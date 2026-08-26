@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260902;
+const CONTRACT_VERSION = 20260903;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -8117,8 +8117,8 @@ const jobPostingsFromHtml = (html, now = Date.now()) => {
 // from js.scheduleengine.net - the word "servicetitan" never appears in that
 // markup), OnceHub/ScheduleOnce and Workiz. Each is anchored to the vendor's own
 // embed host so prose cannot trip it.
-const SCHEDULER_SIGNATURES = /(calendly\.com|acuityscheduling|squarespacescheduling|app\.squarespace\.com\/scheduling|setmore|booksy|mindbodyonline|vagaro|janeapp|simplepractice|nexhealth|zocdoc|healthgrades\.com\/appointment|patientpop|solutionreach|luma health|housecallpro|jobber|servicetitan|schedulicity|appointy|10to8|youcanbook|savvycal|(?:^|[^a-z])cal\.com|hubspot\.com\/meetings|chilipiper|appointlet|simplybook|squareup\.com\/appointments|msgsndr\.com\/widget\/(?:booking|appointment)|leadconnectorhq\.com\/widget\/(?:booking|appointment)|scheduleengine\.net|oncehub\.com|scheduleonce|app\.workiz\.com)/i;
-const BOOKING_ACTION_PATHS = /(book(ing)?\.(now|online)|\/book-?(now|online|appointment)|scheduleyourappointment)/i;
+const SCHEDULER_SIGNATURES = /(calendly\.com|acuityscheduling|squarespacescheduling|app\.squarespace\.com\/scheduling|setmore|booksy|mindbodyonline|vagaro|janeapp|simplepractice|nexhealth|zocdoc|healthgrades\.com\/appointment|patientpop|solutionreach|luma health|housecallpro|jobber|servicetitan|schedulicity|appointy|10to8|youcanbook|savvycal|(?:^|[^a-z])cal\.com|hubspot\.com\/meetings|chilipiper|appointlet|simplybook|squareup\.com\/appointments|msgsndr\.com\/widget\/(?:booking|appointment)|leadconnectorhq\.com\/widget\/(?:booking|appointment)|scheduleengine\.net|oncehub\.com|scheduleonce|app\.workiz\.com|bookings\.wixapps\.net|wix-bookings)/i;
+const BOOKING_ACTION_PATHS = /(book(ing)?\.(now|online)|\/book-?(now|online|appointment|us)|scheduleyourappointment|\/schedule-?(?:online|now|service|an?-?appointment)|\/request-(?:an?-)?appointment|\/appointments?\b)/i;
 // A REAL form asks for a way to reach a person back. A site-search box is
 // <form><input type="text"> too, and reading one as "a route in" would
 // manufacture a capture path on a phone-only site — the same false-claim class
@@ -8137,6 +8137,10 @@ const htmlHasRealForm = (h) => {
   const blocks = s.match(/<form\b[\s\S]*?<\/form>/gi) || [];
   for (const b of blocks) {
     if (_COMMENT_FORM_RE.test(b)) continue;
+    // A client-portal login (email + password) is a form with an email input
+    // and it is NOT a route a new customer contacts anyone through - reading
+    // one as forms:true upgraded a true phone_only verdict on a live shape.
+    if (/<input\b[^>]*type=["']password["']/i.test(b)) continue;
     const newsletterOnly = /newsletter|subscribe/i.test(b)
       && !/<textarea\b/i.test(b)
       && !/<input\b[^>]*type=["']tel["']/i.test(b)
@@ -8825,7 +8829,7 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
         // rawHtml costs nothing extra (per page, not per format) and is the only
         // way the ad markers, the navigation harvest and the booking read can see
         // anything but the homepage. Consumed and dropped in harvestInteriorMarkup.
-        formats: ['markdown', 'screenshot@fullPage', 'rawHtml'],
+        formats: ['markdown', 'screenshot@fullPage', 'rawHtml', 'html'],
         location: { country: 'US', languages: ['en'] },
         // MUST MATCH firecrawlScrape EXACTLY. Both write into the same URL-keyed
         // cache, so if batch stripped nav/header/footer and the single scrape did
@@ -8903,7 +8907,11 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
       // reads as ordinary text in markdown. The picture is what makes it obvious.
       const shot = item?.['screenshot@fullPage'] || item?.screenshot || null;
       if (shot) _PAGE_SHOTS.set(String(u), shot);
-      try { harvestInteriorMarkup(u, item?.rawHtml || item?.html || '', null); } catch (e) { void e; }
+      // BOTH copies in one harvest pass: script signatures live in rawHtml
+      // (the 'html' format strips scripts), a runtime-mounted form or iframe
+      // lives only in the rendered DOM. Concatenated so the pages counter
+      // still counts one page.
+      try { harvestInteriorMarkup(u, [item?.rawHtml || '', item?.html || ''].filter(Boolean).join('\n'), null); } catch (e) { void e; }
       if (_SCRAPE_CACHE.size > 3000) _SCRAPE_CACHE.clear();
       _SCRAPE_CACHE.set(String(u), { md, at: Date.now() });
       fcNote(true, 'batch-scrape (0.5cr)', u);
@@ -8958,7 +8966,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
         // populate 2-4s after load, and a shot taken at 1.5s shows an empty slot
         // where the proof is. That mistake already told an electrician he had no
         // social proof on a page carrying 221 Google reviews.
-        body: JSON.stringify({ url, formats: ['markdown', 'screenshot@fullPage', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true, location: { country: 'US', languages: ['en'] } }),
+        body: JSON.stringify({ url, formats: ['markdown', 'screenshot@fullPage', 'rawHtml', 'html'], onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true, location: { country: 'US', languages: ['en'] } }),
       }, timeout);
       d = await r.json();
       if (!isRateLimited(d, r.status)) break;
@@ -8969,6 +8977,21 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
       }
       await new Promise(res => setTimeout(res, waitMs));
     }
+    // Round 102: 'html' is a new format on this proven shape. A 400 here is
+    // about OUR payload, never their page - re-ask once on the exact shape
+    // that has answered for weeks rather than losing the whole page to a
+    // format experiment.
+    if (r && r.status === 400) {
+      console.log(`FIRECRAWL FORMAT FALLBACK [${url}]: HTTP 400 on the shape carrying 'html' — asking once more without it.`);
+      try {
+        r = await fcCall('https://api.firecrawl.dev/v1/scrape', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url, formats: ['markdown', 'screenshot@fullPage', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true, location: { country: 'US', languages: ['en'] } }),
+        }, timeout);
+        d = await r.json();
+      } catch (e) { void e; }
+    }
     if (isCreditError(d, r.status)) {
       FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now();
       console.log('🔴 FIRECRAWL OUT OF CREDITS — scrapes, searches, and maps will all fail until topped up.');
@@ -8976,7 +8999,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
     }
     let _md = d.data?.markdown || d.markdown || '';
     // Same page, same credit. Consumed and dropped — see harvestInteriorMarkup.
-    try { harvestInteriorMarkup(url, d.data?.rawHtml || d.rawHtml || d.data?.html || '', null); } catch (e) { void e; }
+    try { harvestInteriorMarkup(url, [d.data?.rawHtml || d.rawHtml || '', d.data?.html || d.html || ''].filter(Boolean).join('\n'), null); } catch (e) { void e; }
 
     // ══ NEVER LOSE THE CORPUS TO A SCREENSHOT ═══════════════════════════════
     // This request asks for markdown AND a full-page screenshot together, and on
@@ -10845,6 +10868,11 @@ const visionAuditPage = async (screenshotBase64, companyName, apiKey) => {
       body: JSON.stringify({
         model: 'claude-haiku-4-5-20251001',
         max_tokens: 700,
+        // Pinned. This call GRADES (the /10's first-screen component and the
+        // mid-load/block gates read its answers) and it ran at the API default
+        // of 1.0 for its whole life - the exact class §6 fixed on the writer.
+        // Low, not zero: classification, not composition.
+        temperature: 0.2,
         messages: [{ role: 'user', content: [
           { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotBase64 } },
           { type: 'text', text: `This is a screenshot of ${companyName}'s homepage. It is usually the FULL PAGE, top to bottom; when it is, the TOP of the image (roughly the first screen's worth, before any scrolling) is what a visitor sees on arrival. Questions marked ABOVE THE FOLD are about THAT TOP REGION ONLY — a button or headline further down the page does not count for them.
@@ -10883,6 +10911,14 @@ ABOUT THE EMAIL — this matters a lot:
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
+    // The model occasionally returns "true"/"false" as STRINGS; every grading
+    // consumer gates on typeof boolean, so a string answer silently skipped the
+    // component (safe direction, but a measurement bought and dropped). Coerce
+    // the declared boolean fields only - never invent a value for an absent one.
+    for (const _bf of ['hasVisibleCTA', 'hasHeadline', 'heroIsBlank', 'hasVisibleSocialProof', 'socialProofUncertain', 'pageFullyLoaded', 'looksDated', 'looksBlockedOrError']) {
+      if (parsed[_bf] === 'true') parsed[_bf] = true;
+      else if (parsed[_bf] === 'false') parsed[_bf] = false;
+    }
     // Sanity-check the vision-read email — if it isn't a well-formed address, drop it
     // rather than let a misread string reach the email engine.
     // A screenshot is the likeliest place of all to read a filename as an
@@ -12415,6 +12451,11 @@ const reframeOf = (rung, m) => {
 // when nothing about the destination was actually measured — an unmeasured route
 // must never read as a broken one.
 const paidLeakGapFrom = (m = {}) => {
+  // The two door rungs carry unreadBooking (a booking page sitting unread in
+  // the sitemap bars the absence claim); this sentence and the walk's copy of
+  // it never inherited the guard, so an ads lead could ship "the only way in
+  // is a phone call" about a site whose /book-online page we chose not to open.
+  if (m.unreadBooking === true) return '';
   if (m.bookingMeasured === true && m.booking === 'phone_only' && m.captureSeen !== true) {
     // "the only published way to reach them" read as jargon to the owner of
     // this system. Same bound (we describe the routes their site SHOWS),
@@ -12762,6 +12803,7 @@ const RUNG_PILLAR = {
   absent_from_search:            'INVISIBLE',
   buried_in_results:             'INVISIBLE',
   unclaimed_listing:             'INVISIBLE',
+  site_noindexed:                'INVISIBLE',
   campaign_page_dead:            'LEAKING',
   organic_invisible:             'INVISIBLE',
   ads_untracked:                 'BURNING',
@@ -12862,6 +12904,7 @@ const RUNG_FUNNEL_STAGE = {
   absent_from_search:            'found',
   buried_in_results:             'found',
   unclaimed_listing:             'found',
+  site_noindexed:                'found',
   campaign_page_dead:            'door',
   organic_invisible:             'found',
   outranked_by_weaker:           'found',
@@ -13023,11 +13066,17 @@ const BENCHMARK_SECOND_PERSON = /\b(you|your|yours|they|their|theirs|he|his|him)
 // as well then this makes sense." A credibility claim needs visible evidence;
 // an invisible marker still dates the build and still counts in the score.
 const SITE_AGE_MARKERS = [
-  { id: 'tables',    visible: true,  re: /<table[^>]*(?:width|border|cellpadding|cellspacing)=/i,
+  // tables/precss need MULTIPLE hits (min): one attribute-styled table is a
+  // rate-table plugin or pasted Word content on a maintained site - the say
+  // text asserts the whole page's layout, so the evidence has to be plural.
+  { id: 'tables',    visible: true,  min: 2, re: /<table[^>]*(?:width|border|cellpadding|cellspacing)=/gi,
     say: 'the page is still laid out with tables' },
-  { id: 'precss',    visible: true,  re: /<font\b|<center\b|\bbgcolor=|<marquee\b/i,
+  { id: 'precss',    visible: true,  min: 2, re: /<font\b|<center\b|\bbgcolor=|<marquee\b/gi,
     say: 'the code behind the page is the kind used before smartphones existed' },
-  { id: 'flash',     visible: true,  re: /\.swf\b|application\/x-shockwave-flash|<embed[^>]+type=["']application/i,
+  // The old third arm matched ANY <embed type="application/..."> - a modern
+  // <embed type="application/pdf"> (menu/brochure) fired "it still has Flash
+  // on it", the most checkably-wrong sentence in the set.
+  { id: 'flash',     visible: true,  re: /\.swf\b|application\/x-shockwave-flash|futuresplash/i,
     say: 'it still has Flash on it, which no browser has run since 2020' },
   // jquery-ui is EXCLUDED on purpose: jQuery UI's current major is still 1.x
   // (1.13/1.14, released 2021-2024 and shipped by WordPress core today), so
@@ -13039,17 +13088,104 @@ const SITE_AGE_MARKERS = [
     say: 'the page announces itself in a format websites stopped using over a decade ago' },
   { id: 'keywords',  visible: false, re: /<meta[^>]+name=["']keywords["']/i,
     say: 'it carries a keywords tag that search engines stopped reading in 2009' },
-  { id: 'fixedwidth', visible: true, re: /<(?:table|div)[^>]+width=["']?(?:7[5-9]\d|8\d\d|9\d\d|1000)["']?[\s>]/i,
+  // [\s"'] before width= so data-width= (Revolution Slider, FB page plugin)
+  // cannot fire a cannot-fit-a-phone claim on a responsive build.
+  { id: 'fixedwidth', visible: true, re: /<(?:table|div)[^>]*[\s"']width=["']?(?:7[5-9]\d|8\d\d|9\d\d|1000)["']?[\s>]/i,
     say: 'the layout is pinned to a fixed width, so it cannot fit a phone' },
   { id: 'oldbuilder', visible: false, re: /content=["'][^"']*(?:FrontPage|Dreamweaver|Adobe Muse|iWeb|Microsoft Word)/i,
     say: 'it was built with a website tool that no longer exists' },
 ];
+
+// ══ THE SEARCH-CODE READ - round 102 ═════════════════════════════════════════
+// "The code set up for SEO wise" was four booleans in a prompt line. What the
+// industry's own evidence supports from a static read of their page (recorded
+// in CLAUDE.md §79): a robots noindex is the ONE kill-switch finding a static
+// read can make; schema must be CLASSIFIED, because Wix and Squarespace
+// auto-inject WebSite/Organization boilerplate, so bare ld+json presence
+// proves nothing about anybody doing SEO (58% of local sites lack a real
+// LocalBusiness block); a title of "Home" is table stakes lost; and on-page
+// weighs ~15% of the local pack, so NONE of this may ever be sold as the
+// reason for a map position. Everything here is INTERNAL except the noindex
+// rung, whose claim is checkable in view-source.
+const readSeoSignals = (rawHtml, opts = {}) => {
+  const html = String(rawHtml || '');
+  if (!html || html.length < 400) return { checked: false };
+  const head = (html.match(/<head[\s\S]*?<\/head>/i) || [html.slice(0, 6000)])[0];
+  const noindex = /<meta[^>]+name=["'](?:robots|googlebot)["'][^>]*content=["'][^"']*noindex/i.test(head)
+    || /<meta[^>]+content=["'][^"']*noindex[^"']*["'][^>]*name=["'](?:robots|googlebot)["']/i.test(head);
+  const types = [];
+  let businessSchema = false;
+  for (const m of html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) {
+    try {
+      const walk = (o) => {
+        if (!o || typeof o !== 'object') return;
+        if (Array.isArray(o)) { o.forEach(walk); return; }
+        if (o['@type']) {
+          const ts = Array.isArray(o['@type']) ? o['@type'] : [o['@type']];
+          ts.forEach(t => types.push(String(t)));
+          // Type-agnostic on purpose: schema.org business subtypes run to
+          // hundreds of names (Plumber, RoofingContractor, Dentist...) - a
+          // typed block that carries an address or phone IS the business
+          // block, whatever the subtype is called.
+          if (o.address || o.telephone) businessSchema = true;
+        }
+        if (o['@graph']) walk(o['@graph']);
+        for (const k of Object.keys(o)) { if (o[k] && typeof o[k] === 'object' && k !== '@graph') walk(o[k]); }
+      };
+      walk(JSON.parse(m[1]));
+    } catch (e) { void e; }
+  }
+  const BOILERPLATE_TYPES = /^(WebSite|WebPage|Organization|BreadcrumbList|ImageObject|SearchAction|SiteNavigationElement|CollectionPage|ItemList|ReadAction|EntryPoint|ListItem)$/i;
+  const boilerplateOnly = types.length > 0 && !businessSchema && types.every(t => BOILERPLATE_TYPES.test(t));
+  const title = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [, ''])[1].replace(/\s+/g, ' ').trim().slice(0, 140);
+  const _tl = title.toLowerCase();
+  const nameLow = String(opts.companyName || '').toLowerCase().trim();
+  const titleIsDefault = !!title && (/^(home|homepage|welcome|index|untitled|new page|my site|website|coming soon)$/i.test(title)
+    || (!!nameLow && (_tl === nameLow || _tl === nameLow + ' | home' || _tl === nameLow + ' - home' || _tl === 'home | ' + nameLow || _tl === 'home - ' + nameLow)));
+  const cityToken = String(opts.city || '').toLowerCase().split(',')[0].trim();
+  // The trade word arrives in whatever form the pipeline holds (roofer,
+  // roofing) - matched on the STEM so 'roofer' finds 'roofing' in a title.
+  // The recorded §15 rule: a stem inside a boundary matches nothing.
+  const tradeStem = String(opts.trade || '').toLowerCase().trim().split(/\s+/)[0].replace(/(?:ers|er|ing)$/, '');
+  const titleHasCity = !!(title && cityToken.length >= 3 && _tl.includes(cityToken));
+  const titleHasTrade = !!(title && tradeStem.length >= 4 && _tl.includes(tradeStem));
+  const canonicalHref = ((head.match(/<link[^>]+rel=["']canonical["'][^>]*href=["']([^"']+)["']/i)
+    || head.match(/<link[^>]+href=["']([^"']+)["'][^>]*rel=["']canonical["']/i) || [])[1] || '').slice(0, 300);
+  const imgs = html.match(/<img\b[^>]*>/gi) || [];
+  const imgAltCount = imgs.filter(t => /alt=["'][^"']+["']/i.test(t)).length;
+  return { checked: true, noindex, schemaTypes: [...new Set(types)].slice(0, 12), businessSchema, boilerplateOnly,
+    title, titleIsDefault, titleHasCity, titleHasTrade, canonicalHref, imgCount: imgs.length, imgAltCount };
+};
+
+// The sitemap's own lastmod dates - the read a comment in this file promised
+// for months and no code ever performed. STALENESS ONLY: plugins regenerate
+// lastmod=now on every deploy, so a fresh date proves nothing, while a NEWEST
+// lastmod over a year old genuinely means nobody has touched the site. One
+// free fetch, one file, no index recursion.
+const fetchSitemapFreshness = async (website) => {
+  try {
+    const origin = new URL(String(website).startsWith('http') ? website : 'https://' + website).origin;
+    const r = await fetchT(origin + '/sitemap.xml', { headers: { 'User-Agent': 'Mozilla/5.0' } }, 8000);
+    if (!r || !r.ok) return { checked: false };
+    const xml = String(await r.text()).slice(0, 400000);
+    const dates = [...xml.matchAll(/<lastmod>\s*([0-9]{4}-[0-9]{2}-[0-9]{2})/gi)].map(m => m[1]);
+    if (dates.length < 3) return { checked: false };
+    const newest = dates.reduce((a, b) => (a > b ? a : b));
+    return { checked: true, newest, entries: dates.length };
+  } catch (e) { void e; return { checked: false }; }
+};
 // Two markers we already measure elsewhere and must not measure twice.
 const readSiteAge = ({ rawHtml, content, hasViewport, isHttps, copyrightYear } = {}) => {
   const html = String(rawHtml || '');
   if (!html || html.length < 400) return { checked: false, dated: false, markers: [], score: 0, visibleCount: 0 };
   const markers = [];
-  for (const m of SITE_AGE_MARKERS) if (m.re.test(html)) markers.push({ id: m.id, say: m.say, visible: m.visible === true });
+  // A marker with `min` needs that many separate matches: one attribute-styled
+  // table is a calendar plugin or pasted Word content on a modern build; a
+  // page LAID OUT with tables carries several. Content is not the build.
+  for (const m of SITE_AGE_MARKERS) {
+    const _hits = m.min ? (html.match(m.re) || []).length : (m.re.test(html) ? 1 : 0);
+    if (_hits >= (m.min || 1)) markers.push({ id: m.id, say: m.say, visible: m.visible === true });
+  }
   if (hasViewport === false) markers.push({ id: 'noviewport', visible: true, say: 'a phone gets the desktop page shrunk down instead of a mobile one' });
   if (isHttps === false) markers.push({ id: 'nohttps', visible: true, say: 'it is still on plain http, so browsers warn people away from it' });
   const yr = Number(copyrightYear);
@@ -13583,6 +13719,20 @@ const HARM_LADDER = [
     test: (m) => m.listingClaimed === false,
     say: () => 'Their Google listing is unclaimed. Nobody at the business controls it, so nobody can answer reviews on it, correct its hours, or stop anyone suggesting edits to it',
     costs: 'the first page a searching customer meets is one nobody at the business can touch' },
+
+  // ══ THE DO-NOT-LIST FLAG - round 102 ══════════════════════════════════════
+  // The one kill-switch finding a static read of their page can make (the
+  // industry grades it A: WP's "discourage search engines" box left on after
+  // launch, staging flags that shipped). Fires only off a real read of their
+  // homepage markup (pageNoindexed is tri-state, null when nothing was read),
+  // and the claim is scoped to the PAGE the flag is on. The owner checks it
+  // in view-source; his web company confirms it in one message.
+  { harm: 92, specific: 96, novel: 96, delegable: 40, weFix: 95, band: 'INVISIBLE', id: 'site_noindexed',
+    blind: 'the flag is one line of page code, and the page itself looks perfectly normal in every browser',
+    reframe: 'a page can be told to stay out of Google, and their own homepage carries that instruction',
+    test: (m) => m.pageNoindexed === true,
+    say: () => 'A line of code on their own homepage tells Google not to list the page. Google obeys it, so searches happen without them no matter how good the site is',
+    costs: 'every search a customer runs is a search they are told to sit out' },
 
   // ══ THE AD-SHAPED PAGE THAT DIED ══════════════════════════════════════════
   // A page built like an ad landing page (/lp/, /offer/, /free-quote), listed
@@ -15370,6 +15520,7 @@ const AREA_OF = {
   no_after_hours: 'Getting in touch', phone_mismatch: 'Getting in touch',
   absent_from_search: 'Being found', outranked_by_weaker: 'Being found', organic_invisible: 'Being found',
   buried_in_results: 'Being found', unclaimed_listing: 'Google listing', campaign_page_dead: 'Website',
+  site_noindexed: 'Being found',
   ads_untracked: 'Money already spent',
   coverage_gap: 'Being found',
   wrong_gbp_category: 'Being found', no_google_listing: 'Being found',
@@ -15480,6 +15631,7 @@ const SUBJECTS_FOR = {
   absent_from_search:   ['you are not showing up', 'nobody can find you'],
   buried_in_results:    ['below the top three', 'the names above yours'],
   unclaimed_listing:    ['nobody owns your listing', 'your listing is unclaimed'],
+  site_noindexed:       ['your site hides from Google', 'Google is told to skip you'],
   campaign_page_dead:   ['a dead page on your site', 'your ad page is an error'],
   organic_invisible:    ['you are not on page one', 'your rivals own that search'],
   ads_untracked:        ['your ad clicks are untracked', 'nobody is counting your ads'],
@@ -16140,6 +16292,7 @@ const HARM_LADDER_LAYER = {
   absent_from_search:    'LEADS',
   buried_in_results:     'LEADS',
   unclaimed_listing:     'LEADS',
+  site_noindexed:        'LEADS',
   campaign_page_dead:    'CONVERSION',
   organic_invisible:     'LEADS',
   ads_untracked:         'LEADS',
@@ -16228,7 +16381,7 @@ const BINDING_LAYER_BONUS = 10;
 const SELLABLE = {
   // ── 5: this is the pitch ────────────────────────────────────────────────
   site_empty: 5, broken_page: 5, absent_from_search: 5, outranked_by_weaker: 5, organic_invisible: 5, ads_untracked: 5,
-  buried_in_results: 5, unclaimed_listing: 5, campaign_page_dead: 5,
+  buried_in_results: 5, unclaimed_listing: 5, campaign_page_dead: 5, site_noindexed: 5,
   coverage_gap: 5,
   // The two business-level findings. Both are 5 by definition: one is a
   // retainer competing with a salaried hire the owner is already budgeting
@@ -20119,7 +20272,7 @@ const CTA_BY_FINDING = {
   dead_blog: 'accountability', phone_mismatch: 'accountability',
   // Their Google listing. Same logic, different owner in most businesses.
   listing_closed: 'listing', no_google_listing: 'listing', wrong_gbp_category: 'listing',
-  unclaimed_listing: 'listing', campaign_page_dead: 'accountability',
+  unclaimed_listing: 'listing', campaign_page_dead: 'accountability', site_noindexed: 'indexability',
   no_hours_on_profile: 'listing', no_website_on_profile: 'listing', thin_profile: 'listing',
   // Two listings. Deliberately NOT the shared 'listing' ask — "is anyone
   // watching that" invites him to forward it to whoever watches. Only the owner
@@ -20195,6 +20348,11 @@ const CTA_TEXT = {
     alts: ['Who looks after the site for you these days?',
            'Is anyone on the site at the moment, or has it been left alone?'] },
   listing: { text: 'Is anyone actually watching that, or has it been on its own for a while?', kind: 'listing' },
+  // site_noindexed: the fix is one line for whoever built the site, and only
+  // the owner knows who that is. No mechanism words - he cannot check a tag,
+  // he can check who set his site up.
+  indexability: { text: 'Want the exact line to send to whoever runs your website?', kind: 'indexability',
+    alts: ['Should I send you the line to forward to whoever built the site?'] },
   // Only the owner can answer this one from memory, and the answer is the
   // diagnosis: set up on purpose years ago, left over from a move or a rebrand,
   // or created by Google without anyone asking.
@@ -20879,6 +21037,7 @@ const RUNG_CALL_OPENER = {
   absent_from_search: 'Where do new customers say they found you, when you ask them?',
   buried_in_results: 'When you run your own trade search, whose names come up before yours?',
   unclaimed_listing: 'Who at the shop has the login for your Google listing?',
+  site_noindexed: 'Who set up your website, and did anyone ever ask them to hide it from Google?',
   campaign_page_dead: 'Does anything still point people at the pages that no longer load?',
   dated_credibility: 'When did the website last get a real update, roughly?',
   slow_mobile: 'Have you opened your own site on a phone, away from your office wifi?',
@@ -23007,8 +23166,11 @@ const scoreWebsite = (m = {}, extras = {}) => {
   // The eyes count only when the render was real and fully loaded - a block
   // page or a mid-load shot grades nothing (the Burbank 403 scored the
   // block page itself under the old shape).
+  // pageFullyLoaded === true, not !== false: a vision response that OMITS the
+  // field (undefined !== false) used to walk past the mid-load gate and grade
+  // the first screen off a shot nobody vouched for.
   const _vis = (extras.visualAnalysis
-    && extras.visualAnalysis.pageFullyLoaded !== false
+    && extras.visualAnalysis.pageFullyLoaded === true
     && extras.visualAnalysis.looksBlockedOrError !== true) ? extras.visualAnalysis : null;
 
   // A way to book (3). The route a ready customer actually gets - the
@@ -23028,20 +23190,23 @@ const scoreWebsite = (m = {}, extras = {}) => {
   if (_vis && typeof _vis.hasVisibleCTA === 'boolean') {
     const got = _vis.hasVisibleCTA === true ? (_vis.heroIsBlank === true ? 0.75 : 1.5) : 0;
     add('the first screen', got, 1.5,
-      _vis.hasVisibleCTA !== true ? 'no clear next step on the first screen'
+      (_vis.hasVisibleCTA !== true ? 'no clear next step on the first screen'
         : _vis.heroIsBlank === true ? 'a next step is there but the hero area is blank or broken'
-        : 'a visitor lands on a clear next step');
+        : 'a visitor lands on a clear next step') + ' (judged on the desktop render)');
   } else skipped.push('first screen');
 
   // The form asks little (1). Only when a single real form was measured.
   if (m.formFieldCountIsSingleForm === true && Number.isFinite(Number(m.formFieldCount))) {
     const n = Number(m.formFieldCount);
-    add('a form a stranger finishes', n >= 9 ? 0 : n >= 6 ? 0.5 : 1, 1, `${n} fields before anything happens`);
+    const _stepped = !!(extras.htmlSignals && extras.htmlSignals.multiStepForm === true);
+    add('a form a stranger finishes',
+      n >= 9 ? (_stepped ? 0.5 : 0) : n >= 6 ? (_stepped ? 1 : 0.5) : 1, 1,
+      `${n} fields${_stepped ? ', split into steps - the right pattern for a long form' : ' before anything happens'}`);
   } else skipped.push('form size');
 
   // Built for a phone (1).
-  if (m.viewportChecked === true) {
-    add('built for a phone', m.hasViewport === false ? 0 : 1, 1,
+  if (m.viewportChecked === true && typeof m.hasViewport === 'boolean') {
+    add('built for a phone', m.hasViewport === true ? 1 : 0, 1,
       m.hasViewport === false ? 'loads at desktop width and has to be pinched to read' : 'resizes for a phone');
   } else skipped.push('phone layout');
 
@@ -23082,6 +23247,18 @@ const scoreWebsite = (m = {}, extras = {}) => {
   const of = graded.reduce((n, g) => n + g.of, 0);
   const got = graded.reduce((n, g) => n + g.got, 0);
   if (!of) return { checked: false, skipped };
+  // ══ THE FLOOR - round 102 ═══════════════════════════════════════════════
+  // A blocked or thinly-scraped site loses most components to the denominator
+  // rule, and the two or three that survive (viewport + https, or the vision
+  // pair on a ladder crash) can multiply out to a confident 10/10 - a single
+  // flattering number on precisely the lead where the least is known. Under
+  // five graded components there is no honest /10; the card says how much was
+  // measured instead of pretending a grade.
+  if (graded.length < 5) {
+    return { checked: false, thin: true, graded, skipped,
+      why: `only ${graded.length} of ${graded.length + skipped.length} components could be measured - no grade is honest on that little`,
+      basedOn: `${graded.length} of ${graded.length + skipped.length} components measured` };
+  }
   // One decimal, scaled to ten whatever was measurable.
   let score = Math.round((got / of) * 100) / 10;
   // ══ THE DOOR CAPS THE SCORE ═══════════════════════════════════════════════
@@ -23195,6 +23372,19 @@ const buildAuditFacts = (m = {}, unlinked = null, extras = null) => {
       proofOnlyInFooter: _hs.proofOnlyInFooter === true,
       sharedInboxOnly: _hs.sharedInboxOnly === true,
       firstFoldCtaKinds: Number.isFinite(Number(_hs.firstFoldCtaKinds)) ? Number(_hs.firstFoldCtaKinds) : null,
+    } : null,
+    // ══ THE SEARCH-CODE FACTS - round 102 ══════════════════════════════════
+    // Classified, never bare presence: builder-injected boilerplate schema is
+    // not evidence anybody did SEO, and a title of "Home" is a present title.
+    // INTERNAL rows on the sheet; the noindex is the one sendable claim.
+    seo: (extras && extras.seo && extras.seo.checked) ? {
+      noindex: extras.seo.noindex === true,
+      schema: extras.seo.businessSchema ? 'business' : extras.seo.boilerplateOnly ? 'boilerplate' : (extras.seo.schemaTypes || []).length ? 'other' : 'none',
+      titleIsDefault: extras.seo.titleIsDefault === true,
+      titleHasCity: extras.seo.titleHasCity === true,
+      titleHasTrade: extras.seo.titleHasTrade === true,
+      imgAlt: Number(extras.seo.imgCount) > 0 ? { withAlt: Number(extras.seo.imgAltCount) || 0, of: Number(extras.seo.imgCount) } : null,
+      sitemapNewest: (extras.sitemapFresh && extras.sitemapFresh.checked) ? extras.sitemapFresh.newest : null,
     } : null,
     // Is ANYTHING measuring their site - GA4, a pixel, any counter at all.
     // INTERNAL: "no dashboard anywhere can tell him how many people came" is
@@ -23466,7 +23656,9 @@ const buildFunnelStory = (m = {}, x = {}) => {
         form: 'Nothing there books a time. A visitor can fill in a form and wait.',
         phone_only: m.captureSeen === true
           ? 'Nothing on their site books a time, and the direct route in is a phone call during office hours.'
-          : 'The only way in their site offers is a phone call during office hours.',
+          : (m.unreadBooking === true
+            ? 'The route their site shows is a phone call, and a booking-named page sits in their sitemap that we did not open.'
+            : 'The only way in their site offers is a phone call during office hours.'),
         none_found: 'No route in appears on the pages we read at all.',
       }[m.booking]);
     }
@@ -24179,6 +24371,7 @@ const OWNER_KNOWS = {
   absent_from_search:           ['cannot_know', 'requires running the search himself and reading a whole result list he has never pulled up'],
   buried_in_results:            ['has_not_looked', 'the search is one he could run in ten seconds, and owners search their own name instead of their trade'],
   unclaimed_listing:            ['has_not_looked', 'the listing prints "Claim this business" on itself, and he has never opened his own listing the way a stranger does'],
+  site_noindexed:               ['cannot_know', 'the flag is one line of page code and the page looks normal in every browser, so nothing he ever sees shows it'],
   campaign_page_dead:           ['cannot_know', 'nothing on his own site links the page, so no click of his ever finds the error'],
   outranked_by_weaker:          ['cannot_know', 'requires running the search AND comparing another listing’s review count against his own'],
   coverage_gap:                 ['cannot_know', 'requires searching a market he does not trade in to discover he is absent from it'],
@@ -25239,15 +25432,33 @@ const measureBookingPath = (html, text) => {
   //
   // In markdown a button is a link: [BOOK NOW](https://...). Match that, and
   // bare heading text, as well as the HTML forms.
-  const BOOK_WORDS = /\b(book\s*(now|online|appointment|a\s*consultation|your\s*\w+)?|schedule\s*(a\s*)?(consultation|appointment|visit|now)|request\s*(an?\s*)?(appointment|consultation)|make\s*an?\s*appointment|reserve\s*(your|a)\s*\w+)\b/i;
-  // Markdown link whose LABEL is a booking action.
-  const mdLinks = [...h.matchAll(/\[([^\]]{2,60})\]\(([^)]+)\)/g)];
-  if (mdLinks.some(m => BOOK_WORDS.test(m[1]))) {
-    return { booking: 'online_booking', why: 'a book/schedule link is offered on the page itself' };
-  }
-  // HTML button or anchor text, for callers that do pass raw HTML.
-  if (/>\s*[^<]{0,40}(book|schedule|appointment)[^<]{0,40}\s*</i.test(h) && BOOK_WORDS.test(h)) {
-    return { booking: 'online_booking', why: 'a book/schedule action is offered on the page itself' };
+  // ══ A BOOKING LABEL IS INTENT; THE LINK DECIDES - round 102 ═══════════════
+  // The old first branch turned any book/schedule LABEL into online_booking
+  // before a shred of evidence ran, so the single most common trade/medical
+  // shape - a hero button "Request an Appointment" linking to a plain 9-field
+  // contact form - graded 3/3 on the score's heaviest component, lifted the
+  // 7.5 cap and silenced both door rungs on exactly the leads they exist for.
+  // (And bare \bbook\b meant a "Guest Book" link counted.) A label can never
+  // prove a booking SYSTEM. The URL it points at can:
+  //   a vendor scheduler URL       -> online_booking, and the why says LINKED
+  //   the site's own booking page  -> online_booking (their own claim)
+  //   an offsite URL whose own path says booking -> online_booking (a vendor
+  //     our list does not know - the URL itself is the evidence)
+  //   anything else (a form page, mailto:, #) -> intent only; falls through,
+  //     and the label travels as bookingLabelSeen for the call sheet.
+  const BOOK_INTENT = /\b(book\s+(?:now|online|an?\s+appointment|a\s+consultation|your\s+\w+)|schedule\s+(?:now|online|service|an?\s+appointment|a\s+(?:consultation|visit|call))|request\s+an?\s+(?:appointment|consultation)|make\s+an?\s+appointment)\b/i;
+  const _bookLinks = [];
+  for (const m of h.matchAll(/\[([^\]]{2,60})\]\(([^)\s]+)[^)]*\)/g)) { if (BOOK_INTENT.test(m[1])) _bookLinks.push(m[2]); }
+  for (const m of h.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]{0,80}?)<\/a>/gi)) { if (BOOK_INTENT.test(String(m[2]).replace(/<[^>]+>/g, ' '))) _bookLinks.push(m[1]); }
+  const _labelSeen = _bookLinks.length > 0 || BOOK_INTENT.test(h);
+  for (const _u of _bookLinks) {
+    if (SCHEDULER_SIGNATURES.test(_u)) {
+      return { booking: 'online_booking', why: 'a booking link on the page leads to a third-party scheduler', bookingLabelSeen: true, schedulerLinkUrl: String(_u).slice(0, 300) };
+    }
+    if (BOOKING_ACTION_PATHS.test(_u)) return { booking: 'online_booking', why: 'the page links its own booking page', bookingLabelSeen: true };
+    if (/^https?:\/\//i.test(_u) && /(book|schedul|appoint)/i.test(_u)) {
+      return { booking: 'online_booking', why: 'a booking-labeled link leads to a page whose own address says booking', bookingLabelSeen: true, schedulerLinkUrl: String(_u).slice(0, 300) };
+    }
   }
   // ══ PRECEDENCE IS BY STRENGTH OF EVIDENCE, NOT BY ORDER OF WRITING ═══
   // These four checks used to run form → tel → scheduler → form, and the two
@@ -25274,27 +25485,31 @@ const measureBookingPath = (html, text) => {
   // checkBuiltWith, because two hand-kept copies of "what is a booking tool"
   // disagreed on a live lead and the disagreement withdrew a composed email.
   const SCHEDULERS = SCHEDULER_SIGNATURES;
-  if (SCHEDULERS.test(h)) return { booking: 'online_booking', why: 'a third-party scheduling tool is embedded in the page source' };
+  if (SCHEDULERS.test(h)) return { booking: 'online_booking', why: 'a third-party scheduling tool is wired into the page source', bookingLabelSeen: _labelSeen };
   // The site's OWN booking link (/book-now, /book-an-appointment). Same verdict
   // as the anchor-text branches above and the same honest why - the customer can
   // book from here. It is deliberately NOT in SCHEDULER_SIGNATURES: that list's
   // consumers say "a third-party tool is embedded", which is false for a nav link.
-  if (BOOKING_ACTION_PATHS.test(h)) return { booking: 'online_booking', why: 'the page links its own booking page' };
+  if (BOOKING_ACTION_PATHS.test(h)) return { booking: 'online_booking', why: 'the page links its own booking page', bookingLabelSeen: _labelSeen };
 
   // ── A FORM, IN EITHER SHAPE ───────────────────────────────────
   // Firecrawl renders a form's fields as plain lines, so the markdown shape needs
   // matching as well as the HTML one. Two field labels AND a submit word: one
   // alone appears in ordinary copy ("send us your name"), and a false form
   // reading is as bad as a false absence.
-  const _fieldHits = (h.match(/^\s*(first name|last name|your name|full name|email address|phone number|e-?mail|phone|name|message)\s*\*?\s*$/gim) || []).length
-    + (h.match(/\b(first name|last name|email address|phone number)\b/gi) || []).length;
+  // A careers/application page's field lines are not a customer route in. The
+  // corpus arrives with '=== PAGE: <key> ===' headers, so segments whose own
+  // label says careers/jobs/apply are excluded before the lines are counted.
+  const _fieldSrc = h.split(/(?==== PAGE: )/).filter(seg => !/^=== PAGE: [^\n]*(career|job|apply|employment)/i.test(seg)).join('\n');
+  const _fieldHits = (_fieldSrc.match(/^\s*(first name|last name|your name|full name|email address|phone number|e-?mail|phone|name|message)\s*\*?\s*$/gim) || []).length
+    + (_fieldSrc.match(/\b(first name|last name|email address|phone number)\b/gi) || []).length;
   if (_fieldHits >= 2 && /\b(message|submit|send|comments?)\b/i.test(h)) {
-    return { booking: 'form', why: 'an enquiry form is present on the page' };
+    return { booking: 'form', why: 'an enquiry form is present on the page', bookingLabelSeen: _labelSeen };
   }
   // htmlHasRealForm is the ONE rule for an HTML-shaped form — shared with the
   // interior harvest, and tighter than the old <input type="text"> test, which
   // read a site-search box as a route in.
-  if (htmlHasRealForm(h)) return { booking: 'form', why: 'a submitting form is present in the page source' };
+  if (htmlHasRealForm(h)) return { booking: 'form', why: 'a submitting form is present in the page source', bookingLabelSeen: _labelSeen };
 
   // ══ 'PHONE_ONLY' REQUIRES A PHONE A CUSTOMER CAN ACTUALLY SEE ═════════════
   // This used to accept ANY ten-digit-shaped string anywhere in the blob, and
@@ -25334,15 +25549,15 @@ const measureBookingPath = (html, text) => {
     visible.replace(/\b(fax|licen[cs]e|lic\.?|reg(istration)?|ein|tax\s*id|permit|policy)\b[^\n]{0,40}/gi, ' ')
   );
 
-  if (hasTel) return { booking: 'phone_only', why: 'a tappable phone link is the only route offered' };
-  if (phoneVisible) return { booking: 'phone_only', why: 'a phone number is printed on the page and is the only route offered \u2014 it is NOT a tappable link' };
+  if (hasTel) return { booking: 'phone_only', why: 'a tappable phone link is the only route offered', bookingLabelSeen: _labelSeen };
+  if (phoneVisible) return { booking: 'phone_only', why: 'a phone number is printed on the page and is the only route offered \u2014 it is NOT a tappable link', bookingLabelSeen: _labelSeen };
 
   // No scheduler, no form, no visible phone. That is a real and quite serious
   // finding on its own, and it is NOT 'phone_only'. Naming it correctly is the
   // difference between "your number will not dial" (false, and checkable) and
   // "there is no way to contact you from this page without filling something in"
   // (true, measured, and a stronger thing to say).
-  return { booking: 'none_found', why: 'no scheduler, no form and no phone number visible anywhere on the page \u2014 there is no direct route to contact them from here' };
+  return { booking: 'none_found', why: 'no scheduler, no form and no phone number visible anywhere on the page \u2014 there is no direct route to contact them from here', bookingLabelSeen: _labelSeen };
 };
 
 // ══ WHAT THE BOOKING READ IS ALLOWED TO SEE ══════════════════════════════════
@@ -25386,10 +25601,13 @@ const applyInteriorPathEvidence = (out, im, companyName) => {
   }
   return out;
 };
-const bookingSourceFor = (homepageHtml, homepageMd, corpus) => {
+const bookingSourceFor = (homepageHtml, homepageMd, corpus, homepageDom) => {
   const _md = homepageMd ? String(homepageMd).slice(0, 40000) : '';
   return {
-    src: [homepageHtml ? String(homepageHtml).slice(0, 150000) : '', _md, corpus || ''].filter(Boolean).join('\n\n'),
+    // The rendered DOM rides beside the server HTML: a form or scheduler
+    // iframe a site builder mounts at runtime exists only in the DOM copy,
+    // and the pre-JS copy alone read those sites as having no route in.
+    src: [homepageHtml ? String(homepageHtml).slice(0, 150000) : '', homepageDom ? String(homepageDom).slice(0, 120000) : '', _md, corpus || ''].filter(Boolean).join('\n\n'),
     text: [_md, corpus || ''].filter(Boolean).join('\n\n'),
   };
 };
@@ -27155,6 +27373,11 @@ function extractHtmlSignals(rawHtml, pageUrl) {
   const metaDescription = descMatch ? descMatch[1].trim() : '';
   const hasMetaDescription = metaDescription.length > 0;
   const hasTelLink = /href=["']tel:[^"']+["']/i.test(html);
+  // A "text us" route: an sms: link is a real after-hours capture path a
+  // stranger can use at 9pm, and no branch of the booking read ever saw one -
+  // so no_after_hours shipped "finds nothing on the website to start with
+  // until the office opens" about sites a customer can text right now.
+  const hasSmsLink = /href=["']sms:[^"']*["']/i.test(html);
   // ══ A MISSING tel: LINK IS NOT A MISSING TAP-TO-CALL ═══════════════════════
   // Apple's own docs: "By default, Safari on iOS detects any string formatted
   // like a phone number and makes it a link that calls the number." So on the
@@ -27218,7 +27441,7 @@ function extractHtmlSignals(rawHtml, pageUrl) {
 
   // AUTOPSY 06 — "The button says what happens next. Never just 'Submit'."
   // The checklist's own worked example of a failure, and it is one regex.
-  const _btns = (html.match(/<(?:button|input)\b[^>]*>(?:[^<]{0,40})/gi) || []).join(' ');
+  const _btns = (html.match(/<(?:button\b[^>]*|input\b[^>]*type=["']submit["'][^>]*)>(?:[^<]{0,40})/gi) || []).join(' ');
   const submitOnlyButton = /(?:value\s*=\s*["']\s*submit\s*["'])|(?:>\s*submit\s*$)|(?:>\s*submit\s*<)/i.test(_btns)
     || /<button[^>]*>\s*submit\s*</i.test(html);
 
@@ -27228,6 +27451,10 @@ function extractHtmlSignals(rawHtml, pageUrl) {
   // where the field is unambiguously an email or a phone by name or id.
   const _inputs = html.match(/<input\b[^>]*>/gi) || [];
   const _wrongKeyboard = _inputs.filter((t) => {
+    // A hidden CRM-prefill input named "email" is not a field a visitor types
+    // into - counting it shipped "N fields typed as plain text" about fields
+    // that do not exist on the page.
+    if (IGNORED_FIELD.test(t) || NOT_A_QUESTION.test(t)) return false;
     const type = ((t.match(/type\s*=\s*["']([^"']+)["']/i) || [])[1] || 'text').toLowerCase();
     const ident = ((t.match(/(?:name|id|autocomplete)\s*=\s*["']([^"']+)["']/i) || [])[1] || '').toLowerCase();
     if (/e-?mail/.test(ident) && type !== 'email') return true;
@@ -27239,40 +27466,104 @@ function extractHtmlSignals(rawHtml, pageUrl) {
   // ask first." A multi-step form is a PASS on the same box a long form fails,
   // so counting fields without checking for steps condemns the sites that did
   // the right thing.
-  const multiStepForm = /\b(?:step|multi-?step|wizard|page)\s*(?:1|one)\s*(?:of|\/)\s*(?:2|3|4|5|two|three)\b/i.test(html)
-    || /data-(?:step|multistep)|class=["'][^"']*(?:multi-?step|form-?step|step-?\d)/i.test(html);
+  const _formsJoined = formBlocks.join(' ');
+  const multiStepForm = /\b(?:step|multi-?step|wizard|page)\s*(?:1|one)\s*(?:of|\/)\s*(?:2|3|4|5|two|three)\b/i.test(_formsJoined)
+    || /data-(?:step|multistep)|class=["'][^"']*(?:multi-?step|form-?step|step-?\d)/i.test(_formsJoined);
 
   // AUTOPSY 05 — "The strongest proof appears in the first two folds, not the
   // footer." Measured as POSITION in the document rather than presence: where
   // the proof sits is the whole point of that box.
-  const _proofRe = /\b(?:testimonial|what our (?:client|customer|patient)s? say|review|5-star|five star|google rating|trustpilot|verified customer)\b/i;
-  const _proofAt = html.search(_proofRe);
-  const proofPosition = _proofAt < 0 ? null : Math.round((_proofAt / Math.max(1, html.length)) * 100);
-  // The footer is the last fifth of the document on essentially every template.
+  // Plural-aware on purpose: "Testimonials" and "Reviews" are the two most
+  // common proof headings on real pages, and testimonial\b / review\b - the
+  // recorded §15 stem-boundary trap - matched NEITHER, so the proof-position
+  // read was dark on most sites that actually have proof. Caught by the
+  // round-102 fixture, not by reading the regex.
+  const _proofRe = /\b(?:testimonials?|what our (?:client|customer|patient)s? say|reviews?|5-star|five star|google rating|trustpilot|verified customers?)\b/i;
+  // Measured over the VISIBLE TEXT, not raw bytes: the old byte offset counted
+  // <head>, scripts and JSON-LD, so a schema.org review block in the head read
+  // as proof "before the footer" (0.5 awarded off markup no visitor sees), and
+  // "footer = last 20% of bytes" was a claim about the source, not the page.
+  const _proofBody = html
+    .replace(/<head[\s\S]*?<\/head>/i, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  const _proofAt = _proofBody.search(_proofRe);
+  const proofPosition = _proofAt < 0 ? null : Math.round((_proofAt / Math.max(1, _proofBody.length)) * 100);
+  // The footer is the last fifth of the visible text on essentially every template.
   const proofOnlyInFooter = proofPosition !== null && proofPosition >= 80;
 
   // LEDGER stage 4 — "New leads route to a named owner, never a shared inbox
   // where everyone means no one." Read from the addresses printed on their own
   // page, so this is about what a CUSTOMER is given, not about their routing.
-  const _mails = [...new Set((html.match(/mailto:([^"'?>\s]+)/gi) || []).map(addressFromMailto).filter(Boolean))];
+  const _textOnlyForMail = html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ');
+  const _mails = [...new Set([
+    ...(html.match(/mailto:([^"'?>\s]+)/gi) || []).map(addressFromMailto),
+    ...(_textOnlyForMail.match(/\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/gi) || []).map(a => String(a).toLowerCase()),
+  ].filter(Boolean))];
   const sharedInboxOnly = _mails.length > 0
     && _mails.every(a => /^(?:info|office|admin|contact|hello|sales|enquir|inquir|team|mail|support|service)/.test(a));
 
   // AUTOPSY 06 — "One primary action per fold. Competing buttons are visually
   // demoted or gone." Counted as DISTINCT calls to action in the first fifth of
   // the document, which is the part a visitor sees before scrolling.
-  const _firstFold = html.slice(0, Math.min(html.length, Math.max(4000, Math.round(html.length * 0.2))));
+  // Windowed over the document with head/scripts/styles/nav removed: the raw
+  // 20% was usually the <head> plus the menu, so "Contact Us / Request
+  // Service / Free Estimate" NAV LINKS counted as competing first-screen asks.
+  const _foldSrc = html
+    .replace(/<head[\s\S]*?<\/head>/i, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<nav\b[\s\S]*?<\/nav>/gi, ' ');
+  const _firstFold = _foldSrc.slice(0, Math.min(_foldSrc.length, Math.max(4000, Math.round(_foldSrc.length * 0.2))));
   const _ctaWords = (_firstFold.match(/>\s*(?:get (?:a |your )?(?:quote|estimate|audit|started)|book (?:now|online|a |your )|schedule|call (?:now|us|today)|contact us|request|free (?:quote|estimate|consultation)|apply|sign up|learn more)\b/gi) || []);
   const firstFoldCtaKinds = new Set(_ctaWords.map(x => x.replace(/[^a-z ]/gi, '').trim().toLowerCase().split(' ')[0])).size;
 
   return { checked: true, isHttps: null, hasViewport, hasTitle, title: title.slice(0,120), titleIsErrorPage,
     hasMetaDescription, metaDescription: metaDescription.slice(0,160),
-    hasTelLink, blocksPhoneAutoDetect, tapToCallGenuinelyBroken, hasForm, formFieldCount,
+    hasTelLink, hasSmsLink, blocksPhoneAutoDetect, tapToCallGenuinelyBroken, hasForm, formFieldCount,
     formFieldCountIsSingleForm, formCount: formBlocks.length,
     submitOnlyButton, wrongKeyboardFields: _wrongKeyboard, multiStepForm,
     proofPosition, proofOnlyInFooter, sharedInboxOnly, firstFoldCtaKinds,
     h1: (html.match(/<h1\b[^>]*>([\s\S]{0,200}?)<\/h1>/i) || [, ''])[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() };
 }
+
+// ══ A DOLLAR DIGIT IS NOT A PUBLISHED PRICE - round 102 ═════════════════════
+// homepagePriceSeen was /\$\s?\d/ over the homepage text, so '$0 down',
+// 'Save $500 on a new system', '$100 OFF' and '$2M insured' all read as "a
+// price a stranger can see" - which SUPPRESSES the whole no-price claim family
+// and awards the score's price point. A promo digit clearing a true leak is
+// the false-good direction, on the fact the owner checks first. A dollar
+// amount counts only when its immediate context is not a discount, a deposit
+// teaser or an insurance figure. The §77 case - '$89 tune-up special' in the
+// hero - must keep counting, and its fixture rides the boot check.
+// "Avoid costly emergency repairs with our Comfort Club" is copy arguing
+// AGAINST urgency - the bare word fired the emergency-vs-scheduled-door
+// mismatch on the standard maintenance-plan pitch. 24/7 always counts; the
+// word emergency counts unless its context is avoid/prevent.
+const emergencyServiceCopySeen = (text) => {
+  const t = String(text || '');
+  if (/\b24[\s\/-]?7\b/.test(t)) return true;
+  for (const m of t.matchAll(/emergenc(?:y|ies)/gi)) {
+    const before = t.slice(Math.max(0, m.index - 45), m.index).toLowerCase();
+    if (/(?:avoid|prevent|stop|no more|before (?:it|they) become)\b[^.!?]{0,35}$/.test(before)) continue;
+    return true;
+  }
+  return false;
+};
+
+const priceContextSeen = (text) => {
+  const t = String(text || '');
+  for (const m of t.matchAll(/\$\s?\d[\d,]*(?:\.\d\d)?[km]?\b/gi)) {
+    const before = t.slice(Math.max(0, m.index - 24), m.index).toLowerCase();
+    const after = t.slice(m.index + m[0].length, m.index + m[0].length + 24).toLowerCase();
+    if (/(?:save|get|receive|up to|rebate|coupon|gift|earn)\s*$/.test(before)) continue;
+    if (/^\s*(?:off\b|discount|rebate|down\b|deposit|in savings)/.test(after)) continue;
+    if (/^\s*(?:million)?\s*(?:insured|bonded|liability|coverage|guarantee|warranty)/.test(after)) continue;
+    return true;
+  }
+  return false;
+};
 
 // ══ APIFY GOOGLE REVIEWS ══════════════════════════════════════════════════════
 // The previous path scraped search.google.com/local/reviews. That endpoint died for
@@ -28247,7 +28538,7 @@ const PAGE_INTENT = [
   { key: 'proof',    re: /(review|testimonial|gallery|portfolio|our-work|past-work|projects?|case-stud|before-?and-?after|results)/i },
 ];
 
-const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd, homepageHtml) => {
+const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd, homepageHtml, homepageDom) => {
   // Every null out of this function means ONLY THE HOMEPAGE IS READ: no
   // interior pages, no interior renders, no booking evidence off interior
   // markup, and the recurring-plan read cannot run (its floor is two pages).
@@ -28638,8 +28929,27 @@ ${corpus}` }]
       // customer SEES (markdown, so a phone number in a script tag can never be
       // mistaken for a printed one). Passing source as `text` would reinstate
       // the invented-phone-number bug recorded a few lines below.
-      const _book = bookingSourceFor(homepageHtml, homepageMd, corpus);
-      const _measured = measureBookingPath(_book.src, _book.text);
+      const _book = bookingSourceFor(homepageHtml, homepageMd, corpus, homepageDom);
+      let _measured = measureBookingPath(_book.src, _book.text);
+      // A LINKED scheduler is a booking route only while the link answers. A
+      // dead Calendly (trial ended, account closed) still reads online_booking
+      // from its URL alone - so a link-derived verdict is probed once, and a
+      // page that answers gone TWICE is removed from the read (the
+      // campaign_page_dead discipline: one 404 is a moment, two is a state).
+      // Embeds are not probed - the script host answering is not the test.
+      if (_measured && _measured.schedulerLinkUrl && /^https?:\/\//i.test(_measured.schedulerLinkUrl)) {
+        const _deadUrl = _measured.schedulerLinkUrl;
+        const _probeOnce = async () => { try { const r = await fetchT(_deadUrl, { method: 'HEAD', redirect: 'follow' }, 8000); return r ? Number(r.status) : null; } catch (e) { void e; return null; } };
+        const _s1 = await _probeOnce();
+        if (_s1 === 404 || _s1 === 410) {
+          const _s2 = await _probeOnce();
+          if (_s2 === 404 || _s2 === 410) {
+            console.log(`SITE AUDIT [${companyName}]: the booking link ${_deadUrl.slice(0, 90)} answered ${_s2} twice \u2014 a dead scheduler is not a booking route. Re-reading the page without it.`);
+            _measured = measureBookingPath(String(_book.src).split(_deadUrl).join(' '), _book.text);
+          }
+        }
+      }
+      if (_measured && _measured.bookingLabelSeen === true) out.bookingLabelSeen = true;
       if (_measured && _measured.booking !== out.booking) {
         console.log(`SITE AUDIT [${companyName}]: booking corrected ${out.booking} \u2192 ${_measured.booking} \u2014 ${_measured.why}. The model's read was an opinion; this is in the source.`);
         out.booking = _measured.booking;
@@ -34413,7 +34723,7 @@ const WP_BUILDERS = [
 // HOST, the way SCHEDULER_SIGNATURES already is, and the live counter-example
 // is George Sink: a live-chat popup on the page, invisible to every read this
 // system had, under an audit claiming the form was the only route in.
-const CHAT_SIGNATURES = /widget\.intercom\.io|js\.driftt\.com|cdn\.livechatinc\.com|embed\.tawk\.to|static\.zdassets\.com|v2\.zopim\.com|js\.hs-scripts\.com|js\.usemessages\.com|code\.tidio\.co|\.olark\.com\/|client\.crisp\.chat|\.smartsuppchat\.com|lptag\.liveperson\.net|app\.purechat\.com|salesiq\.zohopublic\.com|wchat\.freshchat\.com|customerchat\.js|\.chaport\.com|livehelpnow\.net|connect\.podium\.com\/widget|birdeye\.com\/embed|cdn\.nicejob\.co|messenger\.ngageics\.com|apexchat\.com|blazeo\.com|\.clientchatlive\.com\/|cdn\.juvoleads\.com|intaker\.com|leadconnectorhq\.com\/loader\.js|chatra\.io\/|widgets\.broadly\.com/i;
+const CHAT_SIGNATURES = /widget\.intercom\.io|js\.driftt\.com|cdn\.livechatinc\.com|embed\.tawk\.to|static\.zdassets\.com|v2\.zopim\.com|js\.hs-scripts\.com|js\.usemessages\.com|code\.tidio\.co|\.olark\.com\/|client\.crisp\.chat|\.smartsuppchat\.com|lptag\.liveperson\.net|app\.purechat\.com|salesiq\.zohopublic\.com|wchat\.freshchat\.com|customerchat\.js|\.chaport\.com|livehelpnow\.net|connect\.podium\.com\/widget|birdeye\.com\/embed|cdn\.nicejob\.co|messenger\.ngageics\.com|apexchat\.com|blazeo\.com|\.clientchatlive\.com\/|cdn\.juvoleads\.com|intaker\.com|leadconnectorhq\.com\/loader\.js|chatra\.io\/|widgets\.broadly\.com|usehatchapp\.com|avochato\.com/i;
 const AD_TAG_SIGNATURES = {
   hasGoogleAdsTag: /AW-\d{6,}|googleadservices|google_conversion/i,
   hasMetaPixel: /fbq\(|facebook\.net\/tr|connect\.facebook\.net.*fbevents/i,
@@ -34441,7 +34751,7 @@ const AD_TAG_SIGNATURES = {
   // of its own visitors anywhere - the owner cannot answer "how many people
   // came last month" from any dashboard. INTERNAL evidence for the call;
   // absence rides the same did-we-look gate as everything else here.
-  hasAnalytics: /gtag\(|G-[A-Z0-9]{6,}|googletagmanager|google-analytics\.com|fbq\(|plausible\.io|usefathom|matomo|clarity\.ms|analytics\.tiktok|snap\.licdn/i,
+  hasAnalytics: /gtag\(|G-[A-Z0-9]{6,}|googletagmanager|google-analytics\.com|fbq\(|plausible\.io|usefathom|matomo|clarity\.ms|analytics\.tiktok|snap\.licdn|static\.hotjar\.com|cloudflareinsights\.com/i,
 };
 const mergeAdSignals = (builtWith, renderedHtml, interior) => {
   const bw = builtWith && typeof builtWith === 'object' ? builtWith : {};
@@ -34481,6 +34791,11 @@ const mergeAdSignals = (builtWith, renderedHtml, interior) => {
     const absenceRead = renderedRead || (plainRead && PLAIN_COMPUTED.has(k));
     out[k] = positive ? true : (absenceRead ? false : null);
   }
+  // Wix/Squarespace measure traffic natively with no tag in the markup - the
+  // asset hosts are the platform fingerprint, read from the same copy.
+  out.builderNativeAnalytics = renderedRead
+    ? /static\.parastorage\.com|wixstatic\.com|static1\.squarespace\.com|assets\.squarespace\.com/i.test(html)
+    : null;
   return out;
 };
 
@@ -36909,6 +37224,7 @@ const _runResearchInner = async (req, res) => {
   // failure class in this file, so the value travels in a named function-scope
   // variable rather than on an assumption about braces.
   let homepageHtml = '';
+  let homepageDom = '';
   // ══ THE FIRST BROKEN LINK, WHICH NEVER LEFT THE SERVER ═══════════════════
   // The bottleneck cascade below walks the revenue chain — OPERATIONS, CAPTURE,
   // CONVERSION, SCALE, FOLLOW-UP, DEMAND, FOUNDATION — and each branch names what
@@ -37267,6 +37583,16 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           return { refused: true, status: r.status, body, reason: errText || 'rate limited', ms };
         }
         if (!r.ok || body?.success === false || (body && body.error)) {
+          // Round 102 fallback: 'html' (the rendered DOM) is the one format in
+          // this request with no recorded live success. If the refusal is about
+          // the request shape (HTTP 400), drop it and ask once with the proven
+          // pair - the DOM read is one measurement, the homepage is half the
+          // audit. HOMEPAGE REQUEST CHECK admits the new shape ONLY because
+          // this branch exists.
+          if (!_retried && r.status === 400 && formats.includes('html')) {
+            console.log(`   ↳ FORMAT FALLBACK [${kind}] ${target}: HTTP 400 with 'html' in the formats — asking once more without it, on the shape that has answered for weeks.`);
+            return fcAsk(target, formats.filter(f => f !== 'html'), waitFor, timeout, kind, true, opts);
+          }
           console.log(`⛔ FIRECRAWL REFUSED THE REQUEST [${kind}] ${target} — HTTP ${r.status} in ${ms}ms, formats ${JSON.stringify(formats)}. Firecrawl said: ${errText || '(no message)'}. Read that literally: the request NEVER RAN, so this is not evidence that their page is slow, heavy or blank. If it answered in under a second it did not even try. Fix the payload; do not add a retry.`);
           return { refused: true, status: r.status, body, reason: errText || `HTTP ${r.status}`, ms };
         }
@@ -37274,7 +37600,14 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         return { refused: false, status: r.status, body, reason: '', ms };
       };
 
-      const askCorpus   = (t, timeout = 20000, waitFor = 1500) => fcAsk(t, ['markdown', 'rawHtml'], waitFor, timeout, 'scrape (text)');
+      // 'html' is Firecrawl's RENDERED DOM (scripts stripped); 'rawHtml' is the
+      // server's HTML before any JavaScript ran - their own docs' words. Every
+      // DOM-shaped read (forms, iframes, booking widgets, nav) was running on
+      // the pre-JS copy, so a site-builder page that mounts its form at runtime
+      // read as having no form at all. Script signatures (ads, chat, scheduler
+      // embeds) stay on rawHtml, where the script tags actually are. Same page,
+      // same credit - Firecrawl bills per page, not per format.
+      const askCorpus   = (t, timeout = 20000, waitFor = 1500) => fcAsk(t, ['markdown', 'rawHtml', 'html'], waitFor, timeout, 'scrape (text)');
       // waitFor 4000, matching firecrawlScrape's inner-page shape, and for the
       // same reason recorded there: review widgets and embeds populate 2-4s after
       // load, and a shot taken at 1.5s shows an empty slot where the proof is.
@@ -37452,6 +37785,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // proves this is a real page rather than a bot challenge (a challenge page is
     // blanked upstream), so nothing downstream has to re-establish that.
     homepageHtml = rawHtml || '';
+    homepageDom = String(firecrawlData.data?.html || firecrawlData.html || '').slice(0, 150000);
+    if (homepageDom && homepageDom === homepageHtml) homepageDom = '';
     // Harvest this page's navigation while we hold its markup. This is the
     // common path — Firecrawl succeeded — and the links cost nothing because the
     // page is already fetched and parsed. They are only ever consulted if the
@@ -37728,6 +38063,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     builtWith.hasChat = _ads.hasChat;
     // Analytics rides the same wire the day it is added - the AD WIRE lesson.
     builtWith.hasAnalytics = _ads.hasAnalytics;
+    builtWith.builderNativeAnalytics = _ads.builderNativeAnalytics;
     builtWith.adsRead = _ads.adsRead;
     console.log(`AD SIGNALS [${company}]: read from ${_ads.adSource} \u2014 google ads tag ${_ads.hasGoogleAdsTag === null ? 'NOT CHECKED' : _ads.hasGoogleAdsTag}, meta pixel ${_ads.hasMetaPixel === null ? 'NOT CHECKED' : _ads.hasMetaPixel}, tag manager ${_ads.hasTagManager === null ? 'NOT CHECKED' : _ads.hasTagManager}, conversion tracking ${_ads.hasAdsConversion === null ? 'NOT CHECKED' : _ads.hasAdsConversion}, call tracking ${_ads.hasCallTracking === null ? 'NOT CHECKED' : _ads.hasCallTracking}. The first three gate the SPENDING findings; the last two decide whether anything on the site counts what a paid click becomes, and they spent their whole lives computed here and never copied off the merge.`);
     const email = emailData; // from browser via browserData
@@ -37777,6 +38113,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         website = '';
         domain = '';
         content = '';
+        homepageHtml = '';
+        homepageDom = '';
         screenshotUrl = null;
         // ══ AND THE MEASUREMENTS ALREADY TAKEN FROM THAT PAGE ═══════════════
         // htmlSignals is extracted from the raw markup BEFORE this check runs —
@@ -38343,7 +38681,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // The homepage text goes in so the interior pages can be compared
         // against it: a redirect or a SPA shell returns the homepage for a URL
         // that is not the homepage, and until now nothing could tell.
-        (website && _siteConfirmable) ? auditSitePages(website, firecrawlKey, apiKey, company, content, homepageHtml) : Promise.resolve(null),
+        (website && _siteConfirmable) ? auditSitePages(website, firecrawlKey, apiKey, company, content, homepageHtml, homepageDom) : Promise.resolve(null),
       ]);
       careers = carRes.status === 'fulfilled' ? carRes.value : null;
       sitePages = siteRes.status === 'fulfilled' ? siteRes.value : null;
@@ -38980,7 +39318,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       unreadPricing: !!(sitePages && sitePages.existsButUnread && sitePages.existsButUnread.pricing),
       // The homepage hero price the interior-corpus extractor cannot see. Same
       // suppression the rung and the constraint carry - one rule, three readers.
-      homepagePriceSeen: /\$\s?\d/.test(String(content || '')),
+      homepagePriceSeen: priceContextSeen(content),
     });
     if (valueEquation.checked) {
       console.log(`VALUE EQUATION [${company}]: ${valueEquation.shape} \u2014 delay=${valueEquation.delay} effort=${valueEquation.effort} likelihood=${valueEquation.likelihood} | ${valueEquation.frictionCount} friction point(s)${valueEquation.earnedButBlocked ? ' \u2014 REPUTATION EARNED BUT BLOCKED: the strongest single story available on this lead' : ''}`);
@@ -39049,6 +39387,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // so ranking depends on what is TRUE about the lead, not on which words
     // the model happened to choose on that run.
     let _harmInputs = {};
+    let _seoRead = { checked: false };
+    let _sitemapFresh = { checked: false };
     // Declared beside _harmInputs, not inside the block that fills it: the call
     // sheet reads this from the RESPONSE, and a value scoped to where it was
     // computed is the shape that has silently eaten measurements here before.
@@ -39314,15 +39654,33 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // reader the form was the only way anyone could start. Host-anchored
           // signatures only, and never a booking upgrade — chat answers a
           // question, it does not book a time.
-          captureSeen: !!(sitePages && sitePages.hasCapture === true) || builtWith.hasChat === true,
+          captureSeen: !!(sitePages && sitePages.hasCapture === true) || builtWith.hasChat === true
+            || !!(htmlSignals && htmlSignals.checked && htmlSignals.hasSmsLink === true),
           // Tri-state for the sheet: the merge already licensed absence per
           // marker, so false here means a page we READ carried none of them.
           chatSeen: builtWith.hasChat === true ? true : builtWith.hasChat === false ? false : null,
         };
         // Read once, above the literal, so the markers and the boolean cannot
         // drift apart the way five inline counters and one opinion did.
+        // The wrong-company discard blanks content/screenshot/htmlSignals and
+        // rawHtml is a const it cannot blank - so the build-age read (and the
+        // /10's modern-build component) was still measured on the DISCARDED
+        // franchisor's markup. The Ram Jack class, one reader over.
+        _seoRead = readSeoSignals((htmlSignals && htmlSignals.discardedWrongCompany) ? '' : rawHtml, {
+          companyName: company,
+          trade: customerTrade || verifiedIndustry || req.body.industry || '',
+          city: (gbpHealth && gbpHealth.checked && gbpHealth.gbpCity) || parseCityState(rankLocationFrom(req.body.location, gbpHealth)).town || '',
+        });
+        if (_seoRead.checked) {
+          console.log(`\u{1F50E} SEO READ [${company}]: noindex=${_seoRead.noindex} schema=${_seoRead.businessSchema ? 'business block (address/phone)' : _seoRead.boilerplateOnly ? 'builder boilerplate only' : _seoRead.schemaTypes.length ? _seoRead.schemaTypes.slice(0, 3).join('/') : 'none'} title="${_seoRead.title.slice(0, 60)}"${_seoRead.titleIsDefault ? ' (DEFAULT)' : ''} city-in-title=${_seoRead.titleHasCity} trade-in-title=${_seoRead.titleHasTrade} alt=${_seoRead.imgAltCount}/${_seoRead.imgCount}`);
+        }
+        try { _sitemapFresh = (website && !(htmlSignals && htmlSignals.discardedWrongCompany)) ? await fetchSitemapFreshness(website) : { checked: false }; } catch (e) { void e; }
+        if (_sitemapFresh.checked) {
+          const _smAgeDays = Math.round((Date.now() - Date.parse(_sitemapFresh.newest)) / 86400000);
+          console.log(`\u{1F5FA} SITEMAP FRESHNESS [${company}]: newest lastmod ${_sitemapFresh.newest} across ${_sitemapFresh.entries} entr(ies)${_smAgeDays > 420 ? ` - nothing touched in ~${Math.round(_smAgeDays / 30)} months, and that direction IS meaningful (plugins regenerate dates, so only staleness can be claimed)` : ' - fresh dates prove nothing (plugins regenerate them)'}`);
+        }
         const _siteAge = readSiteAge({
-          rawHtml,
+          rawHtml: (htmlSignals && htmlSignals.discardedWrongCompany) ? '' : rawHtml,
           content,
           hasViewport: (htmlSignals && htmlSignals.checked) ? htmlSignals.hasViewport : undefined,
           isHttps: (htmlSignals && htmlSignals.checked) ? htmlSignals.isHttps : undefined,
@@ -39731,10 +40089,18 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // fixture it and the sentence it fed named none of them. See
           // readSiteAge: eleven markers now, each one a specific thing in his
           // own page source with a phrase he can go and check.
-          datedSite: _siteAge.dated,
+          // readSiteAge's unchecked return carries dated:false and score:0, and
+          // Number.isFinite(0) is true - so an UNREAD page graded 1.5/1.5
+          // "modern build" and read as measured not-dated. The recorded
+          // unmeasured-as-zero class, in the score's own component. Null when
+          // the page was never read; the component leaves the denominator.
+          datedSite: _siteAge.checked === true ? _siteAge.dated : null,
 
+          // The one sendable claim in the SEO read: a robots noindex on the
+          // homepage. Tri-state - an unread page licenses nothing.
+          pageNoindexed: _seoRead.checked === true ? _seoRead.noindex === true : null,
           siteAgeMarkers: _siteAge.markers.map(m => m.say),
-          siteAgeScore: _siteAge.score,
+          siteAgeScore: _siteAge.checked === true ? _siteAge.score : null,
           siteAgeVisibleCount: Number(_siteAge.visibleCount) || 0,
           // ══ THE ONE FIGURE THE SPINE READS AND NOTHING SUPPLIED ═══════════
           // buildFactualSpine reads fourteen names to build `figures` — the ONLY
@@ -39815,12 +40181,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // "no price anywhere on the pages we read" shipped about a homepage
           // the owner can disprove in one glance. This only ever SUPPRESSES the
           // no-price family; it never makes a claim.
-          homepagePriceSeen: /\$\s?\d/.test(String(content || '')),
+          homepagePriceSeen: priceContextSeen(content),
           // Their own copy claims emergency / 24-7 work (round 101, Burbank:
           // "they're targeting emergency jobs... no one's doing a walkthrough
           // if they have an emergency"). Positive read of THEIR words; the
           // mismatch row it feeds is internal.
-          emergencyCopySeen: /\b24[\s\/-]?7\b|emergency/i.test(String(content || '')),
+          emergencyCopySeen: emergencyServiceCopySeen(content),
           // ══ THE ONLY MEASUREMENT WE TAKE OF HIS ACTUAL CUSTOMERS ═══════
           // Google's CrUX field data: what really happened to real phones
           // visiting his site over the last twenty-eight days. Everything else
@@ -40844,6 +41210,25 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
               if (_qc && (_qc.type === 'image' || (_qc.type === 'text' && /^IMAGE \d/.test(String(_qc.text || ''))))) msgContent.splice(_qi, 1);
             }
             visualAnalysis = null;
+          }
+          // ══ THE EYES SAW A PHONE THE CODE COULD NOT - round 102 ═══════════
+          // visiblePhone was asked of the vision model, returned, and consumed
+          // by NOTHING (the recorded computed-but-not-passed class, instance
+          // twenty-three). The shape it exists for: a number published only as
+          // an image or icon glyphs - no tel: link, no text digits - which
+          // read booking='none_found' and shipped "no route in appears on the
+          // pages we read at all", a claim the owner disproves by glancing at
+          // his own header. Suppression on vision evidence is the safe
+          // direction: the false "no route AT ALL" is withdrawn and the why
+          // says where the number was seen. The ladder has already run by this
+          // point, so this corrects the walk, the facts strip and the score -
+          // the sentence a caller would repeat - not the rung ordering.
+          if (visualAnalysis && visualAnalysis.visiblePhone && sitePages
+            && sitePages.booking === 'none_found' && sitePages.bookingMeasured === true) {
+            console.log(`SITE AUDIT [${company}]: booking corrected none_found \u2192 phone_only \u2014 the vision model read a phone number on the homepage render that the page code never carried (likely an image). The "no route at all" claim is withdrawn.`);
+            sitePages.booking = 'phone_only';
+            sitePages.bookingVisionPhone = true;
+            if (_harmInputs && _harmInputs.booking === 'none_found') _harmInputs.booking = 'phone_only';
           }
           // visualAnalysis now carries the authoritative visual findings;
           // hasCTA (declared below) reads from it directly.
@@ -44946,7 +45331,25 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
           return `Possibly ${builtWith.platform}, from a weak signature only — UNCONFIRMED, and nothing may be claimed about it to the prospect`;
         })(),
         googleAds: builtWith.adsRead !== true ? 'Not readable — no copy of their pages could be read, so we know NOTHING about their ads' : builtWith.hasGoogleAdsTag ? 'Google Ads tag found on site — confirmed ad account wiring (an account, not proof of a live campaign)' : 'No Google Ads tag on page (they may still run ads — unverified)',
-        seoBasics: builtWith.confirmed ? [
+        // Classified, not bare presence (round 102): builder-injected
+        // boilerplate schema is not evidence anybody did SEO, a title of
+        // "Home" is a present title, and NONE of this may be sold as the
+        // reason for a map position - on-page is a minor local factor.
+        seoBasics: _seoRead.checked ? (() => {
+          const _gaps = [
+            _seoRead.noindex ? 'the homepage carries a do-not-list (robots noindex) instruction - Google is told to leave the page out. This is the one kill-switch item here' : '',
+            _seoRead.titleIsDefault ? `the browser-tab title is a default ("${_seoRead.title}")` : (!_seoRead.title ? 'no title tag' : ''),
+            !builtWith.hasMetaDesc ? 'no meta description' : '',
+            !builtWith.hasH1 ? 'no H1 heading' : '',
+            _seoRead.businessSchema ? '' : (_seoRead.boilerplateOnly ? 'the only schema markup is builder boilerplate (no business block carrying an address or phone)' : 'no business schema block (address/phone) in the page code'),
+          ].filter(Boolean);
+          const _titleNote = (_seoRead.title && !_seoRead.titleIsDefault)
+            ? ` Title carries the trade: ${_seoRead.titleHasTrade ? 'yes' : 'no'}; carries the city: ${_seoRead.titleHasCity ? 'yes' : 'no'}.`
+            : '';
+          return (_gaps.length
+            ? 'On-page search-code gaps (context only - on-page signals are a MINOR local ranking factor and are NEVER the reason for a map position): ' + _gaps.join('; ') + '.'
+            : 'On-page search code in order (title, meta description, H1, a real business schema block).') + _titleNote;
+        })() : (builtWith.confirmed ? [
           !builtWith.titleTag || builtWith.titleTag.length < 15 ? 'weak/missing title tag' : '',
           !builtWith.hasMetaDesc ? 'no meta description' : '',
           !builtWith.hasH1 ? 'no H1' : '',
@@ -44956,7 +45359,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
           !builtWith.hasMetaDesc ? 'no meta description' : '',
           !builtWith.hasH1 ? 'no H1' : '',
           !builtWith.hasSchema ? 'no schema markup' : '',
-        ].filter(Boolean).join(', ') : 'On-page SEO fundamentals in place (title, meta, H1, schema)' : '',
+        ].filter(Boolean).join(', ') : 'On-page SEO fundamentals in place (title, meta, H1, schema)' : ''),
         facebookAds: fbAds.hasAds && fbAds.countReliable !== false ? `${fbAds.adCount || fbAds.ads?.length || ''}+ active Facebook ads verified as THEIRS in Ad Library (attribution-checked)`.trim() : fbAds.hasAds ? 'Ad Library keyword hits found but NOT attribution-verified — no ad count can be claimed' : builtWith.hasMetaPixel ? 'Meta pixel on site — ad infrastructure exists, but no ads verified as theirs in Ad Library' : fbAds.confirmed ? 'No Facebook ads attributable to them in Ad Library' : 'Facebook ads: could not check (Ad Library scrape failed)',
         fbAdAge: fbAds.ads?.length > 0 ? `Longest running: ${Math.max(...fbAds.ads.map(a=>a.runningDays))} days` : '',
         staleFbAds: fbAds.ads?.some(a=>a.runningDays>180) ? 'Warning: ads running 6+ months without refresh' : '',
@@ -45768,8 +46171,21 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       websiteScore: scoreWebsite(_harmInputs, { htmlSignals, visualAnalysis }),
       auditFacts: buildAuditFacts(_harmInputs, sitePages && sitePages.unlinkedPages, {
         htmlSignals,
-        analytics: (builtWith && builtWith.adsRead === true) ? (builtWith.hasAnalytics ?? null) : null,
+        // A Wix/Squarespace build measures its own traffic natively with no
+        // tag in the markup, so "no analytics of any kind" was a false claim
+        // on exactly those platforms. Builder-native reads as null: unclaimed,
+        // not clean.
+        analytics: (builtWith && builtWith.adsRead === true)
+          ? (builtWith.hasAnalytics === true ? true
+            : (builtWith.builderNativeAnalytics === true ? null : (builtWith.hasAnalytics ?? null)))
+          : null,
+        seo: _seoRead,
+        sitemapFresh: _sitemapFresh,
       }),
+      // The search-code read, whole, for the call sheet. INTERNAL except the
+      // noindex rung: on-page weighs ~15% of the local pack, so nothing here
+      // may ever be sold as the reason for a map position.
+      seoSignals: _seoRead.checked ? { ..._seoRead, sitemapNewest: _sitemapFresh.checked ? _sitemapFresh.newest : null } : null,
       // A modeled monthly-visits figure, INTERNAL and labeled an estimate.
       // Never a rung and never an email: he has Analytics, we have a model.
       trafficEstimate: trafficEstimate && trafficEstimate.checked ? trafficEstimate : null,
@@ -48409,10 +48825,19 @@ app.listen(PORT, () => {
       bookingMeasured: true, booking: 'online_booking', formFieldCountIsSingleForm: true, formFieldCount: 4,
       mobileFieldMeasured: true, mobileFieldSlow: false, isHttps: true });
     if (!_good.checked || _good.score < 9) _fails.push(`a modern site with a real scheduler scores ${_good && _good.score}/10 — a score that cannot go high tells nobody anything`);
-    // THE RULE: unmeasured leaves the denominator.
+    // THE RULE: unmeasured leaves the denominator - but round 102 adds the
+    // floor: two graded components multiplied out to a confident 10/10 on
+    // exactly the leads where the least was known (a blocked site, a ladder
+    // crash), so under five components there is no honest /10 and the card
+    // says how much was measured instead.
     const _half = scoreWebsite({ viewportChecked: true, hasViewport: true, isHttps: true });
-    if (!_half.checked) _fails.push('a half-read site produced no score at all — the honest answer is a score over what was read');
-    else if (_half.score < 9) _fails.push(`a site measured only on viewport and https — both fine — scores ${_half.score}/10: the unmeasured components are being scored as ZERO, which is the exact class PART 6 names, pointed at a number an operator will repeat`);
+    if (_half.checked !== false || _half.thin !== true) _fails.push('a two-component read still produces a /10 — the thin floor is gone and a blocked site can grade 10/10 again');
+    if (!/only 2 of/.test(String(_half.why || ''))) _fails.push('the thin refusal does not say how little was measured, so the card cannot either');
+    const _five = scoreWebsite({ viewportChecked: true, hasViewport: true, isHttps: true,
+      bookingMeasured: true, booking: 'online_booking', siteAgeScore: 0,
+      mobileFieldMeasured: true, mobileFieldSlow: false });
+    if (_five.checked !== true) _fails.push('a five-component read no longer grades at all — the floor is eating honest partial reads');
+    else if (_five.score < 9) _fails.push(`a clean five-component read scored ${_five.score}/10 — the unmeasured components are being scored as ZERO, which is the exact class PART 6 names, pointed at a number an operator will repeat`);
     if (scoreWebsite({}).checked !== false) _fails.push('a lead with nothing measured produced a score from nothing');
     // ══ V2 (round 101): THE DOOR CAPS THE SCORE ═══════════════════════════
     // Windows Plus shipped 9/10 over a form-and-wait door and the owner's
@@ -49136,7 +49561,7 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('lsa: m.lsaChecked', ' === true ? {'))) _fails.push('the facts strip lost the sponsored-block surface');
     if (!_src.includes(_n("'scrape+screenshot (mobile)', false, ", '{ mobile: true })'))) _fails.push('the mobile homepage render is gone — the phone layout goes back to being invisible on every sheet');
     if (!_src.includes(_n("sitePages.pageShots.push({ key: 'homepage ", "(mobile)', url: String(website || ''), shot: mobileShotUrl });"))) _fails.push('the phone render no longer joins the pageShots list, so neither the brain nor the sheet ever sees it');
-    if (!_src.includes(_n('captureSeen: !!(sitePages && sitePages.hasCapture === true) || ', 'builtWith.hasChat === true,'))) _fails.push('chat evidence no longer suppresses "the only way in is a phone call" — the George Sink claim ships again');
+    if (!_src.includes(_n('captureSeen: !!(sitePages && sitePages.hasCapture === true) || ', 'builtWith.hasChat === true'))) _fails.push('chat evidence no longer suppresses "the only way in is a phone call" — the George Sink claim ships again');
     if (_fails.length) {
       console.log(`⛔ LSA SURFACE CHECK: ${_fails.slice(0, 8).join(' | ')}.`);
     } else {
@@ -49553,7 +49978,7 @@ app.listen(PORT, () => {
     if (!RECURRING_OFFER_RE.test('Join the Comfort Club today')) _fails.push('a branded club is not a recurring offer — §69 RETENTION can bind on the false absence');
     const _pr = _rung('no_published_pricing');
     if (_pr && _pr.test({ pricingMeasured: true, pricesPublished: 0, homepagePriceSeen: true }) !== false) _fails.push('a homepage hero price does not suppress the no-price claim — the interior-corpus extractor cannot see the one page the owner checks first');
-    if (!selfSourceNoComments().includes(_nn('homepagePriceSeen: /\\$\\s?\\d/.test(', 'String(content || \'\')),'))) _fails.push('the homepage price scan never reaches the ladder — computed-but-not-passed');
+    if (!selfSourceNoComments().includes(_nn('homepagePriceSeen: priceContextSeen(', 'content),'))) _fails.push('the homepage price scan never reaches the ladder — computed-but-not-passed');
     // 4 · OPS VOCABULARY. One vocabulary for "is this a delivery complaint":
     // the THROUGHPUT read and the leak ranking read the same buckets now.
     if (!opsPainShaped('unresponsive after install')) _fails.push('the ops read still cannot see "unresponsive" — the split-brain is back and one sheet can carry two verdicts about one string');
@@ -49797,7 +50222,10 @@ app.listen(PORT, () => {
     // component is graded off a 403 body.
     const _wsBlk = scoreWebsite({ bookingMeasured: true, booking: 'online_booking', viewportChecked: true, hasViewport: true },
       { visualAnalysis: { looksBlockedOrError: true, hasVisibleCTA: true, pageFullyLoaded: true } });
-    if (!_wsBlk.checked || (_wsBlk.graded || []).some(g => g.what === 'the first screen') || !(_wsBlk.skipped || []).includes('first screen')) _fails.push('the website score grades the first screen off a render the eyes refused — Burbank\'s 403 page is back in the denominator');
+    // Two graded components sit under the round-102 thin floor, so checked is
+    // false here BY DESIGN - the quarantine question is only whether the first
+    // screen stayed out of the graded list, and both return shapes carry it.
+    if ((_wsBlk.graded || []).some(g => g.what === 'the first screen') || !(_wsBlk.skipped || []).includes('first screen')) _fails.push('the website score grades the first screen off a render the eyes refused — Burbank\'s 403 page is back in the denominator');
     if (_fails.length) {
       console.log(`⛔ RENDER QUARANTINE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
     } else {
@@ -49851,7 +50279,7 @@ app.listen(PORT, () => {
     if (buildAuditFacts({ emergencyCopySeen: true, bookingMeasured: true, booking: 'form' }, null, null).emergencyMismatch !== true) _fails.push('emergency copy over a form-and-wait door no longer reads as a mismatch — the Burbank contradiction goes unmeasured');
     if (buildAuditFacts({ emergencyCopySeen: true, bookingMeasured: true, booking: 'phone_only' }, null, null).emergencyMismatch === true) _fails.push('a phone-only door reads as an emergency mismatch — an emergency customer CALLS');
     if (buildAuditFacts({ emergencyCopySeen: false }, null, null).emergencyMismatch !== false) _fails.push('a site that never claims emergency work carries the mismatch state');
-    if (!_s.includes(_n('emergencyCopySeen: /\\b24[\\s\\/-]?7\\b|emergency/i.test(String(content', " || ''))"))) _fails.push('the emergency-copy read never runs at the call site — the facts strip reads a field nothing writes');
+    if (!_s.includes(_n('emergencyCopySeen: emergencyServiceCopySeen(', 'content),'))) _fails.push('the emergency-copy read never runs at the call site — the facts strip reads a field nothing writes');
     // 5 · The price row's four honest states, server-authoritative.
     if (buildAuditFacts({ pricesPublished: 2 }, null, null).price !== 'shown') _fails.push('a published price does not read shown');
     if (buildAuditFacts({ homepagePriceSeen: true }, null, null).price !== 'shown') _fails.push('a homepage hero price does not read shown');
@@ -50839,7 +51267,7 @@ app.listen(PORT, () => {
     // calls reported two of three and failed a correct build.
     const _scanners = [
       [_needle2('found.add(a); ', '});'), 'the page-text scanner'],
-      [_needle2('.map(addressFrom', 'Mailto).filter(Boolean)'), 'the markup scanner'],
+      [_needle2(']).map(addressFrom', 'Mailto),'), 'the markup scanner'],
       [_needle2('addressFromMailto(m[1])', ''), 'the leadership-page scanner'],
     ];
     for (const [needle, which] of _scanners) {
@@ -54489,7 +54917,15 @@ app.listen(PORT, () => {
       _fails.push('the scrapeHomepage slice does not reach its own return statement — the block boundary is wrong, so nothing below this line was really checked');
     } else {
       // 1. EVERY SHAPE MUST BE ONE WE HAVE WATCHED SUCCEED.
-      const PROVEN = ["['markdown','rawHtml']", "['screenshot@fullPage']", "['screenshot']"];
+      const PROVEN = ["['markdown','rawHtml']", "['screenshot@fullPage']", "['screenshot']",
+        // Round 102: the rendered-DOM format rides the proven text pair. It has
+        // NOT been watched succeed live yet, so it is admitted ONLY because the
+        // refusal branch drops it and re-asks on the proven pair - asserted
+        // right below. Delete the fallback and this shape goes back to refused.
+        "['markdown','rawHtml','html']"];
+      if (_home.indexOf("formats.filter(f => f !== '" + "html')") < 0) {
+        _fails.push("the unproven 'html' format is requested with no fallback to the proven pair - one shape refusal and the homepage is gone on every lead again");
+      }
       const _shapes = (_home.match(/\[\s*'(?:markdown|rawHtml|screenshot|screenshot@fullPage)'[^\]]*\]/g) || [])
         .map(s => s.replace(/\s+/g, ''));
       if (!_shapes.length) _fails.push('no request shape found in scrapeHomepage at all');
@@ -59359,10 +59795,10 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // caller. Needle assembled at runtime, source stripped of comment lines.
     {
       const _src = selfSourceNoCommentsLF();
-      if (_src.indexOf('apiKey, company, content, ' + 'homepageHtml)') < 0) {
+      if (_src.indexOf('apiKey, company, content, ' + 'homepageHtml, homepageDom)') < 0) {
         _fails.push('the homepage source is not passed into the page audit, so the booking read is back to interior markdown only and cannot see a scheduler embed');
       }
-      if (_src.indexOf('const _measured = ' + 'measureBookingPath(_book.src, _book.text)') < 0) {
+      if (_src.indexOf('let _measured = ' + 'measureBookingPath(_book.src, _book.text)') < 0) {
         _fails.push('the booking read no longer goes through the assembled source, so what it is actually reading is unverified');
       }
     }
@@ -59602,7 +60038,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       if (_src.indexOf('const _homeFp = ' + 'pageFingerprint(homepageMd)') < 0) {
         _fails.push('the interior pages are no longer compared against the HOMEPAGE, which is the exact case reported: four renders that were all the homepage');
       }
-      if (_src.indexOf('auditSitePages(website, firecrawlKey, apiKey, company, ' + 'content, homepageHtml)') < 0) {
+      if (_src.indexOf('auditSitePages(website, firecrawlKey, apiKey, company, ' + 'content, homepageHtml, homepageDom)') < 0) {
         _fails.push('the homepage text is not passed into the page audit, so the comparison has nothing to compare against and silently never fires');
       }
       if (_src.indexOf('if (_seenShot.has(' + 'x.shot))') < 0) {
@@ -60253,7 +60689,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
 
     // A genuinely old build: table layout, pre-CSS tags, no viewport.
     const _old = readSiteAge({
-      rawHtml: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0"><html xmlns="http://www.w3.org/1999/xhtml"><table width="960" border="1" cellpadding="4"><tr><td><font size="2">Welcome</font></td></tr></table>${_pad}`,
+      rawHtml: `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0"><html xmlns="http://www.w3.org/1999/xhtml"><table width="960" border="1" cellpadding="4"><tr><td><font size="2">Welcome</font></td></tr></table><table border="1" cellpadding="2"><tr><td><center>Serving the area since 1998</center></td></tr></table>${_pad}`,
       hasViewport: false, isHttps: false, copyrightYear: 2011,
     });
     if (!_old.dated) _fails.push('a table-layout page with <font> tags, no viewport, plain http and a 2011 copyright does not read as dated');
@@ -60272,6 +60708,13 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // ONE marker is a quirk, not a finding. Two is where an impression becomes
     // evidence, and the whole value of this rung is that it stops being taste.
     const _one = readSiteAge({ rawHtml: `<html><head><meta name="keywords" content="roofing"></head><body>${_pad}</body></html>`, hasViewport: true, isHttps: true });
+    // One attribute-styled table is a rate-table plugin or pasted Word content
+    // on a maintained build; and data-width= (Revolution Slider, FB embeds) is
+    // not a fixed layout. Both fire the say-text's whole-page claim if allowed.
+    const _oneTable = readSiteAge({ rawHtml: `<html><head><meta name="viewport" content="w"></head><body><table border="1" cellpadding="2"><tr><td>rates</td></tr></table>${_pad}</body></html>`, hasViewport: true, isHttps: true });
+    if ((_oneTable.markers || []).some(m => m.id === 'tables')) _fails.push('ONE attribute-styled table reads as a table-layout build — pasted Word content fires "the page is still laid out with tables"');
+    const _dataW = readSiteAge({ rawHtml: `<html><head><meta name="viewport" content="w"></head><body><div data-width="960" class="fb-page"></div>${_pad}</body></html>`, hasViewport: true, isHttps: true });
+    if ((_dataW.markers || []).some(m => m.id === 'fixedwidth')) _fails.push('data-width= fires the fixed-width marker — a responsive build with a Facebook embed reads as "cannot fit a phone"');
     if (_one.dated) _fails.push('a single marker is enough to call a site dated, which is how this becomes an opinion again');
     if (_one.score !== 1) _fails.push(`a page with one marker scored ${_one.score}`);
 
@@ -60286,7 +60729,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (!_code.dated) _fails.push('three source-only markers no longer read as a dated build, so the facts strip and the score lose the measurement');
     if (_code.visibleCount !== 0) _fails.push(`an invisible-only build reports ${_code.visibleCount} visible marker(s) \u2014 the split is misclassifying`);
     // And visible markers sort FIRST, because every consumer names the first two.
-    const _mix = readSiteAge({ rawHtml: `<html xmlns="http://www.w3.org/1999/xhtml"><head><meta name="keywords" content="x"></head><body><table width="960" border="1"><tr><td>hi</td></tr></table>${_pad}</body></html>`, hasViewport: true, isHttps: true });
+    const _mix = readSiteAge({ rawHtml: `<html xmlns="http://www.w3.org/1999/xhtml"><head><meta name="keywords" content="x"></head><body><table width="960" border="1"><tr><td>hi</td></tr></table><table border="1" cellpadding="3"><tr><td>rates</td></tr></table>${_pad}</body></html>`, hasViewport: true, isHttps: true });
     // tables happens to be declared first AND visible, so [0] alone would
     // pass without the sort \u2014 the fixture-that-measures-nothing trap. The
     // second slot and the last slot are where the sort actually shows:
@@ -60316,7 +60759,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
 
     // ── the call site, because a fixture supplies its own arguments ────────
     const _an = (...p) => p.join('');
-    if (!selfSourceNoComments().includes(_an('datedSite: _siteAge', '.dated'))) {
+    if (!selfSourceNoComments().includes(_an('datedSite: _siteAge.checked === true ? _siteAge', '.dated : null'))) {
       _fails.push('the ladder is not being handed the real site-age read, so the rung is scoring on something else');
     }
     if (!selfSourceNoComments().includes(_an('siteAgeMarkers: _siteAge.markers', '.map(m => m.say)'))) {
@@ -60330,6 +60773,224 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ SITE AGE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ BOOKING VERDICT CHECK — round 102 ═══════════════════════════════════
+  // "booking clients wise": a book/schedule LABEL used to become online_booking
+  // before any evidence ran, so "Request an Appointment" over a 9-field contact
+  // form graded 3/3 on the score's heaviest component and silenced both door
+  // rungs — the false GOOD, on exactly the leads those rungs exist for. The
+  // label is intent now; the LINK URL decides. Executed both ways.
+  try {
+    const _fails = [];
+    const _pad = '<p>' + 'x'.repeat(400) + '</p>';
+    // The Windows-class false good: a labeled link to a plain contact form.
+    const _reqForm = measureBookingPath(`<a href="/contact">Request an Appointment</a><form action="/contact"><input type="text" name="your-name"><input type="email" name="your-email"><textarea name="message"></textarea></form>${_pad}`, '');
+    if (!_reqForm || _reqForm.booking !== 'form') _fails.push(`a "Request an Appointment" label over a plain contact form reads as ${_reqForm && _reqForm.booking} — the label is deciding again, and the score's heaviest component grades 3/3 on a form-and-wait door`);
+    if (_reqForm && _reqForm.bookingLabelSeen !== true) _fails.push('the booking label no longer travels — the call sheet loses "they SAY book online" on a lead whose door cannot');
+    // A labeled link to a REAL vendor must still read online, and the why must
+    // say LINKED, because an embed and a link fail differently when they die.
+    const _vendor = measureBookingPath(`<a href="https://calendly.com/riverside/estimate">Book Now</a>${_pad}`, '');
+    if (!_vendor || _vendor.booking !== 'online_booking' || !/link/i.test(String(_vendor.why))) _fails.push('a booking label linking a known scheduler no longer reads as online booking with a LINKED why');
+    if (_vendor && !_vendor.schedulerLinkUrl) _fails.push('the linked scheduler URL does not travel, so the dead-scheduler probe has nothing to probe');
+    // A vendor our list does not know, but whose own address says booking.
+    const _unknown = measureBookingPath(`<a href="https://portal.example-crm.com/schedule/riverside">Schedule an Appointment</a>${_pad}`, '');
+    if (!_unknown || _unknown.booking !== 'online_booking') _fails.push('an offsite booking-labeled link whose own address says booking no longer counts — unknown vendors go back to reading as phone-only');
+    // "Guest Book" must be dead: bare \bbook\b is gone from the intent list.
+    const _guest = measureBookingPath(`<a href="/guest-book">Guest Book</a> Call us at <a href="tel:+15551234567">555-123-4567</a>${_pad}`, '');
+    if (_guest && _guest.booking === 'online_booking') _fails.push('"Guest Book" reads as online booking — the bare book intent is back');
+    // A login portal is not a contact route: email+password is how the
+    // adversarial pass manufactured forms:true on portal pages.
+    if (htmlHasRealForm('<form action="/login"><input type="email" name="email"><input type="password" name="password"><button>Log in</button></form>')) {
+      _fails.push('an email+password login form reads as a real contact form — a portal page manufactures a route in');
+    }
+    // A careers page's application fields are not a customer route in.
+    const _careers = measureBookingPath(`=== PAGE: careers ===\nfirst name\nlast name\nemail address\nphone number\nsubmit${_pad}`, '');
+    if (_careers && _careers.booking === 'form') _fails.push('a careers application reads as the customer contact form — the field count is measuring the wrong page');
+    // The dead-scheduler probe: a link-derived verdict is probed twice and a
+    // page answering gone twice is removed from the read. Call-site needles —
+    // the probe is async against a live URL, so the wire is what boot can pin.
+    const _src = selfSourceNoCommentsLF();
+    if (_src.indexOf('const _s2 = await ' + '_probeOnce();') < 0) _fails.push('the dead-scheduler second probe is gone — one 404 is a moment, and a dead Calendly reads as a booking route again');
+    if (_src.indexOf('measureBookingPath(String(_book.src).split(_deadUrl)' + ".join(' '), _book.text)") < 0) _fails.push('a twice-dead booking link is no longer removed from the read — the verdict stands on a page that answers gone');
+    // sms: a text-us link is a capture route (suppression only, never booking).
+    const _rich = ('<div><p>' + 'plumbing repairs and drain service around town all week long. '.repeat(3) + '</p></div>').repeat(8);
+    const _sms = extractHtmlSignals(`<a href="sms:+15551234567">Text us</a>${_rich}`, 'https://x.com');
+    if (!_sms || _sms.hasSmsLink !== true) _fails.push('an sms: link is no longer read from the markup');
+    if (_src.indexOf('htmlSignals.checked && htmlSignals.' + 'hasSmsLink === true)') < 0) _fails.push('the sms link no longer reaches captureSeen — a text-us business reads "the only way in is a phone call"');
+    // visiblePhone: the vision read corrects none_found to phone_only. Wire.
+    if (_src.indexOf('sitePages.' + 'bookingVisionPhone = true;') < 0) _fails.push('the vision-read phone no longer corrects none_found — "no route in at all" ships about a number the render plainly shows');
+    // unreadBooking gates the "only way in" sentence at the walk's source.
+    if (paidLeakGapFrom({ unreadBooking: true, bookingMeasured: true, booking: 'phone_only', captureSeen: false, adsTagConfirmed: true, adsRead: true }) !== '') {
+      _fails.push('an unread booking page no longer bars "the only way in is a phone call" — the absence claim ships about a page we chose not to open');
+    }
+    if (_fails.length) {
+      console.log(`⛔ BOOKING VERDICT CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ BOOKING VERDICT CHECK: a booking LABEL is intent and only the LINK URL decides — a known scheduler or a booking-shaped address reads as online booking, "Request an Appointment" over a plain contact form reads as the form it is, Guest Book is dead, a login portal and a careers application are not contact routes, a linked scheduler that answers gone twice is removed from the read, an sms link suppresses the phone-only claim, and the vision-read phone withdraws "no route in at all". Every branch executed; the async probe and the correction pinned at their call sites.`);
+    }
+  } catch (e) {
+    console.log(`⛔ BOOKING VERDICT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ SCORE INTEGRITY CHECK — round 102 ═══════════════════════════════════
+  // The /10's inputs, each proven honest: an unread page can no longer grade
+  // "modern build" (Number.isFinite(0) laundered an UNCHECKED age read into
+  // 1.5/1.5, live), a wrong-company page cannot be graded at all, a null
+  // viewport no longer passes as measured, a stepped long form scores as the
+  // checklist's own PASS case, a promo dollar is not a published price, and
+  // the vision grader runs at a pinned temperature with its booleans coerced.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    // The null-laundering wire: the age score is delivered ONLY when checked.
+    if (_src.indexOf('siteAgeScore: _siteAge.checked === true ? _siteAge' + '.score : null') < 0) _fails.push('the age score is delivered ungated again — an UNREAD page scores 0, Number.isFinite(0) passes, and a site nobody read grades 1.5/1.5 "modern build"');
+    if (_src.indexOf("readSeoSignals((htmlSignals && htmlSignals.discardedWrongCompany) ? '' : " + 'rawHtml') < 0) _fails.push('the wrong-company discard no longer blanks the SEO read input');
+    if (_src.indexOf("rawHtml: (htmlSignals && htmlSignals.discardedWrongCompany) ? '' : " + 'rawHtml') < 0) _fails.push("the wrong-company discard no longer blanks the age read's input — the franchisor's markup grades the lead's build");
+    // A null viewport is unmeasured, not modern: it must LEAVE the denominator.
+    const _nullVp = scoreWebsite({ viewportChecked: true, hasViewport: null, bookingMeasured: true, booking: 'online_booking', siteAgeScore: 0, mobileFieldMeasured: true, mobileFieldSlow: false, isHttps: true });
+    if (!(_nullVp.skipped || []).includes('phone layout')) _fails.push('a null viewport still grades the phone-layout component — unmeasured is being scored as a boolean again');
+    // A 10-field form split into steps is the checklist's PASS case.
+    const _step = scoreWebsite({ formFieldCountIsSingleForm: true, formFieldCount: 10, viewportChecked: true, hasViewport: true, isHttps: true }, { htmlSignals: { checked: true, multiStepForm: true } });
+    const _stepRow = (_step.graded || []).find(g => g.what === 'a form a stranger finishes');
+    if (!_stepRow || _stepRow.got !== 0.5) _fails.push(`a 10-field form split into steps scores ${_stepRow && _stepRow.got} — the stepped form is condemned on the box it passes`);
+    const _flat = scoreWebsite({ formFieldCountIsSingleForm: true, formFieldCount: 10, viewportChecked: true, hasViewport: true, isHttps: true }, { htmlSignals: { checked: true, multiStepForm: false } });
+    const _flatRow = (_flat.graded || []).find(g => g.what === 'a form a stranger finishes');
+    if (!_flatRow || _flatRow.got !== 0) _fails.push('a flat 10-field form no longer scores zero on the form component');
+    // A promo dollar, a down payment and an insurance figure are not prices.
+    if (priceContextSeen('$89 tune-up special this month') !== true) _fails.push('a real published price on the homepage no longer counts');
+    if (priceContextSeen('$0 down financing available') !== false) _fails.push('"$0 down" reads as a published price');
+    if (priceContextSeen('Save $500 on a new system') !== false) _fails.push('"Save $500" reads as a published price');
+    if (priceContextSeen('$2M liability coverage on every job') !== false) _fails.push('an insurance figure reads as a published price');
+    // Proof position is measured over VISIBLE text: a JSON-LD Review block in
+    // the head is not "proof before the footer".
+    const _proofPad = ('<div><p>' + 'we pour and finish concrete driveways patios and walkways. '.repeat(4) + '</p></div>').repeat(10);
+    const _proofHtml = `<html><head><script type="application/ld+json">{"@type":"Review","reviewBody":"great testimonials reviews"}</script></head><body>${_proofPad}<footer>testimonials from our customers</footer></body></html>`;
+    const _proofSig = extractHtmlSignals(_proofHtml, 'https://x.com');
+    if (!_proofSig || _proofSig.proofOnlyInFooter !== true) _fails.push('a head JSON-LD review block reads as proof before the footer — the position is measured over raw bytes again, and the footer-only finding dies on every schema-carrying site');
+    // The vision grader: pinned temperature, coerced booleans, and a shot
+    // nobody vouched for grades nothing.
+    if (_src.indexOf('temperature: ' + '0.2,') < 0) _fails.push('the vision call runs at the API default temperature again — the grading call §6 fixed on the writer');
+    const _noVouch = scoreWebsite({ viewportChecked: true, hasViewport: true, isHttps: true }, { visualAnalysis: { hasVisibleCTA: true, looksBlockedOrError: false } });
+    if (!(_noVouch.skipped || []).includes('first screen')) _fails.push('a vision answer with no pageFullyLoaded field still grades the first screen — the mid-load gate walks on an omitted field again');
+    if (_src.indexOf("if (parsed[_bf] === 'true') parsed[_bf] " + '= true;') < 0) _fails.push('the vision booleans are no longer coerced — a "true"-as-string answer silently drops the component it was bought to grade');
+    if (_fails.length) {
+      console.log(`⛔ SCORE INTEGRITY CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ SCORE INTEGRITY CHECK: every input to the /10 is honest — the age score travels only when the page was actually read, a wrong-company page grades nothing, a null viewport leaves the denominator instead of passing, a stepped long form scores as the pass the checklist says it is, promo/down-payment/insurance dollars are not published prices, proof position is measured over the text a visitor sees rather than raw bytes, and the vision grader runs pinned at 0.2 and only on a shot it vouched for as fully loaded. Executed on the real functions, both directions.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SCORE INTEGRITY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ SEO READ CHECK — round 102 ══════════════════════════════════════════
+  // "the code set up for SEO wise". The industry evidence bounds every claim
+  // (recorded in CLAUDE.md §79): a robots noindex is the ONE kill-switch
+  // static finding; schema must be CLASSIFIED because the builders auto-inject
+  // boilerplate; on-page is ~15% of the pack, so nothing here may ever be sold
+  // as the reason for a map position — site_noindexed is the only sendable rung.
+  try {
+    const _fails = [];
+    const _pad = '<p>' + 'seo '.repeat(200) + '</p>';
+    const _noidx = readSeoSignals(`<html><head><meta name="robots" content="noindex,nofollow"><title>Riverside Roofing</title></head><body>${_pad}</body></html>`);
+    if (!_noidx.checked || _noidx.noindex !== true) _fails.push('a robots noindex in the head is not detected — the one kill-switch finding a static read can make is dark');
+    const _noidx2 = readSeoSignals(`<html><head><meta content="noindex" name="googlebot"><title>x</title></head><body>${_pad}</body></html>`);
+    if (_noidx2.noindex !== true) _fails.push('the attribute-order variant of the noindex meta is missed');
+    const _idx = readSeoSignals(`<html><head><meta name="robots" content="index,follow"><title>x</title></head><body>${_pad}</body></html>`);
+    if (_idx.noindex !== false) _fails.push('an ordinary robots meta reads as a noindex — the kill-switch finding fires on healthy sites');
+    // Schema is CLASSIFIED: builder boilerplate is not "doing SEO".
+    const _boiler = readSeoSignals(`<html><head><script type="application/ld+json">{"@type":"WebSite","name":"x"}</script></head><body>${_pad}</body></html>`);
+    if (_boiler.businessSchema !== false || _boiler.boilerplateOnly !== true) _fails.push('builder-injected WebSite schema reads as a business block — Wix and Squarespace auto-inject it, so bare presence proves nothing');
+    const _biz = readSeoSignals(`<html><head><script type="application/ld+json">{"@type":"Plumber","name":"x","address":"12 Main St","telephone":"555"}</script></head><body>${_pad}</body></html>`);
+    if (_biz.businessSchema !== true) _fails.push('a typed block carrying an address no longer reads as the business schema');
+    // The title: default-title and trade/city presence on the stem.
+    const _tHome = readSeoSignals(`<html><head><title>Home</title></head><body>${_pad}</body></html>`, { companyName: 'Riverside Roofing' });
+    if (_tHome.titleIsDefault !== true) _fails.push('a title of "Home" no longer reads as the default');
+    const _tGood = readSeoSignals(`<html><head><title>Riverside Roofing - Roof Repair in Dallas, TX</title></head><body>${_pad}</body></html>`, { companyName: 'Riverside Roofing', trade: 'roofer', city: 'Dallas, TX' });
+    if (_tGood.titleIsDefault !== false || _tGood.titleHasCity !== true || _tGood.titleHasTrade !== true) _fails.push('trade "roofer" no longer finds "Roofing" in the title on the stem, or the city read broke — the §15 rule');
+    // Nothing read means nothing claimed.
+    if (readSeoSignals('').checked !== false) _fails.push('an unread page still produces an SEO verdict');
+    // The rung: only ever on a measured true; null licenses nothing.
+    const _rung = HARM_LADDER.find(r => r && r.id === 'site_noindexed');
+    if (!_rung) _fails.push('site_noindexed is gone from the ladder');
+    else {
+      if (_rung.test({ pageNoindexed: true }) !== true) _fails.push('the noindex rung no longer fires on a measured noindex');
+      if (_rung.test({ pageNoindexed: null }) || _rung.test({})) _fails.push('the noindex rung fires with the page unread — the absence-without-a-look class on the strongest new claim');
+    }
+    // The wires: measured, delivered, and never sold as a map cause.
+    const _src = selfSourceNoCommentsLF();
+    if (_src.indexOf('pageNoindexed: _seoRead.checked === true ? _seoRead' + '.noindex === true : null') < 0) _fails.push('the noindex read never reaches the ladder — computed-but-not-passed');
+    if (_src.indexOf('seo: ' + '_seoRead,') < 0) _fails.push('the SEO read never reaches the facts strip');
+    if (_src.indexOf('sitemapFresh: ' + '_sitemapFresh') < 0) _fails.push('the sitemap freshness read never reaches the facts strip');
+    // Staleness only: the facts carry the newest DATE, never a fresh verdict —
+    // plugins regenerate lastmod on every deploy, so fresh proves nothing.
+    // (fetchSitemapFreshness itself needs a live site; the parser floor is
+    // asserted here and the read has NOT yet run against a live sitemap.)
+    if (_src.indexOf('if (dates.length < 3) return { checked: ' + 'false };') < 0) _fails.push('the sitemap read claims freshness off fewer than three dated entries');
+    const _facts = buildAuditFacts({}, null, { seo: { checked: true, noindex: true, schemaTypes: ['WebSite'], boilerplateOnly: true }, sitemapFresh: { checked: false } });
+    if (!_facts.seo || _facts.seo.noindex !== true || _facts.seo.schema !== 'boilerplate') _fails.push('the facts strip mangles the SEO states');
+    if (buildAuditFacts({}, null, { seo: { checked: false } }).seo !== null) _fails.push('an unread SEO state renders as a measured one on the facts strip');
+    if (_fails.length) {
+      console.log(`⛔ SEO READ CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ SEO READ CHECK: the search-code read is measured and bounded — a robots noindex in either attribute order is the one sendable finding and fires only with the page actually read, builder-injected schema is classified as the boilerplate it is while a typed block with an address reads as the business schema, the title is checked for the default and for the trade stem and city, an unread page produces no verdict, and every field reaches the ladder and the facts strip through pinned wires. On-page weighs ~15% of the local pack, so none of this is ever sold as the reason for a map position.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SEO READ CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ CHECKLIST ACCURACY CHECK — round 102 ════════════════════════════════
+  // The adversarial pass on our own §28 checklist six: each signal had a way
+  // to fire on a page that got it RIGHT. A hidden CRM prefill counted as a
+  // wrong keyboard, a hidden input valued "submit" as a Submit-only button,
+  // "Step 1 of 3" in how-it-works prose as a stepped form, nav links as
+  // competing first-fold asks, a plain-text named address was invisible to the
+  // shared-inbox read, a PDF embed fired the Flash marker, and a maintenance
+  // pitch arguing AGAINST emergencies read as selling emergency work.
+  try {
+    const _fails = [];
+    const _pad = ('<div><p>' + 'family owned heating and cooling service for the whole county. '.repeat(3) + '</p></div>').repeat(8);
+    const _hid = extractHtmlSignals(`<form><input type="hidden" name="email" value="prefill"><input type="text" name="your-name"><input type="email" name="your-email"><textarea name="message"></textarea><button>Send my request</button></form>${_pad}`, 'https://x.com');
+    if (!_hid || Number(_hid.wrongKeyboardFields) !== 0) _fails.push(`a hidden CRM prefill named "email" counts as ${_hid && _hid.wrongKeyboardFields} wrong-keyboard field(s) — the finding fires on fields no visitor types into`);
+    const _wrong = extractHtmlSignals(`<form><input type="text" name="phone"><input type="text" name="email"><textarea name="message"></textarea><button>Send</button></form>${_pad}`, 'https://x.com');
+    if (!_wrong || Number(_wrong.wrongKeyboardFields) !== 2) _fails.push('a text-typed phone and email field no longer count as wrong keyboards');
+    if (!_hid || _hid.submitOnlyButton === true) _fails.push('a form whose button says "Send my request" reads as Submit-only');
+    const _hidSubmit = extractHtmlSignals(`<form><input type="hidden" name="action" value="submit"><input type="text" name="your-name"><input type="email" name="e"><textarea name="m"></textarea><button>Get my free estimate</button></form>${_pad}`, 'https://x.com');
+    if (!_hidSubmit || _hidSubmit.submitOnlyButton === true) _fails.push('a HIDDEN input valued "submit" fires the Submit-only finding on a button that says what happens next');
+    const _prose = extractHtmlSignals(`<h2>How It Works: Step 1 of 3</h2><form><input type="text" name="your-name"><input type="email" name="e"><textarea name="m"></textarea></form>${_pad}`, 'https://x.com');
+    if (!_prose || _prose.multiStepForm === true) _fails.push('"Step 1 of 3" in how-it-works PROSE reads as a stepped form — the softener fires on marketing copy');
+    const _step = extractHtmlSignals(`<form><p>Step 1 of 3</p><input type="text" name="your-name"><input type="email" name="e"><textarea name="m"></textarea></form>${_pad}`, 'https://x.com');
+    if (!_step || _step.multiStepForm !== true) _fails.push('a genuinely stepped form no longer reads as one');
+    // Nav links are not competing first-fold asks.
+    const _nav = extractHtmlSignals(`<html><head><title>x</title></head><body><nav><a>Contact Us</a><a>Request Service</a><a>Free Estimate</a></nav><div><a>Get a quote</a></div>${_pad}</body></html>`, 'https://x.com');
+    if (!_nav || Number(_nav.firstFoldCtaKinds) >= 3) _fails.push(`three nav links count as ${_nav && _nav.firstFoldCtaKinds} competing first-fold asks — the menu is being read as the hero`);
+    // A plain-text named address defeats the shared-inbox claim.
+    const _shared = extractHtmlSignals(`<p>Email us at info@acme.com</p>${_pad}`, 'https://x.com');
+    if (!_shared || _shared.sharedInboxOnly !== true) _fails.push('an info@-only page no longer reads as a shared inbox');
+    const _named = extractHtmlSignals(`<p>Email us at info@acme.com or mike@acme.com directly</p>${_pad}`, 'https://x.com');
+    if (!_named || _named.sharedInboxOnly === true) _fails.push('a PLAIN-TEXT named address does not defeat the shared-inbox claim — the read only sees mailto links');
+    // A PDF embed is not Flash.
+    const _pdf = readSiteAge({ rawHtml: `<html><body><embed type="application/pdf" src="/menu.pdf"><embed type="application/pdf" src="/brochure.pdf">${_pad}</body></html>`, hasViewport: true, isHttps: true });
+    if ((_pdf.markers || []).some(m => m.id === 'flash')) _fails.push('a PDF embed fires "it still has Flash on it" — the most checkably-wrong sentence in the marker set is back');
+    const _swf = readSiteAge({ rawHtml: `<html><body><object data="/intro.swf"></object>${_pad}</body></html>`, hasViewport: true, isHttps: true });
+    if (!(_swf.markers || []).some(m => m.id === 'flash')) _fails.push('a real .swf no longer fires the Flash marker');
+    // Emergency copy: a maintenance pitch arguing AGAINST urgency is not
+    // selling emergency work.
+    if (emergencyServiceCopySeen('join our maintenance club and avoid costly emergency repairs') !== false) _fails.push('a maintenance pitch arguing AGAINST emergencies reads as selling emergency work — the Burbank mismatch fires on its own cure');
+    if (emergencyServiceCopySeen('24/7 emergency service, call any time') !== true) _fails.push('genuine emergency copy is no longer seen');
+    // Builder-native analytics: a Wix/Squarespace page measures traffic with
+    // no tag, so "nothing counts their visitors" may not be claimed there.
+    const _wix = mergeAdSignals({ confirmed: true, blocked: false }, `<html><body><img src="https://static.parastorage.com/services/x.png">${'z'.repeat(600)}</body></html>`, null);
+    if (!_wix || _wix.builderNativeAnalytics !== true) _fails.push('the builder platform fingerprint is not read, so the analytics-absence claim fires on platforms that measure natively');
+    const _factsB = buildAuditFacts({}, null, { htmlSignals: { checked: true }, analytics: null });
+    if (_factsB.analytics !== null) _fails.push('a builder-native page still renders a measured analytics state');
+    if (_fails.length) {
+      console.log(`⛔ CHECKLIST ACCURACY CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ CHECKLIST ACCURACY CHECK: every checklist signal survived its own adversarial pass — hidden inputs neither type a keyboard nor say Submit, a stepped form is read only inside a form block, nav links are not competing hero asks, a plain-text named address defeats the shared-inbox claim, a PDF embed is not Flash, a maintenance pitch against emergencies is not emergency copy, and a builder that measures traffic natively bars the analytics-absence claim. Each fixtured in both directions, because a checklist that flags every site tells a salesperson nothing.`);
+    }
+  } catch (e) {
+    console.log(`⛔ CHECKLIST ACCURACY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ WE WERE BUYING REVIEWS THE MODEL NEVER SAW ═══════════════════════════

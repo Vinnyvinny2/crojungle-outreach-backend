@@ -642,6 +642,27 @@ const mergeStat = runMergeCheck();
         if (mod.sig('door', { af: { ads: 'no' }, rows: [] }).rows.some(r => /Check their ads yourself/.test(String(r.label)))) fails.push('the ads hand-check renders on a lead with no ad code — a row telling the caller to verify nothing');
         const _em101 = mod.sig('door', { af: { emergencyMismatch: true }, rows: [] }).rows.find(r => /Emergency copy/.test(String(r.label)));
         if (!_em101 || _em101.internal !== true) fails.push('emergency copy over a scheduled door does not render as an INTERNAL door row — the Burbank contradiction stays invisible (or leaks outward)');
+        // ══ ROUND 102: the search-code rows, the chat wording, the thin
+        // score. The noindex row is RED only when the rung actually fired
+        // (the §69 rule), builder boilerplate renders as internal context
+        // carrying the ~15% bound, no SEO read renders no row, and a thin
+        // score renders the refusal instead of a flattering /10.
+        const _seoRed = mod.sig('found', { af: { seo: { checked: true, noindex: true } }, rows: [{ id: 'site_noindexed' }] });
+        const _seoRow = _seoRed.rows.find(r => /Search setup/.test(String(r.label)));
+        if (!_seoRow || !/tells Google not to list/.test(String(_seoRow.value))) fails.push('a measured noindex never reaches the found rows — the one kill-switch search finding is invisible on the sheet');
+        if (_seoRow && _seoRow.red !== true) fails.push('the noindex row is not marked red when its rung fired');
+        const _seoInt = mod.sig('found', { af: { seo: { checked: true, noindex: false, schema: 'boilerplate', titleIsDefault: false, titleHasCity: true, titleHasTrade: true } }, rows: [] });
+        const _seoIntRow = _seoInt.rows.find(r => /Search setup/.test(String(r.label)));
+        if (!_seoIntRow || !/builder-generated/.test(String(_seoIntRow.value)) || _seoIntRow.internal !== true) fails.push('the classified-schema state does not render as an internal row — builder boilerplate reads like a claim to the owner');
+        if (_seoIntRow && !/never the reason for a map position/.test(String(_seoIntRow.value))) fails.push('the SEO row lost its bound — an on-page note can be read as the reason for a map position, the exact overclaim the industry numbers forbid');
+        if (mod.sig('found', { af: {}, rows: [] }).rows.some(r => /Search setup/.test(String(r.label)))) fails.push('a lead with no SEO read still renders a Search setup row');
+        const _chat102 = mod.sig('door', { af: { liveChat: true }, rows: [] }).rows.find(r => /Live chat/.test(String(r.label)));
+        if (!_chat102 || !/installed/.test(String(_chat102.value))) fails.push('the chat row went back to asserting a visitor CAN ask — installation is not operation, and nobody measured whether anyone answers it');
+        if (mod.scoreLine({ checked: false, thin: true, graded: [], basedOn: '2 of 9' }, false) !== '') fails.push('scoreSentence invents a caption for a thin score');
+        const _thinLead = { ...LEAD, websiteScore: { checked: false, thin: true, basedOn: 'MARKER_THIN of 9 components measured', graded: [], skipped: [] } };
+        const _thinHtml = mod.html([mod.rec(_thinLead)], { title: 'T', at: 'now' });
+        if (!/site build not graded/.test(_thinHtml) || !/MARKER_THIN/.test(_thinHtml)) fails.push('a thin score renders nothing on the sheet — the operator cannot tell "not graded" from "nobody graded it", and the old shape printed a flattering /10 exactly here');
+        if (/undefined<span>/.test(_thinHtml)) fails.push('a thin score prints undefined/10 on the sheet');
         // The renderRefused note lives inside a React component the harness
         // cannot execute, so its branch is pinned at the source — two real
         // halves, assembled here (a literal needle finds itself).
