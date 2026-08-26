@@ -169,6 +169,7 @@ const persistedFieldsFrom = (l) => ({
       ownerEmailMatch: l.ownerEmailMatch ?? null,
       ownerEmailMatchReason: l.ownerEmailMatchReason ?? null,
       localVisibility: l.localVisibility ?? null,
+      renderRefused: l.renderRefused ?? null,
       // placeId and industry are INPUTS to research, not outputs, which is why they
       // were never saved — and why the two highest-value signals in the system
       // silently switched themselves off the moment a lead was reloaded.
@@ -961,6 +962,7 @@ const rowToLead = (r) => ({
   ownerEmailMatch: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.ownerEmailMatch) ?? null,
   ownerEmailMatchReason: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.ownerEmailMatchReason) ?? null,
   localVisibility: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.localVisibility) ?? null,
+  renderRefused: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.renderRefused) ?? null,
   // Prefer a real column if one ever exists, then the nested copy, then blank —
   // so this keeps working if placeId/industry are promoted to columns later.
   placeId: r.place_id || (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.placeId) || '',
@@ -1141,7 +1143,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260901;
+const CLIENT_CONTRACT = 20260902;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -1568,6 +1570,10 @@ const applyResearchResult = (prev, data, ctx) => {
         // turns into "nothing on file".
         L.localVisibility = (data.localVisibility && data.localVisibility.checked)
           ? data.localVisibility : (L.localVisibility || null);
+        // Round 101: WHY there is no homepage picture (a 403/block page was
+        // discarded). Overwritten every run - a stale reason about a fixed
+        // site would be the §16 lie pointed the other way.
+        L.renderRefused = data.renderRefused ?? null;
         L.candidateFindings = data.candidateFindings ?? L.candidateFindings ?? null;
         L.ownerReplyCount = data.ownerReplyCount ?? L.ownerReplyCount ?? null;
         L.reviewsRead = data.reviewsRead ?? L.reviewsRead ?? null;
@@ -1706,6 +1712,7 @@ const applyResearchResult = (prev, data, ctx) => {
         // email as the spine, size as a modifier, hard cap when no owner is found).
         // Use it verbatim — do NOT override with a crude local heuristic.
         if (data.localVisibility) L.localVisibility = data.localVisibility;
+        L.renderRefused = data.renderRefused ?? null;
         if (data._claimRisks) L._claimRisks = data._claimRisks;
         // The name the resolver found and REFUSED. Carried so the caller can see
         // there IS a name and that we do not stand behind it — without this the
@@ -2516,7 +2523,9 @@ const LAYER_PLAIN = { MARKET: 'how they position themselves', OFFER: 'what they 
   OPERATIONS: 'delivering the work', CAPTURE: 'catching the visitors they pay for', SCALE: 'compounding what already works',
   FOUNDATION: 'the website itself', DEMAND: 'getting more people in the door', THROUGHPUT: 'keeping up with the work',
   RETENTION: 'keeping the customers they already win' };
-const layerPlain = (x) => { const k = String(x || '').toUpperCase().trim(); return LAYER_PLAIN[k] ? LAYER_PLAIN[k] + ' (' + k + ')' : String(x || ''); };
+// Round 101: the raw code suffix is gone - Vin twice read '(MARKET)'/'(LEADS)'
+// as noise he could not parse. The codes stay in the stored data only.
+const layerPlain = (x) => { const k = String(x || '').toUpperCase().trim(); return LAYER_PLAIN[k] ? LAYER_PLAIN[k] : String(x || ''); };
 
 const adsFactsLabel = (af) => {
   if (!af) return '';
@@ -2613,11 +2622,26 @@ const signalRowsFor = (stageId, ctx) => {
   };
   if (stageId === 'found') {
     const lr = (ctx && ctx.rank) || null;
-    R('Search, map', lr ? (lr.found === false
+    // Round 101: every search row NAMES ITS QUERY. The live Windows Plus sheet
+    // printed a service query's absence two rows above the head query's #2 with
+    // neither named, and the owner read the section as at war with itself.
+    const q = (af.searchQuery || (lr && (lr.query || lr.phrase)) || '') + '';
+    const qTag = q ? ' \u2014 for "' + q + '" (their named trade)' : '';
+    R('Search, map', lr ? ((lr.found === false
         ? (lr.absenceConfirmed ? ('not among the ' + (Number.isFinite(Number(lr.scanned)) ? lr.scanned + ' ' : '') + 'listings returned (checked twice)') : 'not seen on one look (unconfirmed)')
-        : (Number.isFinite(Number(lr.rank)) && Number(lr.rank) >= 1 ? '#' + lr.rank + ' of ' + (lr.scanned || '?') : "they appear; no position on this run's source"))
+        : (Number.isFinite(Number(lr.rank)) && Number(lr.rank) >= 1 ? '#' + lr.rank + ' of ' + (lr.scanned || '?') : "they appear; no position on this run's source")) + qTag)
       : null, 'search');
-    R('Search, blue links', Number.isFinite(af.organicPosition) ? '#' + af.organicPosition + ' of ' + af.organicScanned : null, 'organic');
+    R('Search, blue links', Number.isFinite(af.organicPosition) ? ('#' + af.organicPosition + ' of ' + af.organicScanned + (q ? ' \u2014 same search' : '')) : null, 'organic');
+    // Their own service pages and published service areas, each by ITS query.
+    const _vres = (ctx && ctx.vis && Array.isArray(ctx.vis.results)) ? ctx.vis.results : [];
+    _vres.filter(function (r) { return r && r.kind !== 'primary trade' && r.checked !== false && r.query; }).slice(0, 4).forEach(function (r) {
+      const lbl = r.kind === 'published service area' ? 'Their published service area' : 'Their own service page';
+      R(lbl + ' \u2014 "' + r.query + '"',
+        r.found === false
+          ? (r.absenceConfirmed ? ('not in the ' + (r.scanned || '?') + ' listings that search returns \u2014 checked twice') : 'not seen on one look (unconfirmed \u2014 never quote it)')
+          : (Number.isFinite(Number(r.rank)) && Number(r.rank) >= 1 ? '#' + r.rank + ' of ' + (r.scanned || '?') : 'they appear in the results'),
+        (r.found === false && r.absenceConfirmed) ? 'search' : null);
+    });
     R('Check it yourself', (lr && (lr.query || lr.phrase))
       ? ('search Google for "' + (lr.query || lr.phrase) + '" \u2014 the sponsored block, the AI answer and the map all move, so read the live page before quoting a position')
       : null, null);
@@ -2646,19 +2670,26 @@ const signalRowsFor = (stageId, ctx) => {
     if (tr && Array.isArray(tr.topKeywords) && tr.topKeywords.length) {
       R('What already brings traffic', tr.topKeywords.slice(0, 5).map(function (k) {
         return '"' + k.keyword + '"' + (Number.isFinite(Number(k.position)) ? ' #' + k.position : '') + (Number.isFinite(Number(k.volume)) ? ' (' + k.volume + '/mo searched)' : '');
-      }).join(' \u00b7 '), null, true);
+      }).join(' \u00b7 ') + ' \u2014 a third-party model of the unpaid results, mostly how-to searches, not the buying search above', null, true);
     }
   } else if (stageId === 'door') {
     R('Ad clicks land on', af.adLanding
       ? ({ homepage: 'their homepage, not a page built for the ad', interior: 'an ordinary page of the site', unlinked: 'a page the site never links — landing-page shaped', offsite: 'a page on a different domain' })[af.adLanding]
       : (af.ads === 'yes' ? 'only their ads account shows it — worth asking' : null), 'adLanding');
-    R('What a click becomes', af.roiStatus === 'counted' ? 'tracking on the pages can tie a click to a job'
+    R('What a click becomes', af.roiStatus === 'counted' ? 'the site carries code that can count when a click becomes a call or a job'
       : af.roiStatus === 'hidden' ? 'hidden inside their tag container — could not see'
       : af.roiStatus === 'blind' ? 'nothing visible on the pages we read \u2014 only their ads account can say' : null, 'roi');
     R('Booking route', ({ online_booking: 'a visitor can book a time on the site', form: 'a form, then waiting', phone_only: 'a phone call', none_found: 'no route found on the pages read' })[af.booking] || null, 'booking');
-    R('Live chat', af.liveChat === true ? 'on the site \u2014 a visitor can ask without calling' : af.liveChat === false ? 'none found on the pages read' : null, null);
+    // Round 101, Vin: the chat row earns its place only when a chat was FOUND.
+    R('Live chat', af.liveChat === true ? 'on the site \u2014 a visitor can ask without calling' : null, null);
     R('Form length', Number.isFinite(af.formFields) ? af.formFields + ' fields' : null, 'form');
-    R('Price on the site', Number(ctx && ctx.pricesShown) > 0 ? 'shown' : (ids.has('no_published_pricing') ? 'none on the pages read' : null), 'price');
+    // Round 101: the price row reads the SERVER's four-state answer. "Not
+    // measured: Price on the site" used to print about a lead whose pricing
+    // page sat unread AND about one whose homepage shows a dollar figure.
+    R('Price on the site', af.price === 'shown' ? 'shown on the pages we read'
+      : af.price === 'none' ? 'none on the pages we read'
+      : af.price === 'unread' ? 'a pricing page exists that we did not open'
+      : (Number(ctx && ctx.pricesShown) > 0 ? 'shown' : (ids.has('no_published_pricing') ? 'none on the pages read' : null)), 'price');
     R('Site build', Number.isFinite(af.siteAgeMarkers) ? (af.siteAgeMarkers >= 2 ? af.siteAgeMarkers + ' old-build markers in the source' : 'no meaningful age markers') : null, 'build');
     R('Real-visitor speed', af.mobile === 'slow' ? 'slow for their real visitors' : af.mobile === 'fine' ? 'fine for their real visitors' : null, 'speed');
     const ck = af.checklist;
@@ -2671,6 +2702,12 @@ const signalRowsFor = (stageId, ctx) => {
       if (Number(ck.firstFoldCtaKinds) >= 3) R('First-screen asks', ck.firstFoldCtaKinds + ' competing calls to action on the first screen', null);
     }
     R('Anything measuring the site', af.analytics === false ? 'no analytics of any kind on the pages read \u2014 no dashboard anywhere can tell them how many people came' : af.analytics === true ? 'an analytics tag is on the site' : null, null, af.analytics === false);
+    // Round 101 (Burbank): their own pages sell emergency work while the way in
+    // is a form. Internal - a question for the call, never a claim to him.
+    R('Emergency copy, scheduled door', af.emergencyMismatch === true ? 'their own pages sell emergency or 24/7 work, and the site\u2019s way in is a form and a wait \u2014 worth asking who answers the 2am call' : null, 'booking', true);
+    // Round 101 (Vin: "we need to know 100% they are running ads"): the one
+    // public place a human can confirm live ads in ten seconds.
+    R('Check their ads yourself', af.ads === 'yes' ? 'adstransparency.google.com \u2014 search the business name; a live campaign shows its ads there' : null, null);
   } else if (stageId === 'after') {
     R('Service plan', af.recurring === 'none' ? 'none on the pages read' : af.recurring === 'offered' ? 'they sell one' : null, 'recurring');
     const ob = Array.isArray(ctx && ctx.opsBuckets) && ctx.opsBuckets.length ? ctx.opsBuckets[0] : null;
@@ -2788,7 +2825,12 @@ const walkTextsByStage = (fs) => {
 const scoreSentence = (ws, anyBroken) => {
   if (!ws || ws.checked !== true || !Number.isFinite(Number(ws.score))) return '';
   const sc = Number(ws.score);
-  if (sc >= 7) return anyBroken ? 'the build is fine — the leaks are in the path around it' : 'the build is fine';
+  // Round 101: a capped score says WHY it stopped where it did - "the build is
+  // fine" over a form-and-wait door is the exact caption the owner rejected
+  // ("this site IS NOT A 9/10 not even close").
+  if (ws.capped) return 'built cleanly, but nothing on it books a time — the door caps the grade';
+  if (sc >= 8.5) return anyBroken ? 'the build is fine — the leaks are in the path around it' : 'the build is fine';
+  if (sc >= 7) return anyBroken ? 'a solid build — the leaks are in the path around it' : 'a solid build';
   if (sc <= 4) return 'the site build itself is part of the problem';
   return anyBroken ? 'an average build — the bigger leaks are in the path around it' : 'an average build';
 };
@@ -2842,7 +2884,20 @@ const auditRecordFor = (lead) => {
       rank: Number.isFinite(Number(ba.localRank.rank)) ? Number(ba.localRank.rank) : null,
       scanned: Number(ba.localRank.scanned) || null,
       absenceConfirmed: ba.localRank.absenceConfirmed === true,
+      // Round 101: the query travels, so the exported sheet's Check-it-yourself
+      // row can finally render - it was structurally impossible before (the
+      // compact copy dropped it and the row fell into "Not measured" forever).
+      query: ba.localRank.query || ba.localRank.phrase || null,
     } : null,
+    // The per-query rows (service pages, service areas) for the export's found
+    // stage - compacted to what the renderer reads.
+    visRows: (l.localVisibility && Array.isArray(l.localVisibility.results))
+      ? l.localVisibility.results.filter(function (r) { return r && r.kind !== 'primary trade' && r.query; }).slice(0, 4).map(function (r) {
+          return { kind: r.kind, query: r.query, checked: r.checked !== false, found: r.found === true,
+                   rank: Number.isFinite(Number(r.rank)) ? Number(r.rank) : null,
+                   scanned: Number(r.scanned) || null, absenceConfirmed: r.absenceConfirmed === true };
+        })
+      : null,
     pricesShown: (l.sitePages && Array.isArray(l.sitePages.prices)) ? l.sitePages.prices.length : null,
     background: (sr && sr.background) || '',
     // THE ONE THING
@@ -3073,7 +3128,7 @@ const auditExportHtml = (records, meta) => {
           // stage must not read "no fault found" on that run.
           const fbSearch = !!(af && af.searchSource === 'places');
           const sigCtx = { af: af || {}, rows: Array.isArray(r.problemList) ? r.problemList : [],
-            rank: r.rank || null, traffic: r.traffic || null, pricesShown: r.pricesShown,
+            rank: r.rank || null, vis: (r.visRows && r.visRows.length) ? { results: r.visRows } : null, traffic: r.traffic || null, pricesShown: r.pricesShown,
             negUnanswered: r.negUnanswered, opsBuckets: r.opsBuckets || null };
           const stagesHtml = fg.stages.map((s3, si) => {
             const cls = s3.status === 'broken' ? 'fb' : (s3.status === 'clean' || s3.status === 'mixed') ? 'fc' : 'fn';
@@ -6451,8 +6506,8 @@ function buildAuditRows(lead) {
       }
       if (l.status === 'running_lsa') {
         return { label: 'Google LSA', confidence: 'mechanical', val: 'Running LSA · confirmed', ok: true,
-          proof: 'Found "' + (l.marker || 'Google Guaranteed') + '" on their own site — that mark is issued only through Local Services Ads. They are already paying Google per lead.' + (l.evidence ? ' Context: "' + l.evidence + '"' : ''),
-          tags: ['LSA-only marker', 'Paying per lead today'] };
+          proof: 'Found "' + (l.marker || 'Google Guaranteed') + '" on their own site — that mark is issued only through Local Services Ads. It proves the program, not a live campaign: a badge can outlive a cancelled account, so whether they are paying per lead TODAY shows only in their own dashboard or on a live search.' + (l.evidence ? ' Context: "' + l.evidence + '"' : ''),
+          tags: ['LSA-only marker', 'Badge on their site'] };
       }
       if (l.status === 'eligible_ambiguous_badge') {
         return { label: 'Google LSA', confidence: 'opinion', val: 'Unclear', ok: false,
@@ -6699,6 +6754,7 @@ function LeadBriefing({ lead }) {
       const fbSearch = !!(lead.auditFacts && lead.auditFacts.searchSource === 'places');
       const sigCtx = { af: lead.auditFacts || {}, rows: Array.isArray(lead.problemList) ? lead.problemList : [],
         rank: (lead.brainAudit && lead.brainAudit.localRank && lead.brainAudit.localRank.checked) ? lead.brainAudit.localRank : null,
+        vis: lead.localVisibility || null,
         traffic: (lead.trafficEstimate && lead.trafficEstimate.checked && lead.trafficEstimate.inIndex) ? lead.trafficEstimate : null,
         pricesShown: (lead.sitePages && Array.isArray(lead.sitePages.prices)) ? lead.sitePages.prices.length : null,
         negUnanswered: Number(lead.reviewsNegativeUnanswered) > 0 ? Number(lead.reviewsNegativeUnanswered) : null,
@@ -8651,6 +8707,13 @@ function ResearchView({
       // going on here", which is backwards for whoever reads it cold.
       hasResearch && React.createElement(LeadBriefing, { lead: lead }),
 
+      // Round 101: when a render was taken and thrown away as a block/error
+      // page, the sheet says WHY there is no picture. Burbank's homepage
+      // "picture" was a literal 403 page shipped as their homepage; the
+      // discarded state must never read as "no screenshot was taken".
+      (!lead.screenshotUrl && lead.renderRefused) && React.createElement('div', {
+        style: { border: '1px solid #e5e5e5', borderRadius: 8, padding: '10px 12px', margin: '10px 0', fontSize: 12.5 }
+      }, 'No picture of their homepage on this run: ' + lead.renderRefused + ' Their site itself may be fine \u2014 this is about how their server answered our camera.'),
       // SCREENSHOT — visual proof of what we're auditing (constrained so it
       // doesn't dominate the view; opens full-size in a new tab on click)
       lead.screenshotUrl && React.createElement('div', null,

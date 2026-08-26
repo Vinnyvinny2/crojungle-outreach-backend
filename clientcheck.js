@@ -615,6 +615,39 @@ const mergeStat = runMergeCheck();
         if (!/What already brings traffic/.test(_r99v) || !/pest control charlotte/.test(_r99v)) fails.push('the ranked keywords never reach the sheet — the named top of their funnel, bought and invisible');
         const _r99n = mod.sig('found', { af: { lsa: { blockPresent: false, us: false } }, rows: [] });
         if (_r99n.rows.some(r => /map beside the results/i.test(String(r.label)))) fails.push('a pack row renders with no pack sighting — absence consumed as a fact, the direction the positive-only rule forbids');
+        // ══ ROUND 101: every search row names its query, the service pages
+        // get their own rows, the price row has four honest states, the chat
+        // row earns its place, and the ads hand-check ships. All off the live
+        // Windows Plus / TriStar / Burbank hand-check.
+        const _q101 = 'window replacement contractor in Louisville, KY';
+        const _f101 = mod.sig('found', { af: {}, rows: [], rank: { checked: true, found: true, rank: 2, scanned: 99, query: _q101 } });
+        const _f101v = _f101.rows.map(r => r.label + ': ' + r.value).join(' | ');
+        if (_f101v.indexOf('for "' + _q101 + '" (their named trade)') < 0) fails.push('the map row does not name its query — the Windows Plus "section at war with itself" is back on the sheet');
+        const _v101 = mod.sig('found', { af: {}, rows: [{ id: 'service_invisibility' }], rank: { checked: true, found: true, rank: 2, scanned: 99, query: _q101 }, vis: { results: [
+          { kind: 'their own service page', checked: true, found: false, absenceConfirmed: true, scanned: 100, query: 'bathroom remodeling in Louisville, KY' },
+          { kind: 'primary trade', checked: true, found: true, rank: 2, scanned: 99, query: _q101 },
+        ] } });
+        const _v101v = _v101.rows.map(r => r.label + ': ' + r.value).join(' | ');
+        if (!/Their own service page.*"bathroom remodeling in Louisville, KY"/.test(_v101v)) fails.push('a confirmed service-page absence does not render as its own named row');
+        if (!/checked twice/.test(_v101v)) fails.push('the confirmed service absence lost its two-look claim on the sheet');
+        const _v101red = _v101.rows.find(r => /service page/.test(String(r.label)));
+        if (!_v101red || _v101red.red !== true) fails.push('a twice-confirmed service absence renders without its red mark while its rung fired — the row and the finding disagree about one measurement');
+        if (mod.sig('door', { af: { liveChat: null }, rows: [] }).rows.some(r => /Live chat/.test(String(r.label)))) fails.push('the chat row renders on a lead with no chat found — Vin: "does not need to be in the audits unless weve found one"');
+        const _pr101 = (p) => { const g = mod.sig('door', { af: p === undefined ? {} : { price: p }, rows: [] }); const r = g.rows.find(x => /Price on the site/.test(String(x.label))); return r ? String(r.value) : null; };
+        if (_pr101('shown') !== 'shown on the pages we read') fails.push('the price row does not render the shown state');
+        if (_pr101('unread') !== 'a pricing page exists that we did not open') fails.push('the unread-pricing state does not render — "Not measured: Price" prints about a page one click away, the exact complaint');
+        if (_pr101('none') !== 'none on the pages we read') fails.push('the price row does not render the measured absence');
+        if (_pr101(undefined) !== null) fails.push('an unmeasured price hardened into a rendered state');
+        if (!mod.sig('door', { af: { ads: 'yes' }, rows: [] }).rows.some(r => /Check their ads yourself/.test(String(r.label)) && /adstransparency\.google\.com/.test(String(r.value)))) fails.push('the ads hand-check row is missing on an ads-wired lead — "we need to know 100% they are running ads" has no ten-second check');
+        if (mod.sig('door', { af: { ads: 'no' }, rows: [] }).rows.some(r => /Check their ads yourself/.test(String(r.label)))) fails.push('the ads hand-check renders on a lead with no ad code — a row telling the caller to verify nothing');
+        const _em101 = mod.sig('door', { af: { emergencyMismatch: true }, rows: [] }).rows.find(r => /Emergency copy/.test(String(r.label)));
+        if (!_em101 || _em101.internal !== true) fails.push('emergency copy over a scheduled door does not render as an INTERNAL door row — the Burbank contradiction stays invisible (or leaks outward)');
+        // The renderRefused note lives inside a React component the harness
+        // cannot execute, so its branch is pinned at the source — two real
+        // halves, assembled here (a literal needle finds itself).
+        const _nn101 = (a, b) => a + b;
+        if (html.indexOf(_nn101('(!lead.screenshotUrl && lead.render', 'Refused) && React.createElement')) < 0) fails.push('the discarded-render note is gone from the screen — a quarantined 403 render reads as "no screenshot was taken"');
+        if (html.indexOf(_nn101('No picture of their homepage on this run: ', "' + lead.renderRefused")) < 0) fails.push('the discarded-render note lost its reason — the sheet cannot say WHY there is no picture');
       } else {
         fails.push('signalRowsFor is not exposed for execution, so none of the surface rows can be verified');
       }
@@ -800,7 +833,12 @@ const mergeStat = runMergeCheck();
         if (!nrm[0] || nrm[0][1] !== 1 || nrm[1][1] !== 2 || nrm[2][1] !== 3) fails.push('normalized ranks are not sequential 1-2-3');
         if (JSON.stringify(wt).includes('WR')) fails.push('the what_repeats walk text leaked into a funnel stage — it belongs in the work strip');
         // The score sentence: one plain line, both directions.
-        if (!/well built|build is fine/i.test(mod.scoreLine({ checked: true, score: 8 }, true))) fails.push('a high score does not read as a healthy build');
+        // Round 101: 8.0 reads as "a solid build" (the build-is-fine caption
+        // now starts at 8.5), and a CAPPED score must say the door capped it -
+        // "the build is fine" over a form-and-wait door is the caption the
+        // owner rejected on the live Windows Plus 9/10.
+        if (!/solid build|build is fine/i.test(mod.scoreLine({ checked: true, score: 8 }, true))) fails.push('a high score does not read as a healthy build');
+        if (!/door caps the grade/i.test(mod.scoreLine({ checked: true, score: 7.5, capped: 'x' }, true))) fails.push('a capped score does not say the door capped it - a silently capped number reads as an earned one');
         if (!/part of the problem/i.test(mod.scoreLine({ checked: true, score: 3 }, true))) fails.push('a low score does not say the build itself is a problem');
         if (mod.scoreLine(null, true) !== '' || mod.scoreLine({ checked: false, score: 8 }, true) !== '') fails.push('an unmeasured score produced a sentence');
         // The rendered sheet: the segments, the spout and the drip actually
@@ -857,7 +895,7 @@ const mergeStat = runMergeCheck();
         for (const mk of ['MARKER_WALK_MONEY', 'MARKER_WALK_DOOR', 'MARKER_WALK_REPEATS', 'PARTLY MEASURED', 'fallback source this run', 'MARKER_BASEDON']) {
           if (wp.indexOf(mk) < 0) fails.push('the funnel render drops "' + mk + '" — a measured walk sentence, the fallback caveat or the score grading never reaches the sheet');
         }
-        if (!/the leaks are in the path around it|build is fine/.test(wp)) fails.push('the one-sentence score verdict never reaches the sheet — the chips block was removed and nothing replaced it');
+        if (!/the leaks are in the path around it|build is fine|solid build|door caps the grade/.test(wp)) fails.push('the one-sentence score verdict never reaches the sheet — the chips block was removed and nothing replaced it');
         // A clean measured stage must NOT say "no fault found" when the search
         // was read on the fallback — that silence is a different fact.
         if (/NO FAULT FOUND/.test(wp) && wp.indexOf('PARTLY MEASURED') < 0) fails.push('a fallback-search lead still reads NO FAULT FOUND at Getting found');
@@ -933,7 +971,10 @@ const mergeStat = runMergeCheck();
         if (/Legal as a general truth/.test(_pr)) fails.push('the warning still carries the detector rationale — engineering prose on a sales sheet');
         if (!/never watched what happens after someone contacts them/.test(_pr)) fails.push('the warning lost its plain-English reason');
         // Layer codes translate; an unknown code passes through untouched.
-        if (mod.layer('MARKET') !== 'how they position themselves (MARKET)') fails.push('MARKET does not translate — "The one thing \u2014 MARKET" confused the person who built this system');
+        // Round 101: the raw code suffix is gone - Vin twice read '(LEADS)'
+        // as noise. Plain words only on both surfaces.
+        if (mod.layer('MARKET') !== 'how they position themselves') fails.push('MARKET does not translate — "The one thing \u2014 MARKET" confused the person who built this system');
+        if (/\(MARKET\)/.test(mod.layer('MARKET'))) fails.push('the raw layer code is back on the sheet');
         if (mod.layer('SOMENEWLAYER') !== 'SOMENEWLAYER') fails.push('an unknown layer code is mangled instead of passed through');
         // ══ THE V2 GROUPING — the spine of the sheet, executed both ways ══
         // Every finding lands in exactly one place: nested under its leak
