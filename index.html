@@ -1131,7 +1131,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260829;
+const CLIENT_CONTRACT = 20260830;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -2678,31 +2678,36 @@ const groupByFunnelStage = (pl, fs) => {
 // The funnel drawing. One function, both surfaces — statuses in, inline SVG
 // out. Red marks a stop (the house rule); an unmeasured stage is dashed and
 // never coloured, because "we did not look" must not read as a verdict.
-const funnelSvg = (sts, pal) => {
-  const P = pal || { broken: '#fef2f2', brokenLine: '#dc2626', clean: '#f5f5f7', cleanLine: '#a1a1a6', noread: '#fafafa', noreadLine: '#c7c7cc', text: '#1d1d1f', brokenText: '#b91c1c', dim: '#1d1d1f' };
-  const band = (d, st, label, ly) => {
-    // 'mixed' (works, with leaks) draws as a working stage whose drips are
-    // red — the leaks are real, the stage is not broken.
-    const fill = st === 'broken' ? P.broken : (st === 'clean' || st === 'mixed') ? P.clean : P.noread;
-    const line = st === 'broken' ? P.brokenLine : (st === 'clean' || st === 'mixed') ? P.cleanLine : P.noreadLine;
-    const dash = st === 'no_read' ? ' stroke-dasharray="5 4"' : '';
-    const tcol = st === 'broken' ? P.brokenText : P.text;
-    return '<path d="' + d + '" fill="' + fill + '" stroke="' + line + '" stroke-width="1.5" stroke-linejoin="round"' + dash + '/>'
-      + '<text x="100" y="' + ly + '" text-anchor="middle" font-size="9.5" font-weight="700" letter-spacing="0.8" fill="' + tcol + '" font-family="-apple-system,Helvetica,sans-serif">' + label + '</text>';
-  };
-  const drip = (x, y) => '<path d="M' + x + ' ' + y + ' C ' + (x + 13) + ' ' + (y + 6) + ', ' + (x + 20) + ' ' + (y + 16) + ', ' + (x + 17) + ' ' + (y + 30) + '" stroke="' + P.brokenLine + '" stroke-width="1.5" stroke-dasharray="3 4" fill="none"/>'
-    + '<circle cx="' + (x + 17) + '" cy="' + (y + 38) + '" r="2.6" fill="' + P.brokenLine + '"/><circle cx="' + (x + 13) + '" cy="' + (y + 49) + '" r="1.8" fill="' + P.brokenLine + '"/>';
-  return '<svg width="236" height="474" viewBox="0 0 200 402" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="funnel">'
-    + band('M12 6 L188 6 L166 108 L34 108 Z', sts.found, 'GETTING FOUND', 62)
-    + ((sts.found === 'broken' || sts.found === 'mixed') ? drip(174, 40) : '')
-    + band('M38 120 L162 120 L144 222 L56 222 Z', sts.door, 'THE DOOR', 176)
-    + ((sts.door === 'broken' || sts.door === 'mixed') ? drip(151, 154) : '')
-    + band('M60 234 L140 234 L126 324 L74 324 Z', sts.after, 'AFTER CONTACT', 284)
-    + ((sts.after === 'broken' || sts.after === 'mixed') ? drip(130, 262) : '')
-    + '<path d="M86 336 L114 336 L111 372 L89 372 Z" fill="' + P.clean + '" stroke="' + P.cleanLine + '" stroke-width="1.5" stroke-linejoin="round"/>'
-    + '<text x="100" y="392" text-anchor="middle" font-size="11" fill="' + P.dim + '" font-family="-apple-system,Helvetica,sans-serif">booked jobs</text>'
-    + '</svg>';
+// ══ THE FUNNEL IS THE ROWS — round 98, Vin-approved Direction A ════════════
+// "the size of the funnel needs to always fit the amount of text to the right
+// of it." So there is no drawing to keep in sync: the funnel segments and the
+// stage cards are the SAME grid rows, each segment stretches to the exact
+// height of its card, and the taper is drawn in percentages so it scales with
+// any height. This retires funnelSvg — a fixed 236x474 picture the content
+// beside it outran two to three times on every real lead.
+// Each row's bottom edge IS the next row's top edge, so the segments join
+// into one continuous funnel — Vin on the first draft: "i dont like that its
+// boxes its suppose to be a funnel."
+const FUNNEL_TAPER = [
+  { top: 0, bot: 11 },
+  { top: 11, bot: 25 },
+  { top: 25, bot: 37 },
+  { top: 37, bot: 44 },
+];
+const funnelSegClip = (i) => {
+  const n = FUNNEL_TAPER.length;
+  const t = FUNNEL_TAPER[i < 0 ? 0 : i >= n ? n - 1 : i];
+  return 'polygon(' + t.top + '% 0%, ' + (100 - t.top) + '% 0%, ' + (100 - t.bot) + '% 100%, ' + t.bot + '% 100%)';
 };
+// Colour marks a stop: red fill only where the stage is BROKEN. mixed (works,
+// with leaks) fills as a working stage and keeps its red drips; no_read is
+// the faintest fill and its label already says NOT MEASURED.
+const funnelSegFill = (status, dark) => {
+  if (status === 'broken') return dark ? 'rgba(248,113,113,.10)' : '#fef2f2';
+  if (status === 'no_read') return dark ? 'rgba(255,255,255,.02)' : '#fafafa';
+  return dark ? 'rgba(255,255,255,.05)' : '#f5f5f7';
+};
+// (funnelSvg deleted here, round 98 — the segments above replaced it.)
 
 // The walk's measured sentences keyed to the three drawn stages, so each
 // stage shows WHAT WAS MEASURED (grey) above WHAT IS BROKEN (rows) — the
@@ -3013,7 +3018,7 @@ const auditExportHtml = (records, meta) => {
           const sigCtx = { af: af || {}, rows: Array.isArray(r.problemList) ? r.problemList : [],
             rank: r.rank || null, traffic: r.traffic || null, pricesShown: r.pricesShown,
             negUnanswered: r.negUnanswered, opsBuckets: r.opsBuckets || null };
-          const stagesHtml = fg.stages.map(s3 => {
+          const stagesHtml = fg.stages.map((s3, si) => {
             const cls = s3.status === 'broken' ? 'fb' : (s3.status === 'clean' || s3.status === 'mixed') ? 'fc' : 'fn';
             const partial = s3.id === 'found' && s3.status === 'clean' && fbSearch;
             const st = s3.status === 'broken' ? 'BROKEN' : s3.status === 'mixed' ? 'WORKS \u2014 WITH LEAKS' : s3.status === 'clean' ? (partial ? 'PARTLY MEASURED' : 'NO FAULT FOUND') : 'NOT MEASURED';
@@ -3045,7 +3050,13 @@ const auditExportHtml = (records, meta) => {
                 + (sg.unmeasured.length ? '<div class="sgr">Not measured: ' + e(sg.unmeasured.join(', ')) + '</div>' : '')
                 + '</div>'
               : '';
-            return '<div class="fstage ' + cls + '"><div class="fsh"><b>' + e(s3.label) + '</b><span class="fss">' + e(s3.sub) + '</span><span class="fst">' + st + '</span></div>'
+            // The segment and the card are ONE grid row, sharing ONE status string:
+            // the segment stretches to the card's height and the two labels can
+            // never disagree, because there is only one `st`.
+            return '<div class="fseg ' + cls + '"><div class="fsegbg" style="background:' + funnelSegFill(s3.status, false) + ';clip-path:' + funnelSegClip(si) + '"></div>'
+              + '<div class="fseglbl"><b>' + e(s3.label) + '</b><span class="fsegst">' + st + '</span></div>'
+              + ((s3.status === 'broken' || s3.status === 'mixed') ? '<span class="fdrip">&#128167;</span>' : '') + '</div>'
+              + '<div class="fstage ' + cls + '"><div class="fsh"><b>' + e(s3.label) + '</b><span class="fss">' + e(s3.sub) + '</span><span class="fst">' + st + '</span></div>'
               + sigHtml
               + (wt.trim() ? '<div class="fev">' + p(wt.trim()) + '</div>' : '') + rowsHtml + legacyFriction + emptyNote + '</div>';
           }).join('');
@@ -3059,9 +3070,10 @@ const auditExportHtml = (records, meta) => {
           const unstagedHtml = fg.unstaged.length
             ? '<div style="margin-top:8px">' + fg.unstaged.map(x => '<div class="ferow"><b>' + p(x.problem) + '</b>'
               + (x.costs || x.area ? ' <span class="tw">— ' + [x.area ? e(x.area) : '', x.costs ? p(x.costs) : ''].filter(Boolean).join(' · ') + '</span>' : '') + '</div>').join('') + '</div>' : '';
-          const sts = {}; for (const s3 of fg.stages) sts[s3.id] = s3.status;
           return cat('The funnel', "a customer's path to hiring them, top to bottom — where it breaks, the money falls out",
-            '<div class="fwrap"><div class="fsvg">' + funnelSvg(sts) + '</div><div class="fstages">' + stagesHtml + ffHtml + workHtml + unstagedHtml + '</div></div>');
+            '<div class="fwrap">' + stagesHtml
+            + '<div class="fspoutrow"><div class="fspoutbar"></div><div class="fspoutlbl">booked jobs</div></div><div></div>'
+            + '<div class="ffull">' + ffHtml + workHtml + unstagedHtml + '</div></div>');
         })()
       // ═══ THE CALL PREP ═══
       + (() => {
@@ -3165,7 +3177,7 @@ const auditExportHtml = (records, meta) => {
     + '<title>' + e(m.title || 'CROJungle audits') + '</title><style>'
     + ':root{color-scheme:light}body{margin:0;padding:34px 28px;font:14.5px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#1d1d1f;background:#fff;max-width:860px;margin:0 auto;-webkit-font-smoothing:antialiased}'
     + 'h1{font-size:22px;margin:0 0 4px;letter-spacing:-.3px}h2{font-size:24px;margin:0 0 2px;letter-spacing:-.4px}h3{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 10px;font-weight:700}'
-    + 'h4{font-size:12px;margin:14px 0 4px;color:#1d1d1f}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#1d1d1f;font-size:13.5px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#1d1d1f;font-size:12.5px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#1d1d1f;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#1d1d1f;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#1d1d1f;font-size:13px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#1d1d1f;font-size:13.5px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#1d1d1f}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#1d1d1f}.fwrap{display:flex;gap:24px}.fsvg{flex-shrink:0}.fstages{flex:1;display:flex;flex-direction:column;gap:12px;min-width:0}.fstage{border-left:2px solid #d2d2d7;padding-left:13px}.fstage.fb{border-left-color:#dc2626}.fsh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.fsh b{font-size:14px}.fss{color:#1d1d1f;font-size:12.5px}.fst{font-size:11.5px;font-weight:700;letter-spacing:.04em;color:#1d1d1f}.fb .fst{color:#b91c1c}.fev{color:#1d1d1f;font-size:13.5px;line-height:1.65;margin-top:3px}.ferow{font-size:13px;line-height:1.6;margin-top:4px}.lkb{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#b91c1c;border-radius:4px;padding:1px 6px;margin-right:6px;vertical-align:1px}.ffirst{margin-top:2px;font-size:13.5px;line-height:1.55}.sgrid{margin:4px 0 2px}.sgr{font-size:12.5px;line-height:1.55;color:#1d1d1f}.sgred{color:#b91c1c;font-weight:600}.lkchip{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#92400e;background:#fef3c7;border-radius:4px;padding:0 5px;vertical-align:1px}.fwork{background:#fafafa;border-radius:10px;padding:9px 12px;font-size:13px;color:#1d1d1f;line-height:1.6}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
+    + 'h4{font-size:12px;margin:14px 0 4px;color:#1d1d1f}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#1d1d1f;font-size:13.5px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#1d1d1f;font-size:12.5px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#1d1d1f;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#1d1d1f;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#1d1d1f;font-size:13px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#1d1d1f;font-size:13.5px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#1d1d1f}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#1d1d1f}.fwrap{display:grid;grid-template-columns:180px 1fr;gap:14px 22px;align-items:stretch}.fseg{position:relative;min-height:64px}.fsegbg{position:absolute;inset:0}.fseglbl{position:relative;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:4px 26px}.fseglbl b{font-size:12.5px;line-height:1.3;color:#1d1d1f}.fsegst{font-size:12.5px;font-weight:700;letter-spacing:.03em;color:#1d1d1f}.fseg.fb .fsegst{color:#b91c1c}.fdrip{position:absolute;right:9%;bottom:0;font-size:13px}.fspoutrow{position:relative;height:30px}.fspoutbar{position:absolute;left:44%;right:44%;top:0;height:13px;background:#f5f5f7}.fspoutlbl{position:absolute;top:14px;left:0;right:0;text-align:center;font-size:12.5px;font-weight:700;letter-spacing:.03em;color:#1d1d1f}.ffull{grid-column:1 / -1}.fstage{border-left:2px solid #d2d2d7;padding-left:13px}.fstage.fb{border-left-color:#dc2626}.fsh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.fsh b{font-size:14px}.fss{color:#1d1d1f;font-size:12.5px}.fst{font-size:11.5px;font-weight:700;letter-spacing:.04em;color:#1d1d1f}.fb .fst{color:#b91c1c}.fev{color:#1d1d1f;font-size:13.5px;line-height:1.65;margin-top:3px}.ferow{font-size:13px;line-height:1.6;margin-top:4px}.lkb{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#b91c1c;border-radius:4px;padding:1px 6px;margin-right:6px;vertical-align:1px}.ffirst{margin-top:2px;font-size:13.5px;line-height:1.55}.sgrid{margin:4px 0 2px}.sgr{font-size:12.5px;line-height:1.55;color:#1d1d1f}.sgred{color:#b91c1c;font-weight:600}.lkchip{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#92400e;background:#fef3c7;border-radius:4px;padding:0 5px;vertical-align:1px}.fwork{background:#fafafa;border-radius:10px;padding:9px 12px;font-size:13px;color:#1d1d1f;line-height:1.6}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
     + '.stop{margin:12px 0 4px;padding:11px 14px;border:1px solid #dc2626;border-radius:10px;background:#fef2f2;color:#7f1d1d;font-size:13.5px;line-height:1.55}'
     + 'article{padding:30px 0;border-top:3px solid #1d1d1f}article:first-of-type{border-top:none}header .meta{color:#1d1d1f;font-size:13.5px;margin-bottom:6px}'
     + '.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#f5f5f7;color:#1d1d1f}'
@@ -6607,7 +6619,6 @@ function LeadBriefing({ lead }) {
       const t = (lead.theOneThing && typeof lead.theOneThing === 'object') ? lead.theOneThing : null;
       const anyRows = fg.stages.some(s3 => s3.rows.length) || fg.work.length || fg.unstaged.length;
       if (!anyRows && !lead.funnelStory && !(t && (t.friction || []).length)) return null;
-      const sts = {}; for (const s3 of fg.stages) sts[s3.id] = s3.status;
       const lead1Row = [...fg.rankOf.entries()].find(x => x[1] === 1);
       const lead1 = lead1Row && lead1Row[0].moneyLine;
       const DARK = { broken: 'rgba(248,113,113,.08)', brokenLine: '#f87171', clean: 'rgba(255,255,255,.03)', cleanLine: '#6b7280', noread: 'rgba(255,255,255,.015)', noreadLine: '#4b5563', text: '#f2f4f7', brokenText: '#f87171', dim: '#e8eaee' };
@@ -6652,12 +6663,22 @@ function LeadBriefing({ lead }) {
             g.label + ': ' + g.value,
             g.internal ? React.createElement('span', { style: { display: 'inline-block', fontSize: 10, fontWeight: 700, letterSpacing: '.05em', color: '#92400e', background: '#fef3c7', borderRadius: 4, padding: '0 5px', marginLeft: 6, verticalAlign: '1px' } }, 'INTERNAL') : null)),
           sg.unmeasured.length ? React.createElement('div', { key: 'sgu', style: { fontSize: 12, color: 'var(--t)' } }, 'Not measured: ' + sg.unmeasured.join(', ')) : null) : null;
-        return React.createElement('div', { key: 'fst' + si, style: { borderLeft: '2px solid ' + (broken ? '#f87171' : 'var(--b)'), paddingLeft: 12, marginBottom: 12 } },
-          React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
-            React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: broken ? 'var(--t)' : 'var(--t)' } }, s3.label),
-            React.createElement('span', { style: { fontSize: 12.5, color: 'var(--t)' } }, s3.sub),
-            React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.04em', color: broken ? '#f87171' : 'var(--t)' } }, stTxt)),
-          sigEls, walkEl, rowsEls, legacyFriction, emptyNote);
+        // Segment + card as ONE grid row with ONE stTxt, so the funnel is
+        // exactly as tall as the text beside it and the two can never disagree.
+        return [
+          React.createElement('div', { key: 'fseg' + si, style: { position: 'relative', minHeight: 64 } },
+            React.createElement('div', { style: { position: 'absolute', inset: 0, background: funnelSegFill(s3.status, true), clipPath: funnelSegClip(si) } }),
+            React.createElement('div', { style: { position: 'relative', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '4px 24px' } },
+              React.createElement('b', { style: { fontSize: 12.5, lineHeight: 1.3, color: 'var(--t)' } }, s3.label),
+              React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.03em', color: broken ? '#f87171' : 'var(--t)' } }, stTxt)),
+            (s3.status === 'broken' || s3.status === 'mixed') ? React.createElement('span', { style: { position: 'absolute', right: '9%', bottom: 0, fontSize: 13 } }, '\u{1F4A7}') : null),
+          React.createElement('div', { key: 'fst' + si, style: { borderLeft: '2px solid ' + (broken ? '#f87171' : 'var(--b)'), paddingLeft: 12 } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: broken ? 'var(--t)' : 'var(--t)' } }, s3.label),
+              React.createElement('span', { style: { fontSize: 12.5, color: 'var(--t)' } }, s3.sub),
+              React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.04em', color: broken ? '#f87171' : 'var(--t)' } }, stTxt)),
+            sigEls, walkEl, rowsEls, legacyFriction, emptyNote),
+        ];
       });
       const ff = (lead.funnelStory && lead.funnelStory.fixFirst) || null;
       const ffEl = ff
@@ -6678,9 +6699,13 @@ function LeadBriefing({ lead }) {
       return React.createElement('div', null,
         React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The funnel',
           React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, "a customer's path to hiring them \u2014 where it breaks, the money falls out")),
-        React.createElement('div', { style: { display: 'flex', gap: 20 } },
-          React.createElement('div', { style: { flexShrink: 0 }, dangerouslySetInnerHTML: { __html: funnelSvg(sts, DARK) } }),
-          React.createElement('div', { style: { flex: 1, minWidth: 0 } }, stageBlocks, ffEl, workEl, unstagedEl, sysDiag)));
+        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '164px 1fr', gap: '14px 20px', alignItems: 'stretch' } },
+          stageBlocks,
+          React.createElement('div', { key: 'fspout', style: { position: 'relative', height: 30 } },
+            React.createElement('div', { style: { position: 'absolute', left: '44%', right: '44%', top: 0, height: 13, background: 'rgba(255,255,255,.05)' } }),
+            React.createElement('div', { style: { position: 'absolute', top: 14, left: 0, right: 0, textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--t)' } }, 'booked jobs')),
+          React.createElement('div', { key: 'fsp2' }),
+          React.createElement('div', { key: 'ffull', style: { gridColumn: '1 / -1', minWidth: 0 } }, ffEl, workEl, unstagedEl, sysDiag)));
     })(),
 
     // (The one-thing card is gone from the screen: its fix-first and friction
