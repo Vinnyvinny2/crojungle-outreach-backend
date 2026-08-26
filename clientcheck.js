@@ -656,6 +656,24 @@ const mergeStat = runMergeCheck();
         if (!_seoIntRow || !/builder-generated/.test(String(_seoIntRow.value)) || _seoIntRow.internal !== true) fails.push('the classified-schema state does not render as an internal row — builder boilerplate reads like a claim to the owner');
         if (_seoIntRow && !/never the reason for a map position/.test(String(_seoIntRow.value))) fails.push('the SEO row lost its bound — an on-page note can be read as the reason for a map position, the exact overclaim the industry numbers forbid');
         if (mod.sig('found', { af: {}, rows: [] }).rows.some(r => /Search setup/.test(String(r.label)))) fails.push('a lead with no SEO read still renders a Search setup row');
+        // ══ ROUND 103: the partial bands. Each of these fired only on its most
+        // extreme value, so the ordinary cases - a title naming the trade but
+        // not the city, two of forty images, a sitemap eight months cold - were
+        // measured on every lead and rendered nowhere.
+        const _sb = mod.sig('found', { af: { seo: { checked: true, noindex: false, schema: 'business',
+          titleIsDefault: false, titleHasTrade: true, titleHasCity: false,
+          imgAlt: { withAlt: 2, of: 40 },
+          sitemapNewest: new Date(Date.now() - 240 * 86400000).toISOString().slice(0, 10) } }, rows: [] })
+          .rows.find(r => /Search setup/.test(String(r.label)));
+        if (!_sb || !/not the city/.test(String(_sb.value))) fails.push('a title naming the trade but not the city renders nothing - the band only ever fired when BOTH were missing, so the ordinary case was measured and invisible');
+        if (_sb && !/only 2 of their 40/.test(String(_sb.value))) fails.push('a partial image-text count renders nothing - the band only fired at zero');
+        if (_sb && !/nothing on the site has changed since/.test(String(_sb.value))) fails.push('a sitemap eight months cold renders nothing - the band only fired past a year');
+        const _sbClean = mod.sig('found', { af: { seo: { checked: true, noindex: false, schema: 'business',
+          titleIsDefault: false, titleHasTrade: true, titleHasCity: true,
+          imgAlt: { withAlt: 38, of: 40 },
+          sitemapNewest: new Date(Date.now() - 10 * 86400000).toISOString().slice(0, 10) } }, rows: [] })
+          .rows.find(r => /Search setup/.test(String(r.label)));
+        if (_sbClean && /(not the city|only \d+ of their|has changed since)/.test(String(_sbClean.value))) fails.push('a site with its title, its images and its sitemap all in order is being given a fault - a row that flags every site tells a caller nothing');
         const _chat102 = mod.sig('door', { af: { liveChat: true }, rows: [] }).rows.find(r => /Live chat/.test(String(r.label)));
         if (!_chat102 || !/installed/.test(String(_chat102.value))) fails.push('the chat row went back to asserting a visitor CAN ask — installation is not operation, and nobody measured whether anyone answers it');
         if (mod.scoreLine({ checked: false, thin: true, graded: [], basedOn: '2 of 9' }, false) !== '') fails.push('scoreSentence invents a caption for a thin score');
@@ -663,6 +681,54 @@ const mergeStat = runMergeCheck();
         const _thinHtml = mod.html([mod.rec(_thinLead)], { title: 'T', at: 'now' });
         if (!/site build not graded/.test(_thinHtml) || !/MARKER_THIN/.test(_thinHtml)) fails.push('a thin score renders nothing on the sheet — the operator cannot tell "not graded" from "nobody graded it", and the old shape printed a flattering /10 exactly here');
         if (/undefined<span>/.test(_thinHtml)) fails.push('a thin score prints undefined/10 on the sheet');
+        // ══ ROUND 103: the old-build finds render in WORDS, with the honest
+        // scope on a code-only build, and a pre-103 lead keeps its count row.
+        const _bm103 = mod.sig('door', { af: { buildMarkers: ['MARKER_OLDCODE find'], buildVisibleCount: 0, siteAgeMarkers: 3 }, rows: [] });
+        const _bm103r = _bm103.rows.find(r => /Site build/.test(String(r.label)));
+        if (!_bm103r || !/MARKER_OLDCODE/.test(String(_bm103r.value))) fails.push('the named old-build finds never render — the sheet is back to a bare count of the finds the owner called great');
+        if (_bm103r && !/page code/.test(String(_bm103r.value))) fails.push('a code-only old build lost its scope note — the sentence can be read as what customers see, the exact overclaim the visible-marker rule exists to stop');
+        const _bm103f = mod.sig('door', { af: { siteAgeMarkers: 3 }, rows: [] }).rows.find(r => /Site build/.test(String(r.label)));
+        if (!_bm103f || !/3 old-build markers/.test(String(_bm103f.value))) fails.push('a lead audited before the named markers existed loses its build row entirely');
+        // ══ ROUND 103: FACTS RENDER CHECK — the client half of "every fact
+        // must have a home". The server's own boot check proves every measured
+        // fact has a row in FACTS_RENDER; only THIS file can see both sides, so
+        // only this check can prove a row marked 'client' is actually read by
+        // something a person looks at. The old-build finds were measured,
+        // delivered, persisted and rendered as a bare count for weeks, and
+        // every wire looked healthy the whole time - a count IS a render, so
+        // nothing downstream could tell the difference.
+        try {
+          const _fr = server.replace(/\r\n/g, '\n');
+          const _at = _fr.indexOf('const FACTS_RENDER = {');
+          if (_at < 0) {
+            fails.push('FACTS_RENDER is gone from server.js - nothing declares where a measured fact goes, so the next decluttering pass can delete a render and no check will notice');
+          } else {
+            const _end = _fr.indexOf('\n};', _at);
+            const _tbl = _fr.slice(_at, _end);
+            // Escaped apostrophes are legal inside a reason and the naive
+            // [^']* stopped at the first one, truncating the text and failing a
+            // correct build. A reason is exactly the kind of string that
+            // contains an apostrophe, so this had to be fixed rather than
+            // worked around.
+            const _rows = [..._tbl.matchAll(/^  ([a-zA-Z_][a-zA-Z0-9_]*):\s*'((?:\\.|[^'\\])*)'/gm)].map(m => [m[1], m[2]]);
+            if (_rows.length < 20) fails.push('the FACTS_RENDER table parsed to ' + _rows.length + ' rows - the parser is not reading the real table, so this check is measuring nothing');
+            const _clientRows = _rows.filter(([, v]) => v === 'client');
+            if (_clientRows.length < 15) fails.push('only ' + _clientRows.length + " facts are declared as reaching the caller - the sheet has quietly become a summary");
+            for (const [k] of _clientRows) {
+              const _re = new RegExp('\\b(?:af|auditFacts|facts|_af97|_fx)\\.' + k + '\\b');
+              if (!_re.test(html)) {
+                fails.push('"' + k + '" is declared as something the caller reads and NOTHING in index.html reads it - it is measured, delivered, persisted and invisible, which is the exact shape of the old-build finds Vin had to notice by hand');
+              }
+            }
+            // And the reasons must be reasons. A one-word "internal" is how an
+            // accident gets filed as a decision.
+            for (const [k, v] of _rows) {
+              if (v === 'client') continue;
+              if (!/^(derived|internal):\s*.{25,}/.test(v)) fails.push('"' + k + '" is held back from the sheet with no real reason written down (' + v.slice(0, 40) + ') - an undocumented omission cannot be told apart from a bug');
+            }
+          }
+        } catch (e) { fails.push('the facts-render contract could not be read: ' + e.message); }
+
         // The renderRefused note lives inside a React component the harness
         // cannot execute, so its branch is pinned at the source — two real
         // halves, assembled here (a literal needle finds itself).

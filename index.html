@@ -2680,11 +2680,23 @@ const signalRowsFor = (stageId, ctx) => {
         bits.push(seo.schema === 'business' ? 'business info is coded for Google to read'
           : seo.schema === 'boilerplate' ? 'only builder-generated code \u2014 no business info coded for Google'
           : seo.schema === 'none' ? 'no business info coded for Google' : 'some structured code present');
+        // Round 103: these fired only on their most extreme band, so the
+        // ordinary partial cases - two of forty images, a title naming the
+        // trade but not the city, a sitemap eight months cold - were measured
+        // and rendered nowhere. The bands are honest now and each still names
+        // one thing a person can open and look at.
         if (seo.titleIsDefault === true) bits.push('the page title is a default like "Home"');
         else if (seo.titleHasTrade === false && seo.titleHasCity === false) bits.push('the page title names neither the trade nor the city');
-        if (seo.imgAlt && Number(seo.imgAlt.of) >= 5 && Number(seo.imgAlt.withAlt) === 0) bits.push('none of the ' + seo.imgAlt.of + ' images carry text Google can read');
-        if (seo.sitemapNewest && /^\d{4}-\d{2}-\d{2}/.test(String(seo.sitemapNewest)) && (Date.now() - new Date(seo.sitemapNewest).getTime()) > 365 * 24 * 3600 * 1000) {
-          bits.push('by its own sitemap, nothing on the site has changed since ' + seo.sitemapNewest);
+        else if (seo.titleHasCity === false) bits.push('the page title names the trade but not the city');
+        else if (seo.titleHasTrade === false) bits.push('the page title names the city but not the trade');
+        if (seo.imgAlt && Number(seo.imgAlt.of) >= 5 && Number(seo.imgAlt.withAlt) * 2 < Number(seo.imgAlt.of)) {
+          bits.push(Number(seo.imgAlt.withAlt) === 0
+            ? ('none of the ' + seo.imgAlt.of + ' images carry text Google can read')
+            : ('only ' + seo.imgAlt.withAlt + ' of their ' + seo.imgAlt.of + ' images carry text Google can read'));
+        }
+        if (seo.sitemapNewest && /^\d{4}-\d{2}-\d{2}/.test(String(seo.sitemapNewest))) {
+          const _days = Math.round((Date.now() - new Date(seo.sitemapNewest).getTime()) / 86400000);
+          if (_days > 180) bits.push('by its own sitemap, nothing on the site has changed since ' + seo.sitemapNewest);
         }
         R('Search setup', bits.join(' \u00b7 ') + ' \u2014 minor inputs, never the reason for a map position', null, true);
       }
@@ -2710,6 +2722,12 @@ const signalRowsFor = (stageId, ctx) => {
     R('Booking route', ({ online_booking: 'a visitor can book a time on the site', form: 'a form, then waiting', phone_only: 'a phone call', none_found: 'no route found on the pages read' })[af.booking] || null, 'booking');
     // Round 101, Vin: the chat row earns its place only when a chat was FOUND.
     R('Live chat', af.liveChat === true ? 'a chat product is installed on the site \u2014 installed is not proof anyone answers it' : null, null);
+    // Round 102 measured this "for the call sheet" and delivered it nowhere.
+    // Only the CONTRADICTION earns a row - a button that says book, over a
+    // door that cannot. Silent when they neither say it nor do it.
+    R('What the site promises', af.bookingLabelOnly === true
+      ? 'a button on the page invites a visitor to book, and the route behind it is not a booking tool \u2014 worth opening on the call'
+      : null, 'booking');
     R('Form length', Number.isFinite(af.formFields) ? af.formFields + ' fields' : null, 'form');
     // Round 101: the price row reads the SERVER's four-state answer. "Not
     // measured: Price on the site" used to print about a lead whose pricing
@@ -2718,8 +2736,30 @@ const signalRowsFor = (stageId, ctx) => {
       : af.price === 'none' ? 'none on the pages we read'
       : af.price === 'unread' ? 'a pricing page exists that we did not open'
       : (Number(ctx && ctx.pricesShown) > 0 ? 'shown' : (ids.has('no_published_pricing') ? 'none on the pages read' : null)), 'price');
-    R('Site build', Number.isFinite(af.siteAgeMarkers) ? (af.siteAgeMarkers >= 2 ? af.siteAgeMarkers + ' old-build markers in the source' : 'no meaningful age markers') : null, 'build');
-    R('Real-visitor speed', af.mobile === 'slow' ? 'slow for their real visitors' : af.mobile === 'fine' ? 'fine for their real visitors' : null, 'speed');
+    // Round 103: the finds in words, not a count. A code-only old build says
+    // so with the honest scope (the build is dated; a visitor never sees the
+    // code) - the customer-perception CLAIM stays with the rung's own gate.
+    R('Site build', (Array.isArray(af.buildMarkers) && af.buildMarkers.length)
+      ? ('signs of an old build \u2014 ' + af.buildMarkers.join('; ') + (Number(af.buildVisibleCount) === 0 ? ' (all in the page code \u2014 a visitor never sees these; it is the build that is dated)' : ''))
+      : (Number.isFinite(af.siteAgeMarkers) ? (af.siteAgeMarkers >= 2 ? af.siteAgeMarkers + ' old-build markers in the source' : 'no meaningful age markers') : null), 'build');
+    // Round 103: the seconds he cannot argue with, never the adjective he can.
+    // Google's own 28-day record of their REAL visitors - the one measurement
+    // in this system taken from the prospect's own customers. Collapsed to
+    // 'slow'/'fine' since it was built, which is why the number never showed.
+    const _mf = (af.mobileField && typeof af.mobileField === 'object') ? af.mobileField : null;
+    const _mfScope = (_mf && _mf.scope === 'origin') ? ' These seconds cover their whole site, not one page.' : '';
+    const _mfSecs = (_mf && typeof _mf.lcpSec === 'number') ? _mf.lcpSec : null;
+    R('Real-visitor speed',
+      (_mf && _mf.hasRecord === true && _mfSecs !== null)
+        ? (_mf.isProblem === true
+            ? (_mf.faultMetric === 'lcp'
+                ? ('a quarter of phone visitors wait more than ' + (_mfSecs >= 4 && _mfSecs < 4.1 ? '4' : _mfSecs) + ' seconds before the main thing on the page appears \u2014 Google counts over 4 as failing.' + _mfScope)
+                : ('the wait itself is ' + _mfSecs + ' seconds, under Google\'s failing line of 4 \u2014 what Google measured as failing on their real visitors is something else on this page.' + _mfScope))
+            : ('a quarter of phone visitors wait about ' + _mfSecs + ' seconds, under Google\'s failing line of 4, so nothing Google measured on their real visitors is a fault.' + _mfScope))
+        : (_mf && _mf.hasRecord === false)
+          ? null
+          : (af.mobile === 'slow' ? 'slow for their real visitors' : af.mobile === 'fine' ? 'fine for their real visitors' : null),
+      'speed');
     const ck = af.checklist;
     if (ck) {
       if (ck.submitOnlyButton === true) R('Form button', 'says only \u201cSubmit\u201d \u2014 tells the visitor nothing about what happens next', null);

@@ -15229,6 +15229,47 @@ const orderFollowUpRungs = (byHarm, leadId, secondId, leadBand, leadId2) => {
     harm: x.harm, reframe: x.reframe || null, blind: x.blind || '' }));
 };
 
+// ══ ONE AUTHORITY FOR THE REVIEW FIGURE - round 103 ══════════════════════════
+// §44 settled where a review COUNT comes from: Google's Place Details, read on
+// the exact place ID, never the rank-search row - because that row is matched on
+// placeId, else domain, else an exact NAME, and the last of those lands on
+// another business. §56 then found the same raw read at two more call sites and
+// fixed both. It missed three more, all of which ran BEFORE resolveMeasurements
+// and so could not read the resolved figure:
+//   · measureValueEquation - the "what is already working" numerator, which
+//     reaches the audit brief under "WHAT IS WORKING FOR THEM (do NOT call
+//     these problems)" AND the fact-checker under "do NOT flag these as
+//     unverified". The one gate that would catch a wrong number is explicitly
+//     told to stand down on it, and likelihood + earnedButBlocked are scored
+//     off it - so a name-matched row changed the STORY, not just a figure.
+//   · readAffordability - internal, but a wrong count skews the estimate.
+//   · buildAllowedConsequences - the safe reframes handed to the writer.
+// Five hand-kept copies of one rule is how the fifth stays wrong, so the rule is
+// a function now and resolveMeasurements calls it too.
+const reviewFigureAuthority = ({ gbpHealth = null, deepReviews = null, localRank = null } = {}) => {
+  const num = (v) => (strictNum(v) === strictNum(v) ? strictNum(v) : null);
+  const first = (...vals) => { for (const v of vals) { const n = num(v); if (n !== null) return n; } return null; };
+  // A row matched only by NAME whose count contradicts Place Details is a
+  // different business. 25% or five reviews, whichever is larger: search-index
+  // counts lag Details by a few, and refusing a correct match over a lag would
+  // delete the finding on every lead.
+  const mismatch = (() => {
+    const rowOurs = (localRank && localRank.ours) ? localRank.ours : null;
+    if (!rowOurs || !localRank) return false;
+    if (localRank.matchedBy === 'placeId' || localRank.matchedBy === 'domain') return false;
+    const a = num(gbpHealth && gbpHealth.reviewCount);
+    const b = num(rowOurs.reviews);
+    if (a === null || b === null || a <= 0) return false;
+    return Math.abs(b - a) > Math.max(5, a * 0.25);
+  })();
+  const ours = mismatch ? null : ((localRank && localRank.ours) ? localRank.ours : null);
+  return {
+    mismatch,
+    reviewCount: first(gbpHealth && gbpHealth.reviewCount, deepReviews && deepReviews.totalReviews, ours && ours.reviews),
+    rating: first(gbpHealth && gbpHealth.rating, deepReviews && deepReviews.rating, ours && ours.rating),
+  };
+};
+
 const resolveMeasurements = ({
   localRank = null, outrankRow = null, gbpHealth = null, history = null, htmlSignals = null,
   reviewsRead = null, ownerReplyCount = null, deepReviews = null,
@@ -15264,15 +15305,10 @@ const resolveMeasurements = ({
   // refusing a correct match over a lag would delete the finding on every lead.
   // A placeId or domain match is never questioned, and a lead where we hold only
   // one of the two numbers is left exactly as it was.
-  const _mismatchOf = (row) => {
-    const raw = (row && row.ours) ? row.ours : null;
-    if (!raw || !row) return false;
-    if (row.matchedBy === 'placeId' || row.matchedBy === 'domain') return false;
-    const a = num(gbpHealth && gbpHealth.reviewCount);
-    const b = num(raw.reviews);
-    if (a === null || b === null || a <= 0) return false;
-    return Math.abs(b - a) > Math.max(5, a * 0.25);
-  };
+  // ONE copy of the rule, shared with the three pre-resolve call sites through
+  // reviewFigureAuthority. This wrapper stays because the OUTRANKED row is a
+  // different row and needs the same test applied to it.
+  const _mismatchOf = (row) => reviewFigureAuthority({ gbpHealth, localRank: row }).mismatch;
   const _rowRaw = (localRank && localRank.ours) ? localRank.ours : null;
   const _rowMismatch = _mismatchOf(localRank);
   // ══ THE OUTRANKED EVIDENCE HAS ITS OWN ROW - round 101 ═══════════════════
@@ -15313,12 +15349,8 @@ const resolveMeasurements = ({
     // composeFullEmail returns null, and the lead falls through to the model
     // writing the whole email from scratch — the highest-invention path in the
     // system, reached by a number that was never about them.
-    reviewCount: first(gbpHealth && gbpHealth.reviewCount,
-                       deepReviews && deepReviews.totalReviews,
-                       _ours && _ours.reviews),
-    rating: first(gbpHealth && gbpHealth.rating,
-                  deepReviews && deepReviews.rating,
-                  _ours && _ours.rating),
+    reviewCount: reviewFigureAuthority({ gbpHealth, deepReviews, localRank }).reviewCount,
+    rating: reviewFigureAuthority({ gbpHealth, deepReviews, localRank }).rating,
 
     // Search position. rankFound is a GATE, not a figure: without it a rank of
     // null reads as position zero.
@@ -23431,7 +23463,109 @@ const buildAuditFacts = (m = {}, unlinked = null, extras = null) => {
     https: (typeof m.isHttps === 'boolean') ? m.isHttps : null,
     viewport: m.viewportChecked === true ? (m.hasViewport !== false) : null,
     siteAgeMarkers: Number.isFinite(Number(m.siteAgeScore)) ? Number(m.siteAgeScore) : null,
+    // Round 103: the finds themselves, in words. The owner's ruling: the
+    // code/build finds were great and only needed plain terms - reducing them
+    // to a count was a cut, not a translation. The say-texts are already
+    // plain-language gated at boot; visibleCount lets every consumer scope
+    // the sentence to the BUILD when nothing shows to a customer.
+    buildMarkers: (Array.isArray(m.siteAgeMarkers) && m.siteAgeMarkers.length) ? m.siteAgeMarkers.slice(0, 4) : null,
+    // Round 103. A booking LABEL over a door that cannot book is the sharpest
+    // version of the door finding, and round 102 measured it and delivered it
+    // nowhere. Tri-state: null when the booking read did not run at all.
+    bookingLabelOnly: (m.bookingMeasured === true && m.booking !== 'online_booking')
+      ? (m.bookingLabelSeen === true) : null,
+    // The SECONDS, not the adjective. §54's rule: he cannot argue with a number
+    // and can argue with the word "slow". Google's own 28-day record of their
+    // real visitors, and the one measurement in this system taken from the
+    // prospect's own customers rather than from something we looked at.
+    mobileField: (extras && extras.realSpeed && extras.realSpeed.checked === true) ? {
+      hasRecord: extras.realSpeed.hasFieldData === true,
+      scope: extras.realSpeed.fieldScope || null,
+      lcpSec: (typeof extras.realSpeed.lcpSec === 'number' && Number.isFinite(extras.realSpeed.lcpSec)) ? extras.realSpeed.lcpSec : null,
+      lcpBand: extras.realSpeed.lcpBand || null,
+      faultMetric: extras.realSpeed.faultMetric || null,
+      isProblem: extras.realSpeed.isProblem === true,
+    } : null,
+    // Their Google listing's other categories. INTERNAL: this is Google's own
+    // API taxonomy, NOT the list the owner picks from in his Business Profile,
+    // so it is real intelligence for the call and never a claim to him.
+    categories: (extras && extras.categories && Array.isArray(extras.categories.list) && extras.categories.list.length) ? {
+      primary: extras.categories.primary || null,
+      list: extras.categories.list.slice(0, 8),
+      count: Number.isFinite(Number(extras.categories.count)) ? Number(extras.categories.count) : extras.categories.list.length,
+    } : null,
+    buildVisibleCount: Number.isFinite(Number(m.siteAgeVisibleCount)) ? Number(m.siteAgeVisibleCount) : null,
   };
+};
+
+// ══ EVERY FACT MUST HAVE A HOME - round 103 ══════════════════════════════════
+// Vin, this round: "I remember the audits would state code and behind design of
+// websites. I haven't seen that in recent audits since I complained not being
+// able to understand it. I feel it was cut from the audits. This was very strong,
+// just needed it in simple terms."
+//
+// He was right, and the cause is a NEW SHAPE of the class this file records most
+// often. The usual shape is computed-but-not-passed: a value never reaches its
+// consumer. This one is worse, because it looks healthy at every wire: the value
+// is measured, it is delivered, it is persisted, it survives a reload - and the
+// only thing that ever RENDERED it was deleted in a decluttering pass. The
+// measurement is alive and invisible, and nothing anywhere says so.
+//
+// readSiteAge writes eleven finished plain-English sentences ("the copyright line
+// at the bottom still reads 2014"). buildAuditFacts passed the COUNT. So the sheet
+// said "3 old-build markers in the source" - jargon, unverifiable, and the exact
+// opposite of the translation he asked for - for weeks, while the sentences sat
+// in memory. Nobody could see it, because a count IS a render: the row was there.
+//
+// So every key this function returns must declare where it goes. 'client' means a
+// human reads it on the screen or the sheet. 'derived' means another key carries
+// it to a human and names which one. 'internal' means deliberately not shown, with
+// the reason written down where a reviewer sees it. FACTS RENDER CHECK (in
+// clientcheck.js, which can read both files) fails the build when a key is added
+// with no row, when a 'client' key nothing in index.html reads, and when a row
+// names a key this function no longer returns. A field can still be dropped from
+// the sheet - but only by a person writing down that they meant to.
+const FACTS_RENDER = {
+  // ── the caller reads these ────────────────────────────────────────────────
+  // Caught by this check on its FIRST boot: 'ads' was missing from the first
+  // draft of this table, which is the check doing its whole job on its author.
+  ads:               'client',
+  roiStatus:         'client',
+  emergencyMismatch: 'client',
+  adsLive:           'client',
+  adLanding:         'client',
+  organicPosition:   'client',
+  organicScanned:    'client',
+  recurring:         'client',
+  searchSource:      'client',
+  searchQuery:       'client',
+  price:             'client',
+  checklist:         'client',
+  seo:               'client',
+  analytics:         'client',
+  lsa:               'client',
+  pack:              'client',
+  aiOverview:        'client',
+  booking:           'client',
+  liveChat:          'client',
+  formFields:        'client',
+  campaignPages:     'client',
+  mobile:            'client',
+  metaPixel:         'client',
+  siteAgeMarkers:    'client',
+  buildMarkers:      'client',
+  buildVisibleCount: 'client',
+  bookingLabelOnly:  'client',
+  mobileField:       'client',
+  categories:        'internal: Google\'s API taxonomy for the listing, which is NOT the category list the owner picks from in his Business Profile. Close enough to be real intelligence for the call, nowhere near close enough to tell him his listing is missing categories - so it goes to the caller through the audit prompt\'s internal-only block, never as a sheet row that reads like a fault.',
+  // ── carried to a human by another key, named ──────────────────────────────
+  adsConversion: 'derived: roiStatus. The three states a caller can act on are counted / hidden inside their tag container / nothing visible on the pages we read. The raw marker would add a row and no decision.',
+  callTracking:  'derived: roiStatus. Same rollup - a phone-call tracker and a conversion label answer one question, which is whether anything counts what a click becomes.',
+  https:         'derived: the website score grades it (secure connection) and dated_credibility names plain http as a marker a visitor meets, so it reaches the sheet in words rather than as a boolean.',
+  viewport:      'derived: the website score grades it (built for a phone) and the age read names it as a marker, which is the version a person can check.',
+  unlinkedPages: 'derived: the export renders the count from the lead\'s own sitePages, and campaignPages carries the half that means something - a page built to receive ad clicks. A bare count of pages nothing links is a fact about their sitemap, not about their money.',
+  // ── deliberately not shown ────────────────────────────────────────────────
+  adLandingUrl:  'internal: the ad destination is handed to the caller as a KIND (their homepage, an ordinary page, a page the site never links). The raw URL is a live link into somebody else\'s ad campaign and belongs in the reference tail at most - see the round-103 decision note.',
 };
 
 // ══ THE FUNNEL, WALKED IN ORDER, BY CODE ═════════════════════════════════════
@@ -24253,8 +24387,29 @@ const LADDER_HARM_FLOOR = 45;
 // Nothing here is a claim to the prospect — it never leaves the call sheet — so
 // it is allowed to be a judgement in a way an email sentence is not. What it must
 // not do is invent hours. When the listing publishes none, it says so.
-const callWindowFor = (hoursText, tradeWord) => {
+const callWindowFor = (hoursText, tradeWord, utcOffsetMinutes = null) => {
   const rows = Array.isArray(hoursText) ? hoursText.filter(Boolean) : [];
+  // §77 bought utcOffsetMinutes in the Place Details mask to put the calling
+  // window in THEIR timezone and never delivered it. The hours Google publishes
+  // are local to the business, so "opens around 8am" is 8am WHERE THEY ARE - and
+  // a caller three zones away who reads it as his own clock rings an empty
+  // office. Stated as a difference from the caller's own clock, never as a named
+  // zone: the parse comment at the source says plainly that assuming Eastern is
+  // how this goes wrong. A null offset says nothing at all about zones.
+  // typeof, NOT Number.isFinite(Number(x)): Number(null) is 0 and 0 is finite,
+  // so an unmeasured offset laundered into UTC and the sheet told a caller how
+  // many hours ahead of him a business was, off a measurement that never ran.
+  // Written that way in this very round and caught by this check's own fixture,
+  // which is the recorded null-laundering trap arriving on schedule.
+  const _off = (typeof utcOffsetMinutes === 'number' && Number.isFinite(utcOffsetMinutes)) ? utcOffsetMinutes : null;
+  const _zone = (() => {
+    if (_off === null) return '';
+    const mine = -new Date().getTimezoneOffset();
+    const diffH = Math.round((_off - mine) / 60);
+    if (diffH === 0) return ' Those are their local hours, and they are on your clock.';
+    const dir = diffH > 0 ? 'ahead of' : 'behind';
+    return ` Those are their local hours: they are ${Math.abs(diffH)} hour${Math.abs(diffH) === 1 ? '' : 's'} ${dir} you.`;
+  })();
   if (!rows.length) return { checked: false, why: 'their Google listing publishes no opening hours, so there is nothing to read here' };
   if (rows.some(r => /open 24 hours/i.test(r))) {
     return { checked: true, open24: true, say: 'They publish 24-hour availability, so there is no closed window to work around. That also means an after-hours finding is false for them.' };
@@ -24282,14 +24437,14 @@ const callWindowFor = (hoursText, tradeWord) => {
       // "on a roof or under a house" printed on a PAVING contractor and a kitchen
       // remodeler on 2026-08-24 — roofer imagery hardcoded for thirty trades.
       // "out on a job" is true of every one of them.
-      say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}. On a trade like this the owner is usually reachable in the first half hour before crews go out, or late afternoon once they are back. Mid-morning is the worst window: he is out on a job.` };
+      say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}.${_zone} On a trade like this the owner is usually reachable in the first half hour before crews go out, or late afternoon once they are back. Mid-morning is the worst window: he is out on a job.` };
   }
   if (inRooms) {
     return { checked: true, open24: false,
-      say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}. A practice owner is with ${_withWhom} through the day, so the realistic windows are before the first ${_withWhom === 'clients' ? 'meeting' : 'appointment'} and over lunch. The person who answers will be front desk, and the owner's name is the only thing that gets past them.` };
+      say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}.${_zone} A practice owner is with ${_withWhom} through the day, so the realistic windows are before the first ${_withWhom === 'clients' ? 'meeting' : 'appointment'} and over lunch. The person who answers will be front desk, and the owner's name is the only thing that gets past them.` };
   }
   return { checked: true, open24: false,
-    say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}. Early is usually better than late for an owner-operated business.` };
+    say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}.${_zone} Early is usually better than late for an owner-operated business.` };
 };
 
 // ══ WHAT WILL HE SAY BACK ═══════════════════════════════════════════════════
@@ -27525,7 +27680,13 @@ function extractHtmlSignals(rawHtml, pageUrl) {
     formFieldCountIsSingleForm, formCount: formBlocks.length,
     submitOnlyButton, wrongKeyboardFields: _wrongKeyboard, multiStepForm,
     proofPosition, proofOnlyInFooter, sharedInboxOnly, firstFoldCtaKinds,
-    h1: (html.match(/<h1\b[^>]*>([\s\S]{0,200}?)<\/h1>/i) || [, ''])[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim() };
+    // ROUND 103: the {0,200} cap did NOT safely yield '' on a long first
+    // heading. String.match advances its start position on a failed attempt,
+    // so a first <h1> whose inner content runs past 200 characters is skipped
+    // and the SECOND h1 on the page is returned as if it were the headline -
+    // silently, and most often on the builder pages that wrap an h1 around a
+    // whole hero block. Match the first h1 with no length cap, then trim.
+    h1: (html.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i) || [, ''])[1].replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200) };
 }
 
 // ══ A DOLLAR DIGIT IS NOT A PUBLISHED PRICE - round 102 ═════════════════════
@@ -31579,8 +31740,19 @@ const measureRealWorldSpeed = async (website, key) => {
     if (typeof inpMs === 'number' && inpMs > 500)
       findings.push(`the page takes ${inpMs}ms to respond when someone taps it, which reads as broken rather than slow`);
 
+    // The band travels so the sheet never holds a second copy of 2.5/4.0.
+    // NULL unless we really hold a number: Number(null) is 0 and 0 is finite,
+    // and a laundered 0 here would print "within 0 seconds" as a strength.
+    const lcpBand = (typeof lcpSec === 'number' && Number.isFinite(lcpSec))
+      ? (lcpSec > 4 ? 'poor' : lcpSec > 2.5 ? 'mid' : 'good') : null;
+    // WHICH metric failed, so a good LCP beside a failing layout shift cannot
+    // print "nothing here is a fault" above a numbered leak that says it is.
+    const faultMetric = (lcpSec !== null && lcpSec > 4) ? 'lcp'
+      : (cls !== null && cls > 0.25) ? 'cls'
+      : (typeof inpMs === 'number' && inpMs > 500) ? 'inp' : null;
     return {
       checked: true, hasFieldData: true, fieldScope, overall, lcpSec, cls, inpMs: inpMs || null, labScore,
+      lcpBand, faultMetric,
       findings,
       // Only a genuine problem, never a boast.
       isProblem: findings.length > 0,
@@ -35474,7 +35646,18 @@ const matchDuplicateListing = (own, results) => {
 // dispatch like every other call). An audit is 2-3 searches and a profile
 // read; this is the fourth, bought only when the lead has a place ID and a
 // provable identity to match against.
-const findDuplicateListing = async ({ companyName, placeId, website, phone, location, placesKey }) => {
+const findDuplicateListing = async ({ companyName, placeId, website, phone, location, placesKey, serviceAreaOnly = false }) => {
+  // ══ THE PROOF STANDARD CAN BE STRUCTURALLY UNAVAILABLE - round 103 ═══════
+  // A duplicate is claimed only on the same domain-or-phone AND the same STREET
+  // ADDRESS. A pure service-area business hides its address on Google by
+  // design - plumbers, locksmiths, mobile detailers - so that second half can
+  // never be satisfied for them, and "no duplicate found" would report our own
+  // blindness as a fact about their listings. §77 bought pureServiceAreaBusiness
+  // in the field mask for exactly this and never delivered it here.
+  if (serviceAreaOnly === true) {
+    return { checked: false, found: false,
+      why: 'their listing hides its street address (Google calls this a service-area business), and a duplicate is only ever claimed when two listings share an address. So this cannot be checked for them - it is not evidence that no second listing exists.' };
+  }
   // The NAME travels too: the practitioner-listing exemption compares our own
   // name against the other listing's, and it was never being passed one.
   const pre = matchDuplicateListing({ name: companyName, placeId, website, phone, address: location }, []);
@@ -38233,7 +38416,34 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
 
     if (cachedContact && cachedContact.owner) {
       decisionMaker = cachedContact.owner;
-      if (!verifiedCEO) { verifiedCEO = decisionMaker.name; verifiedCEOTitle = decisionMaker.title || 'Owner'; }
+      // ══ THE AUTHORITY FLOOR APPLIES HERE TOO - round 103 ═══════════════
+      // §41 removed the `|| 'Owner'` default and built the held-back path, and
+      // it built both INSIDE the `else if (company)` arm below. This arm - a
+      // contact cached within the last 60 days - kept the old behaviour: it
+      // promoted any cached name to verifiedCEO and invented the word "Owner"
+      // when the cached row had no title. So the exact sheet §41 was written
+      // to stop ("Michelle Musacchio, Owner", a word nobody read anywhere)
+      // still shipped one branch over, on every re-research of a lead whose
+      // contact was already cached. A row cached before §41 carries no canBuy
+      // at all, so an absent verdict is re-derived from the title through the
+      // same authorityScore the resolver uses.
+      const _cachedOk = decisionMaker.canBuy === true
+        || (decisionMaker.canBuy === undefined && authorityScore(decisionMaker.title) >= 75);
+      if (!_cachedOk) {
+        heldBackContact = {
+          name: decisionMaker.name,
+          title: decisionMaker.title || null,
+          authority: Number.isFinite(Number(decisionMaker.authority)) ? decisionMaker.authority : authorityScore(decisionMaker.title),
+          why: decisionMaker.blockReason || 'a cached contact that does not clear the buying-authority floor',
+          sources: decisionMaker.sources || [],
+        };
+        console.log(`DM [${company}]: the CACHED contact ${decisionMaker.name} is held back - ${heldBackContact.why}. Shown as an unverified candidate, not as the owner.`);
+      } else if (!verifiedCEO) {
+        verifiedCEO = decisionMaker.name;
+        // No default. An unknown title stays unknown - the same rule as the
+        // resolver arm below, and the whole point of §41.
+        verifiedCEOTitle = decisionMaker.title || verifiedCEOTitle || null;
+      }
     } else if (company) {
       try {
         decisionMaker = await findDecisionMaker({
@@ -39222,6 +39432,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         phone: (phoneResult && phoneResult.phone) || '',
         location: req.body.location || '',
         placesKey: process.env.GOOGLE_PLACES_KEY || '',
+        // Their listing may hide its address, which makes the address half of
+        // the proof standard unreachable - see findDuplicateListing.
+        serviceAreaOnly: !!(gbpHealth && gbpHealth.serviceAreaOnly),
       });
       if (duplicateListing.found) {
         console.log(`\u{1F465} DUPLICATE LISTING [${company}]: Google holds a SECOND listing for this business at the same address — "${duplicateListing.otherName}" with ${duplicateListing.otherReviews === null ? 'an unreported number of' : duplicateListing.otherReviews} review(s), proven by ${duplicateListing.matchedBy}. Invisible to the owner, splits the review record, and explains an outranked finding with no theory about ranking at all.`);
@@ -39270,8 +39483,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // reads as surveillance and our estimate is often wrong.
     affordability = readAffordability({
       staffText: [content, sitePages && sitePages.rawText].filter(Boolean).join('\n'),
-      reviewCount: localRank && localRank.ours ? localRank.ours.reviews : undefined,
-      reviewRating: localRank && localRank.ours ? localRank.ours.rating : undefined,
+      // §44's authority, not the raw rank row - see reviewFigureAuthority.
+      // deepReviews is not in scope this early; the mined total is the THIRD
+      // source in that chain anyway, behind Place Details.
+      reviewCount: reviewFigureAuthority({ gbpHealth, localRank }).reviewCount ?? undefined,
+      reviewRating: reviewFigureAuthority({ gbpHealth, localRank }).rating ?? undefined,
       recentReviewCount,
       publishedPrices: sitePages && Array.isArray(sitePages.prices) ? sitePages.prices.length : 0,
       priceStrings: sitePages && sitePages.prices,
@@ -39312,8 +39528,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       formFieldCount: htmlSignals && htmlSignals.checked ? htmlSignals.formFieldCount : undefined,
       hasForm: htmlSignals && htmlSignals.hasForm,
       guarantee: offerStrength.checked ? offerStrength.guarantee : undefined,
-      reviewCount: localRank && localRank.ours ? localRank.ours.reviews : undefined,
-      reviewRating: localRank && localRank.ours ? localRank.ours.rating : undefined,
+      // §44's authority chain, not the raw rank row. This call runs BEFORE
+      // resolveMeasurements, which is exactly why it was missed twice - so the
+      // rule travels as a function rather than as a line somebody has to
+      // remember to copy. likelihood and earnedButBlocked are scored off these
+      // numbers, so a wrong count here changed the STORY, not just a figure.
+      // deepReviews is not in scope this early; the mined total is the THIRD
+      // source in that chain anyway, behind Place Details.
+      reviewCount: reviewFigureAuthority({ gbpHealth, localRank }).reviewCount ?? undefined,
+      reviewRating: reviewFigureAuthority({ gbpHealth, localRank }).rating ?? undefined,
       publishedPrices: sitePages && Array.isArray(sitePages.prices) ? sitePages.prices.length : undefined,
       unreadPricing: !!(sitePages && sitePages.existsButUnread && sitePages.existsButUnread.pricing),
       // The homepage hero price the interior-corpus extractor cannot see. Same
@@ -39646,6 +39869,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         const _bookingRead = {
           booking: sitePages && sitePages.booking,
           bookingMeasured: !!(sitePages && sitePages.bookingMeasured),
+          // Round 102 made the booking LABEL travel "for the call sheet" and
+          // then never delivered it - computed on every branch of
+          // measureBookingPath, stamped onto sitePages, and read by nothing.
+          // The sharpest version of the door finding is a business that SAYS
+          // book online over a door that cannot.
+          bookingLabelSeen: !!(sitePages && sitePages.bookingLabelSeen),
           // ANY capture evidence — code-measured or the model's own read of
           // the interior pages. Used only to SUPPRESS "the only way in is a
           // phone call"-class claims, never to assert a form exists.
@@ -40505,6 +40734,16 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         if (gbpHealth.photosAtCap) push(`at least ${gbpHealth.photosSeen} photos on the Google profile (our API caps the list, so the true number is unknown and must never be stated)`);
         else if (Number.isFinite(gbpHealth.photoCount)) push(`${gbpHealth.photoCount} photos on the Google profile`);
         if (gbpHealth.gaps && gbpHealth.gaps.length) push(`Google profile gaps: ${gbpHealth.gaps.join('; ')}`);
+        // Google's OWN summary of their reviews, bought in the billed Place
+        // Details mask since §77 and parsed by nothing. It is Google's words
+        // about their reputation, which makes it the cheapest read available on
+        // how the business presents in the one place a customer looks - and it
+        // is INTERNAL for the same reason every review-derived thing is.
+        if (gbpHealth.reviewSummary) push(`INTERNAL ONLY (never write a sentence about this): Google's own summary of their reviews reads "${String(gbpHealth.reviewSummary).slice(0, 300)}"`);
+        // Their listing's other categories - Google's API taxonomy, NOT the
+        // list the owner picks from, so it is a question for the call and can
+        // never become "your listing is missing categories".
+        if (Array.isArray(gbpHealth.placeCategories) && gbpHealth.placeCategories.length > 1) push(`INTERNAL ONLY (never write a sentence about this): their listing carries ${gbpHealth.placeCategories.length} categories in Google's own taxonomy - ${gbpHealth.placeCategories.slice(0, 6).join(', ')}. This is NOT the category list the owner chooses from, so it is a question worth asking, never a claim about his listing.`);
       }
       if (Number.isFinite(ownerReplyCount) && Number.isFinite(reviewsRead) && reviewsRead > 0) push(`The owner replies to ${ownerReplyCount} of the ${reviewsRead} reviews we read`);
       if (Number.isFinite(Number(ownerReplyMedianDays))) push(`When the owner does reply to a review, the typical wait is about ${ownerReplyMedianDays} day(s) (median over the reviews we read). INTERNAL: how fast he answers the public is the cheapest available read on how fast the business answers anyone.`);
@@ -40711,7 +40950,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       hasForm: htmlSignals && htmlSignals.hasForm,
       guarantee: offerStrength.checked ? offerStrength.guarantee : undefined,
       publishedPrices: sitePages && Array.isArray(sitePages.prices) ? sitePages.prices.length : undefined,
-      reviewCount: localRank && localRank.ours ? localRank.ours.reviews : undefined,
+      // §44's authority, not the raw rank row - see reviewFigureAuthority.
+      // deepReviews is out of scope here; Place Details is the authority anyway.
+      reviewCount: reviewFigureAuthority({ gbpHealth, localRank }).reviewCount ?? undefined,
       rank: localRank && localRank.found ? localRank.rank : undefined,
       trade: customerTrade || verifiedIndustry || req.body.industry || '',
     });
@@ -41868,6 +42109,7 @@ SITE REVENUE SIGNALS (measured from THEIR homepage HTML — every item is a fact
   (Number(htmlSignals.wrongKeyboardFields) >= 1) ? `- ${htmlSignals.wrongKeyboardFields} email/phone field(s) in the form are typed as plain text, so a phone gets the full QWERTY keyboard to type a phone number into. Measured from the input types in his own markup.` : '',
   htmlSignals.proofOnlyInFooter === true ? '- Every trust signal on the page (reviews, badges, testimonials) sits in the footer — the first screens a visitor sees carry none of it. Measured from where the proof markup sits in the document.' : '',
   htmlSignals.sharedInboxOnly === true ? '- Every published email address is a shared inbox (info@ / office@) — no named person is reachable from the page. Measured from the mailto links.' : '',
+  (_harmInputs && _harmInputs.datedSite === true && Array.isArray(_harmInputs.siteAgeMarkers) && _harmInputs.siteAgeMarkers.length) ? `- The build itself is measurably old: ${_harmInputs.siteAgeMarkers.slice(0, 4).join('; ')}. ${Number(_harmInputs.siteAgeVisibleCount) >= 1 ? 'Some of this shows to a visitor and may be said as what a customer meets.' : 'ALL of it sits in the page code where a customer never looks — say it as a fact about the BUILD (real, and checkable by whoever runs the site), NEVER as something customers see or feel.'}` : '',
   (Number(htmlSignals.firstFoldCtaKinds) >= 3) ? `- The first screen offers ${htmlSignals.firstFoldCtaKinds} different asks at once (call, form, quote...) — competing calls to action split the click. Measured from the buttons in the first fold of his own markup.` : '',
   htmlSignals.hasTitle === false ? '- The page has no <title> tag — this hurts how it reads in search and browser tabs. Measured, checkable in their own source.' : '',
   htmlSignals.hasMetaDescription === false ? '- No meta description on the page — a missing description means search engines improvise the snippet, lowering click-through. Measured from the HTML.' : '',
@@ -46181,6 +46423,14 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
           : null,
         seo: _seoRead,
         sitemapFresh: _sitemapFresh,
+        // Round 103: measured on every lead since §54 and collapsed to a
+        // two-state adjective at the one place a person reads it.
+        realSpeed,
+        categories: (gbpHealth && gbpHealth.checked) ? {
+          primary: gbpHealth.primaryCategory || null,
+          list: gbpHealth.placeCategories || [],
+          count: gbpHealth.categoryCount,
+        } : null,
       }),
       // The search-code read, whole, for the call sheet. INTERNAL except the
       // noindex rung: on-page weighs ~15% of the local pack, so nothing here
@@ -46224,7 +46474,8 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       researchedAt: new Date().toISOString(),
       // Their published hours read as a calling window, plus the trade. Internal
       // only — it is a judgement about our own day, not a claim about theirs.
-      callWindow: callWindowFor((gbpHealth && gbpHealth.hoursText) || [], customerTrade || verifiedIndustry || ''),
+      callWindow: callWindowFor((gbpHealth && gbpHealth.hoursText) || [], customerTrade || verifiedIndustry || '',
+        gbpHealth && Number.isFinite(Number(gbpHealth.utcOffsetMinutes)) ? gbpHealth.utcOffsetMinutes : null),
       reviewCount: (gbpHealth && gbpHealth.reviewCount) || null,
       rating: (gbpHealth && gbpHealth.rating) || null,
       phone: phoneResult.phone || req.body.phone || '',
@@ -46461,7 +46712,14 @@ const runResearch = (req, res, sink) => runWithLead(
       // nothing ever wrote a milestone into it - so the batch bar could only
       // say "working". These are REAL milestones (set when that stage's code is
       // reached), never an elapsed-time simulation.
-      req._setPhase = (p) => { sink.phase = String(p); };
+      // A MILESTONE IS NOT A STATE - round 103. This wrote into `phase`, which
+      // the kill clock, the stale sweeper and the concurrency counter all read
+      // as a state enum. From the first milestone onward that enum held prose
+      // ("reading their pages"), so every consumer comparing it to a state was
+      // comparing against a sentence. It gets its own field; the status route
+      // still hands the milestone outward under the name the client reads, so
+      // nothing on the wire changes.
+      req._setPhase = (p) => { sink.milestone = String(p); };
     }
     return FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0, places: 0, anthropicUsd: 0, apify: 0 },
       () => NET_LEDGER.run(_net, () => _runResearchInner(req, res)));
@@ -47107,7 +47365,8 @@ app.get('/api/research-job/:id', (req, res) => {
     }
     // workBudgetMs travels so the browser never has to hold its own copy of the
     // server's number - the two-hand-kept-copies disease, across a network.
-    return res.json({ status: job.status, phase: job.phase || 'running', elapsedMs, workedMs, gateWaitMs, workBudgetMs: RESEARCH_WORK_BUDGET_MS, error: job.error || null });
+    // The MILESTONE is what a person reads; job.phase stays the state enum.
+    return res.json({ status: job.status, phase: job.milestone || job.phase || 'running', elapsedMs, workedMs, gateWaitMs, workBudgetMs: RESEARCH_WORK_BUDGET_MS, error: job.error || null });
   }
   return res.json({
     status: job.status,
@@ -49227,7 +49486,15 @@ app.listen(PORT, () => {
     const _fails = [];
     const _pn = (...p) => p.join('');
     const _psrc = selfSourceNoComments();
-    if (!_psrc.includes(_pn('req._setPhase = (p) => { sink.', 'phase = String(p); };'))) {
+    // Round 103: the setter used to write into `phase`, the field the kill
+    // clock, the stale sweeper and the concurrency counter all read as a STATE
+    // ENUM - so from the first milestone onward that enum held prose. This
+    // check could not see it, because it only asserted that a setter existed.
+    // It now asserts the setter writes somewhere ELSE, which is the whole rule.
+    if (_psrc.includes(_pn('req._setPhase = (p) => { sink.', 'phase = String(p); };'))) {
+      _fails.push('the milestone setter writes into job.phase again - that field is the STATE enum every clock and sweeper compares against, and a milestone sentence in it makes every one of those comparisons false');
+    }
+    if (!_psrc.includes(_pn('req._setPhase = (p) => { sink.', 'milestone = String(p); };'))) {
       _fails.push('the job wrapper no longer attaches the phase setter — every milestone below is a silent no-op and the bar is back to "working"');
     }
     const _mCount = _psrc.split(_pn('req._setPhase && req._setPhase(', "'")).length - 1;
@@ -49237,7 +49504,7 @@ app.listen(PORT, () => {
     for (const _ph of ['reading their pages', 'reading their Google listing', 'reading their reviews', 'running their search', 'writing the audit']) {
       if (!_psrc.includes(_pn("req._setPhase('", _ph))) _fails.push(`the "${_ph}" milestone is gone`);
     }
-    if (!_psrc.includes(_pn('phase: job.phase || ', "'running'"))) {
+    if (!_psrc.includes(_pn('phase: job.milestone || job.phase || ', "'running'"))) {
       _fails.push('the status route no longer returns the phase, so the milestones are computed and never delivered — the recorded class');
     }
     if (_fails.length) {
@@ -57930,7 +58197,21 @@ app.listen(PORT, () => {
         _fails.push(`${forbidden} could not be found, so nothing here is checking whether the email path reads the library. Rename it back or point this list at the new name`);
         continue;
       }
-      const body = _src.slice(i, i + 6000);
+      // A FIXED WINDOW IS NOT A FUNCTION BODY - round 103. 6000 characters
+      // stops well short of these three (they run to 3,000, 7,600 and 9,700),
+      // so a niche-library read in the TAIL of buildWriterBrief or
+      // buildEmailEvidence sat outside everything this loop could see, and the
+      // wall reported itself intact. Read to the function's own terminator.
+      const _bodyEnd = _src.indexOf('\n};', i);
+      const body = _src.slice(i, _bodyEnd < 0 ? _src.length : _bodyEnd);
+      // A fixed window is not a function body. The old slice stopped at 6,000
+      // characters and these three run to 3,000, 7,600 and 9,700 - so a niche
+      // read in the TAIL of two of them sat outside everything this loop could
+      // see, and the wall reported itself intact. If the slice ever stops
+      // short of the real body again, say so rather than checking a fragment.
+      if (_src.slice(i + body.length, i + body.length + 3) !== '\n};') {
+        _fails.push(`${forbidden}'s body was not read to its own closing brace (stopped after ${body.length} chars), so this wall is checking a FRAGMENT - the exact shape that let a fixed 6,000-character window report an intact wall over a 9,700-character function`);
+      }
       if (/NICHE_BRIEFS|_niche\b|nicheBrief/.test(body)) {
         _fails.push(`${forbidden} reads the niche library — industry framing is for the call and the audit, and the email path must never see it`);
       }
@@ -58745,6 +59026,25 @@ app.listen(PORT, () => {
       { finding_id: 'no_published_pricing', outcome: 'not_now' },
       { finding_id: 'no_published_pricing', outcome: 'gatekeeper' },
     ]);
+    // ══ THE ROW SHAPE, round 103 ═══════════════════════════════════════════
+    // This check exercised the REPORT over hand-made rows and never once built
+    // the record the writer actually posts - so it stayed green for the whole
+    // life of a defect that made every write fail: the record stamped a UUID
+    // STRING into `id`, a column declared `bigserial`. Postgres refuses that,
+    // PostgREST answers 400, sbRest returns null, and the one mechanism in this
+    // project that produces evidence rather than inference silently recorded
+    // nothing. The report can only ever be right about rows that exist.
+    {
+      const _shape = buildCallOutcomeRow({ leadId: 'L1', company: 'X Co', outcome: 'conversation',
+        findingId: 'no_published_pricing', findingText: 'no price', said: 'not interested' });
+      if (!_shape) _fails.push('the call-outcome record builder is gone, so nothing can check the shape that actually gets written');
+      else {
+        if ('id' in _shape) _fails.push('the outcome record supplies its own id again - the column is a bigserial and a supplied value is refused by the database, which is how every call ever logged was discarded in silence');
+        for (const _k of ['lead_id', 'company', 'outcome', 'finding_id']) {
+          if (!(_k in _shape)) _fails.push(`the outcome record lost ${_k}, so the report cannot group by the finding that opened the call`);
+        }
+      }
+    }
     const _ads = R.findings.find(f => f.finding === 'paying_for_a_search_they_lose');
     const _price = R.findings.find(f => f.finding === 'no_published_pricing');
     if (!_ads || !_price) _fails.push('the report is not grouping by the finding that opened the call, which is the only question it exists to answer');
@@ -58846,6 +59146,17 @@ app.listen(PORT, () => {
   try {
     const _fails = [];
     // 1. WHEN TO CALL. Read from their own published hours. Never invented.
+    // The hours Google publishes are LOCAL TO THE BUSINESS, and §77 bought
+    // utcOffsetMinutes to say so and never delivered it - so a caller three
+    // zones away read "opens around 8am" as his own clock and rang an empty
+    // office. Stated as a difference from the caller's clock, never as a named
+    // zone, and silent when we hold no offset.
+    {
+      const _far = callWindowFor(['Monday: 8:00 AM - 5:00 PM'], 'plumber', -480);
+      const _near = callWindowFor(['Monday: 8:00 AM - 5:00 PM'], 'plumber', null);
+      if (!/their local hours/i.test(String(_far.say || ''))) _fails.push('the calling window no longer says the hours are local to the business - a caller in another zone rings an empty office');
+      if (/their local hours/i.test(String(_near.say || ''))) _fails.push('the calling window claims a timezone difference on a lead where no offset was measured');
+    }
     const _noHours = callWindowFor([], 'plumber');
     if (_noHours.checked) _fails.push('a listing that publishes no hours still produces a calling window — that is an invented fact on the one sheet somebody reads while dialling');
     const _open24 = callWindowFor(['Monday: Open 24 hours', 'Tuesday: Open 24 hours'], 'plumber');
@@ -60757,6 +61068,21 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       if (_rung.test({ datedSite: true, siteAgeVisibleCount: 1 }) !== true) _fails.push('one visible marker no longer clears the credibility gate, so the rung never fires at all');
     }
 
+    // Round 103: the finds must reach the sheet and the brain in WORDS. The
+    // visible-marker gate on the credibility RUNG is correct (the owner's own
+    // R94 ruling - no customer reads source) and it also took the sentences
+    // off every surface for code-only builds, so weeks of audits reduced the
+    // finds he called great to "3 markers". The words travel now; only the
+    // customer-perception CLAIM stays gated.
+    const _bf103 = buildAuditFacts({ siteAgeMarkers: ['M103A', 'M103B'], siteAgeVisibleCount: 0, siteAgeScore: 2, datedSite: true }, null, null);
+    if (!Array.isArray(_bf103.buildMarkers) || _bf103.buildMarkers[0] !== 'M103A') _fails.push('the named age markers never reach the facts strip — the finds are reduced to a bare count again');
+    if (_bf103.buildVisibleCount !== 0) _fails.push('the visible count does not travel, so no consumer can scope the sentence to the build');
+    if (buildAuditFacts({ siteAgeScore: 0 }, null, null).buildMarkers !== null) _fails.push('a clean modern build invents marker words');
+    const _pb103 = (a, b) => a + b;
+    if (!selfSourceNoComments().includes(_pb103('- The build itself is measurably old: ${_harmInputs.siteAgeMarkers', '.slice(0, 4)'))) {
+      _fails.push('the audit brain no longer hears the dated build in words — the prose about old code cannot come back on any lead');
+    }
+
     // ── the call site, because a fixture supplies its own arguments ────────
     const _an = (...p) => p.join('');
     if (!selfSourceNoComments().includes(_an('datedSite: _siteAge.checked === true ? _siteAge', '.dated : null'))) {
@@ -60773,6 +61099,134 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ SITE AGE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ REVIEW FIGURE AUTHORITY CHECK — round 103 ═══════════════════════════
+  // §44 settled that a review COUNT comes from Place Details on the exact place
+  // id, never the rank-search row, because that row is matched on placeId, else
+  // domain, else an exact NAME - and the last of those lands on another
+  // business. §56 found the raw read at two more call sites. Three more were
+  // still raw, all of them running BEFORE resolveMeasurements and therefore
+  // unable to read the resolved figure. The worst was measureValueEquation: its
+  // numerator reaches the audit brief under "WHAT IS WORKING FOR THEM (do NOT
+  // call these problems)" and the fact-checker under "do NOT flag these as
+  // unverified", so the one gate that would catch a wrong number is explicitly
+  // told to stand down on it - and likelihood and earnedButBlocked are scored
+  // off it, which makes it a STORY change, not a figure change.
+  try {
+    const _fails = [];
+    // Place Details is the authority, whatever the row says.
+    const _a = reviewFigureAuthority({ gbpHealth: { reviewCount: 262, rating: 4.7 },
+      localRank: { matchedBy: 'placeId', ours: { reviews: 260, rating: 4.7 } } });
+    if (_a.reviewCount !== 262) _fails.push(`Place Details is no longer the authority for the count - got ${_a.reviewCount} where the profile says 262`);
+    // A NAME match that contradicts Place Details is a different business.
+    const _b = reviewFigureAuthority({ gbpHealth: { reviewCount: 150, rating: 4.6 },
+      localRank: { matchedBy: 'name', ours: { reviews: 8, rating: 4.9 } } });
+    if (_b.mismatch !== true) _fails.push('a name-matched row reporting 8 reviews against a profile holding 150 is not refused - the BVA "we read 150 reviews of 8" shape is back');
+    if (_b.reviewCount !== 150) _fails.push('the refused row still supplies the figure');
+    // An identity match is never questioned, however far apart the numbers are.
+    const _c = reviewFigureAuthority({ gbpHealth: { reviewCount: 150 },
+      localRank: { matchedBy: 'domain', ours: { reviews: 8 } } });
+    if (_c.mismatch !== false) _fails.push('a DOMAIN match is being second-guessed - an identity match is not a guess and refusing it deletes the finding on healthy leads');
+    // A small index lag is not a different business.
+    const _d = reviewFigureAuthority({ gbpHealth: { reviewCount: 100 },
+      localRank: { matchedBy: 'name', ours: { reviews: 97 } } });
+    if (_d.mismatch !== false) _fails.push('a three-review index lag reads as a different business - a guard that fires on the normal case is one somebody switches off');
+    // Nothing measured means nothing claimed.
+    const _e = reviewFigureAuthority({});
+    if (_e.reviewCount !== null || _e.rating !== null) _fails.push('an unmeasured lead produces a review figure out of nothing');
+    // ── and every call site must go through it, because a fixture cannot see
+    // a caller. Needles assembled at runtime, comment lines stripped.
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    if (_src.indexOf(_n('reviewCount: localRank && localRank.ours ? localRank.ours', '.reviews : undefined')) >= 0) {
+      _fails.push('a call site reads the review count straight off the rank row again - the raw read that put another business\'s number into "what is working for them"');
+    }
+    for (const [needle, which] of [
+      [_n('affordability = readAffordability({', ''), 'the affordability read'],
+      [_n('valueEquation = measureValueEquation({', ''), 'the value equation'],
+      [_n('allowedConsequences = buildAllowedConsequences({', ''), 'the allowed consequences'],
+    ]) {
+      const _at = _src.indexOf(needle);
+      if (_at < 0) { _fails.push(`${which} call site could not be found, so this check cannot see whether it uses the authority`); continue; }
+      const _blk = _src.slice(_at, _at + 1400);
+      if (_blk.indexOf(_n('reviewFigureAuthority({ gbpHealth', ', localRank })')) < 0) {
+        _fails.push(`${which} no longer reads the review figure through the one authority`);
+      }
+    }
+    // ── THE BUYING-AUTHORITY FLOOR APPLIES ON BOTH ARMS ──────────────────
+    // §41 built the held-back path INSIDE the resolver arm, and the cache-hit
+    // arm one branch above kept promoting any cached name and inventing the
+    // word "Owner" for a row with no title. A falsification run found nothing
+    // guarding it: gutting the gate left every check green. Both halves are
+    // pinned here - the floor itself, and the fact that the cache arm applies
+    // it - because a fixture cannot see a caller.
+    if (authorityScore('Owner') < 75) _fails.push('the buying-authority floor no longer clears an owner, so every cached contact is held back and the sheet loses its decision-maker');
+    if (authorityScore('') >= 75) _fails.push('an ABSENT title clears the buying floor - "no title found" becomes the owner, which is the exact Michelle Musacchio sheet §41 exists to stop');
+    if (authorityScore('Marketing Coordinator') >= 75) _fails.push('a below-the-line title clears the buying floor');
+    if (_src.indexOf(_n('const _cachedOk = decisionMaker.canBuy === true', '')) < 0
+      || _src.indexOf(_n('authorityScore(decisionMaker.title) >= ', '75)')) < 0) {
+      _fails.push('the CACHED-contact arm no longer applies the buying-authority floor - a contact cached before that floor existed is promoted to owner again, with the title invented, on every re-research');
+    }
+    if (_src.indexOf(_n("verifiedCEOTitle = decisionMaker.title || ", "'Owner'")) >= 0) {
+      _fails.push('the invented "Owner" default is back on some arm - nobody read that word anywhere, and it shipped on a live call sheet');
+    }
+    if (_fails.length) {
+      console.log(`⛔ REVIEW FIGURE AUTHORITY CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ REVIEW FIGURE AUTHORITY CHECK: the review count comes from Google's record of that exact place, a name-matched row that contradicts it is refused as a different business, an identity match is never questioned, a small index lag is not a mismatch, and an unmeasured lead produces nothing. All five call sites go through the one authority - three of them were still reading the raw search row, and the worst fed "what is working for them", which both the brief and the fact-checker are told to trust without checking.`);
+    }
+  } catch (e) {
+    console.log(`⛔ REVIEW FIGURE AUTHORITY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ FACTS COVERAGE CHECK — round 103 ════════════════════════════════════
+  // The server half of "every fact must have a home". EXECUTES buildAuditFacts
+  // rather than reading its source, because the keys are what ship, not what a
+  // regex can find - and a key added tomorrow with no declared home fails the
+  // boot rather than going quietly dark the way the age markers did.
+  try {
+    const _fails = [];
+    // A rich vector so every conditional key is present in the returned object.
+    const _rich = buildAuditFacts({
+      googleAdsTag: true, adsReadable: true, tagManager: false, adsConversion: true, callTracking: true,
+      metaPixel: true, emergencyCopySeen: true, bookingMeasured: true, booking: 'form',
+      lsaChecked: true, lsaBlockPresent: true, lsaUs: true, lsaUsIndex: 2,
+      organicChecked: true, organicPosition: 7, organicScanned: 20,
+      recurringChecked: true, recurringOffer: false, rankSource: 'dataforseo', searchQuery: 'roofer in Dallas, TX',
+      pricingMeasured: true, pricesPublished: 1, formFieldCount: 6, formFieldCountIsSingleForm: true,
+      mobileFieldMeasured: true, mobileFieldSlow: true, isHttps: true, viewportChecked: true, hasViewport: true,
+      siteAgeScore: 3, siteAgeMarkers: ['a', 'b'], siteAgeVisibleCount: 1, datedSite: true,
+      liveChat: true, adLandingKind: 'unlinked', adLandingUrl: 'https://x.com/lp',
+      packChecked: true, packUs: true, aiOverviewChecked: true,
+    }, { checked: true, campaignCount: 2, unlinkedCount: 5 }, {
+      htmlSignals: { checked: true, submitOnlyButton: true, wrongKeyboardFields: 1, multiStepForm: false,
+        proofOnlyInFooter: true, sharedInboxOnly: true, firstFoldCtaKinds: 2 },
+      analytics: true, seo: { checked: true, noindex: false, schemaTypes: ['LocalBusiness'], businessSchema: true },
+      sitemapFresh: { checked: true, newest: '2024-01-01' },
+    });
+    const _keys = Object.keys(_rich);
+    if (_keys.length < 20) _fails.push(`the rich fixture produced only ${_keys.length} facts keys - it is no longer exercising the function and this check is measuring nothing`);
+    for (const _k of _keys) {
+      if (!Object.prototype.hasOwnProperty.call(FACTS_RENDER, _k)) {
+        _fails.push(`"${_k}" is measured and shipped with no declared home - it can go dark on the sheet and nothing would say so, which is exactly how the old-build finds disappeared`);
+      }
+    }
+    for (const _k of Object.keys(FACTS_RENDER)) {
+      if (!_keys.includes(_k)) _fails.push(`FACTS_RENDER declares a home for "${_k}", which the facts strip no longer returns - a row nobody can reach reads as coverage`);
+    }
+    for (const [_k, _v] of Object.entries(FACTS_RENDER)) {
+      if (_v === 'client') continue;
+      if (/^(derived|internal):\s*\S/.test(String(_v))) continue;
+      _fails.push(`"${_k}" is declared "${_v}" - anything that is not 'client' must say derived: or internal: and then give the reason, because an undocumented omission is indistinguishable from an accident`);
+    }
+    if (_fails.length) {
+      console.log(`⛔ FACTS COVERAGE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ FACTS COVERAGE CHECK: all ${_keys.length} measured facts have a declared home - read by the caller, carried to them by a named sibling, or deliberately internal with the reason written down. Executed on the real function, so a key added tomorrow fails the boot instead of shipping invisibly. The old-build finds were measured, delivered, persisted and rendered as a bare count for weeks, and every wire looked healthy the whole time.`);
+    }
+  } catch (e) {
+    console.log(`⛔ FACTS COVERAGE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ BOOKING VERDICT CHECK — round 102 ═══════════════════════════════════
@@ -60824,6 +61278,25 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (paidLeakGapFrom({ unreadBooking: true, bookingMeasured: true, booking: 'phone_only', captureSeen: false, adsTagConfirmed: true, adsRead: true }) !== '') {
       _fails.push('an unread booking page no longer bars "the only way in is a phone call" — the absence claim ships about a page we chose not to open');
     }
+    // ── AND THE LABEL HAS TO REACH SOMETHING ─────────────────────────────
+    // Round 102 measured bookingLabelSeen on every branch "for the call sheet"
+    // and delivered it nowhere: not into the ladder's inputs, not onto the
+    // facts strip, not to a row. A falsification run proved no check could see
+    // that, which is the computed-but-not-passed class inside the check built
+    // to stop it. Both ends pinned: the wire, and the tri-state it produces.
+    const _nb = (a, b) => a + b;
+    if (_src.indexOf(_nb('bookingLabelSeen: !!(sitePages && sitePages', '.bookingLabelSeen)')) < 0) {
+      _fails.push('the booking label never reaches the ladder inputs - measured on every branch and delivered nowhere, so the sheet loses a business that SAYS book online over a door that cannot');
+    }
+    if (buildAuditFacts({ bookingMeasured: true, booking: 'form', bookingLabelSeen: true }, null, null).bookingLabelOnly !== true) {
+      _fails.push('a booking label over a form-and-wait door no longer reads as the contradiction it is');
+    }
+    if (buildAuditFacts({ bookingMeasured: true, booking: 'online_booking', bookingLabelSeen: true }, null, null).bookingLabelOnly !== null) {
+      _fails.push('a site that says book online AND books online is being reported as a contradiction');
+    }
+    if (buildAuditFacts({}, null, null).bookingLabelOnly !== null) {
+      _fails.push('an unmeasured booking read produces a label verdict out of nothing');
+    }
     if (_fails.length) {
       console.log(`⛔ BOOKING VERDICT CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
     } else {
@@ -60873,6 +61346,23 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (_src.indexOf('temperature: ' + '0.2,') < 0) _fails.push('the vision call runs at the API default temperature again — the grading call §6 fixed on the writer');
     const _noVouch = scoreWebsite({ viewportChecked: true, hasViewport: true, isHttps: true }, { visualAnalysis: { hasVisibleCTA: true, looksBlockedOrError: false } });
     if (!(_noVouch.skipped || []).includes('first screen')) _fails.push('a vision answer with no pageFullyLoaded field still grades the first screen — the mid-load gate walks on an omitted field again');
+    // ── the FIRST h1, not the first SHORT one ────────────────────────────
+    // The old {0,200} cap did not safely yield '' on a long heading: String
+    // .match advances on a failed attempt, so a first h1 running past 200
+    // characters was SKIPPED and the second h1 on the page came back as the
+    // headline - silently, and most often on builder pages that wrap an h1
+    // around a whole hero block. Proven by execution, not by reading.
+    {
+      const _pad2 = ('<div><p>' + 'roof repair and replacement across the county every week. '.repeat(4) + '</p></div>').repeat(9);
+      const _longFirst = '<h1>' + 'Quality Roofing And Exterior Restoration For Homeowners Across The Entire Metropolitan Region Since Nineteen Eighty Seven And Still Family Owned Today Serving Every Neighbourhood'.repeat(2) + '</h1><h2>x</h2><h1>Second Heading</h1>' + _pad2;
+      const _hs2 = extractHtmlSignals(_longFirst, 'https://x.com');
+      if (_hs2 && /Second Heading/.test(String(_hs2.h1 || ''))) _fails.push('a long first heading is skipped and the SECOND h1 is reported as the headline - the page\'s real headline is replaced by a later one, silently');
+      if (!_hs2 || !/^Quality Roofing/.test(String(_hs2.h1 || ''))) _fails.push('the first heading on the page is no longer what the h1 read returns');
+    }
+    // ── the SECONDS reach the sheet, not the adjective ───────────────────
+    const _spd = buildAuditFacts({}, null, { realSpeed: { checked: true, hasFieldData: true, lcpSec: 5.2, lcpBand: 'poor', faultMetric: 'lcp', isProblem: true, fieldScope: 'url' } });
+    if (!_spd.mobileField || _spd.mobileField.lcpSec !== 5.2 || _spd.mobileField.lcpBand !== 'poor') _fails.push('the real-visitor seconds never reach the facts strip - the one measurement taken from the prospect\'s own customers is back to a two-state adjective');
+    if (buildAuditFacts({}, null, { realSpeed: { checked: false } }).mobileField !== null) _fails.push('an unmeasured speed read produces a seconds figure out of nothing');
     if (_src.indexOf("if (parsed[_bf] === 'true') parsed[_bf] " + '= true;') < 0) _fails.push('the vision booleans are no longer coerced — a "true"-as-string answer silently drops the component it was bought to grade');
     if (_fails.length) {
       console.log(`⛔ SCORE INTEGRITY CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
@@ -62279,6 +62769,23 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if ((rankHarms({ ..._base, duplicateChecked: false }).all || []).some(h => h.id === 'duplicate_listing')) _fails.push('the rung fires on a lead we never checked — unmeasured treated as measured, the PART 6 class');
     if ((rankHarms({ ..._base, duplicateOtherReviews: null }).all || []).some(h => h.id === 'duplicate_listing')) _fails.push('the rung fires without the other listing\u2019s count, so the sentence would carry a hole where its evidence goes');
 
+    // ── A HIDDEN ADDRESS IS NOT AN ABSENT DUPLICATE ──────────────────────
+    // The proof standard is same-domain-or-phone AND same street address. A
+    // pure service-area listing hides its address on Google by design, so the
+    // second half can never be satisfied - and "no duplicate found" would be
+    // reporting our own blindness as a fact about their listings. §77 bought
+    // pureServiceAreaBusiness for exactly this and never delivered it here.
+    {
+      // This check is not async, and the guard returns BEFORE any await inside
+      // the function - so the promise is already settled and .then runs on the
+      // next microtask, before the verdict settles.
+      findDuplicateListing({ companyName: 'X Plumbing', placeId: 'p1', website: 'https://x.com', phone: '5551234567', location: '1 Main St, Dallas, TX', placesKey: '', serviceAreaOnly: true })
+        .then((_sab) => {
+          if (!_sab || _sab.checked !== false || _sab.found === true) console.log('⛔ DUPLICATE LISTING CHECK: a service-area listing still produces a duplicate verdict - the address half of the proof standard cannot be met for them, so any answer here is about our blindness rather than their listings.');
+          else if (!/service-area|hides its street address/i.test(String(_sab.why || ''))) console.log('⛔ DUPLICATE LISTING CHECK: the service-area case does not say WHY it could not be checked, so it reads as "no duplicate found".');
+        })
+        .catch(() => { console.log('⛔ DUPLICATE LISTING CHECK: the service-area guard threw.'); });
+    }
     if (_fails.length) {
       console.log(`⛔ DUPLICATE LISTING CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
     } else {
@@ -65352,15 +65859,24 @@ const CALL_OUTCOMES = {
 // argue with where the line sits.
 const OUTCOME_LANDED = { booked: true, interested: true, callback: true };
 
-const recordCallOutcome = async (row) => {
+// The ROW, as a pure function, so the boot check can execute the exact shape
+// that gets written. It could not before, and that is precisely why a defect in
+// the shape survived: every assertion exercised the REPORT over hand-made rows,
+// and the report can only ever be right about rows that exist.
+const buildCallOutcomeRow = (row) => {
   const r = row && typeof row === 'object' ? row : {};
   const outcome = String(r.outcome || '').toLowerCase();
-  if (!CALL_OUTCOMES[outcome]) {
-    return { ok: false, why: `"${r.outcome}" is not one of: ${Object.keys(CALL_OUTCOMES).join(', ')}` };
-  }
-  if (!r.leadId) return { ok: false, why: 'no lead id, so the outcome could never be paired with the finding that opened the call' };
-  const rec = {
-    id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2),
+  return {
+    // NO id. The declared column is `id bigserial primary key` - a bigint - and
+    // this line used to stamp a UUID STRING into it. Postgres refuses that with
+    // 22P02, PostgREST answers 400, and sbRest returns null on any non-ok
+    // response, so EVERY call outcome ever logged was silently discarded and
+    // the report has always answered zero. §35 calls this capture "the lever,
+    // and it is the only one that is not inference" - the single mechanism in
+    // this project that produces evidence instead of the system grading its
+    // own homework - and it could never write a row. The two siblings written
+    // the same week both omit the id and let the sequence assign it
+    // (writeObservation and the send_log write); this was the odd one out.
     lead_id: String(r.leadId).slice(0, 120),
     company: String(r.company || '').slice(0, 200),
     outcome,
@@ -65377,6 +65893,16 @@ const recordCallOutcome = async (row) => {
     predicted: String(r.predicted || '').slice(0, 400),
     at: new Date().toISOString(),
   };
+};
+
+const recordCallOutcome = async (row) => {
+  const r = row && typeof row === 'object' ? row : {};
+  const outcome = String(r.outcome || '').toLowerCase();
+  if (!CALL_OUTCOMES[outcome]) {
+    return { ok: false, why: `"${r.outcome}" is not one of: ${Object.keys(CALL_OUTCOMES).join(', ')}` };
+  }
+  if (!r.leadId) return { ok: false, why: 'no lead id, so the outcome could never be paired with the finding that opened the call' };
+  const rec = buildCallOutcomeRow(r);
   const wrote = await sbRest('/call_outcomes', { method: 'POST', body: JSON.stringify([rec]) });
   if (wrote === null) {
     console.log(`⛔ CALL OUTCOME [${rec.company}]: could not be stored — ${sbWhy('call_outcomes') || 'no reason reported'}. The call happened and the record did not, which is the one thing this table exists to prevent.`);
