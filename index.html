@@ -1131,7 +1131,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260828;
+const CLIENT_CONTRACT = 20260829;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -2582,12 +2582,27 @@ const signalRowsFor = (stageId, ctx) => {
   if (stageId === 'found') {
     const lr = (ctx && ctx.rank) || null;
     R('Search, map', lr ? (lr.found === false
-        ? (lr.absenceConfirmed ? 'not in the results (checked twice)' : 'not seen on one look (unconfirmed)')
+        ? (lr.absenceConfirmed ? ('not among the ' + (Number.isFinite(Number(lr.scanned)) ? lr.scanned + ' ' : '') + 'listings returned (checked twice)') : 'not seen on one look (unconfirmed)')
         : (Number.isFinite(Number(lr.rank)) && Number(lr.rank) >= 1 ? '#' + lr.rank + ' of ' + (lr.scanned || '?') : "they appear; no position on this run's source"))
       : null, 'search');
     R('Search, blue links', Number.isFinite(af.organicPosition) ? '#' + af.organicPosition + ' of ' + af.organicScanned : null, 'organic');
+    R('Check it yourself', (lr && (lr.query || lr.phrase))
+      ? ('search Google for "' + (lr.query || lr.phrase) + '" \u2014 the sponsored block, the AI answer and the map all move, so read the live page before quoting a position')
+      : null, null);
     R('Google ads code', af.ads === 'yes' ? ('on their site' + (af.adsLive === true ? ' · their own sponsored result appeared' : '')) : af.ads === 'no' ? 'none found' : null, 'adsCode');
     R('Facebook ad code', af.metaPixel === true ? 'on their site' : af.metaPixel === false ? 'none found' : null, 'meta');
+    R('Sponsored services block', (af.lsa && typeof af.lsa === 'object')
+      ? (af.lsa.blockPresent === true
+        ? (af.lsa.us === true
+          ? "their ad was in Google's pay-per-lead block on our pull"
+          : ('present for this search' + (Number.isFinite(Number(af.lsa.shown)) && Number(af.lsa.shown) > 0 ? ', ' + af.lsa.shown + ' advertisers shown' : '') + ' (rotates; not seeing their ad proves nothing)'))
+        : 'none appeared for this search on our pull')
+      : null, null);
+    R("Google's AI answer", (af.aiOverview && typeof af.aiOverview === 'object')
+      ? (af.aiOverview.present === true
+        ? (af.aiOverview.citesUs === true ? 'above the results, and it cites their site' : 'above the results on this search')
+        : 'none appeared for this search on our pull')
+      : null, null);
     const tr = (ctx && ctx.traffic) || null;
     if (tr) R('Traffic, estimated', '~' + (Number(tr.organicEtvMonthly) || 0) + ' unpaid' + (Number(tr.paidKeywords) > 0 ? ' + ~' + (Number(tr.paidEtvMonthly) || 0) + ' paid' : '') + ' visits/month, third-party estimate', null, true);
   } else if (stageId === 'door') {
@@ -2598,6 +2613,7 @@ const signalRowsFor = (stageId, ctx) => {
       : af.roiStatus === 'hidden' ? 'hidden inside their tag container — could not see'
       : af.roiStatus === 'blind' ? 'nothing on the pages counts it' : null, 'roi');
     R('Booking route', ({ online_booking: 'a visitor can book a time on the site', form: 'a form, then waiting', phone_only: 'a phone call', none_found: 'no route found on the pages read' })[af.booking] || null, 'booking');
+    R('Live chat', af.liveChat === true ? 'on the site \u2014 a visitor can ask without calling' : af.liveChat === false ? 'none found on the pages read' : null, null);
     R('Form length', Number.isFinite(af.formFields) ? af.formFields + ' fields' : null, 'form');
     R('Price on the site', Number(ctx && ctx.pricesShown) > 0 ? 'shown' : (ids.has('no_published_pricing') ? 'none on the pages read' : null), 'price');
     R('Site build', Number.isFinite(af.siteAgeMarkers) ? (af.siteAgeMarkers >= 2 ? af.siteAgeMarkers + ' old-build markers in the source' : 'no meaningful age markers') : null, 'build');
@@ -2695,7 +2711,17 @@ const funnelSvg = (sts, pal) => {
 const WALK_TO_STAGE = { money_out: 'found', who_finds_them: 'found', the_door: 'door', after_contact: 'after' };
 const walkTextsByStage = (fs) => {
   const out = { found: [], door: [], after: [] };
-  for (const st of ((fs && fs.stages) || [])) { const k = WALK_TO_STAGE[st && st.id]; if (k && st && st.text) out[k].push(String(st.text)); }
+  // Prefer the server's brief: the walk sentences NOT already stated by a
+  // signal row (verdicts, joins, readings). A lead audited before the brief
+  // existed has no such field and keeps its full text, so old sheets do not
+  // lose their walk. An empty-string brief means the rows carry the whole
+  // stage, and the walk line stays out of the way on purpose.
+  for (const st of ((fs && fs.stages) || [])) {
+    const k = WALK_TO_STAGE[st && st.id];
+    if (!k || !st) continue;
+    const t = (typeof st.brief === 'string') ? st.brief : (st.text ? String(st.text) : '');
+    if (t) out[k].push(t);
+  }
   return out;
 };
 // One plain sentence instead of the chips block — Vin: "still waiting for it
@@ -3006,12 +3032,12 @@ const auditExportHtml = (records, meta) => {
             }).join('');
             const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
               ? '<div class="ferow tw">' + t.friction.map(x => p(x)).join(' · ') + '</div>' : '';
-            const emptyNote = (!rowsHtml && !legacyFriction && !wt.trim())
+            const sg = signalRowsFor(s3.id, sigCtx);
+            const emptyNote = (!rowsHtml && !legacyFriction && !wt.trim() && !sg.rows.length)
               ? (s3.status === 'no_read'
                 ? '<div class="tw">Nothing measured here' + (s3.id === 'after' ? ' — what happens after someone reaches out is a question for the call, not a claim.' : '.') + '</div>'
                 : '<div class="tw">Measured — no fault found.</div>')
               : '';
-            const sg = signalRowsFor(s3.id, sigCtx);
             const sigHtml = sg.rows.length
               ? '<div class="sgrid">' + sg.rows.map(g =>
                   '<div class="sgr' + (g.red ? ' sgred' : '') + '">' + e(g.label) + ': ' + p(g.value)
@@ -6613,14 +6639,14 @@ function LeadBriefing({ lead }) {
         });
         const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
           ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginTop: 4 } }, t.friction.join(' \u00b7 ')) : null;
-        const emptyNote = (!s3.rows.length && !legacyFriction && !wt)
+        const sg = signalRowsFor(s3.id, sigCtx);
+        const emptyNote = (!s3.rows.length && !legacyFriction && !wt && !sg.rows.length)
           ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginTop: 3 } },
               s3.status === 'no_read'
                 ? ('Nothing measured here' + (s3.id === 'after' ? ' \u2014 what happens after someone reaches out is a question for the call, not a claim.' : '.'))
                 : 'Measured \u2014 no fault found.')
           : null;
         const walkEl = wt ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.65, marginTop: 3 } }, wt) : null;
-        const sg = signalRowsFor(s3.id, sigCtx);
         const sigEls = (sg.rows.length || sg.unmeasured.length) ? React.createElement('div', { style: { margin: '4px 0 2px' } },
           sg.rows.map((g, gi) => React.createElement('div', { key: 'sg' + gi, style: { fontSize: 12.5, lineHeight: 1.55, color: g.red ? '#f87171' : 'var(--t)', fontWeight: g.red ? 600 : 400 } },
             g.label + ': ' + g.value,

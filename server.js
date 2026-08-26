@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260828;
+const CONTRACT_VERSION = 20260829;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -8087,6 +8087,7 @@ const harvestInteriorMarkup = (url, html, companyName) => {
   // cascade fell through to "phone_only" while the contact page held a form.
   const _formHere = htmlHasRealForm(h);
   const _schedHere = SCHEDULER_SIGNATURES.test(h);
+  const _chatHere = CHAT_SIGNATURES.test(h);
   const next = {
     googleAds: prev.googleAds || AD_TAG_SIGNATURES.hasGoogleAdsTag.test(h),
     metaPixel: prev.metaPixel || AD_TAG_SIGNATURES.hasMetaPixel.test(h),
@@ -8099,6 +8100,7 @@ const harvestInteriorMarkup = (url, html, companyName) => {
     formPage: prev.formPage || (_formHere ? String(url).slice(0, 200) : null),
     scheduler: prev.scheduler || _schedHere,
     schedulerPage: prev.schedulerPage || (_schedHere ? String(url).slice(0, 200) : null),
+    chat: prev.chat || _chatHere,
     pages: prev.pages + 1,
   };
   _INTERIOR_ADS.set(host, next);
@@ -11504,7 +11506,7 @@ const RECURRING_OFFER_RE = /\b(membership|memberships|member(?:s)? (?:plan|progr
 //
 // Every stem below carries \w* deliberately. `vet` is the exception and stays
 // exact: `vet\w*` would match "veteran" and "vetted".
-const RECURRING_NORMAL_TRADES = /\b(hvac|heating|cooling|air condition\w*|plumb\w*|electric\w*|pest|exterminat\w*|lawn|landscap\w*|irrigation|pool|septic|chimney|gutter\w*|roof\w*|window clean\w*|janitor\w*|clean(?:ing|er\w*)|dent(?:al|ist\w*)|orthodont\w*|periodont\w*|vet\b|veterinar\w*|animal (?:hospital\w*|clinic\w*)|chiroprac\w*|physical therap\w*|med ?spa\w*|aesthetic\w*|derm\w*|salon\w*|barber\w*|gym|fitness|pilates|yoga|massage|account(?:ing|ant\w*)|bookkeep\w*|cpa|payroll|managed (?:it|service\w*)|msp|security (?:system\w*|monitor\w*)|alarm\w*|water treatment|softener\w*)\b/i;
+const RECURRING_NORMAL_TRADES = /\b(hvac|heating|cooling|air condition\w*|plumb\w*|electric\w*|pest|exterminat\w*|lawn|landscap\w*|tree (?:service\w*|care|trim\w*|removal\w*|surgeon\w*)|arborist\w*|irrigation|pool|septic|chimney|gutter\w*|roof\w*|window clean\w*|janitor\w*|clean(?:ing|er\w*)|dent(?:al|ist\w*)|orthodont\w*|periodont\w*|vet\b|veterinar\w*|animal (?:hospital\w*|clinic\w*)|chiroprac\w*|physical therap\w*|med ?spa\w*|aesthetic\w*|derm\w*|salon\w*|barber\w*|gym|fitness|pilates|yoga|massage|account(?:ing|ant\w*)|bookkeep\w*|cpa|payroll|managed (?:it|service\w*)|msp|security (?:system\w*|monitor\w*)|alarm\w*|water treatment|softener\w*)\b/i;
 
 const readRecurringOffer = ({ text, trade, pagesRead } = {}) => {
   const t = String(text || '');
@@ -12606,11 +12608,27 @@ const pillarForRung = (id) => RUNG_PILLAR[String(id || '')] || null;
 //           follow-up, the next job from the same customer)
 //   work  — the work itself and the reputation record: CONTEXT under the
 //           funnel, never a leak location (we cannot fix their paving)
+const RUNG_CLAIM_FAMILY = {
+  // ══ TWO NUMBERED LEAKS THAT SAY ONE THING ARE ONE LEAK ═════════════════
+  // Bob Ray's sheet, live 2026-08-25: leak 2 (ad clicks land on a form-and-
+  // wait door) and leak 3 (a visitor can only fill in a form and wait) are
+  // the same measured fact — booking === 'form' — wearing two rung ids, and
+  // Vin read them as a padded list. A family names the CLAIM a rung makes;
+  // the numbering hands each family at most one of the three numbers, and
+  // the family's other rungs still render as ordinary findings below.
+  //
+  // DECLARED, not derived — the same discipline as RUNG_PILLAR: only rungs
+  // that genuinely assert one claim carry a row, and a rung with no row is
+  // its own family. Do not add a row to tidy a sheet; add one when two rungs
+  // read the same measurement and say the same thing about it.
+  paid_traffic_leaks:   'booking_route',
+  form_only_no_booking: 'booking_route',
+  no_after_hours:       'booking_route',
+};
 const RUNG_FUNNEL_STAGE = {
   // ── found ──────────────────────────────────────────────────────────────────
   paying_for_a_search_they_lose: 'found',
   social_spend_no_search:        'found',
-  ads_untracked:                 'found',
   no_retargeting:                'found',
   hiring_marketing_now:          'found',
   absent_from_search:            'found',
@@ -12631,6 +12649,11 @@ const RUNG_FUNNEL_STAGE = {
   // but the FAULT it names is where the click lands — Vin's own walk: "ads
   // dump into the same form."
   paid_traffic_leaks:            'door',
+  // ads_untracked moved found → door 2026-08-26: its claim is about what a
+  // CLICK BECOMES, its signal row (What a click becomes) renders at the door,
+  // and staging it at found put the red mark and the leak row at two
+  // different stages of one funnel.
+  ads_untracked:                 'door',
   no_after_hours:                'door',
   form_only_no_booking:          'door',
   tap_to_call_broken:            'door',
@@ -13315,7 +13338,11 @@ const HARM_LADDER = [
     // draw and absent on the next. The head term has bought a second sample
     // for weeks; the service-page rows pickRankRow PROMOTES over every found
     // row were still single-draw, and this test could not tell the two apart.
-    test: (m) => m.rankChecked === true && m.rankFound === false && m.rankAbsenceConfirmed === true,
+    // And it stands down when our own pull saw their ad in the Sponsored
+    // services block: "they never found him" is disproved by the ad the
+    // searcher is looking at. The map absence stays true and stays on the
+    // signal rows; the INVISIBLE conclusion is what may not ship.
+    test: (m) => m.rankChecked === true && m.rankFound === false && m.rankAbsenceConfirmed === true && m.lsaUs !== true,
     // ══ IT IS THE MAP PACK, SO SAY THE MAP PACK ═══════════════════════════
     // This rank comes from the Google Places API — the map results, the box of
     // three businesses at the top of a phone screen. We described it as "the
@@ -13345,7 +13372,7 @@ const HARM_LADDER = [
     // surface: somebody searches, and the list Google shows does not have them
     // in it. True of exactly what we measured, and it needs no vocabulary he
     // does not already have.
-    say: (m) => `When somebody searches Google for "${m.rankQuery || 'their main trade term'}", they are not in the list of local businesses it shows. We ran that search and went through the whole list`,
+    say: (m) => `When somebody searches Google for "${m.rankQuery || 'their main trade term'}", they are not among the ${Number.isFinite(Number(m.scanned)) ? m.scanned + ' ' : ''}local businesses that search returned. We ran it twice and read every listing that came back`,
     costs: (m) => `every ${audienceOf(m.tradeWord).buyer} searching for exactly what they sell is choosing from a list they are not on` },
 
 
@@ -13951,7 +13978,11 @@ const HARM_LADDER = [
     // rankChecked is the "did we look?" gate. rankFound false is the strongest
     // case (not in the pack at all) and must not be excluded by requiring a
     // number; rank is only consulted when it exists.
-    test: (m) => m.googleAdsTag === true && m.rankChecked === true
+    // Stands down when our pull saw their ad atop the Sponsored services
+    // block: a business winning the paid surface of a search is not LOSING
+    // that search, and the live counter-example was a pest company holding
+    // the #2 sponsored slot while this rung's inputs read "absent".
+    test: (m) => m.googleAdsTag === true && m.rankChecked === true && m.lsaUs !== true
       && ((m.rankFound === false && m.rankAbsenceConfirmed === true)
           || (typeof m.rank === 'number' && Number.isFinite(m.rank) && m.rank > 3)),
     say: (m) => {
@@ -13963,7 +13994,7 @@ const HARM_LADDER = [
       // which is exactly why it survives both re-measurement and the
       // personalisation of his own search.
       const band = (m.rankFound === false)
-        ? `${when} they do not come up at all`
+        ? `${when} they are not among the ${Number.isFinite(Number(m.scanned)) ? m.scanned + ' ' : ''}local results shown`
         : `${when} they are not in the top three`;
       return `Google's ad code is on their site, and ${band}`;
     },
@@ -20661,6 +20692,9 @@ const buildProblemList = (harms, opts = {}) => {
         ? ('Reviews do count toward ranking, and this business is ahead on them \u2014 so reviews are not what is deciding this search. The names above them are winning on the other things the map weighs: the listing\u2019s primary category, proximity, the site behind the listing, and how much people interact with each listing.'
            + (_ev.reviewThemeContact === true
              ? ' Their own customers already name one of those things: calls that never come back. Google\u2019s own guidance for its local ads ranks businesses partly on how reliably they answer.'
+               + (_ev.lsaUs === true
+                 ? ' And their ad appeared in that Sponsored services block on our pull, so that guidance applies to a surface they are already paying for.'
+                 : '')
              : ''))
         : null,
     };
@@ -20760,10 +20794,21 @@ const buildProblemList = (harms, opts = {}) => {
   // no fixture can reach is the kind that rots.
   const _anchor = _numbered.find(_anchorable) || null;
   let _lr = 0;
-  if (_anchor) { _anchor.leakRank = ++_lr; _anchor.callOpener = callOpenerFor(_anchor); }
+  // One number per claim family: the family's best row (this list is already
+  // sorted) takes it, the rest stay ordinary findings. See RUNG_CLAIM_FAMILY.
+  const _famSeen = new Set();
+  const _famTaken = (r) => {
+    const f = RUNG_CLAIM_FAMILY[r.id];
+    if (!f) return false;
+    if (_famSeen.has(f)) return true;
+    _famSeen.add(f);
+    return false;
+  };
+  if (_anchor) { _anchor.leakRank = ++_lr; _anchor.callOpener = callOpenerFor(_anchor); _famTaken(_anchor); }
   for (const r of _numbered) {
     if (_lr >= 3) break;
     if (r === _anchor) continue;
+    if (_famTaken(r)) continue;
     r.leakRank = ++_lr;
     r.callOpener = callOpenerFor(r);
   }
@@ -22359,7 +22404,12 @@ const contactShapedTheme = (theme, kind) => {
 const leakEvidenceFrom = (m = {}) => {
   const theme = contactShapedTheme(String(m.reviewPainTop || ''), m.reviewPainTopKind);
   return { reviewThemeContact: theme,
-           writtenContact: Number(m.reviewPainMentions) >= 3 && theme === true };
+           writtenContact: Number(m.reviewPainMentions) >= 3 && theme === true,
+           // Their ad seen in Google's Sponsored services block on OUR pull:
+           // the one direct Google-side proof of live local-ads spend. Rides
+           // the same accessor so no call site can carry one class and drop
+           // the other.
+           lsaUs: m.lsaUs === true };
 };
 
 // rankHarms' `worst` is the SAME finding the sheet numbers as LEAK 1: the
@@ -22483,7 +22533,28 @@ const buildAuditFacts = (m = {}, unlinked = null) => {
     // anywhere but the Render log, which is why "is DataForSEO working" was
     // unanswerable from a sheet.
     searchSource: m.rankSource || null,
+    // ══ THE SURFACES THAT SIT ABOVE THE MAP ON A REAL RESULTS PAGE ══════════
+    // Google's pay-per-lead Sponsored services block and the AI answer, read
+    // off the same organic SERP call — the two surfaces this system was blind
+    // to when a pest company holding the #2 sponsored slot read as "Getting
+    // found: BROKEN" on a live sheet. POSITIVE-ONLY: the block rotates by
+    // design, so "their ad was not shown on our pull" is a fact about our
+    // pull, never about their account — the client caption must say so.
+    lsa: m.lsaChecked === true ? {
+      blockPresent: m.lsaBlockPresent === true,
+      us: m.lsaUs === true,
+      shown: Number.isFinite(Number(m.lsaShownCount)) ? Number(m.lsaShownCount) : null,
+    } : null,
+    aiOverview: m.lsaChecked === true ? {
+      present: m.aiOverviewPresent === true,
+      // Being cited is sayable. NOT being cited is never a fact about them —
+      // the AI answer varies pull to pull — so false never leaves here.
+      citesUs: m.aiOverviewCitesUs === true ? true : null,
+    } : null,
     booking: (m.bookingMeasured === true && ['online_booking', 'form', 'phone_only', 'none_found'].includes(m.booking)) ? m.booking : null,
+    // Tri-state passthrough: the merge licensed absence per marker, so false
+    // here is a page we read with none of the chat products on it.
+    liveChat: m.chatSeen === true ? true : m.chatSeen === false ? false : null,
     formFields: (m.formFieldCountIsSingleForm === true && Number.isFinite(Number(m.formFieldCount))) ? Number(m.formFieldCount) : null,
     // POSITIVE ONLY, per the unlinked-page read's own rule: a count when we
     // found them, null when the read did not run — and the client's caption
@@ -22541,8 +22612,8 @@ const buildFunnelStory = (m = {}, x = {}) => {
   const stages = [];
 
   // ── 1 · MONEY OUT: what they pay for, and whether anything counts it ──────
-  if (m.adsReadable === true && (m.googleAdsTag !== null || m.metaPixel !== null)) {
-    const g = m.googleAdsTag === true, f = m.metaPixel === true;
+  if ((m.adsReadable === true && (m.googleAdsTag !== null || m.metaPixel !== null)) || m.lsaUs === true) {
+    const g = m.googleAdsTag === true && m.adsReadable === true, f = m.metaPixel === true && m.adsReadable === true;
     let text = '';
     if (g && f) text = "Google's and Facebook's ad code is on their site — the code a business installs to run paid ads.";
     else if (g) text = "Google's ad code is on their site — the code a business installs to run Google ads.";
@@ -22550,6 +22621,16 @@ const buildFunnelStory = (m = {}, x = {}) => {
     else if (m.googleAdsTag === false && m.metaPixel === false) text = 'No ad wiring appears on any page we read.';
     if (g && x.adsLive === true) {
       text += ' A paid Google result for their own search proves those ads are running right now.';
+    }
+    // Google's pay-per-lead block, read off the same SERP page the organic
+    // read bought. POSITIVE-ONLY: the block rotates by design (the same top
+    // two appear in the same order about one search in ten), so presence is
+    // proof of live spend and absence is never a claim about anybody. An LSA
+    // advertiser can carry ZERO ad code on their site — this is the surface
+    // that made a pest company holding the #2 sponsored slot read as
+    // "Getting found: BROKEN" on a live sheet.
+    if (m.lsaUs === true) {
+      text += `${text ? ' ' : ''}Their ad appeared in Google's Sponsored services block for this search — a pay-per-lead product where the calls and messages arrive inside Google, not through their website.`;
     }
     // The ROI half, three states, scoped to the pages we read. Google can count
     // conversions WITHOUT site code (call assets, GA4 imports), so this never
@@ -22565,7 +22646,10 @@ const buildFunnelStory = (m = {}, x = {}) => {
         text += ' Nothing counts what those clicks turn into, though: no page we read carries the code that ties a paid click to a phone call or a booked job.';
       }
     }
-    if (text) stages.push({ id: 'money_out', label: 'Money out', text });
+    // Every sentence this stage can produce is a signal row's own fact (the
+    // ad-code rows, the sponsored-block row, the what-a-click-becomes row),
+    // so its brief is empty by construction: the rows carry the stage.
+    if (text) stages.push({ id: 'money_out', label: 'Money out', text, brief: '' });
   }
 
   // ── 2 · WHO FINDS THEM: the people already typing what they sell ──────────
@@ -22576,9 +22660,14 @@ const buildFunnelStory = (m = {}, x = {}) => {
   let _strongFound = false;
   {
     let text = '';
+    // brief: the subset of this stage no signal row already states — the
+    // top-three verdict, the paid-door reading, the unpaid-ranking call and
+    // the Facebook-versus-Google join. Positions, absences, the block and
+    // the AI answer are the rows' own facts and stay out of it.
+    let brief = '';
     const q = String(m.rankQuery || '').trim();
     if (m.rankChecked === true && m.rankFound === false && m.rankAbsenceConfirmed === true && q) {
-      text = `When somebody searches "${q}", they are not in the results at all — we ran that search twice.`;
+      text = `When somebody searches "${q}", they are not among the ${Number.isFinite(Number(m.scanned)) ? m.scanned + ' ' : ''}local listings that search returned — we ran it twice.`;
     } else if (m.rankChecked === true && m.rankFound === true && typeof m.rank === 'number' && Number.isFinite(m.rank) && m.rank >= 1 && q) {
       // typeof-number, not Number(m.rank): a fallback-source lead arrives with
       // rank NULL (the §52 trust wall), Number(null) is 0, 0 is finite and
@@ -22590,7 +22679,28 @@ const buildFunnelStory = (m = {}, x = {}) => {
       text = m.rank <= 3
         ? `When somebody searches "${q}", they are in the top three — the people already looking can find them. That part works.`
         : `When somebody searches "${q}", they show up at #${m.rank}${Number.isFinite(Number(m.scanned)) ? ` of the ${m.scanned} listed` : ''} — under the top three.`;
-      if (m.rank <= 3) _strongFound = true;
+      if (m.rank <= 3) { _strongFound = true; brief = text; }
+    }
+    // The paid door counts as being found. A business whose ad sits in the
+    // Sponsored services block IS being seen by the people searching — the
+    // stage cannot read BROKEN over the one surface we used to be blind to.
+    // POSITIVE-ONLY, both directions: our pull seeing their ad proves spend;
+    // our pull NOT seeing it proves nothing, because occupants rotate.
+    if (m.lsaUs === true) {
+      _strongFound = true;
+      if (!text && m.rankChecked !== true) {
+        text = `Their ad appeared in Google's Sponsored services block for this search — people looking for this work see them through the paid door.`;
+        brief = text;
+      } else if (text && (m.rankFound === false || (Number.isFinite(Number(m.rank)) && Number(m.rank) > 3))) {
+        const _paidDoor = ` Their ad appeared in Google's Sponsored services block for that same search, though — the people searching still see them through the paid door.`;
+        text += _paidDoor;
+        brief += _paidDoor;
+      }
+    } else if (m.lsaBlockPresent === true && text) {
+      // The block exists for this search and businesses are paying to hold it.
+      // Block-existence only: no claim about who is or is not in it, because
+      // one pull of a rotating surface cannot carry an absence.
+      text += ` A Sponsored services block sits above everything for this search — businesses paying Google per lead hold the top of that page.`;
     }
     // The join Vin walked on Breck's: Facebook-only wiring while the Google
     // search is measured bad or confirmed empty. All five gates or silence.
@@ -22604,6 +22714,16 @@ const buildFunnelStory = (m = {}, x = {}) => {
       && typeof m.organicPosition === 'number' && Number.isFinite(m.organicPosition)
       && typeof m.organicScanned === 'number' && m.organicScanned >= 6) {
       text += `${text ? ' ' : ''}In the blue links under the map they are #${m.organicPosition} of ${m.organicScanned} — a separate ranking from the map itself.`;
+      // What stacks ABOVE those links on the page a searcher actually sees.
+      // Being cited is sayable; not being cited never is — the AI answer
+      // varies pull to pull, so its absence proves nothing about anybody.
+      if (m.aiOverviewCitesUs === true) {
+        text += ` Google's AI answer sits above those links, and it lists their site as a source.`;
+      } else if (m.aiOverviewPresent === true) {
+        text += ` Google's AI answer sits above those links on the page.`;
+      } else if (m.lsaBlockPresent === true && m.lsaUs !== true) {
+        text += ` A sponsored block sits above those links on the page.`;
+      }
     }
     // WHICH ranking a position is. Vin, on a #2: "is that organic or are they
     // running ads to rank that high — info we need." Sayable only when we
@@ -22614,16 +22734,20 @@ const buildFunnelStory = (m = {}, x = {}) => {
     if (text && m.rankChecked === true && m.rankFound === true
       && m.adsReadable === true && m.tagManager === false
       && m.googleAdsTag === false && m.metaPixel === false
-      && m.adsLiveInPack !== true) {
-      text += ` That position is the unpaid ranking: no ad code on any page we read, and no sponsored listing of theirs appeared on the search we ran.`;
+      && m.adsLiveInPack !== true && m.lsaUs !== true) {
+      const _unpaid = ` That position is the unpaid ranking: no ad code on any page we read, and no sponsored listing of theirs appeared on the search we ran.`;
+      text += _unpaid;
+      brief += _unpaid;
     }
     if (m.adsReadable === true && m.tagManager === false
       && m.metaPixel === true && m.googleAdsTag === false
       && m.rankChecked === true
       && (m.rankAbsenceConfirmed === true || (m.rankFound === true && Number.isFinite(Number(m.rank)) && Number(m.rank) > 3))) {
-      text += `${text ? ' ' : ''}So the ad code points at Facebook — people who were not looking — while the people already typing this work into Google cannot find them. If those ads are live, they are paying for the harder sell while the easier customer walks past.`;
+      const _fbJoin = `${text ? ' ' : ''}So the ad code points at Facebook — people who were not looking — while the people already typing this work into Google cannot find them. If those ads are live, they are paying for the harder sell while the easier customer walks past.`;
+      text += _fbJoin;
+      brief += _fbJoin;
     }
-    if (text) stages.push({ id: 'who_finds_them', label: 'Who finds them', text });
+    if (text) stages.push({ id: 'who_finds_them', label: 'Who finds them', text, brief: brief.trim() });
   }
 
   // ── 3 · WHAT A CLICK LANDS ON: the bottom of the path ─────────────────────
@@ -22666,15 +22790,24 @@ const buildFunnelStory = (m = {}, x = {}) => {
     if (m.pricingMeasured === true && Number(m.pricesPublished) === 0 && m.unreadPricing !== true) {
       parts.push('No price appears on any page we read.');
     }
+    const briefParts = [];
     if (m.financingMeasured === true && m.financingOffered === false && m.bigTicketTrade === true) {
-      parts.push('Nothing on the pages we read lets a customer pay over time.');
+      // The one door sentence with no signal row of its own, so it survives
+      // into the brief; everything else here is the rows' own facts.
+      const _fin = 'Nothing on the pages we read lets a customer pay over time.';
+      parts.push(_fin);
+      briefParts.push(_fin);
     }
-    if (parts.length) stages.push({ id: 'the_door', label: 'What a click lands on', text: parts.join(' ') });
+    if (parts.length) stages.push({ id: 'the_door', label: 'What a click lands on', text: parts.join(' '), brief: briefParts.join(' ') });
   }
 
   // ── 4 · AFTER THEY REACH OUT: contact complaints, and the capacity read ───
   {
     const parts = [];
+    // The complaint-with-arithmetic sentence is the numbered leak's own text
+    // on every lead where it matters, so the brief keeps only the capacity
+    // join — the one reading nothing else on the page carries.
+    const briefParts = [];
     const themeContact = contactShapedTheme(String(m.reviewPainTop || ''), m.reviewPainTopKind);
     const mentions = Number(m.reviewPainMentions);
     const read = Number(m.reviewsRead);
@@ -22687,10 +22820,12 @@ const buildFunnelStory = (m = {}, x = {}) => {
       // and present tense only, because an undated posting buys no clock.
       const roles = (Array.isArray(x.opsRoles) ? x.opsRoles : []).map(r => String((r && r.title) || r || '').trim()).filter(Boolean).slice(0, 2);
       if (roles.length && ((x.opsPain && x.opsPain.binding === true) || mentions >= 3)) {
-        parts.push(`They are also hiring for ${roles.join(' and ')} right now — customers describing that in public while these roles sit open are signs of a team at capacity.`);
+        const _cap = `They are also hiring for ${roles.join(' and ')} right now — customers describing that in public while these roles sit open are signs of a team at capacity.`;
+        parts.push(_cap);
+        briefParts.push(_cap);
       }
     }
-    if (parts.length) stages.push({ id: 'after_contact', label: 'After they reach out', text: parts.join(' ') });
+    if (parts.length) stages.push({ id: 'after_contact', label: 'After they reach out', text: parts.join(' '), brief: briefParts.join(' ') });
     // A workmanship-shaped pattern is CONTEXT: real, on the sheet, never the
     // leak. Vin: "we have no control over the quality they produce."
     if (themeContact === false && theme && Number.isFinite(mentions) && mentions >= 2) {
@@ -22705,9 +22840,14 @@ const buildFunnelStory = (m = {}, x = {}) => {
     plain: BOTTLENECK_PLAIN[_b] || _b.toLowerCase(),
     why: String(x.bottleneckWhy || '').trim() || null,
     // The order sentence Vin endorsed, said only when both halves are measured:
-    // the search is bad or empty AND the landing path is broken.
+    // the search is bad or empty AND the landing path is broken. Keyed on the
+    // MEASUREMENTS, not on a regex over the sentence this same function built
+    // three lines up — that sniff silently died the first time the wording
+    // moved, which is exactly the two-hand-kept-copies disease in one hand.
     join: (stages.some(s => s.id === 'the_door')
-      && stages.some(s => s.id === 'who_finds_them' && /not in the (?:results|top three)|show up, but not|under the top three/.test(s.text)))
+      && m.rankChecked === true
+      && ((m.rankFound === false && m.rankAbsenceConfirmed === true)
+          || (Number.isFinite(Number(m.rank)) && Number(m.rank) > 3)))
       ? 'Showing up higher will not pay off while it lands on the same dead end. The door first, then the traffic.'
       : null,
   } : null;
@@ -22721,7 +22861,7 @@ const buildFunnelStory = (m = {}, x = {}) => {
   // window this system has into what happens after contact is the customers'
   // own written record, so with fewer than ten reviews read it stays unmeasured.
   const measured = {
-    found: m.rankChecked === true || m.adsReadable === true,
+    found: m.rankChecked === true || m.adsReadable === true || m.lsaChecked === true,
     door: m.bookingMeasured === true || m.formFieldCountIsSingleForm === true
       || m.pricingMeasured === true || typeof m.isHttps === 'boolean',
     after: Number(m.reviewsRead) >= 10,
@@ -27365,10 +27505,21 @@ const PAGE_INTENT = [
 ];
 
 const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd, homepageHtml) => {
-  if (!website || !fcKey || !apiKey) return null;
+  // Every null out of this function means ONLY THE HOMEPAGE IS READ: no
+  // interior pages, no interior renders, no booking evidence off interior
+  // markup, and the recurring-plan read cannot run (its floor is two pages).
+  // Two of these three branches were silent, and a live "Only their homepage
+  // was read" on a many-page site could not be diagnosed from the log.
+  if (!website || !fcKey || !apiKey) {
+    console.log(`SITE AUDIT [${companyName || website || 'lead'}]: interior pages NOT read — ${!website ? 'no website on the lead' : !fcKey ? 'no Firecrawl key' : 'no Anthropic key'}. Only the homepage can be read on this lead, and the recurring-plan read cannot run at all (its floor is two pages).`);
+    return null;
+  }
   try {
     const urls = await firecrawlMap(fcKey, website, 'pricing services about our story book schedule quote'); // cached — usually free
-    if (!urls.length) return null;
+    if (!urls.length) {
+      console.log(`SITE AUDIT [${companyName}]: interior pages NOT read — the sitemap map returned zero URLs for ${website}. Only the homepage is read on this lead; if the site plainly has more pages, the map call is the thing to look at.`);
+      return null;
+    }
     const clean = urls.filter(u => !/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|webp)$/i.test(u));
 
     // ── PICK THE RIGHT PAGE, NOT THE FIRST ONE THAT MATCHES ──────────────────
@@ -27499,7 +27650,10 @@ const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd, h
       spare.forEach(u => picked.push({ key: _pathKey(u), url: u }));
       if (spare.length) console.log(`SITE AUDIT [${companyName}]: only ${picked.length - spare.length} page(s) matched our intent words, so ${spare.length} more were taken from the sitemap by shallowest path. Their URLs do not use our vocabulary \u2014 that is our gap, not a thin site.`);
     }
-    if (!picked.length) return null;
+    if (!picked.length) {
+      console.log(`SITE AUDIT [${companyName}]: interior pages NOT read — ${urls.length} URL(s) mapped and every one was filtered out (binary files, articles, duplicates). Only the homepage is read on this lead; that is our filter's gap, not a thin site.`);
+      return null;
+    }
 
     // ALWAYS keep the About page if one was found. The slice used to cut on
     // PAGE_INTENT order alone, so a site with pricing + services + booking pages
@@ -33445,6 +33599,17 @@ const WP_BUILDERS = [
 // below is inline in the source, so this is strictly better than the plain fetch,
 // which executes no JavaScript at all — but it is not proof of absence on its
 // own, which is why adsReadable still has to be true for any absence claim.
+// ══ A CHAT WIDGET IS A ROUTE IN, AND THE OLD TEST WAS A WORD LIST ═══════════
+// checkBuiltWith matched the bare words "intercom" and "drift" against the
+// whole page — prose on a gate-repair site ("intercom systems") or a snow
+// company ("drift removal") read as a live-chat product. Harmless while the
+// only consumers were prompts; fatal now that chat evidence SUPPRESSES
+// "the only way in their site offers is a phone call" — a false positive here
+// silences a true finding. So every entry is anchored to the product's embed
+// HOST, the way SCHEDULER_SIGNATURES already is, and the live counter-example
+// is George Sink: a live-chat popup on the page, invisible to every read this
+// system had, under an audit claiming the form was the only route in.
+const CHAT_SIGNATURES = /widget\.intercom\.io|js\.driftt\.com|cdn\.livechatinc\.com|embed\.tawk\.to|static\.zdassets\.com|v2\.zopim\.com|js\.hs-scripts\.com|js\.usemessages\.com|code\.tidio\.co|\.olark\.com\/|client\.crisp\.chat|\.smartsuppchat\.com|lptag\.liveperson\.net|app\.purechat\.com|salesiq\.zohopublic\.com|wchat\.freshchat\.com|customerchat\.js|\.chaport\.com|livehelpnow\.net|connect\.podium\.com\/widget|birdeye\.com\/embed|cdn\.nicejob\.co|messenger\.ngageics\.com|apexchat\.com|blazeo\.com|\.clientchatlive\.com\/|cdn\.juvoleads\.com|intaker\.com/i;
 const AD_TAG_SIGNATURES = {
   hasGoogleAdsTag: /AW-\d{8,}|googleadservices|google_conversion/i,
   hasMetaPixel: /fbq\(|facebook\.net\/tr|connect\.facebook\.net.*fbevents/i,
@@ -33462,6 +33627,10 @@ const AD_TAG_SIGNATURES = {
   // that do it; a match proves it is installed, an absence proves only that
   // none of THESE are.
   hasCallTracking: /callrail|calltrackingmetrics|whatconverts|invoca|marchex|callsource|ringba|phonewagon|nimbata/i,
+  // The chat list above, by reference: one list, three readers (plain fetch,
+  // rendered homepage, interior harvest). Two hand-kept copies of one rule is
+  // the disease this file records most often.
+  hasChat: CHAT_SIGNATURES,
 };
 const mergeAdSignals = (builtWith, renderedHtml, interior) => {
   const bw = builtWith && typeof builtWith === 'object' ? builtWith : {};
@@ -33475,9 +33644,10 @@ const mergeAdSignals = (builtWith, renderedHtml, interior) => {
   // on purpose: two different floors for one question is how they drift apart.
   const renderedRead = html.length >= 500;
   const FROM_INTERIOR = { hasGoogleAdsTag: 'googleAds', hasMetaPixel: 'metaPixel', hasTagManager: 'tagManager',
-    hasAdsConversion: 'adsConversion', hasCallTracking: 'callTracking' };
+    hasAdsConversion: 'adsConversion', hasCallTracking: 'callTracking', hasChat: 'chat' };
   if (!renderedRead && !inter) {
     return { hasGoogleAdsTag: bw.hasGoogleAdsTag ?? null, hasMetaPixel: bw.hasMetaPixel ?? null,
+      hasChat: bw.hasChat ?? null,
       hasTagManager: bw.hasTagManager ?? null, hasAdsConversion: bw.hasAdsConversion ?? null,
       hasCallTracking: bw.hasCallTracking ?? null,
       adsRead: plainRead, adSource: plainRead ? 'plain fetch' : 'neither copy' };
@@ -33492,7 +33662,7 @@ const mergeAdSignals = (builtWith, renderedHtml, interior) => {
   // homepage for all five, the plain fetch for the three it computes. Interior
   // pages can prove presence and can never prove absence, which is the rule the
   // harvest's own comment already states.
-  const PLAIN_COMPUTED = new Set(['hasGoogleAdsTag', 'hasMetaPixel', 'hasTagManager']);
+  const PLAIN_COMPUTED = new Set(['hasGoogleAdsTag', 'hasMetaPixel', 'hasTagManager', 'hasChat']);
   for (const k of Object.keys(AD_TAG_SIGNATURES)) {
     const positive = bw[k] === true
       || (renderedRead && AD_TAG_SIGNATURES[k].test(html))
@@ -33586,7 +33756,9 @@ const checkBuiltWith = async (domain) => {
                  platformIsDiy: p.isDiy, platformBuilder: p.builder };
       })(),
       hasVideo: /wistia|vimeo|youtube\.com\/embed|vidyard/i.test(html),
-      hasChat: /intercom|drift|crisp\.chat|zendesk.*widget|tawk\.to|livechat/i.test(html),
+      // Same list as the rendered and interior reads — the old bare-word
+      // version matched "intercom systems" in a gate company's prose.
+      hasChat: CHAT_SIGNATURES.test(html),
       // ── ON-PAGE SEO & FRESHNESS (free — same HTML fetch) ──
       titleTag: (html.match(/<title[^>]*>([^<]{0,120})/i)?.[1] || '').trim(),
       hasMetaDesc: /<meta[^>]+name=["']description["'][^>]+content=["'][^"']{30,}/i.test(html),
@@ -34454,7 +34626,15 @@ const fetchLocalPack = async ({ query, city, placesKey, bizLat, bizLng }) => {
           location_code: 2840,
           language_code: 'en',
           device: 'desktop',
-          depth: 20,
+          // 100, up from 20. Live 2026-08-25: a business a human then found
+          // at #26 in the expanded Businesses list was reported "not in the
+          // results at all" \u2014 both stability samples were the identical
+          // depth-20 request, so the two-miss rule confirmed an absence the
+          // window itself created. DFS bills the finder per 20-desktop-result
+          // unit, so this is ~5x one of the cheapest calls in the system
+          // (~$0.01/lead), buying the difference between "not in the first
+          // 20" and a real read of the whole list.
+          depth: 100,
         }]),
       }, 20000);
       const body = await safeJson(r);
@@ -34527,7 +34707,7 @@ const fetchLocalPack = async ({ query, city, placesKey, bizLat, bizLng }) => {
 const DFS_ORGANIC_URL = 'https://api.dataforseo.com/v3/serp/google/organic/live/advanced';
 
 // Pure, so the boot check runs it against a real response shape.
-const parseOrganicSerp = (body, ourDomain) => {
+const parseOrganicSerp = (body, ourDomain, ourName) => {
   const dom = String(ourDomain || '').replace(/^www\./, '').toLowerCase();
   if (!dom) return { ok: false, why: 'no domain to look for' };
   const task = body && Array.isArray(body.tasks) ? body.tasks[0] : null;
@@ -34546,14 +34726,68 @@ const parseOrganicSerp = (body, ourDomain) => {
   // the item list is not a blue-link position, and counting one as a position is
   // how "you are third" gets said about a business that is nowhere.
   const organic = items.filter(it => it && String(it.type || '') === 'organic');
-  if (!organic.length) return { ok: false, why: 'no organic results in the response' };
   let position = null;
   organic.forEach((it, i) => {
     if (position !== null) return;
     const host = String(it.domain || '').replace(/^www\./, '').toLowerCase();
     if (host && (host === dom || host.endsWith('.' + dom))) position = i + 1;
   });
-  return { ok: true, position, scanned: organic.length };
+  // ══ THE REST OF THE PAGE, from the SAME response ═══════════════════════
+  // Live 2026-08-25: a pest company holding the #2 slot in Google's
+  // "Sponsored \u00b7 Pest control services" block was audited as "Getting found:
+  // BROKEN" \u2014 the block is a Google surface this system had never measured,
+  // its clicks are captured by Google's own call-and-message flow, and an LSA
+  // advertiser can carry ZERO ad code on their website. Every read below is
+  // POSITIVE-ONLY: the block rotates by design (the same top two appear in
+  // the same order about one search in ten), so presence is proof and
+  // absence is never a claim about anybody.
+  const _norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  const _ourName = _norm(ourName);
+  const lsaBlock = items.find(it => it && String(it.type || '') === 'local_services') || null;
+  const lsaProviders = (lsaBlock && Array.isArray(lsaBlock.items) ? lsaBlock.items : [])
+    .map(el => ({
+      title: String((el && el.title) || ''),
+      domain: String((el && el.domain) || '').replace(/^www\./, '').toLowerCase(),
+      rating: (el && el.rating && Number.isFinite(Number(el.rating.value))) ? Number(el.rating.value) : null,
+    }));
+  let lsaUsIndex = -1;
+  lsaProviders.forEach((p, i) => {
+    if (lsaUsIndex >= 0) return;
+    if (dom && p.domain && (p.domain === dom || p.domain.endsWith('.' + dom))) lsaUsIndex = i;
+    else if (_ourName && _norm(p.title) === _ourName) lsaUsIndex = i;
+  });
+  const aio = items.find(it => it && String(it.type || '') === 'ai_overview') || null;
+  let aioCitesUs = false;
+  if (aio && dom) {
+    const _refs = Array.isArray(aio.references) ? aio.references : [];
+    for (const rf of _refs) {
+      const h = String((rf && rf.domain) || '').replace(/^www\./, '').toLowerCase();
+      if (h && (h === dom || h.endsWith('.' + dom))) { aioCitesUs = true; break; }
+    }
+    if (!aioCitesUs) {
+      for (const el of (Array.isArray(aio.items) ? aio.items : [])) {
+        for (const ln of (el && Array.isArray(el.links) ? el.links : [])) {
+          const u = String((ln && ln.url) || '');
+          if (u.includes('//' + dom) || u.includes('//www.' + dom) || u.includes('.' + dom + '/')) { aioCitesUs = true; break; }
+        }
+        if (aioCitesUs) break;
+      }
+    }
+  }
+  const serp = {
+    lsaBlockPresent: !!lsaBlock,
+    lsaShownCount: lsaProviders.length || null,
+    lsaUs: lsaUsIndex >= 0,
+    lsaUsIndex: lsaUsIndex >= 0 ? lsaUsIndex + 1 : null,
+    lsaProviders: lsaProviders.slice(0, 5),
+    aiOverviewPresent: !!aio,
+    aiOverviewCitesUs: aioCitesUs,
+    paidCount: items.filter(it => it && String(it.type || '') === 'paid').length,
+    packPresent: items.some(it => it && String(it.type || '') === 'local_pack'),
+    discussionsPresent: items.some(it => it && String(it.type || '') === 'discussions_and_forums'),
+  };
+  if (!organic.length) return { ok: false, why: 'no organic results in the response', serp };
+  return { ok: true, position, scanned: organic.length, serp };
 };
 
 // ══ TRAFFIC VOLUME: AN ESTIMATE, BOUGHT CHEAP, AND NEVER A CLAIM ════════════
@@ -34618,7 +34852,7 @@ const parseTrafficOverview = (body) => {
     note: 'modeled by a third-party index from ranked keywords — an estimate, not a measurement; internal only' };
 };
 
-const checkOrganicRank = async ({ query, city, website }) => {
+const checkOrganicRank = async ({ query, city, website, companyName }) => {
   if (!DFS_READY) return { checked: false, why: 'no DataForSEO credentials, so no organic position is measured or claimed' };
   let dom = '';
   try { dom = new URL(String(website)).hostname.replace(/^www\./, '').toLowerCase(); } catch { return { checked: false, why: 'no readable domain on this lead' }; }
@@ -34628,15 +34862,20 @@ const checkOrganicRank = async ({ query, city, website }) => {
     const r = await fetchT(DFS_ORGANIC_URL, {
       method: 'POST',
       headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify([{ keyword: String(query), location_code: 2840, language_code: 'en', device: 'desktop', depth: 20 }]),
+      body: JSON.stringify([{ keyword: String(query), location_code: 2840, language_code: 'en', device: 'desktop', depth: 20, load_async_ai_overview: true }]),
     }, 20000);
-    const parsed = parseOrganicSerp(await safeJson(r), dom);
-    if (!parsed.ok) return { checked: false, why: parsed.why };
+    const parsed = parseOrganicSerp(await safeJson(r), dom, companyName);
+    // The serp extras (LSA block, AI answer) survive a refused POSITION read:
+    // they are positive-only presence facts about the page, not positions.
+    if (!parsed.ok) return { checked: false, why: parsed.why, serp: parsed.serp || null };
     // A thin field is arithmetic, not a finding - the same floor the pack read
     // carries, and for the same reason.
-    if (parsed.scanned < 8) return { checked: false, why: `only ${parsed.scanned} organic result(s) came back, too small a field to call a position` };
+    if (parsed.scanned < 8) return { checked: false, why: `only ${parsed.scanned} organic result(s) came back, too small a field to call a position`, serp: parsed.serp || null };
     console.log(`\u{1F517} ORGANIC RANK [${query}]: ${parsed.position ? '#' + parsed.position : 'NOT FOUND'} of ${parsed.scanned} blue links. This is a different ranking from the map pack and a business can sit high in one and nowhere in the other.`);
-    return { checked: true, found: parsed.position !== null, position: parsed.position, scanned: parsed.scanned, query, city };
+    if (parsed.serp && (parsed.serp.lsaBlockPresent || parsed.serp.aiOverviewPresent)) {
+      console.log(`\u{1F4E1} SERP SURFACES [${query}]: ${parsed.serp.lsaBlockPresent ? `Sponsored services (LSA) block PRESENT with ${parsed.serp.lsaShownCount || 0} provider(s)${parsed.serp.lsaUs ? ' \u2014 THEIR AD IS IN IT (shown #' + parsed.serp.lsaUsIndex + ' on this pull; the block rotates by design, so the slot is not a stable rank)' : ' \u2014 their name not among the ones shown on this pull (rotation means this is NEVER evidence they do not advertise)'}` : 'no LSA block on this pull'}${parsed.serp.aiOverviewPresent ? `; AI Overview present${parsed.serp.aiOverviewCitesUs ? ' and it CITES their site' : ''}` : ''}.`);
+    }
+    return { checked: true, found: parsed.position !== null, position: parsed.position, scanned: parsed.scanned, query, city, serp: parsed.serp || null };
   } catch (e) {
     return { checked: false, why: `organic rank check failed: ${(e && e.message) || e}` };
   }
@@ -35785,7 +36024,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // wrong. fcNoteRateLimited has already held the WHOLE gate by the time we
       // get here, and the retry goes through fcSerial like every other call, so
       // it cannot start before the hold expires and needs no sleep of its own.
-      const fcAsk = async (target, formats, waitFor, timeout, kind, _retried = false) => {
+      const fcAsk = async (target, formats, waitFor, timeout, kind, _retried = false, opts = null) => {
         // The other four Firecrawl entry points fail fast on an empty balance;
         // this one, the HOMEPAGE reader, did not. Stanley Schultze fired both of
         // his requests 52 seconds after the balance ran out, got 402 twice, and
@@ -35809,7 +36048,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             method: 'POST',
             headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: target, formats, onlyMainContent: false, waitFor,
-              maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true }),
+              maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true,
+              ...(opts && opts.mobile === true ? { mobile: true } : {}) }),
           }, timeout));
         } catch (e) {
           const ms = Date.now() - t0;
@@ -35835,7 +36075,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           console.log(`   ↳ HTTP ${r.status} in ${ms}ms. Read that literally: this is throttling, NOT an empty page and NOT their site.`);
           if (!_retried) {
             console.log(`   ↳ asking once more after the gate hold \u2014 losing the homepage to a queue costs the whole website half of this audit, and everything else on this lead is already paid for.`);
-            return fcAsk(target, formats, waitFor, timeout, kind, true);
+            return fcAsk(target, formats, waitFor, timeout, kind, true, opts);
           }
           return { refused: true, status: r.status, body, reason: errText || 'rate limited', ms };
         }
@@ -35856,6 +36096,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // the thing furthest down, it matters more, not less.
       const askFullPage = (t, timeout = 30000) => fcAsk(t, ['screenshot@fullPage'], 4000, timeout, 'scrape+screenshot');
       const askViewport = (t, timeout = 20000) => fcAsk(t, ['screenshot'], 2500, timeout, 'scrape+screenshot (viewport)');
+      // The homepage as a phone shows it — Firecrawl's mobile device emulation,
+      // one extra credit. HONEST SHAPE: this option has never been run against
+      // the live endpoint from this codebase; a refusal is logged by fcAsk,
+      // costs one credit at most, and the audit continues without the phone
+      // view rather than waiting on it.
+      const askMobile   = (t, timeout = 25000) => fcAsk(t, ['screenshot'], 2500, timeout, 'scrape+screenshot (mobile)', false, { mobile: true });
 
       const mdOf   = (b) => String(b?.data?.markdown || b?.markdown || '');
       const fullOf = (b) => b?.data?.['screenshot@fullPage'] || b?.['screenshot@fullPage'] || null;
@@ -35955,9 +36201,21 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       const _body = (cRes && cRes.body) || {};
       const _full = fullOf(rRes.body);
       const _view = viewOf(rRes.body);
+      // ── THE SAME PAGE, ON A PHONE ────────────────────────────────────────
+      // "lots prospects are booking through their phones" — and every render
+      // this system had ever taken was a desktop page, which is how a broken
+      // mobile layout stayed invisible on a live sheet. Asked only when the
+      // desktop read produced something: paying to photograph a dead site
+      // twice helps nobody.
+      let _mobUrl = null;
+      if (_full || _view || usable(cRes)) {
+        const _mob = settle((await Promise.allSettled([askMobile(target)]))[0]);
+        if (_mob && !_mob.refused) _mobUrl = viewOf(_mob.body) || null;
+      }
       return { ..._body, data: { ...(_body.data || {}),
         screenshot: _full || _view || null,
-        'screenshot@fullPage': _full || null } };
+        'screenshot@fullPage': _full || null,
+        screenshotMobile: _mobUrl } };
     };
 
     req._setPhase && req._setPhase('reading their pages');
@@ -36066,6 +36324,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // said was missing, and every true statement in the email dies with it.
     let fullPageUrl = firecrawlData.data?.['screenshot@fullPage'] || firecrawlData['screenshot@fullPage']
       || firecrawlData.data?.screenshotFullPage || null;
+    let mobileShotUrl = firecrawlData.data?.screenshotMobile || null;
 
     // ══ BOT-CHECK DETECTION — WE MAY NOT HAVE THEIR SITE AT ALL ═══════════════
     // Cloudflare and similar services serve an interstitial challenge based on the
@@ -36090,6 +36349,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       content = '';
       screenshotUrl = null;
       fullPageUrl = null;
+      // The phone render is the same wrong-company page by a different route.
+      mobileShotUrl = null;
     }
     if (fullPageUrl) {
       // `\u1f5bc` was a five-digit \u escape, which JavaScript reads as \u1f5b
@@ -36252,6 +36513,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // tracking" off a wire that had never carried a measurement. AD WIRE CHECK.
     builtWith.hasAdsConversion = _ads.hasAdsConversion;
     builtWith.hasCallTracking = _ads.hasCallTracking;
+    // Chat rides the same wire the day it is added, because ads_untracked
+    // spent months asserting off a marker that was computed and never copied
+    // back — the AD WIRE lesson, applied before the first live run.
+    builtWith.hasChat = _ads.hasChat;
     builtWith.adsRead = _ads.adsRead;
     console.log(`AD SIGNALS [${company}]: read from ${_ads.adSource} \u2014 google ads tag ${_ads.hasGoogleAdsTag === null ? 'NOT CHECKED' : _ads.hasGoogleAdsTag}, meta pixel ${_ads.hasMetaPixel === null ? 'NOT CHECKED' : _ads.hasMetaPixel}, tag manager ${_ads.hasTagManager === null ? 'NOT CHECKED' : _ads.hasTagManager}, conversion tracking ${_ads.hasAdsConversion === null ? 'NOT CHECKED' : _ads.hasAdsConversion}, call tracking ${_ads.hasCallTracking === null ? 'NOT CHECKED' : _ads.hasCallTracking}. The first three gate the SPENDING findings; the last two decide whether anything on the site counts what a paid click becomes, and they spent their whole lives computed here and never copied off the merge.`);
     const email = emailData; // from browser via browserData
@@ -36759,7 +37024,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           const _headRow = (lv.results || []).find(r => r && r.kind === 'primary trade') || lv.results[0];
           if (_headRow && _headRow.query && _headRow.city) {
             try {
-              organicRank = await checkOrganicRank({ query: _headRow.query, city: _headRow.city, website });
+              organicRank = await checkOrganicRank({ query: _headRow.query, city: _headRow.city, website, companyName: company });
             } catch (e) { organicRank = { checked: false, why: (e && e.message) || 'organic read threw' }; }
           }
           for (const r of lv.results) {
@@ -36864,6 +37129,14 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       ]);
       careers = carRes.status === 'fulfilled' ? carRes.value : null;
       sitePages = siteRes.status === 'fulfilled' ? siteRes.value : null;
+      // The phone render joins the one list every consumer already reads —
+      // the brain's image loop, the audit screen's render strip and the export
+      // footer — so it needs no new contract field and no second wire. A
+      // homepage-only lead has no sitePages to join; the response literal
+      // carries the row on its own for that case, so the SHEET still shows it.
+      if (mobileShotUrl && sitePages && Array.isArray(sitePages.pageShots)) {
+        sitePages.pageShots.push({ key: 'homepage (mobile)', url: String(website || ''), shot: mobileShotUrl });
+      }
       const pain = painRes.status === 'fulfilled' ? painRes.value : null;
       if (pain && pain.signals && pain.signals.length > 0) {
         publicPainSignals = pain.signals.map(sg => `${sg.pain} — evidence: "${clipQuote(sg.evidence)}" (${sg.source || 'web'})`);
@@ -37795,7 +38068,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // ANY capture evidence — code-measured or the model's own read of
           // the interior pages. Used only to SUPPRESS "the only way in is a
           // phone call"-class claims, never to assert a form exists.
-          captureSeen: !!(sitePages && sitePages.hasCapture === true),
+          // A live-chat widget counts: it is a route in that is not a phone
+          // call, and the audit that missed George Sink's chat popup told the
+          // reader the form was the only way anyone could start. Host-anchored
+          // signatures only, and never a booking upgrade — chat answers a
+          // question, it does not book a time.
+          captureSeen: !!(sitePages && sitePages.hasCapture === true) || builtWith.hasChat === true,
+          // Tri-state for the sheet: the merge already licensed absence per
+          // marker, so false here means a page we READ carried none of them.
+          chatSeen: builtWith.hasChat === true ? true : builtWith.hasChat === false ? false : null,
         };
         // Read once, above the literal, so the markers and the boolean cannot
         // drift apart the way five inline counters and one opinion did.
@@ -37817,6 +38098,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           organicFound: !!(organicRank && organicRank.found),
           organicPosition: (organicRank && Number.isFinite(Number(organicRank.position))) ? Number(organicRank.position) : null,
           organicScanned: (organicRank && Number.isFinite(Number(organicRank.scanned))) ? Number(organicRank.scanned) : null,
+          // The other Google surfaces, read off the SAME organic SERP page.
+          // POSITIVE-ONLY by construction: the LSA block rotates by design,
+          // so absence of their name on one pull may never become a claim.
+          lsaChecked: !!(organicRank && organicRank.serp),
+          lsaBlockPresent: !!(organicRank && organicRank.serp && organicRank.serp.lsaBlockPresent),
+          lsaUs: !!(organicRank && organicRank.serp && organicRank.serp.lsaUs),
+          lsaShownCount: (organicRank && organicRank.serp && Number.isFinite(Number(organicRank.serp.lsaShownCount))) ? Number(organicRank.serp.lsaShownCount) : null,
+          aiOverviewPresent: !!(organicRank && organicRank.serp && organicRank.serp.aiOverviewPresent),
+          aiOverviewCitesUs: !!(organicRank && organicRank.serp && organicRank.serp.aiOverviewCitesUs),
           brokenPages: (sitePages && sitePages.brokenPages) || [],
           // The four fields the ledger produces. Delivered through
           // observationHarmInputs so the boot check runs the shipping code
@@ -37927,6 +38217,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           booking: _bookingRead.booking,
           bookingMeasured: _bookingRead.bookingMeasured,
           captureSeen: _bookingRead.captureSeen,
+          chatSeen: _bookingRead.chatSeen,
           // ══ THE COVERAGE TABLE, WHICH HAS NEVER BEEN A FINDING ═══════════
           // Find measures these for free on every run and they have only ever
           // been logged and handed to the writer as background. RUNG INPUT CHECK
@@ -39084,7 +39375,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // buyer is), services, proof, pricing.
         try {
           const _shots = (sitePages && Array.isArray(sitePages.pageShots)) ? sitePages.pageShots : [];
-          const _ORDER = ['booking', 'contact', 'about', 'services', 'proof', 'pricing'];
+          const _ORDER = ['booking', 'homepage (mobile)', 'contact', 'about', 'services', 'proof', 'pricing'];
           const _ranked = [..._shots].sort((a, b) => {
             const ia = _ORDER.indexOf(a.key), ib = _ORDER.indexOf(b.key);
             return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
@@ -44214,7 +44505,8 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // Full-page renders of every INNER page we read, so a human can scroll the
       // booking page and the services page \u2014 not just the homepage. These are the
       // pages where a crash or an empty form actually lives.
-      pageShots: (sitePages && sitePages.pageShots) || [],
+      pageShots: (sitePages && sitePages.pageShots)
+        || (mobileShotUrl ? [{ key: 'homepage (mobile)', url: String(website || ''), shot: mobileShotUrl }] : []),
       companyTriggers,
       verifiedCEO, verifiedCEOTitle, verifiedEmployees, verifiedRevenue,
       // The name we found and REFUSED. Named here or it does not exist as far as
@@ -46838,7 +47130,7 @@ app.listen(PORT, () => {
     if (!_mo || !/Facebook's ad code is on their site/.test(_mo.text)) _fails.push('Facebook-only wiring does not open the money stage');
     if (_mo && /Google ads\./.test(_mo.text)) _fails.push('the money stage claims Google wiring on a Facebook-only lead');
     const _wf = _stage(_fs, 'who_finds_them');
-    if (!_wf || !/not in the results at all/.test(_wf.text)) _fails.push('a confirmed search absence does not reach the story');
+    if (!_wf || !/local listings that search returned/.test(_wf.text)) _fails.push('a confirmed search absence does not reach the story');
     if (!_wf || !/people who were not looking/.test(_wf.text) || !/If those ads are live/.test(_wf.text)) {
       _fails.push('the Facebook-versus-Google join is missing on the exact shape Vin walked, or it dropped the stated conditional that keeps a pixel from becoming spend');
     }
@@ -47186,13 +47478,18 @@ app.listen(PORT, () => {
     //    on either sort and prove nothing.
     const _rk = buildProblemList({ byHarm: [
       { id: 'ads_untracked', finding: 'ads with nothing counted', costs: 'c', harm: 84, opener: 80, novel: 78 },
+      // The found representative, and deliberately the HIGHEST harm in the
+      // list: depth must still hold it out of the numbers while door and
+      // after rows exist. ads_untracked used to play this role; it moved to
+      // the door 2026-08-26 because its claim is what a click becomes.
+      { id: 'outranked_by_weaker', finding: 'a weaker competitor above them', costs: 'c', harm: 92, opener: 90, novel: 72 },
       { id: 'review_pain_pattern', finding: 'quotes that never come back', costs: 'c', harm: 76, opener: 75, novel: 88 },
       { id: 'no_after_hours', finding: 'no way to book a time', costs: 'c', harm: 74, opener: 70, novel: 60 },
       { id: 'no_published_pricing', finding: 'no price anywhere', costs: 'c', harm: 66, opener: 60, novel: 50 },
       { id: 'stale_reviews', finding: 'reviews stale', costs: 'c', harm: 70, opener: 60, novel: 60 },
     ] }, { evidence: { adsLive: false, writtenContact: true, reviewThemeContact: true } });
     const _byId = Object.fromEntries(_rk.map(r => [r.id, r]));
-    if (!_byId.ads_untracked || _byId.ads_untracked.funnelStage !== 'found') _fails.push('the rows do not carry their funnel stage');
+    if (!_byId.ads_untracked || _byId.ads_untracked.funnelStage !== 'door') _fails.push('the rows do not carry their funnel stage (ads_untracked belongs at the door: its claim is what a click becomes)');
     if (!_byId.review_pain_pattern || _byId.review_pain_pattern.funnelStage !== 'after') _fails.push('a contact-themed complaint row is not staged after contact');
     const _ranked = _rk.filter(r => Number.isFinite(r.leakRank)).sort((a, b) => a.leakRank - b.leakRank);
     if (_ranked.length !== 3) _fails.push(`${_ranked.length} leak rank(s) assigned, not 3 — the audit's stated goal is the top three`);
@@ -47213,10 +47510,24 @@ app.listen(PORT, () => {
       }
     }
     if (_ranked[0] && _ranked[0].id !== 'review_pain_pattern') _fails.push(`leak 1 is ${_ranked[0] && _ranked[0].id}, not the after-contact complaint — the deepest broken stage anchors, because money already in hand dying there nullifies every dollar spent above it`);
-    if (_ranked[1] && _ranked[1].id !== 'no_after_hours') _fails.push('leak 2 is not the worse of the two door findings — harm breaks ties inside a stage');
-    if (_ranked[2] && _ranked[2].id !== 'no_published_pricing') _fails.push('leak 3 is not the remaining door finding');
-    if (Number.isFinite((_byId.ads_untracked || {}).leakRank)) _fails.push('the getting-found row outranked deeper leaks — the numbering is back on money pillars');
+    if (_ranked[1] && _ranked[1].id !== 'ads_untracked') _fails.push('leak 2 is not the worst of the door findings — harm breaks ties inside a stage');
+    if (_ranked[2] && _ranked[2].id !== 'no_after_hours') _fails.push('leak 3 is not the next door finding');
+    if (Number.isFinite((_byId.outranked_by_weaker || {}).leakRank)) _fails.push('the getting-found row outranked deeper leaks — the numbering is back on money pillars');
     if (_ranked.some(r => r.id === 'stale_reviews')) _fails.push('an internal review metric took a leak number — the seven internal rungs can never be one of the three things we say are damaging the business');
+    // 3b. One number per claim family — Bob Ray's leak2≈leak3, executed. Both
+    //     door rows read booking === 'form' and say the same thing about it;
+    //     the family hands the pair ONE number and the freed slot goes to the
+    //     next DISTINCT claim, while the duplicate stays an ordinary finding.
+    const _fam = buildProblemList({ byHarm: [
+      { id: 'paid_traffic_leaks', finding: 'ad clicks land on a form-and-wait door', costs: 'c', harm: 93, opener: 80, novel: 78 },
+      { id: 'form_only_no_booking', finding: 'a visitor can only fill in a form and wait', costs: 'c', harm: 58, opener: 50, novel: 40 },
+      { id: 'no_published_pricing', finding: 'no price on the pages read', costs: 'c', harm: 66, opener: 60, novel: 50 },
+    ] }, { evidence: { adsLive: false, writtenContact: false, reviewThemeContact: null } });
+    const _famRanked = _fam.filter(r => Number.isFinite(r.leakRank)).sort((a, b) => a.leakRank - b.leakRank);
+    if (_famRanked.some(r => r.id === 'form_only_no_booking')) _fails.push('two numbered leaks say one thing — the booking_route family handed both its rungs a number, which is the padded list Vin read on Bob Ray');
+    if (!_famRanked.some(r => r.id === 'paid_traffic_leaks')) _fails.push('the family suppressed its own best row instead of the duplicate');
+    if (!_famRanked.some(r => r.id === 'no_published_pricing')) _fails.push('the freed number did not go to the next distinct claim — the family rule shrank the list instead of diversifying it');
+    if (!_fam.some(r => r.id === 'form_only_no_booking')) _fails.push('the family rule deleted the duplicate row entirely — it must stay as an ordinary finding below the numbers');
     // Within one stage, a complaint a customer WROTE beats a finding we
     // inferred, even at lower harm — written evidence is the stronger anchor.
     const _rkEv = buildProblemList({ byHarm: [
@@ -47270,9 +47581,9 @@ app.listen(PORT, () => {
     //    the same facts passes.
     const _ev = [
       'The only thing a visitor can do there is fill in a form and wait. That form asks for 8 pieces of information before anything happens.',
-      'When somebody searches "parking lot paving in Columbus, OH", they are not in the results at all — we ran that search twice.',
+      'When somebody searches "parking lot paving in Columbus, OH", they are not among the local listings that search returned — we ran it twice.',
     ];
-    const _parrot = 'The only thing a visitor can do there is fill in a form and wait patiently. When somebody searches "parking lot paving in Columbus, OH", they are not in the results at all after we ran that search twice.';
+    const _parrot = 'The only thing a visitor can do there is fill in a form and wait patiently. When somebody searches "parking lot paving in Columbus, OH", they are not among the local listings that search returned after we ran it twice.';
     if (restatedEvidenceLines(_parrot, _ev).length < 2) _fails.push('a read that copies two evidence lines nearly word for word is not caught — the narrator can pass by parroting');
     const _thinks = 'Sixty-nine years of reputation and none of it is working for them online: the buyers already searching cannot see it, and the ones who arrive are asked to do the most work. Fixing the page before the spend is the only order that pays.';
     if (restatedEvidenceLines(_thinks, _ev).length !== 0) _fails.push('a genuinely synthesized read is flagged as a restatement — a gate that cries wolf gets switched off');
@@ -47291,6 +47602,153 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ FUNNEL STAGE MAP CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE SURFACES A SEARCHER ACTUALLY SEES, EXECUTED BOTH WAYS ═══════════
+  // Live 2026-08-25, three audits hand-checked against Google: a pest company
+  // holding the #2 slot in the Sponsored services block was audited "Getting
+  // found: BROKEN — not in the results at all", because the block, the AI
+  // answer and everything past row 20 of the local finder were surfaces this
+  // system had never measured. This check runs the real parser on the real
+  // response shapes, the real walk on the new branches, and the two rungs
+  // that now stand down when our own pull saw their ad win the paid surface.
+  // POSITIVE-ONLY is the rule under every assertion here: the block rotates
+  // by design, so presence proves spend and absence proves nothing.
+  try {
+    const _fails = [];
+    const _mkBody = (items) => ({ tasks: [{ status_code: 20000, result: [{ items }] }] });
+    const _org = (dom, i) => ({ type: 'organic', domain: dom, rank_group: i });
+    // 1. The parser: LSA by domain, LSA by normalised name, AIO by reference
+    //    domain and by item link, and an organic index that counts ONLY
+    //    organic rows — a paid row and a forum carousel above us must not
+    //    shift the position.
+    const _lsaRow = (t, d) => ({ title: t, domain: d, rating: { value: 4.8 } });
+    const _p1 = parseOrganicSerp(_mkBody([
+      { type: 'paid', domain: 'ads.example.com' },
+      { type: 'local_services', items: [_lsaRow('Bug Off LLC', 'bugoff.com'), _lsaRow('Axiom Eco-Pest Control', 'axiompest.com')] },
+      { type: 'discussions_and_forums' },
+      _org('reddit.com', 1), _org('axiompest.com', 2), _org('other.com', 3),
+    ]), 'axiompest.com', 'Axiom Eco-Pest Control');
+    if (!_p1 || _p1.ok !== true || _p1.position !== 2) _fails.push(`a paid row and a forum carousel shifted the organic index — position came back ${_p1 && _p1.position}, and "you are third" gets said about a business that is second`);
+    if (!_p1 || !_p1.serp || _p1.serp.lsaUs !== true || _p1.serp.lsaUsIndex !== 2) _fails.push('their own ad in the Sponsored services block is not recognised by domain — the Axiom failure verbatim');
+    if (!_p1 || !_p1.serp || _p1.serp.lsaBlockPresent !== true || _p1.serp.lsaShownCount !== 2) _fails.push('the block itself is not reported');
+    const _p2 = parseOrganicSerp(_mkBody([
+      { type: 'local_services', items: [{ title: "Axiom Eco-Pest Control", rating: { value: 4.9 } }] },
+      _org('other.com', 1),
+    ]), 'axiompest.com', 'Axiom Eco-Pest Control!');
+    if (!_p2 || !_p2.serp || _p2.serp.lsaUs !== true) _fails.push('an LSA row with no domain is not matched by normalised name — LSA rows routinely carry no website, which is the point of the product');
+    const _p3 = parseOrganicSerp(_mkBody([
+      { type: 'local_services', items: [_lsaRow('Somebody Else', 'else.com')] },
+      _org('other.com', 1),
+    ]), 'axiompest.com', 'Axiom Eco-Pest Control');
+    if (!_p3 || !_p3.serp || _p3.serp.lsaUs !== false || _p3.serp.lsaBlockPresent !== true) _fails.push('a block without us must read blockPresent true and lsaUs false — nothing more, because occupants rotate');
+    const _p4 = parseOrganicSerp(_mkBody([
+      { type: 'ai_overview', references: [{ domain: 'www.georgesink.com' }] },
+      _org('other.com', 1),
+    ]), 'georgesink.com', 'George Sink');
+    if (!_p4 || !_p4.serp || _p4.serp.aiOverviewCitesUs !== true) _fails.push('an AI answer citing their site via references is missed');
+    const _p5 = parseOrganicSerp(_mkBody([
+      { type: 'ai_overview', items: [{ links: [{ url: 'https://www.georgesink.com/car-accidents' }] }] },
+      _org('other.com', 1),
+    ]), 'georgesink.com', 'George Sink');
+    if (!_p5 || !_p5.serp || _p5.serp.aiOverviewCitesUs !== true) _fails.push('an AI answer citing their site via an item link is missed');
+    const _p6 = parseOrganicSerp(_mkBody([{ type: 'local_services', items: [_lsaRow('X', 'x.com')] }]), 'axiompest.com', 'Axiom');
+    if (!_p6 || _p6.ok !== false || !_p6.serp || _p6.serp.lsaBlockPresent !== true) _fails.push('a response with no organic rows loses the surfaces that WERE in it — the serp must survive the checked:false path');
+    // 2. The walk. An LSA-only lead cannot read BROKEN; a block someone else
+    //    holds is block-existence only; the AI answer citing them is said;
+    //    and the unpaid-ranking call stands down beside their own ad.
+    const _st = (r, id) => ((r && r.stages) || []).find(s => s.id === id) || null;
+    const _wLsa = buildFunnelStory({ lsaChecked: true, lsaBlockPresent: true, lsaUs: true }, {});
+    if (!_wLsa || _wLsa.strong.found !== true) _fails.push('an ad seen in the Sponsored services block does not count as being found — the verdict that read BROKEN over the paid door');
+    const _wLsaMo = _st(_wLsa, 'money_out');
+    if (!_wLsaMo || !/Sponsored services block/.test(_wLsaMo.text)) _fails.push('an LSA-only lead has no money-out stage — the spend Google itself proved is invisible');
+    const _wTho = buildFunnelStory({ rankChecked: true, rankFound: true, rank: 26, scanned: 100, rankQuery: 'pest control company in Charlotte, NC', lsaChecked: true, lsaBlockPresent: true, lsaUs: true }, {});
+    const _wThoF = _st(_wTho, 'who_finds_them');
+    if (!_wThoF || !/paid door/.test(_wThoF.text)) _fails.push('a deep map position beside their own LSA ad does not say the paid door — the Axiom shape ships as pure weakness again');
+    if (!_wTho || _wTho.strong.found !== true) _fails.push('the paid door does not carry the strength verdict on the found stage');
+    const _wBlock = buildFunnelStory({ rankChecked: true, rankFound: false, rankAbsenceConfirmed: true, scanned: 100, rankQuery: 'pest control company in Charlotte, NC', lsaChecked: true, lsaBlockPresent: true, lsaUs: false }, {});
+    const _wBlockF = _st(_wBlock, 'who_finds_them');
+    if (!_wBlockF || !/Sponsored services block sits above everything/.test(_wBlockF.text)) _fails.push('a block somebody else is paying to hold is not named — the reader cannot see that paid ads own the top of this search');
+    if (_wBlockF && /their name was not|not among the ones shown/i.test(_wBlockF.text)) _fails.push('the walk claims their ad was absent from a rotating block — the exact absence the POSITIVE-ONLY rule forbids');
+    const _wCite = buildFunnelStory({ rankChecked: true, rankFound: true, rank: 2, scanned: 20, rankQuery: 'personal injury lawyer in Columbia, SC', organicChecked: true, organicFound: true, organicPosition: 4, organicScanned: 19, lsaChecked: true, aiOverviewPresent: true, aiOverviewCitesUs: true }, {});
+    const _wCiteF = _st(_wCite, 'who_finds_them');
+    if (!_wCiteF || !/AI answer/.test(_wCiteF.text) || !/source/.test(_wCiteF.text)) _fails.push("Google's AI answer citing their site is measured and never said — George Sink's #5 AIO citation, invisible again");
+    const _wUnpaid = buildFunnelStory({ rankChecked: true, rankFound: true, rank: 2, scanned: 20, rankQuery: 'q in x', adsReadable: true, tagManager: false, googleAdsTag: false, metaPixel: false, lsaChecked: true, lsaBlockPresent: true, lsaUs: true }, {});
+    const _wUnpaidF = _st(_wUnpaid, 'who_finds_them');
+    if (_wUnpaidF && /unpaid ranking/.test(_wUnpaidF.text)) _fails.push('"that position is the unpaid ranking" printed beside their own sponsored ad — a false sentence built from a stale gate');
+    for (const _s of [_wLsaMo, _wThoF, _wBlockF, _wCiteF]) {
+      if (!_s) continue;
+      const _f = plainEnglishFaults(_s.text, { trade: 'pest control', mined: '' });
+      if (_f.length) _fails.push(`a surface sentence fails the plain-English gate — "${_s.text.slice(0, 60)}" (${_f[0]})`);
+    }
+    // 3. The two stand-downs, both directions — a gate that fires never is a
+    //    gate somebody deletes.
+    const _payRung = HARM_LADDER.find(h => h.id === 'paying_for_a_search_they_lose');
+    const _absRung = HARM_LADDER.find(h => h.id === 'absent_from_search');
+    const _payBase = { googleAdsTag: true, rankChecked: true, rankFound: true, rank: 7, scanned: 100, rankAbsenceConfirmed: false };
+    if (_payRung && !_payRung.test({ ..._payBase, lsaUs: false })) _fails.push('the paying rung no longer fires on its genuine case');
+    if (_payRung && _payRung.test({ ..._payBase, lsaUs: true })) _fails.push('"paying for a search they lose" fires on a business whose ad tops the Sponsored block — they are winning the paid surface of that search');
+    const _absBase = { rankChecked: true, rankFound: false, rankAbsenceConfirmed: true };
+    if (_absRung && !_absRung.test({ ..._absBase, lsaUs: false })) _fails.push('the absence rung no longer fires on its genuine case');
+    if (_absRung && _absRung.test({ ..._absBase, lsaUs: true })) _fails.push('INVISIBLE fires on a business whose ad the searcher is looking at — the one-search-disproof class');
+    if (_payRung) {
+      const _paySay = _payRung.say({ googleAdsTag: true, rankQuery: 'pest control company in Charlotte, NC', rankFound: false, scanned: 100 });
+      if (!/100 local results shown/.test(_paySay)) _fails.push('the paying band does not say the window it scanned — "do not come up at all" was the depth-20 overclaim');
+      if (plainEnglishFaults(_paySay, { trade: 'pest control', mined: '' }).length) _fails.push('the scoped paying band fails the plain-English gate');
+    }
+    if (_absRung) {
+      const _absSay = _absRung.say({ rankQuery: 'pest control company in Charlotte, NC', scanned: 100 });
+      if (!/among the 100 local businesses/.test(_absSay)) _fails.push('the absence sentence does not carry the window — "went through the whole list" was false the moment the list was a 20-row window of a 100-row surface');
+    }
+    // 4. The rankNote's LSA variant: with contact-shaped pain AND their ad
+    //    seen live, the note names the surface they are already paying for —
+    //    and never without both.
+    const _orLsa = buildProblemList({ byHarm: [
+      { id: 'outranked_by_weaker', finding: 'a competitor above them with fewer reviews', costs: 'x', harm: 92, opener: 90, novel: 72 },
+    ] }, { evidence: { reviewThemeContact: true, lsaUs: true } });
+    const _orLsaRow = _orLsa.find(r => r.id === 'outranked_by_weaker');
+    if (!_orLsaRow || !/Sponsored services block on our pull/.test(String(_orLsaRow.rankNote || ''))) _fails.push('the responsiveness join does not name the paid surface their own ad appeared on');
+    const _orNoLsa = buildProblemList({ byHarm: [
+      { id: 'outranked_by_weaker', finding: 'a competitor above them with fewer reviews', costs: 'x', harm: 92, opener: 90, novel: 72 },
+    ] }, { evidence: { reviewThemeContact: true, lsaUs: false } });
+    const _orNoLsaRow = _orNoLsa.find(r => r.id === 'outranked_by_weaker');
+    if (_orNoLsaRow && /on our pull/.test(String(_orNoLsaRow.rankNote || ''))) _fails.push('the LSA tail prints with no LSA measurement behind it');
+    // 5. The chat list is host-anchored, shared, and suppresses — never
+    //    asserts. The old bare-word test filed "intercom systems" prose as a
+    //    live-chat product, and chat now gates "the only way in is a phone
+    //    call", so a false positive here silences a true finding.
+    for (const _c of ['https://widget.intercom.io/widget/abc', 'src="https://embed.tawk.to/x/default"', 'connect.podium.com/widget.js', 'https://cdn.livechatinc.com/tracking.js']) {
+      if (!CHAT_SIGNATURES.test(_c)) _fails.push(`a real chat embed is missed — ${_c.slice(0, 40)}`);
+    }
+    for (const _c of ['we install intercom systems for gated communities', 'snow drift removal is our specialty', 'our live chat hours are 9 to 5']) {
+      if (CHAT_SIGNATURES.test(_c)) _fails.push(`ordinary prose reads as a chat product — "${_c.slice(0, 40)}" — and a false positive here suppresses a true phone-only finding`);
+    }
+    const _PADC = '<p>' + 'x'.repeat(600) + '</p>';
+    const _mChat = mergeAdSignals({ confirmed: false, blocked: true }, '<script src="https://embed.tawk.to/abc/default"></script>' + _PADC);
+    if (_mChat.hasChat !== true) _fails.push('a chat widget in the rendered homepage is missed by the merge');
+    const _mNoChat = mergeAdSignals({ confirmed: true, blocked: false, hasGoogleAdsTag: false, hasMetaPixel: false, hasTagManager: false, hasChat: false }, _PADC);
+    if (_mNoChat.hasChat !== false) _fails.push('a readable page without a chat product no longer reads false — the suppression could never clear');
+    const _mNullChat = mergeAdSignals({ confirmed: false, blocked: true }, '');
+    if (_mNullChat.hasChat !== null) _fails.push('an unreadable page reports a chat verdict — an absence claim with no read behind it');
+    // 6. The wires, assembled at runtime with comments stripped — a fixture
+    //    supplies its own arguments and cannot see a dropped wire, and a
+    //    literal needle finds itself.
+    const _n = (...p) => p.join('');
+    const _src = selfSourceNoCommentsLF();
+    if (!_src.includes(_n('depth: ', '100,'))) _fails.push('the local finder is back to a 20-row window — a business at #26 becomes a confirmed absence again');
+    if (!_src.includes(_n('load_async_ai_overview', ': true'))) _fails.push('the organic request no longer asks for the AI answer');
+    if (!_src.includes(_n('lsaChecked: !!(organicRank && ', 'organicRank.serp),'))) _fails.push('the surface read never reaches the harm inputs — measured, paid for, and dropped one line before use');
+    if (!_src.includes(_n('lsa: m.lsaChecked', ' === true ? {'))) _fails.push('the facts strip lost the sponsored-block surface');
+    if (!_src.includes(_n("'scrape+screenshot (mobile)', false, ", '{ mobile: true })'))) _fails.push('the mobile homepage render is gone — the phone layout goes back to being invisible on every sheet');
+    if (!_src.includes(_n("sitePages.pageShots.push({ key: 'homepage ", "(mobile)', url: String(website || ''), shot: mobileShotUrl });"))) _fails.push('the phone render no longer joins the pageShots list, so neither the brain nor the sheet ever sees it');
+    if (!_src.includes(_n('captureSeen: !!(sitePages && sitePages.hasCapture === true) || ', 'builtWith.hasChat === true,'))) _fails.push('chat evidence no longer suppresses "the only way in is a phone call" — the George Sink claim ships again');
+    if (_fails.length) {
+      console.log(`⛔ LSA SURFACE CHECK: ${_fails.slice(0, 8).join(' | ')}.`);
+    } else {
+      console.log(`✓ LSA SURFACE CHECK: the Sponsored services block, the AI answer and the 100-row finder window are measured off responses we already buy, and every claim built on them is positive-only — their ad seen is proof of live spend, their ad not seen proves nothing, and the two rungs that would call a paid-surface winner INVISIBLE stand down. The parser, the walk branches, the stand-downs, the rankNote join, the chat suppression and the mobile-render wires were all EXECUTED here, both directions, because the Axiom sheet read "Getting found: BROKEN" about a business holding the #2 sponsored slot.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LSA SURFACE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ THE FOUR SIGNALS ADDED FOR THE MONEY MAP, EXECUTED BOTH WAYS ═══════
@@ -53446,6 +53904,7 @@ app.listen(PORT, () => {
         'veterinary', 'veterinarian', 'chiropractic', 'chiropractor', 'dermatology',
         'aesthetics', 'janitorial', 'heating', 'cooling', 'hvac', 'pest control',
         'lawn care', 'pool service', 'septic tank', 'chimney sweep', 'gutters',
+        'tree service', 'tree care', 'tree trimming', 'tree removal', 'arborist',
         'window cleaning', 'air conditioning', 'animal hospital', 'physical therapy',
         'med spa', 'salons', 'barbershop', 'accountant', 'accounting', 'payroll',
         'managed services', 'security systems', 'alarms', 'water softeners',
@@ -53486,7 +53945,7 @@ app.listen(PORT, () => {
     // exact while veterinar\w* carries the long form.
     const MUST_NOT = [
       ['ICP_SMALL_PRACTICE', ICP_SMALL_PRACTICE, ['veteran', 'veterans', 'vetted', 'dentures']],
-      ['RECURRING_NORMAL_TRADES', RECURRING_NORMAL_TRADES, ['veteran', 'veterans', 'poolside dental supply is fine', 'gymnasium']],
+      ['RECURRING_NORMAL_TRADES', RECURRING_NORMAL_TRADES, ['veteran', 'veterans', 'poolside dental supply is fine', 'gymnasium', 'family tree research']],
       ['ICP_INSTITUTION', ICP_INSTITUTION, ['universal windows', 'grocer supply of nashville is a wholesaler']],
     ];
     for (const [name, re, words] of MUST_NOT) {
@@ -58647,7 +59106,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // The homepage reader did not, and it is the FRONT of a seven-page fan-out:
     // one 429 there cost the whole website half of an audit while Places, Apify
     // and every model call were paid in full. Bounded at one extra attempt.
-    if (!_src.includes(_needle('return fcAsk(target, formats, waitFor,', ' timeout, kind, true);'))) {
+    if (!_src.includes(_needle('return fcAsk(target, formats, waitFor,', ' timeout, kind, true, opts);'))) {
       _fails.push('the homepage read no longer asks again after a throttle, so one 429 on the first of seven pages throws away the whole website half of a lead that is already paid for everywhere else');
     }
     // ---- AND A THROTTLE IS COUNTED AGAINST THE LEAD THAT WAS REFUSED ------
