@@ -125,6 +125,13 @@ const cleanVector = () => {
   m.hasRecurringOffer = m.recurringChecked ? chance(0.5) : null;
   m.tradeWord = rand(TRADES);
   m.chatSeen = chance(0.6) ? chance(0.3) : null;
+  // Round-100 fields. listingClaimed is tri-state and unverified live, so the
+  // fuzz must prove null licenses nothing; deadCampaignPages must survive
+  // hostile shapes; the price/financing suppressors must never widen a claim.
+  m.listingClaimed = chance(0.3) ? chance(0.5) : null;
+  m.deadCampaignPages = chance(0.2) ? [{ url: 'https://x.com/lp/offer-' + int(99), status: rand([404, 410]) }] : [];
+  m.homepagePriceSeen = chance(0.4);
+  m.unreadFinancing = chance(0.2);
   return m;
 };
 

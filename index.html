@@ -246,6 +246,11 @@ const persistedFieldsFrom = (l) => ({
       // unanswered. Both are INTERNAL — reviews are how we read the business.
       opsBuckets: l.opsBuckets ?? null,
       reviewsNegativeUnanswered: l.reviewsNegativeUnanswered ?? null,
+      ownerReplyMedianDays: l.ownerReplyMedianDays ?? null,
+      reviewsDistribution: l.reviewsDistribution ?? null,
+      paaQuestions: l.paaQuestions ?? null,
+      paidAdvertisers: l.paidAdvertisers ?? null,
+      afterBenchmarks: l.afterBenchmarks ?? null,
       // Positive-only advertising evidence from Google's own Transparency
       // Centre. Never a negative: only verified advertisers appear there.
       adsTransparency: l.adsTransparency ?? null,
@@ -874,6 +879,11 @@ const rowToLead = (r) => ({
   trafficEstimate: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.trafficEstimate) || null,
   opsBuckets: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.opsBuckets) || null,
   reviewsNegativeUnanswered: (r.brain_audit && r.brain_audit._persisted && Number.isFinite(Number(r.brain_audit._persisted.reviewsNegativeUnanswered))) ? Number(r.brain_audit._persisted.reviewsNegativeUnanswered) : null,
+  ownerReplyMedianDays: (r.brain_audit && r.brain_audit._persisted && Number.isFinite(Number(r.brain_audit._persisted.ownerReplyMedianDays))) ? Number(r.brain_audit._persisted.ownerReplyMedianDays) : null,
+  reviewsDistribution: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.reviewsDistribution) || null,
+  paaQuestions: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.paaQuestions) || null,
+  paidAdvertisers: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.paidAdvertisers) || null,
+  afterBenchmarks: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.afterBenchmarks) || null,
   // Which ask this lead was sent, and the page it points at. Persisted because a
   // reply arrives days later and the arm is the only thing that makes it mean
   // anything.
@@ -1131,7 +1141,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260831;
+const CLIENT_CONTRACT = 20260901;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -1534,6 +1544,14 @@ const applyResearchResult = (prev, data, ctx) => {
         L.trafficEstimate = data.trafficEstimate ?? L.trafficEstimate ?? null;
         L.opsBuckets = data.opsBuckets ?? L.opsBuckets ?? null;
         L.reviewsNegativeUnanswered = data.reviewsNegativeUnanswered ?? L.reviewsNegativeUnanswered ?? null;
+        // Round 100: reply latency, the whole-profile star spread, the questions
+        // customers actually type, the advertisers seen on their search, and
+        // the after-contact industry rows. All INTERNAL - call sheet, never email.
+        L.ownerReplyMedianDays = data.ownerReplyMedianDays ?? L.ownerReplyMedianDays ?? null;
+        L.reviewsDistribution = data.reviewsDistribution ?? L.reviewsDistribution ?? null;
+        L.paaQuestions = data.paaQuestions ?? L.paaQuestions ?? null;
+        L.paidAdvertisers = data.paidAdvertisers ?? L.paidAdvertisers ?? null;
+        L.afterBenchmarks = data.afterBenchmarks ?? L.afterBenchmarks ?? null;
         L.adsTransparency = data.adsTransparency ?? L.adsTransparency ?? null;
         // What moved between two looks at this business. The only facts in the
         // system with a date on them that did not come from a job board, and
@@ -1633,6 +1651,14 @@ const applyResearchResult = (prev, data, ctx) => {
         L.trafficEstimate = data.trafficEstimate ?? L.trafficEstimate ?? null;
         L.opsBuckets = data.opsBuckets ?? L.opsBuckets ?? null;
         L.reviewsNegativeUnanswered = data.reviewsNegativeUnanswered ?? L.reviewsNegativeUnanswered ?? null;
+        // Round 100: reply latency, the whole-profile star spread, the questions
+        // customers actually type, the advertisers seen on their search, and
+        // the after-contact industry rows. All INTERNAL - call sheet, never email.
+        L.ownerReplyMedianDays = data.ownerReplyMedianDays ?? L.ownerReplyMedianDays ?? null;
+        L.reviewsDistribution = data.reviewsDistribution ?? L.reviewsDistribution ?? null;
+        L.paaQuestions = data.paaQuestions ?? L.paaQuestions ?? null;
+        L.paidAdvertisers = data.paidAdvertisers ?? L.paidAdvertisers ?? null;
+        L.afterBenchmarks = data.afterBenchmarks ?? L.afterBenchmarks ?? null;
         L.adsTransparency = data.adsTransparency ?? L.adsTransparency ?? null;
         // What moved between two looks at this business. The only facts in the
         // system with a date on them that did not come from a job board, and
@@ -2496,8 +2522,14 @@ const adsFactsLabel = (af) => {
   if (!af) return '';
   if (af.ads === 'yes' && af.metaPixel === true) return 'Ads: Google + Facebook';
   if (af.ads === 'yes') return 'Ads: Google running';
+  // An LSA advertiser carries ZERO site code by design - the leads run through
+  // Google's own call flow. "None found" on the sheet of a business whose ad
+  // we SAW live was the false label the Axiom run carried.
+  if (af.ads === 'lsa_only') return 'Ads: Google pay-per-lead seen live (no ad code on their pages, which is how that product works)';
   if (af.ads === 'no' && af.metaPixel === true) return 'Ads: Facebook only';
-  if (af.ads === 'no') return 'Ads: none found';
+  // Scoped: LSA needs no site code, so a clean page read can never become a
+  // flat "none".
+  if (af.ads === 'no') return 'Ads: no ad code on their pages';
   return 'Ads: could not read';
 };
 // The pillar vocabulary, ONE copy — it was three (the money card, the selling
@@ -2589,7 +2621,9 @@ const signalRowsFor = (stageId, ctx) => {
     R('Check it yourself', (lr && (lr.query || lr.phrase))
       ? ('search Google for "' + (lr.query || lr.phrase) + '" \u2014 the sponsored block, the AI answer and the map all move, so read the live page before quoting a position')
       : null, null);
-    R('Google ads code', af.ads === 'yes' ? ('on their site' + (af.adsLive === true ? ' · their own sponsored result appeared' : '')) : af.ads === 'no' ? 'none found' : null, 'adsCode');
+    R('Google ads code', af.ads === 'yes' ? ('on their site' + (af.adsLive === true ? ' · their own sponsored result appeared' : ''))
+      : af.ads === 'lsa_only' ? 'none on their pages \u2014 their pay-per-lead ad was seen live, and that product needs no site code'
+      : af.ads === 'no' ? 'none found on their pages' : null, 'adsCode');
     R('Facebook ad code', af.metaPixel === true ? 'on their site' : af.metaPixel === false ? 'none found' : null, 'meta');
     R('Sponsored services block', (af.lsa && typeof af.lsa === 'object')
       ? (af.lsa.blockPresent === true
@@ -2620,13 +2654,23 @@ const signalRowsFor = (stageId, ctx) => {
       : (af.ads === 'yes' ? 'only their ads account shows it — worth asking' : null), 'adLanding');
     R('What a click becomes', af.roiStatus === 'counted' ? 'tracking on the pages can tie a click to a job'
       : af.roiStatus === 'hidden' ? 'hidden inside their tag container — could not see'
-      : af.roiStatus === 'blind' ? 'nothing on the pages counts it' : null, 'roi');
+      : af.roiStatus === 'blind' ? 'nothing visible on the pages we read \u2014 only their ads account can say' : null, 'roi');
     R('Booking route', ({ online_booking: 'a visitor can book a time on the site', form: 'a form, then waiting', phone_only: 'a phone call', none_found: 'no route found on the pages read' })[af.booking] || null, 'booking');
     R('Live chat', af.liveChat === true ? 'on the site \u2014 a visitor can ask without calling' : af.liveChat === false ? 'none found on the pages read' : null, null);
     R('Form length', Number.isFinite(af.formFields) ? af.formFields + ' fields' : null, 'form');
     R('Price on the site', Number(ctx && ctx.pricesShown) > 0 ? 'shown' : (ids.has('no_published_pricing') ? 'none on the pages read' : null), 'price');
     R('Site build', Number.isFinite(af.siteAgeMarkers) ? (af.siteAgeMarkers >= 2 ? af.siteAgeMarkers + ' old-build markers in the source' : 'no meaningful age markers') : null, 'build');
     R('Real-visitor speed', af.mobile === 'slow' ? 'slow for their real visitors' : af.mobile === 'fine' ? 'fine for their real visitors' : null, 'speed');
+    const ck = af.checklist;
+    if (ck) {
+      if (ck.submitOnlyButton === true) R('Form button', 'says only \u201cSubmit\u201d \u2014 tells the visitor nothing about what happens next', null);
+      if (Number(ck.wrongKeyboardFields) >= 1) R('Phone/email fields', ck.wrongKeyboardFields + ' typed as plain text \u2014 a phone shows the wrong keyboard', null);
+      if (ck.multiStepForm === true) R('Form shape', 'split into steps \u2014 the right pattern for a long form', null);
+      if (ck.proofOnlyInFooter === true) R('Proof placement', 'reviews and badges sit only in the footer \u2014 the first screens carry none', null);
+      if (ck.sharedInboxOnly === true) R('Published email', 'shared inboxes only (info@/office@) \u2014 no named person is reachable', null);
+      if (Number(ck.firstFoldCtaKinds) >= 3) R('First-screen asks', ck.firstFoldCtaKinds + ' competing calls to action on the first screen', null);
+    }
+    R('Anything measuring the site', af.analytics === false ? 'no analytics of any kind on the pages read \u2014 no dashboard anywhere can tell them how many people came' : af.analytics === true ? 'an analytics tag is on the site' : null, null, af.analytics === false);
   } else if (stageId === 'after') {
     R('Service plan', af.recurring === 'none' ? 'none on the pages read' : af.recurring === 'offered' ? 'they sell one' : null, 'recurring');
     const ob = Array.isArray(ctx && ctx.opsBuckets) && ctx.opsBuckets.length ? ctx.opsBuckets[0] : null;
@@ -2785,6 +2829,10 @@ const auditRecordFor = (lead) => {
     // Review intelligence for the sheet. INTERNAL by the standing rule: reviews
     // are how we read the business, never what gets said to the owner.
     opsBuckets: Array.isArray(l.opsBuckets) && l.opsBuckets.length ? l.opsBuckets : null,
+    replyMedianDays: Number.isFinite(Number(l.ownerReplyMedianDays)) ? Number(l.ownerReplyMedianDays) : null,
+    paaQuestions: Array.isArray(l.paaQuestions) && l.paaQuestions.length ? l.paaQuestions : null,
+    paidAdvertisers: Array.isArray(l.paidAdvertisers) && l.paidAdvertisers.length ? l.paidAdvertisers : null,
+    afterBenchmarks: Array.isArray(l.afterBenchmarks) && l.afterBenchmarks.length ? l.afterBenchmarks : null,
     traffic: (l.trafficEstimate && l.trafficEstimate.checked && l.trafficEstimate.inIndex) ? l.trafficEstimate : null,
     negUnanswered: (Number.isFinite(Number(l.reviewsNegativeUnanswered)) && Number(l.reviewsNegativeUnanswered) > 0) ? Number(l.reviewsNegativeUnanswered) : null,
     // The map-rank read and the published-price count, for the signal rows —
@@ -3135,6 +3183,10 @@ const auditExportHtml = (records, meta) => {
       (r.traffic && Number(r.traffic.paidKeywords) > 0) ? ('~' + (Number.isFinite(r.traffic.paidEtvMonthly) ? r.traffic.paidEtvMonthly.toLocaleString() : '?') + ' Google-paid visits/mo across ' + r.traffic.paidKeywords + ' paid keyword(s) — estimate, never said to him') : '',
       (r.traffic && Number(r.traffic.paidKeywords) === 0) ? 'The search index has never seen this domain buy a Google ad' : '',
       (r.opsBuckets && r.opsBuckets[0]) ? ('Complaints are mostly “' + p(r.opsBuckets[0].label) + '”' + (Number(r.opsBuckets[0].mentions) > 1 ? ' (' + r.opsBuckets[0].mentions + ' mentions)' : '')) : '',
+      Number.isFinite(Number(r.replyMedianDays)) ? ('When the owner replies to a review, the typical wait is ~' + r.replyMedianDays + ' day(s)') : '',
+      (Array.isArray(r.paaQuestions) && r.paaQuestions.length) ? ('Customers on that search also ask: ' + r.paaQuestions.slice(0, 3).map(p).join(' · ')) : '',
+      (Array.isArray(r.paidAdvertisers) && r.paidAdvertisers.length) ? ('Advertisers seen on that search: ' + p(r.paidAdvertisers.join(', '))) : '',
+      (Array.isArray(r.afterBenchmarks) && r.afterBenchmarks.length) ? ('Industry, for the call: ' + r.afterBenchmarks.map(p).join(' · ')) : '',
       r.negUnanswered ? (r.negUnanswered + ' negative review' + (r.negUnanswered === 1 ? '' : 's') + ' with no owner reply — the cheapest fix a call can open with') : '',
     ].concat((g.internal || []).map(x => p(x.problem)))
      .concat((r.changes || []).filter(c => !c.sayable).map(c => p(c.say))).filter(Boolean);
@@ -6803,6 +6855,18 @@ function LeadBriefing({ lead }) {
       }
       if (Number.isFinite(Number(lead.reviewsNegativeUnanswered)) && Number(lead.reviewsNegativeUnanswered) > 0) {
         notes.push(lead.reviewsNegativeUnanswered + ' negative review' + (Number(lead.reviewsNegativeUnanswered) === 1 ? '' : 's') + ' with no owner reply \u2014 the cheapest fix a call can open with, internal only');
+      }
+      if (Number.isFinite(Number(lead.ownerReplyMedianDays))) {
+        notes.push('When the owner replies to a review, the typical wait is ~' + lead.ownerReplyMedianDays + ' day(s) \u2014 the cheapest read on how fast the business answers anyone, internal only');
+      }
+      if (Array.isArray(lead.paaQuestions) && lead.paaQuestions.length) {
+        notes.push('Customers on that search also ask: ' + lead.paaQuestions.slice(0, 3).map(function (q) { return '\u201c' + q + '\u201d'; }).join(' \u00b7 ') + ' \u2014 internal only');
+      }
+      if (Array.isArray(lead.paidAdvertisers) && lead.paidAdvertisers.length) {
+        notes.push('Advertisers whose ads were served on that search: ' + lead.paidAdvertisers.join(', ') + ' \u2014 who is paying for the click, internal only');
+      }
+      if (Array.isArray(lead.afterBenchmarks) && lead.afterBenchmarks.length) {
+        notes.push('Industry, for the call: ' + lead.afterBenchmarks.join(' \u00b7 ') + ' \u2014 segment facts with sources, never said as facts about him');
       }
       if (!(ws && ws.checked) && !notes.length) return null;
       return React.createElement('div', {
