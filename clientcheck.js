@@ -582,8 +582,8 @@ const mergeStat = runMergeCheck();
       if (page.indexOf('Booking route') < 0 || page.indexOf('#4 of 20') < 0) {
         fails.push('the signal rows are not lined up at their funnel stages on the sheet (booking at the door, the map read at getting-found)');
       }
-      if (page.indexOf('nothing on the pages counts it') < 0) {
-        fails.push('a blind conversion read does not reach the door stage as a signal row');
+      if (page.indexOf('nothing visible on the pages we read') < 0) {
+        fails.push('a blind conversion read does not reach the door stage as a signal row (with the only-their-account-can-say scope the thank-you-page invisibility demands)');
       }
 
       // ══ THE SURFACES AND THE WALK BRIEF, EXECUTED (round 97) ══════════════
@@ -909,7 +909,8 @@ const mergeStat = runMergeCheck();
         // renderer, and a Meta-only advertiser must never read "none found".
         if (mod.adsLabel({ ads: 'no', metaPixel: true }) !== 'Ads: Facebook only') fails.push('a Meta-only advertiser reads "' + mod.adsLabel({ ads: 'no', metaPixel: true }) + '" instead of naming Facebook — the header/finding split-brain returns');
         if (mod.adsLabel({ ads: 'yes', metaPixel: true }) !== 'Ads: Google + Facebook') fails.push('both platforms do not read as both');
-        if (mod.adsLabel({ ads: 'no', metaPixel: false }) !== 'Ads: none found') fails.push('a genuinely tag-free site no longer reads "none found"');
+        if (mod.adsLabel({ ads: 'no', metaPixel: false }) !== 'Ads: no ad code on their pages') fails.push('a genuinely tag-free site lost its scoped label (a flat "none found" was false for LSA advertisers, whose product needs no site code)');
+        if (mod.adsLabel({ ads: 'lsa_only', metaPixel: false }).indexOf('pay-per-lead seen live') < 0) fails.push('an LSA-only advertiser still reads as having no ads - the Axiom false label');
         if (mod.adsLabel({ ads: 'unreadable' }) !== 'Ads: could not read') fails.push('an unreadable page reads as a fact about the business');
         // The same finding printed twice in THE EVIDENCE on 2 of 3 live sheets:
         // merged copy-quote rows in problemList AND the standalone own-words list.
