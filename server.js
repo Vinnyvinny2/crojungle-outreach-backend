@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260830;
+const CONTRACT_VERSION = 20260831;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -628,31 +628,51 @@ const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, on
   // The first job whose OWN endpoint is ready starts. Scanning rather than
   // taking the head: with one queue and per-endpoint pacing, a scrape waiting
   // on a slow /search's clock would be the same defect wearing a queue.
-  const readyIndex = (now) => {
+  // ══ A SEARCH IS NOT A BROWSER ═══════════════════════════════════════════
+  // /v1/search with scrapeContent off renders nothing — it is an index query,
+  // rate-limited like everything else but consuming no browser. It held one of
+  // the gate's browser slots anyway, so a twelve-credit owner-lookup wave
+  // starved the page renders queued behind it. Same class as the batch status
+  // poll, whose own comment reads "a status read renders nothing." Search
+  // jobs keep the per-kind spacing and the 429 hold — those are account
+  // facts — and skip only the slot.
+  const SLOTLESS_KINDS = new Set(['search']);
+  const _slotless = (job) => SLOTLESS_KINDS.has(job.kind || 'other');
+  const readyIndex = (now, full) => {
     for (let i = 0; i < waiting.length; i++) {
+      if (full && !_slotless(waiting[i])) continue;
       const k = waiting[i].kind || 'other';
       if (now - (lastStartByKind.get(k) || 0) >= gapNow(k)) return i;
     }
     return -1;
   };
-  const nextWakeMs = (now) => {
+  const nextWakeMs = (now, full) => {
     let soonest = Infinity;
     for (const job of waiting) {
+      if (full && !_slotless(job)) continue;
       const k = job.kind || 'other';
       const due = (lastStartByKind.get(k) || 0) + gapNow(k) - now;
       if (due < soonest) soonest = due;
     }
-    return Number.isFinite(soonest) ? Math.max(5, soonest) : 5;
+    // null = nothing here can dispatch until a slot frees, and the finally()
+    // pump covers that wake — arming a timer for it would spin the loop.
+    return Number.isFinite(soonest) ? Math.max(5, soonest) : null;
   };
   const pump = () => {
-    while (inFlight < capNow() && waiting.length) {
+    while (waiting.length) {
       const held = pausedUntil - Date.now();
       if (held > 0) { setTimeout(pump, held + 20); return; }
       const now = Date.now();
-      const idx = readyIndex(now);
-      if (idx < 0) { setTimeout(pump, nextWakeMs(now)); return; }
+      const full = inFlight >= capNow();
+      const idx = readyIndex(now, full);
+      if (idx < 0) {
+        const wake = nextWakeMs(now, full);
+        if (wake !== null) setTimeout(pump, wake);
+        return;
+      }
       const job = waiting.splice(idx, 1)[0];
-      inFlight++;
+      const takesSlot = !_slotless(job);
+      if (takesSlot) inFlight++;
       lastStart = Date.now();
       lastStartByKind.set(job.kind || 'other', lastStart);
       // The spacing this gate promises is between THESE moments. Anything that
@@ -664,7 +684,7 @@ const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, on
       Promise.resolve()
         .then(job.fn)
         .then(job.resolve, job.reject)
-        .finally(() => { inFlight--; pump(); });
+        .finally(() => { if (takesSlot) inFlight--; pump(); });
     }
   };
   const gate = (fn, kind) => new Promise((resolve, reject) => {
@@ -852,6 +872,21 @@ const fcSerial = (fn, kind) => {
     return r;
   }).finally(_release);
 };
+
+// ══ THE DOOR THAT CANNOT FORGET ITS KIND ═══════════════════════════════════
+// §50 made the gate's pacing per endpoint, and the wire was dead in production
+// for its whole life: every one of the eight call sites passed NO kind, so
+// every job queued as 'other', the learned per-endpoint gaps applied to
+// nothing, and every Firecrawl start in the process paced at the 7.5-second
+// unknown-plan default on ONE shared clock — about 105 seconds of pure spacing
+// per lead, the single largest cause of "the audits take forever". The boot
+// checks tested the gap arithmetic with kinds supplied and never the call
+// sites' kind argument: the recorded half-a-check. fcCall derives the kind
+// from the URL the caller already types, so a call site written tomorrow
+// cannot forget it — the fcSerial comment PROMISED exactly that ("the endpoint
+// is read off the response's own URL") and only delivered it to the limit
+// learning, never to the pacing.
+const fcCall = (url, opts, timeout) => fcSerial(() => fetchT(url, opts, timeout), fcKindOf(url));
 
 const safeJson = async (r) => { try { return await r.json(); } catch { return {}; } };
 const safeText = async (r) => { try { return await r.text(); } catch { return ''; } };
@@ -3276,6 +3311,13 @@ const BRAIN_MODEL = process.env.BRAIN_MODEL || 'claude-haiku-4-5-20251001';
 // It was already on a Sonnet before this change, so moving it to the current one
 // is cost-neutral on the input rate. It is the call worth spending on.
 const SITUATION_MODEL = process.env.SITUATION_MODEL || 'claude-sonnet-5';
+// The situation-read's thinking effort. HIGH since 2026-08-24 (§65: the one
+// call whose whole job is judgement) — and the priciest call on the lead, at
+// ~$0.14 of a ~$0.27 total, so the dial is a SETTING the owner can turn
+// without a deploy: SITUATION_EFFORT=medium roughly halves the lead's model
+// bill at the cost of story depth. Validated so an unknown value falls back
+// to the deliberate default instead of crashing every audit.
+const SITUATION_EFFORT = /^(low|medium|high)$/.test(String(process.env.SITUATION_EFFORT || '')) ? String(process.env.SITUATION_EFFORT) : 'high';
 
 // ══ THINKING IS NOT A DEFAULT ANYONE SHOULD INHERIT ═════════════════════════
 // Sonnet 5 runs ADAPTIVE THINKING when the `thinking` parameter is omitted.
@@ -3911,11 +3953,11 @@ app.post('/api/scrape', async (req, res) => {
     if (fcCreditsBlocked()) return res.status(503).json({ markdown: '', error: 'Firecrawl reports the account out of credits — the breaker re-tests shortly; top up and retry.' });
     { const _c = budgetRefusal(['fc']); if (_c) return res.status(429).json({ markdown: '', error: _c.message, budgetStopped: true }); }
     fcNote(true, 'scrape', String(url));
-    const r = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/scrape', {
+    const r = await fcCall('https://api.firecrawl.dev/v1/scrape', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: true }),
-    }, 15000));
+    }, 15000);
     const d = await safeJson(r);
     if (r && r.status === 402) { FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now(); }
     res.json({ markdown: (d.data?.markdown || '').slice(0, 5000) });
@@ -8262,7 +8304,7 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
   const _hit = _MAP_CACHE.get(_mk);
   if (_hit && Date.now() - _hit.at < _MAP_TTL_MS) { fcNote(false, 'map', _mk); return _hit.urls; }
   try {
-    const r = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/map', {
+    const r = await fcCall('https://api.firecrawl.dev/v1/map', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
       // NO `search` FILTER. The cache is keyed by hostname, so whichever caller ran
@@ -8275,7 +8317,7 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
       // Fetch the whole sitemap once; every caller filters it locally, as they
       // already do. One map call per domain instead of three.
       body: JSON.stringify({ url, limit }),
-    }, 20000));
+    }, 20000);
     let d = await r.json();
     // ══ MAP HAD NO THROTTLE HANDLING AT ALL ═══════════════════════════════
     // firecrawlScrape backs off on a 429; /map and /search never looked. A
@@ -8288,11 +8330,11 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
     if (isRateLimited(d, r.status)) {
       const _mapWait = fcNoteRateLimited(r, 4000, _mk + ' (map)');
       await new Promise(res => setTimeout(res, _mapWait));
-      const r2 = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/map', {
+      const r2 = await fcCall('https://api.firecrawl.dev/v1/map', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, limit }),
-      }, 20000));
+      }, 20000);
       d = await r2.json();
       if (isRateLimited(d, r2.status)) {
         console.log(`\ud83d\udd34 FIRECRAWL STILL RATE LIMITED (map) on ${_mk} — returning empty WITHOUT caching, so the next caller asks again instead of inheriting a false "no pages".`);
@@ -8369,7 +8411,7 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) =>
   // meter reported 2 for a call that actually cost 5.
   fcNote(true, `search x${limit}${scrapeContent ? '+scrape' : ''}`, query);
   try {
-    const r = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/search', {
+    const r = await fcCall('https://api.firecrawl.dev/v1/search', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -8377,7 +8419,7 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) =>
         limit,
         ...(scrapeContent ? { scrapeOptions: { formats: ['markdown'], onlyMainContent: true } } : {}),
       }),
-    }, 30000));
+    }, 30000);
     const d = await r.json();
     if (isCreditError(d, r.status)) {
       FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now();
@@ -8730,7 +8772,7 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
   }
 
   try {
-    const submit = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/batch/scrape', {
+    const submit = await fcCall('https://api.firecrawl.dev/v1/batch/scrape', {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -8762,7 +8804,7 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
         removeBase64Images: true,
         maxAge: FC_CACHE_MS,
       }),
-    }, 20000));
+    }, 20000);
     const sub = await submit.json();
     if (isCreditError(sub, submit.status)) {
       FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now();
@@ -8859,7 +8901,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
     // bill a request it refused to serve.
     let r, d;
     for (let attempt = 0; attempt < 3; attempt++) {
-      r = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/scrape', {
+      r = await fcCall('https://api.firecrawl.dev/v1/scrape', {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
         // ══ MUST MATCH THE BATCH, INCLUDING THE IMAGE ══════════════════════
@@ -8874,7 +8916,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
         // where the proof is. That mistake already told an electrician he had no
         // social proof on a page carrying 221 Google reviews.
         body: JSON.stringify({ url, formats: ['markdown', 'screenshot@fullPage', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true }),
-      }, timeout));
+      }, timeout);
       d = await r.json();
       if (!isRateLimited(d, r.status)) break;
       const waitMs = fcNoteRateLimited(r, 4000 * (attempt + 1), url);
@@ -8917,11 +8959,11 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
     // nothing, so this costs one extra call only on pages that already failed.
     if (!_md) {
       try {
-        const r2 = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/scrape', {
+        const r2 = await fcCall('https://api.firecrawl.dev/v1/scrape', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
           body: JSON.stringify({ url, formats: ['markdown'], onlyMainContent: false, waitFor: 1500, maxAge }),
-        }, Math.min(timeout, 30000)));
+        }, Math.min(timeout, 30000));
         const d2 = await r2.json();
         const _md2 = d2.data?.markdown || d2.markdown || '';
         if (_md2) {
@@ -9999,6 +10041,45 @@ const _getLeadershipLen = (companyName) => _leadershipTextLen.get(String(company
 // promoted a no-title candidate while the same evidence on a brain-read name
 // went unused ("Who to talk to" printed an em-dash beside shane.irwin@... on a
 // business called Irwin's).
+// ══ EPONYMOUS OWNERSHIP, THE EXECUTABLE RULE ════════════════════════════════
+// Module scope so the boot check runs the real thing — a closure inside
+// findDecisionMaker was uncheckable from here, which is how its two floors
+// disagreed with surnameInCompanyName below for weeks (4 letters vs 3, the
+// two-hand-kept-copies disease). Two halves with two floors, and the
+// difference is the MATCHING RULE: the company-name half matches whole words,
+// so a three-letter surname is safe ("Tee Ray" of Bob Ray Co, the recorded
+// refusal); the domain half is a bare substring — domains have no word
+// boundaries — so it keeps the 4-letter floor ("ray" inside
+// raymondplumbing.com is the false positive that floor exists for).
+const isEponymousOwnerRule = (personName, coName, siteUrl) => {
+  const parts = String(personName || '').trim().split(/\s+/)
+    .filter(w => w.length > 2 && !/^(dr|mr|mrs|ms|dds|md|do|dvm|esq|jr|sr|iii|ii)\.?$/i.test(w));
+  if (!parts.length) return false;
+  const surname = parts[parts.length - 1].toLowerCase().replace(/[^a-z]/g, '');
+  if (surname.length >= 3) {
+    const coWords = String(coName || '').toLowerCase().split(/[^a-z]+/).filter(Boolean);
+    if (coWords.includes(surname)) return true;
+  }
+  if (surname.length >= 4) {
+    const dom = String(siteUrl || '').toLowerCase().replace(/[^a-z]/g, '');
+    if (dom.includes(surname)) return true;
+  }
+  return false;
+};
+// ══ A LICENCE HIT MUST TIE THE NAME TO THIS COMPANY ═════════════════════════
+// Pure and module-scope for the same reason. true = some hit line carries the
+// surname AND a distinctive word of the company's name; false = no hit ties
+// them (the August Hoppe discard); null = the company name has no distinctive
+// token to test, so no judgement — positive evidence only, never a guess.
+const licenseHitTiesToCompany = (personName, companyName, hits) => {
+  const sur = String(personName || '').trim().split(/\s+/).pop().toLowerCase().replace(/[^a-z]/g, '');
+  const co = String(companyName || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !/^(the|and|inc|llc|corp|company|companies|group|service|services|of)$/.test(w));
+  if (!sur || !co.length) return null;
+  return (Array.isArray(hits) ? hits : []).some(h => {
+    const ln = `${(h && h.title) || ''} ${(h && (h.description || h.snippet)) || ''} ${(h && h.url) || ''}`.toLowerCase();
+    return ln.includes(sur) && co.some(t => ln.includes(t));
+  });
+};
 const surnameInCompanyName = (name, companyName) => {
   const _surname = String(name || '').trim().split(/\s+/).pop().toLowerCase().replace(/[^a-z]/g, '');
   if (_surname.length < 3) return false;
@@ -11159,11 +11240,22 @@ const fetchGBPHealth = async (placeId, placesKey) => {
       const days = Math.floor((Date.now() - Math.max(...revTimes)) / 86400000);
       reviewRecency = { checked: true, newestDays: days, stale: days > 90, veryCold: days > 180 };
     }
-    const primaryCategory = (d.primaryTypeDisplayName && d.primaryTypeDisplayName.text) || null;
+    const primaryCategory = (() => {
+      const t = (d.primaryTypeDisplayName && d.primaryTypeDisplayName.text) || null;
+      // The generic display forms are the same taxonomy leak as 'service'
+      // below: "Services" is not a category anybody chose, and stating it as
+      // theirs is a guess printed as a measurement.
+      return (t && !/^(services?|establishment|point of interest)$/i.test(String(t).trim())) ? t : null;
+    })();
     // Every listing carries these two whatever it sells, so they are structure
     // rather than category and counting them would make every business look
     // well configured.
-    const GENERIC_PLACE_TYPES = new Set(['point_of_interest', 'establishment', 'premise', 'subpremise', 'geocode', 'street_address', 'route', 'locality', 'political']);
+    const GENERIC_PLACE_TYPES = new Set(['point_of_interest', 'establishment', 'premise', 'subpremise', 'geocode', 'street_address', 'route', 'locality', 'political',
+      // 'service' is Google's generic taxonomy leaking through, not a category
+      // the owner picked: it printed "category:Services (1 in total: service)"
+      // on every trades lead, which reads as a measurement and measures
+      // nothing.
+      'service']);
     const placeCategories = (Array.isArray(d.types) ? d.types : []).filter(t => !GENERIC_PLACE_TYPES.has(String(t)));
 
     // Things we looked at that are NOT gaps - kept so the reasoning is visible
@@ -13342,7 +13434,10 @@ const HARM_LADDER = [
     // services block: "they never found him" is disproved by the ad the
     // searcher is looking at. The map absence stays true and stays on the
     // signal rows; the INVISIBLE conclusion is what may not ship.
-    test: (m) => m.rankChecked === true && m.rankFound === false && m.rankAbsenceConfirmed === true && m.lsaUs !== true,
+    // packUs stands this down too: the organic page's own map pack showing
+    // their listing is one-search disproof of "invisible", from a source the
+    // finder failure cannot take with it.
+    test: (m) => m.rankChecked === true && m.rankFound === false && m.rankAbsenceConfirmed === true && m.lsaUs !== true && m.packUs !== true,
     // ══ IT IS THE MAP PACK, SO SAY THE MAP PACK ═══════════════════════════
     // This rank comes from the Google Places API — the map results, the box of
     // three businesses at the top of a phone screen. We described it as "the
@@ -13982,7 +14077,7 @@ const HARM_LADDER = [
     // block: a business winning the paid surface of a search is not LOSING
     // that search, and the live counter-example was a pest company holding
     // the #2 sponsored slot while this rung's inputs read "absent".
-    test: (m) => m.googleAdsTag === true && m.rankChecked === true && m.lsaUs !== true
+    test: (m) => m.googleAdsTag === true && m.rankChecked === true && m.lsaUs !== true && m.packUs !== true
       && ((m.rankFound === false && m.rankAbsenceConfirmed === true)
           || (typeof m.rank === 'number' && Number.isFinite(m.rank) && m.rank > 3)),
     say: (m) => {
@@ -15540,14 +15635,23 @@ const readOperationalPain = (signals, reviewsRead) => {
   // reviewPainMentions parses "3 of the 150 reviews we read say it" out of the
   // miner's own string. A theme with no stated count is worth one person, never
   // zero — it was found, we just do not know how widely.
-  const mentions = rows.reduce((n, s) => n + (reviewPainMentions(s) || 1), 0);
+  const perCounts = rows.map(s => reviewPainMentions(s) || 1);
+  const mentions = perCounts.reduce((n, c) => n + c, 0);
+  // The largest SINGLE pattern. Bob Ray, live 2026-08-25: three delivery
+  // patterns of two mentions each cleared the aggregate bars and bound
+  // THROUGHPUT — "demand is not the problem, delivery is", the sentence that
+  // tells Mike not to sell this business leads — off three pairs of bad days.
+  // A pattern is somebody's repeated experience: the email's own anchor floor
+  // is three mentions of ONE pattern, and the most commercially consequential
+  // diagnosis in the audit deserves at least the same bar.
+  const maxMentions = perCounts.length ? Math.max(...perCounts) : 0;
   const read = Number(reviewsRead);
   const haveRead = Number.isFinite(read) && read > 0;
   const share = haveRead ? mentions / read : null;
   // Two themes AND a real share. Without a review count we cannot compute a
   // share, so the bar becomes an absolute one rather than an assumption.
-  const binding = themes >= 2 && (haveRead ? (mentions >= 3 && share >= 0.04) : mentions >= 6);
-  return { themes, mentions, reviewsRead: haveRead ? read : null, share, binding };
+  const binding = themes >= 2 && maxMentions >= 3 && (haveRead ? (mentions >= 3 && share >= 0.04) : mentions >= 6);
+  return { themes, mentions, maxMentions, reviewsRead: haveRead ? read : null, share, binding };
 };
 
 const reviewPainMentions = (t) => {
@@ -16128,7 +16232,12 @@ const normQuote = (t) => _quoteDeAccent(_quoteDeEntity(String(t || ''))).toLower
 // verifyOriginalFinding while resolveBusinessModel had none, which is why a
 // real institutional quote behind a three-word preamble was refused there.
 const stripQuoteLabel = (t) => String(t || '')
-  .replace(/^\s*(the\s+)?(home\s?page|homepage|about(\s+page)?|contact(\s+page)?|services?(\s+page)?|pricing(\s+page)?|booking(\s+page)?|team(\s+page)?|our[- ]story)\s*[:—-]\s*/i, '')
+  // The model labels its quotes by SOURCE as well as by page: a live sheet
+  // printed `their own words: "Review quotes: 'Someone came in March...'"` —
+  // the miner's own label inside the quoted span, because this list knew only
+  // page labels. The separator requirement is what keeps a real quote that
+  // merely BEGINS with the word "Reviews" intact.
+  .replace(/^\s*(the\s+)?(home\s?page|homepage|about(\s+page)?|contact(\s+page)?|services?(\s+page)?|pricing(\s+page)?|booking(\s+page)?|team(\s+page)?|our[- ]story|(google\s+)?reviews?(\s+quotes?)?|review\s+quotes?|customer\s+reviews?)\s*[:—-]\s*/i, '')
   .replace(/^["'\u201c\u2018]+|["'\u201d\u2019]+$/g, '')
   .trim();
 // == WHAT BELONGS IN "DO NOT SAY", AND WHAT DOES NOT ========================
@@ -16356,7 +16465,11 @@ const verifyOriginalFinding = (item, corpus) => {
   // of an otherwise-real span. Both sides padded once, so every match starts
   // and ends on a word boundary.
   const _has = (seg, span) => (' ' + seg + ' ').includes(' ' + span + ' ');
-  if (segs.some(s => _has(s, needle))) return { ok: true, finding: _finding, evidence };
+  // The STRIPPED evidence is what every consumer prints — returning the raw
+  // string put the model's own "Review quotes:" label inside the quoted span
+  // on a live sheet, four lines under a stripper that had already removed it
+  // for matching.
+  if (segs.some(s => _has(s, needle))) return { ok: true, finding: _finding, evidence: stripLabel(evidence) };
   // ══ A REAL QUOTE MUST NOT FAIL ON WHERE IT WAS TRIMMED ══════════════════
   // This only tried windows from the START of the quote, so a model that opened
   // with a word we did not capture — an ellipsis, a heading, a line break the
@@ -16411,7 +16524,7 @@ const verifyOriginalFinding = (item, corpus) => {
         const _dropped = words.filter((w, k) => k < i || k >= i + n);
         if (!_dropped.every(w => _FILLER.has(w))) continue;
       }
-      return { ok: true, finding: _finding, evidence };
+      return { ok: true, finding: _finding, evidence: stripLabel(evidence) };
     }
   }
   // A drop names its NEAREST MISS: "does not appear" is true and unactionable,
@@ -22140,6 +22253,93 @@ const AUDIT_BACKEND_CLAIM_ROWS = [
 // about anyone else is cut whole — softening model prose mid-sentence is how
 // a scope word ends up on the wrong clause.
 const OWNERSHIP_CLAIM_RE = /(?:\b(?:Dr|Mr|Ms|Mrs)\.?\s+)?([A-Z][a-z'\u2019-]+(?:\s+[A-Z][a-z'\u2019.-]+){0,2})\s+(?:is|remains)\s+the\s+(?:named\s+|listed\s+)?(?:owner|founder|co-owner)\b|\b[Tt]he\s+owner\s+is\s+(?:Dr\.?|Mr\.?|Ms\.?|Mrs\.?)?\s*([A-Z][a-z'\u2019-]+(?:\s+[A-Z][a-z'\u2019.-]+){0,2})/;
+// ══ DISTINCT PATTERNS NEVER SUM — the conflation stripper ══════════════════
+// Bob Ray, live 2026-08-25: the miner reported four DISTINCT patterns of two
+// mentions each, and the audit wrote "Four different customers describe the
+// same experience" — the summed count attributed to ONE complaint, a sentence
+// the evidence does not support and the owner can disprove by reading his own
+// reviews. The instruction now sits in the prompt too, and instructional
+// guards do not hold, so this is the mechanical half: a same-thing sentence
+// whose count exceeds the largest SINGLE pattern's own count is cut. A count
+// at or under the largest single pattern is a true sentence and survives; a
+// single-pattern lead cannot conflate anything, so it is untouched.
+const _CONF_NUM = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12 };
+const _confN = (d, w) => d ? Number(d) : (_CONF_NUM[String(w || '').toLowerCase()] || 0);
+const _CONF_PEOPLE_RE = /\b(?:(\d{1,3})|(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve))\s+(?:different\s+|separate\s+)?(?:customers?|people|clients?|reviewers?|patients?|homeowners?|callers?)\b[^.!?]{0,60}\b(?:the\s+)?(?:same|identical|one)\s+(?:thing|issue|problem|complaint|experience|story|frustration|wall)\b/i;
+const _CONF_TIMES_RE = /\b(?:the\s+)?(?:same|identical)\s+(?:thing|issue|problem|complaint|experience|story|wall|delay)\b[^.!?]{0,40}\b(?:(\d{1,3})|(one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve))\s+(?:times|separate times)\b/i;
+const stripPatternConflation = (text, perCounts) => {
+  const out = { text: String(text || ''), cut: [] };
+  const counts = (Array.isArray(perCounts) ? perCounts : []).map(Number).filter(n => Number.isFinite(n) && n > 0);
+  if (counts.length < 2) return out;
+  const maxPer = Math.max(...counts);
+  const parts = out.text.split(/(?<=[.!?])\s+/);
+  const kept = [];
+  for (const s of parts) {
+    let n = 0;
+    const m1 = s.match(_CONF_PEOPLE_RE);
+    const m2 = s.match(_CONF_TIMES_RE);
+    if (m1) n = Math.max(n, _confN(m1[1], m1[2]));
+    if (m2) n = Math.max(n, _confN(m2[1], m2[2]));
+    if (n > maxPer) { out.cut.push(s.slice(0, 140)); continue; }
+    kept.push(s);
+  }
+  out.text = kept.join(' ');
+  return out;
+};
+const stripPatternConflationDeep = (node, acc, depth, perCounts) => {
+  if (depth > 6) return node;
+  if (typeof node === 'string') {
+    const r = stripPatternConflation(node, perCounts);
+    if (r.cut.length) acc.cut.push(...r.cut);
+    return r.text;
+  }
+  if (Array.isArray(node)) return node.map(x => stripPatternConflationDeep(x, acc, depth + 1, perCounts));
+  if (node && typeof node === 'object') {
+    const o = {};
+    for (const k of Object.keys(node)) o[k] = k.charAt(0) === '_' ? node[k] : stripPatternConflationDeep(node[k], acc, depth + 1, perCounts);
+    return o;
+  }
+  return node;
+};
+
+// ══ A TAG IS WIRING; SPEND IS A CLAIM — the unproven-ad-spend stripper ══════
+// Live synthesis: "the ad code is live... so they are paying to bring people
+// to the door" — active spend asserted off a tag that only ever proves an
+// ACCOUNT. The one measured proof of live spend is their ad SEEN on the
+// search we ran (the sponsored row or the LSA block), so when that proof
+// exists the sentence is true and survives; a sentence carrying its own
+// conditional ("if those ads are live...") is the honest form and survives
+// too. Everything else asserting active payment is cut.
+const _AD_SPEND_RE = /\b(?:paying\s+(?:google|facebook|meta)?\s*(?:to|for)|pays?\s+for\s+(?:every\s+)?click|paying\s+per\s+(?:click|lead)|spending\s+(?:money\s+)?on\s+(?:ads|advertising|clicks)|buying\s+(?:clicks|traffic|leads)|the\s+ad\s+budget\s+is\s+(?:buying|chasing|going)|money\s+is\s+going\s+out\s+(?:on|to)\s+ads)\b/i;
+const _AD_COND_RE = /\b(if|whether|may|might|could|should|assuming|unless)\b/i;
+const stripUnprovenAdSpend = (text, adsLive) => {
+  const out = { text: String(text || ''), cut: [] };
+  if (adsLive === true) return out;
+  const parts = out.text.split(/(?<=[.!?])\s+/);
+  const kept = [];
+  for (const s of parts) {
+    if (_AD_SPEND_RE.test(s) && !_AD_COND_RE.test(s)) { out.cut.push(s.slice(0, 140)); continue; }
+    kept.push(s);
+  }
+  out.text = kept.join(' ');
+  return out;
+};
+const stripUnprovenAdSpendDeep = (node, acc, depth, adsLive) => {
+  if (depth > 6) return node;
+  if (typeof node === 'string') {
+    const r = stripUnprovenAdSpend(node, adsLive);
+    if (r.cut.length) acc.cut.push(...r.cut);
+    return r.text;
+  }
+  if (Array.isArray(node)) return node.map(x => stripUnprovenAdSpendDeep(x, acc, depth + 1, adsLive));
+  if (node && typeof node === 'object') {
+    const o = {};
+    for (const k of Object.keys(node)) o[k] = k.charAt(0) === '_' ? node[k] : stripUnprovenAdSpendDeep(node[k], acc, depth + 1, adsLive);
+    return o;
+  }
+  return node;
+};
+
 const stripUnverifiedOwnership = (text, allow) => {
   if (typeof text !== 'string' || text.length < 20) return { text, cut: [] };
   const names = ((allow && Array.isArray(allow.names)) ? allow.names : []).map(s => String(s || '').toLowerCase()).filter(Boolean);
@@ -22543,7 +22743,15 @@ const buildAuditFacts = (m = {}, unlinked = null) => {
     lsa: m.lsaChecked === true ? {
       blockPresent: m.lsaBlockPresent === true,
       us: m.lsaUs === true,
+      usIndex: Number.isFinite(Number(m.lsaUsIndex)) ? Number(m.lsaUsIndex) : null,
       shown: Number.isFinite(Number(m.lsaShownCount)) ? Number(m.lsaShownCount) : null,
+    } : null,
+    // The map pack riding the same organic page — a SECOND, free read of the
+    // map question. POSITIVE-ONLY: only "their listing is in it" survives;
+    // absence from a three-row pack is the normal case and proves nothing.
+    pack: (m.lsaChecked === true && m.packUs === true) ? {
+      us: true,
+      usIndex: Number.isFinite(Number(m.packUsIndex)) ? Number(m.packUsIndex) : null,
     } : null,
     aiOverview: m.lsaChecked === true ? {
       present: m.aiOverviewPresent === true,
@@ -22666,7 +22874,7 @@ const buildFunnelStory = (m = {}, x = {}) => {
     // the AI answer are the rows' own facts and stay out of it.
     let brief = '';
     const q = String(m.rankQuery || '').trim();
-    if (m.rankChecked === true && m.rankFound === false && m.rankAbsenceConfirmed === true && q) {
+    if (m.rankChecked === true && m.rankFound === false && m.rankAbsenceConfirmed === true && q && m.packUs !== true) {
       text = `When somebody searches "${q}", they are not among the ${Number.isFinite(Number(m.scanned)) ? m.scanned + ' ' : ''}local listings that search returned — we ran it twice.`;
     } else if (m.rankChecked === true && m.rankFound === true && typeof m.rank === 'number' && Number.isFinite(m.rank) && m.rank >= 1 && q) {
       // typeof-number, not Number(m.rank): a fallback-source lead arrives with
@@ -22701,6 +22909,17 @@ const buildFunnelStory = (m = {}, x = {}) => {
       // Block-existence only: no claim about who is or is not in it, because
       // one pull of a rotating surface cannot carry an absence.
       text += ` A Sponsored services block sits above everything for this search — businesses paying Google per lead hold the top of that page.`;
+    }
+    // The map pack on the results page itself — the second, free read of the
+    // same question. POSITIVE ONLY: their listing in the pack is proof the
+    // people searching see them; absence from a three-row pack is the normal
+    // case and says nothing about anybody.
+    if (m.packUs === true) {
+      _strongFound = true;
+      if (!text) {
+        text = `The map beside the search results shows their listing${Number.isFinite(Number(m.packUsIndex)) ? ` at #${m.packUsIndex}` : ''} — the people searching see them there.`;
+        brief = text;
+      }
     }
     // The join Vin walked on Breck's: Facebook-only wiring while the Google
     // search is measured bad or confirmed empty. All five gates or silence.
@@ -25677,7 +25896,7 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
         // is judgement — the story that connects the walk, the leaks and the
         // record into one read — and the restatement gate now fails an answer
         // that parrots, so the extra thinking has a check collecting on it.
-        ...(THINKING_FOR(SITUATION_MODEL) ? { output_config: { effort: 'high' } } : {}),
+        ...(THINKING_FOR(SITUATION_MODEL) ? { output_config: { effort: SITUATION_EFFORT } } : {}),
         // 900 -> 1400 -> 1800 -> 4200 -> 6000 -> scaled. The first three were
         // sized against the ANSWER, which is ~840 tokens. On an adaptive-
         // thinking model max_tokens caps thinking PLUS the answer, and the flat
@@ -28290,6 +28509,21 @@ ${corpus}` }]
     const parsed = parseLLMJSON(t) || {};
     if (!parsed.name || String(parsed.name).toLowerCase() === 'null' || !looksLikeRealName(parsed.name)) return null;
     if (parsed.confidence === 'low') { console.log(`DM/license [${clean}]: found ${parsed.name} but confidence low \u2014 discarded`); return null; }
+    // ══ THE MODEL SAID "THIS BUSINESS" AND NOTHING CHECKED ══════════════════
+    // August Hoppe, live 2026-08-25: the licence search for a Louisville tree
+    // company returned Hoppe Tree Service of MILWAUKEE, the prompt's "must
+    // clearly refer to THIS business" rule was instructional only — and
+    // instructional guards do not hold — so a wrong-company owner reached the
+    // sheet. Mechanical now: some search hit must carry the person's surname
+    // AND a distinctive word of OUR company's name on the same line. A
+    // licence row naming a person the hits never tie to this company is
+    // exactly the evidence that must not be trusted; an untied name is a
+    // stranger. Positive-evidence only: a company whose name is all generic
+    // words has no distinctive token and keeps today's behaviour.
+    if (licenseHitTiesToCompany(parsed.name, clean, hits) === false) {
+      console.log(`DM/license [${clean}]: DISCARDED ${parsed.name} — no search hit ties that surname to this company's own name, so it is likely a similarly-named business somewhere else (the August Hoppe failure).`);
+      return null;
+    }
     console.log(`DM/license [${clean}]: \u2713 ${parsed.name} (${parsed.title || 'owner'}) via licence/chamber records \u2014 "${String(parsed.evidence||'').slice(0,70)}"`);
     return { name: parsed.name, title: parsed.title || 'Owner', confidence: parsed.confidence || 'medium', source: 'license_or_chamber' };
   };
@@ -28655,16 +28889,9 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // without touching the authority gate for anyone else.
   // Deliberately strict: the surname must appear as a whole word and be 4+
   // characters, so short names like "Ott" still pay for corroboration.
-  const _isEponymousOwner = (personName, coName, siteUrl) => {
-    const parts = String(personName || '').trim().split(/\s+/)
-      .filter(w => w.length > 2 && !/^(dr|mr|mrs|ms|dds|md|do|dvm|esq|jr|sr|iii|ii)\.?$/i.test(w));
-    if (!parts.length) return false;
-    const surname = parts[parts.length - 1].toLowerCase().replace(/[^a-z]/g, '');
-    if (surname.length < 4) return false;
-    const coWords = String(coName || '').toLowerCase().split(/[^a-z]+/).filter(Boolean);
-    const dom = String(siteUrl || '').toLowerCase().replace(/[^a-z]/g, '');
-    return coWords.includes(surname) || dom.includes(surname);
-  };
+  // The executable rule lives at module scope (isEponymousOwnerRule) so the
+  // boot check runs the real thing; this alias keeps every call site here.
+  const _isEponymousOwner = isEponymousOwnerRule;
 
   const settled = () => {
     const ranked = rankOwnerCandidates(found);
@@ -28678,8 +28905,17 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     // confirmed high-confidence by their own site. The evidence floor (2+
     // independent, non-Hunter sources) is already met — further paid lookups
     // buy proof of something that is not in doubt.
-    const eponymousConfident = independent >= 2
-      && ranked.sources.includes('own_website_brain')
+    // No independent-source floor here, deliberately: independentSourceCount
+    // COLLAPSES own_website_brain and business_name into ONE source, so the
+    // old `independent >= 2` demanded a third source — at which point plain
+    // `corroborated` usually fired anyway, and this rule was nearly
+    // unreachable. Live cost on Bob Ray Co: their own site named Tee Ray at
+    // high confidence, the business bears his name, and the resolver still
+    // bought the ~8-credit websearch+licence wave — which then extracted a
+    // WRONG-company owner from a Milwaukee licence hit. The site naming him
+    // and the business bearing his name are two artifacts of the owner's own
+    // making; that IS the evidence floor.
+    const eponymousConfident = ranked.sources.includes('own_website_brain')
       && (brainHit && brainHit.confidence === 'high')
       && _isEponymousOwner(ranked.name, companyName, website);
     // ══ THE COMPANY'S OWN ROSTER SETTLES IT ═══════════════════════════════
@@ -28697,7 +28933,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
       console.log(`DM [${companyName}]: ROSTER SETTLES IT \u2014 their own team page states ${ranked.name} is "${brainHit.title}". That is the company naming its owner on a page it maintains, which no paid search can outrank. Skipping the web, licence and registry lookups (~12 Firecrawl credits saved).`);
     }
     if (eponymousConfident && !(corroborated || ownSiteConfident || rosterConfident)) {
-      console.log(`DM [${companyName}]: EPONYMOUS \u2014 the business is named after ${ranked.name}, confirmed high-confidence by their own site and corroborated by the business name (${independent} independent sources). Evidence floor met without paid lookups (~8 Firecrawl credits saved).`);
+      console.log(`DM [${companyName}]: EPONYMOUS \u2014 the business is named after ${ranked.name}, confirmed high-confidence by their own site, and the business name itself is the corroboration. Evidence floor met without paid lookups (~8 Firecrawl credits saved).`);
     }
     return (corroborated || ownSiteConfident || eponymousConfident || rosterConfident) ? ranked : null;
   };
@@ -34055,6 +34291,22 @@ const resolvePlaceId = async ({ companyName, website, location, placesKey }) => 
 // he is third makes every other measured fact in the email suspect. And we mark
 // it unstable, which stops the digit reaching the copy at all.
 const checkLocalRankStable = async (args) => {
+  // ══ TWO SAMPLES IN FLIGHT AT ONCE, ON THE DFS PATH ═══════════════════════
+  // Both branches below take a second look, so the second call is bought
+  // either way — running it concurrently is the same money at half the wall
+  // clock, and at the 75-second ceiling the difference is real. DFS only: its
+  // request ignores coordinates entirely, so the anchored second sample is
+  // byte-identical to an unanchored one and parallelism changes nothing about
+  // what is measured. The Places fallback keeps the sequential anchored
+  // shape, because there the anchor IS the measurement discipline. The 1.2s
+  // stagger stays so the two draws are still two draws.
+  let _par = null;
+  if (DFS_READY) {
+    _par = (async () => {
+      await new Promise(r => setTimeout(r, 1200));
+      try { return await checkLocalRank(args); } catch (e) { void e; return null; }
+    })();
+  }
   const a = await checkLocalRank(args);
   // ══ THE STABILITY DISCIPLINE SKIPPED THE STRONGEST CLAIM IN THE SYSTEM ══
   // This used to be `if (!a.checked || !a.found) return a;` — one line, and it
@@ -34083,9 +34335,12 @@ const checkLocalRankStable = async (args) => {
   // pipeline.
   if (!a || !a.checked) return a;
   if (!a.found) {
-    await new Promise(r => setTimeout(r, 1200));
     let a2 = null;
-    try { a2 = await checkLocalRank(args); } catch (e) { void e; }
+    if (_par) { a2 = await _par; }
+    else {
+      await new Promise(r => setTimeout(r, 1200));
+      try { a2 = await checkLocalRank(args); } catch (e) { void e; }
+    }
     if (!a2 || !a2.checked) {
       return { ...a, rankStable: null,
         rankNote: 'the second look failed, so ABSENCE rests on one sample — treat it as unconfirmed' };
@@ -34103,15 +34358,19 @@ const checkLocalRankStable = async (args) => {
       rankSamples: [null, a2.rank],
       rankNote: `one search did not find them and a second returned #${a2.rank}. No absence claim is permitted \u2014 they ARE in the results \u2014 and no position may be stated either.` };
   }
-  await new Promise(r => setTimeout(r, 1200));
   let b = null;
-  // ══ ANCHOR THE SECOND SAMPLE ON THE FIRST ════════════════════════════════
-  // The first search now returns their coordinates. Feeding those back means the
-  // second search asks about the same 30km circle instead of re-guessing which
-  // Dublin we meant \u2014 so a disagreement between samples is real rank movement,
-  // not two different questions.
-  const anchored = (a.bizLat && a.bizLng) ? { ...args, bizLat: a.bizLat, bizLng: a.bizLng } : args;
-  try { b = await checkLocalRank(anchored); } catch (e) { void e; }
+  if (_par) { b = await _par; }
+  else {
+    await new Promise(r => setTimeout(r, 1200));
+    // ══ ANCHOR THE SECOND SAMPLE ON THE FIRST (Places path only) ═══════════
+    // The first search returns their coordinates. Feeding those back means the
+    // second search asks about the same 30km circle instead of re-guessing
+    // which Dublin we meant \u2014 so a disagreement between samples is real rank
+    // movement, not two different questions. The DFS path above needs no
+    // anchor: its request ignores coordinates.
+    const anchored = (a.bizLat && a.bizLng) ? { ...args, bizLat: a.bizLat, bizLng: a.bizLng } : args;
+    try { b = await checkLocalRank(anchored); } catch (e) { void e; }
+  }
   if (!b || !b.checked || !b.found) {
     return { ...a, rankStable: null,
       rankNote: 'only one usable sample \u2014 the position is approximate and the digit must not appear in the email' };
@@ -34500,6 +34759,76 @@ const narrowTradePhrase = (phrase, companyName) => {
 // validated at runtime, and if it does not answer we fall back to Places with
 // the order marked untrusted rather than guessing. Until a real key runs a real
 // lead, treat the DataForSEO path as built and unproven.
+// ══ WHERE IS THE SEARCHER STANDING — ONE DECISION, BOTH DFS ENDPOINTS ═══════
+// Round 99. Every live DFS call before this localized to location_code 2840 —
+// the UNITED STATES, country level — and a country-level results page carries
+// no Sponsored-services block, no AI answer and a differently-ordered list.
+// Three hand-checked audits therefore said "none appeared on our pull" about
+// surfaces Vin's own browser showed on every search. The searcher this system
+// simulates is standing in the business's own market, and we already hold the
+// exact coordinates of that market from their Google listing.
+const US_STATE_NAMES = { AL: 'Alabama', AK: 'Alaska', AZ: 'Arizona', AR: 'Arkansas', CA: 'California', CO: 'Colorado', CT: 'Connecticut', DE: 'Delaware', DC: 'District of Columbia', FL: 'Florida', GA: 'Georgia', HI: 'Hawaii', ID: 'Idaho', IL: 'Illinois', IN: 'Indiana', IA: 'Iowa', KS: 'Kansas', KY: 'Kentucky', LA: 'Louisiana', ME: 'Maine', MD: 'Maryland', MA: 'Massachusetts', MI: 'Michigan', MN: 'Minnesota', MS: 'Mississippi', MO: 'Missouri', MT: 'Montana', NE: 'Nebraska', NV: 'Nevada', NH: 'New Hampshire', NJ: 'New Jersey', NM: 'New Mexico', NY: 'New York', NC: 'North Carolina', ND: 'North Dakota', OH: 'Ohio', OK: 'Oklahoma', OR: 'Oregon', PA: 'Pennsylvania', RI: 'Rhode Island', SC: 'South Carolina', SD: 'South Dakota', TN: 'Tennessee', TX: 'Texas', UT: 'Utah', VT: 'Vermont', VA: 'Virginia', WA: 'Washington', WV: 'West Virginia', WI: 'Wisconsin', WY: 'Wyoming' };
+// A market string that is a whole STATE is not a market. "pest control company
+// in Colorado" returns no local pack a customer sees, and a rank or absence
+// read off it is meaningless — one shipped, harvested off a /service-areas/
+// slug. New York and Washington are deliberately NOT refused: each is also a
+// real city, and refusing a real city to catch a state is the guard-too-tight
+// failure this file records at the size gate.
+const _BARE_STATE_SET = new Set(Object.values(US_STATE_NAMES).map(s => s.toLowerCase()).filter(s => s !== 'new york' && s !== 'washington'));
+const isBareStateName = (s) => {
+  const t = String(s || '').toLowerCase().replace(/[.,]/g, ' ').replace(/\b(usa|united states|us)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  return _BARE_STATE_SET.has(t);
+};
+// "San Antonio, TX" -> "San Antonio,Texas,United States" — the canonical shape
+// of DataForSEO's own locations database: full state name spelled out, no
+// spaces after the commas. Null when the string does not end in a two-letter
+// state, and null never guesses — the recorded failure is exactly a location
+// string their database has never heard of.
+const dfsLocationName = (cityState) => {
+  const m = String(cityState || '').trim().match(/^(.+?),\s*([A-Za-z]{2})\.?$/);
+  if (!m) return null;
+  const st = US_STATE_NAMES[m[2].toUpperCase()];
+  if (!st) return null;
+  const city = m[1].trim();
+  if (!city) return null;
+  return `${city},${st},United States`;
+};
+// DataForSEO's own guidance for live SERP calls is a 120-second client
+// timeout; the old 20 seconds killed every depth-100 finder read on the first
+// credentialed run (each died at ~20-22s while the money was already spent).
+// 75s fits two concurrent samples plus one retry inside the lead's work
+// budget.
+const DFS_LIVE_TIMEOUT_MS = 75000;
+// The two endpoints take DIFFERENT third components in location_coordinate —
+// the local finder takes a ZOOM (omitted here, so their documented default 9z
+// applies: metro scale, wide enough never to manufacture an absence) and
+// organic takes a RADIUS in the 199..199999 range (30000, the same 30km
+// circle the Places locationBias has always used). Mixing them up is
+// undocumented behaviour, which is why this is ONE function and not two
+// hand-kept copies of the decision.
+const dfsLocalization = ({ bizLat, bizLng, city, mode }) => {
+  const lat = Number(bizLat), lng = Number(bizLng);
+  // Number(null) is 0 and 0 is finite — the recorded null-laundering trap,
+  // which here would have localized every coordinate-less lead to latitude 0,
+  // longitude 0: open ocean off West Africa, measured as their market. Caught
+  // by this function's own boot fixture on its first run. A genuine 0,0
+  // business does not exist, so the pair is refused too.
+  // typeof, not just != null: Number([]) is ALSO 0 — auditfuzz found the
+  // second laundering shape an hour after the fixture found the first.
+  // EITHER component at exactly 0 is refused, not just the pair: a laundered
+  // null becomes exactly 0, and no business in this ICP sits on the equator
+  // or the prime meridian. auditfuzz found the single-zero case after the
+  // fixture found the pair.
+  if (typeof bizLat === 'number' && typeof bizLng === 'number' && Number.isFinite(lat) && Number.isFinite(lng) && lat !== 0 && lng !== 0) {
+    const coord = mode === 'organic'
+      ? `${lat.toFixed(7)},${lng.toFixed(7)},30000`
+      : `${lat.toFixed(7)},${lng.toFixed(7)}`;
+    return { arg: { location_coordinate: coord }, note: 'their own coordinates' };
+  }
+  const name = dfsLocationName(city);
+  if (name) return { arg: { location_name: name }, note: `city-level ("${name}")` };
+  return { arg: { location_code: 2840 }, note: 'COUNTRY-LEVEL (code 2840) - the localized surfaces (sponsored block, AI answer, the real pack order) cannot be trusted on a country-level read' };
+};
 const DFS_LOGIN = process.env.DATAFORSEO_LOGIN || '';
 const DFS_PASSWORD = process.env.DATAFORSEO_PASSWORD || '';
 const DFS_READY = !!(DFS_LOGIN && DFS_PASSWORD);
@@ -34609,43 +34938,63 @@ const packTradeOverlap = (cats, tradeWords, phraseWords) => {
 // the untrusted path, which is the disease this file is mostly a record of.
 const fetchLocalPack = async ({ query, city, placesKey, bizLat, bizLng }) => {
   if (DFS_READY) {
+    // ══ LOCALIZE TO THEIR MARKET, NOT TO A COUNTRY ══════════════════════════
+    // The first localized attempt (§59) sent location_name with an abbreviated
+    // state and was refused; the fix then over-corrected to location_code 2840
+    // — the whole United States — and a country-level page carries none of the
+    // surfaces a real searcher sees. The coordinate on their own Google
+    // listing localizes exactly, with no dependence on DataForSEO's location
+    // database; the full-state location_name is the fallback their database
+    // does hold; and country-level is the last resort, SAID OUT LOUD, because
+    // a silent country-level read is three sheets of "none appeared".
+    const _loc = dfsLocalization({ bizLat, bizLng, city, mode: 'finder' });
     try {
       const auth = Buffer.from(`${DFS_LOGIN}:${DFS_PASSWORD}`).toString('base64');
-      const r = await fetchT(DFS_URL, {
-        method: 'POST',
-        headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify([{
-          keyword: String(query || ''),
-          // location_code 2840 is the United States in DataForSEO's own
-          // location database. The first live run sent location_name with the
-          // lead's city ("San Antonio, TX") and their API does not know that
-          // string - locations must come from THEIR database, and an
-          // abbreviated state is not in it. The query itself already carries
-          // "in San Antonio, TX", which is exactly what a real searcher types,
-          // so the country-level location is the correct scope.
-          location_code: 2840,
-          language_code: 'en',
-          device: 'desktop',
-          // 100, up from 20. Live 2026-08-25: a business a human then found
-          // at #26 in the expanded Businesses list was reported "not in the
-          // results at all" \u2014 both stability samples were the identical
-          // depth-20 request, so the two-miss rule confirmed an absence the
-          // window itself created. DFS bills the finder per 20-desktop-result
-          // unit, so this is ~5x one of the cheapest calls in the system
-          // (~$0.01/lead), buying the difference between "not in the first
-          // 20" and a real read of the whole list.
-          depth: 100,
-        }]),
-      }, 20000);
-      const body = await safeJson(r);
-      const parsed = parseLocalFinder(body);
-      if (parsed.ok) {
+      let parsed = null;
+      // One retry, and only on the retriable half. A 40xxx is a fact about the
+      // ACCOUNT (credentials, verification, a malformed request) and fails
+      // identically the second time; a timeout or an empty body is a moment —
+      // DataForSEO's own guidance is that live SERP calls can run long under
+      // load, and the old 20-second ceiling here killed every depth-100 read
+      // on the first credentialed run.
+      for (let _try = 0; _try < 2 && !(parsed && parsed.ok); _try++) {
+        if (_try > 0) console.log(`↺ LOCAL PACK [${query}]: no usable answer on the first ask (${parsed && parsed.why}) — asking once more before falling back.`);
+        let body = null;
+        try {
+          const r = await fetchT(DFS_URL, {
+            method: 'POST',
+            headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify([{
+              keyword: String(query || ''),
+              ..._loc.arg,
+              language_code: 'en',
+              device: 'desktop',
+              // 100, up from 20. Live 2026-08-25: a business a human then found
+              // at #26 in the expanded Businesses list was reported "not in the
+              // results at all" \u2014 both stability samples were the identical
+              // depth-20 request, so the two-miss rule confirmed an absence the
+              // window itself created. DFS bills the finder per 20-desktop-result
+              // unit, so this is ~5x one of the cheapest calls in the system
+              // (~$0.01/lead), buying the difference between "not in the first
+              // 20" and a real read of the whole list.
+              depth: 100,
+            }]),
+          }, DFS_LIVE_TIMEOUT_MS);
+          body = await safeJson(r);
+        } catch (e) {
+          parsed = { ok: false, why: `the call itself failed: ${(e && e.message) || e}` };
+          continue;
+        }
+        parsed = parseLocalFinder(body);
+        if (!parsed.ok && /40\d\d\d|CREDENTIALS|task error/i.test(String(parsed.why || ''))) break;
+      }
+      if (parsed && parsed.ok) {
         const organic = parsed.results.filter(x => !x.isPaid);
         const paid = parsed.results.filter(x => x.isPaid);
-        console.log(`\u{1F4CD} LOCAL PACK [${query}]: DataForSEO returned ${organic.length} organic result(s)${paid.length ? ` and ${paid.length} SPONSORED above them` : ''}. This is the list a customer actually sees, so the position is sayable.`);
+        console.log(`\u{1F4CD} LOCAL PACK [${query}]: DataForSEO returned ${organic.length} organic result(s)${paid.length ? ` and ${paid.length} SPONSORED above them` : ''}, localized to ${_loc.note}. This is the list a customer actually sees, so the position is sayable.`);
         return { ok: true, source: 'dataforseo', orderTrusted: packOrderTrusted('dataforseo'), results: organic, paid };
       }
-      console.log(`⚠ LOCAL PACK [${query}]: DataForSEO did not answer usefully - ${parsed.why}. Falling back to Places, which means NO position may be stated for this lead.`);
+      console.log(`⚠ LOCAL PACK [${query}]: DataForSEO did not answer usefully - ${parsed && parsed.why}. Falling back to Places, which means NO position may be stated for this lead.`);
     } catch (e) {
       console.log(`⚠ LOCAL PACK [${query}]: DataForSEO call failed - ${(e && e.message) || e}. Falling back to Places, position not sayable.`);
     }
@@ -34774,6 +35123,27 @@ const parseOrganicSerp = (body, ourDomain, ourName) => {
       }
     }
   }
+  // ══ THE MAP PACK RIDES THE SAME RESPONSE, FREE ══════════════════════════
+  // The organic page carries the local_pack rows a searcher sees beside the
+  // map — title, domain, rating and the paid flag — and until now they were
+  // reduced to one boolean. Parsed as a SECOND source on the map question:
+  // us-in-the-pack is positive proof of visibility that survives a failed
+  // finder read, and absence from a three-row pack is the normal case and
+  // proves nothing, so only the positive direction is ever consumed.
+  const packItems = items.filter(it => it && String(it.type || '') === 'local_pack');
+  const packRows = packItems.map(it => ({
+    title: String((it && it.title) || ''),
+    domain: String((it && it.domain) || '').replace(/^www\./, '').toLowerCase(),
+    rating: (it && it.rating && Number.isFinite(Number(it.rating.value))) ? Number(it.rating.value) : null,
+    reviews: (it && it.rating && Number.isFinite(Number(it.rating.votes_count))) ? Number(it.rating.votes_count) : 0,
+    isPaid: !!(it && it.is_paid),
+  }));
+  let packUsIndex = -1;
+  packRows.forEach((p, i) => {
+    if (packUsIndex >= 0) return;
+    if (dom && p.domain && (p.domain === dom || p.domain.endsWith('.' + dom))) packUsIndex = i;
+    else if (_ourName && _norm(p.title) === _ourName) packUsIndex = i;
+  });
   const serp = {
     lsaBlockPresent: !!lsaBlock,
     lsaShownCount: lsaProviders.length || null,
@@ -34783,7 +35153,10 @@ const parseOrganicSerp = (body, ourDomain, ourName) => {
     aiOverviewPresent: !!aio,
     aiOverviewCitesUs: aioCitesUs,
     paidCount: items.filter(it => it && String(it.type || '') === 'paid').length,
-    packPresent: items.some(it => it && String(it.type || '') === 'local_pack'),
+    packPresent: packItems.length > 0,
+    packRows: packRows.slice(0, 3),
+    packUs: packUsIndex >= 0,
+    packUsIndex: packUsIndex >= 0 ? packUsIndex + 1 : null,
     discussionsPresent: items.some(it => it && String(it.type || '') === 'discussions_and_forums'),
   };
   if (!organic.length) return { ok: false, why: 'no organic results in the response', serp };
@@ -34852,19 +35225,83 @@ const parseTrafficOverview = (body) => {
     note: 'modeled by a third-party index from ranked keywords — an estimate, not a measurement; internal only' };
 };
 
-const checkOrganicRank = async ({ query, city, website, companyName }) => {
+// ══ WHAT THEY ALREADY RANK FOR — the top of their funnel, named ═════════════
+// Vin: "i need these audits to tell us where top of the funnel traffic is
+// coming from." The Labs index holds the keywords a domain ranks for; the top
+// handful by search volume IS the named answer, at about a cent a lead
+// ($0.01/task + $0.0001/row). Same bounds as the traffic estimate it rides
+// on: a third-party MODEL of Google organic only — INTERNAL, on the sheet and
+// the screen, never an email, never a figure told to the owner. Requested
+// with no exotic parameters (the §59 lesson: every request field must be one
+// their API certainly knows) and sorted HERE, not there. Bought only when the
+// domain is already known to be in the index, so an unindexed lead never pays
+// the task fee.
+const fetchRankedKeywords = async (website) => {
+  if (!DFS_READY) return { checked: false, why: 'no DataForSEO credentials' };
+  const host = String(website || '').replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0].trim();
+  if (!host || !/\./.test(host)) return { checked: false, why: 'no usable domain' };
+  try {
+    const auth = Buffer.from(`${DFS_LOGIN}:${DFS_PASSWORD}`).toString('base64');
+    const r = await fetchT('https://api.dataforseo.com/v3/dataforseo_labs/google/ranked_keywords/live', {
+      method: 'POST',
+      headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify([{ target: host, location_code: 2840, language_code: 'en', limit: 30 }]),
+    }, 30000);
+    return parseRankedKeywords(await safeJson(r));
+  } catch (e) {
+    return { checked: false, why: 'ranked-keywords read failed: ' + e.message };
+  }
+};
+// PURE, so the boot check runs the real parse on the real Labs shape.
+const parseRankedKeywords = (body) => {
+  const task = body && Array.isArray(body.tasks) ? body.tasks[0] : null;
+  if (!task || (task.status_code && Number(task.status_code) >= 40000)) {
+    return { checked: false, why: `DataForSEO Labs error: ${(task && task.status_message) || 'no readable answer'}` };
+  }
+  const res = Array.isArray(task.result) ? task.result[0] : null;
+  const items = res && Array.isArray(res.items) ? res.items : [];
+  const rows = items.map(it => {
+    const kd = (it && it.keyword_data) || {};
+    const ki = kd.keyword_info || {};
+    const se = (it && it.ranked_serp_element && it.ranked_serp_element.serp_item) || {};
+    return {
+      keyword: String(kd.keyword || '').trim(),
+      volume: Number.isFinite(Number(ki.search_volume)) ? Number(ki.search_volume) : null,
+      position: Number.isFinite(Number(se.rank_absolute)) ? Number(se.rank_absolute) : (Number.isFinite(Number(se.rank_group)) ? Number(se.rank_group) : null),
+    };
+  }).filter(x => x.keyword);
+  // Sorted here by volume, biggest first — the request carries no ordering
+  // parameter on purpose.
+  rows.sort((a, b) => (Number(b.volume) || 0) - (Number(a.volume) || 0));
+  return { checked: true, rows: rows.slice(0, 8) };
+};
+
+const checkOrganicRank = async ({ query, city, website, companyName, bizLat, bizLng }) => {
   if (!DFS_READY) return { checked: false, why: 'no DataForSEO credentials, so no organic position is measured or claimed' };
   let dom = '';
   try { dom = new URL(String(website)).hostname.replace(/^www\./, '').toLowerCase(); } catch { return { checked: false, why: 'no readable domain on this lead' }; }
   if (!query || !city) return { checked: false, why: 'no query or city to search' };
   try {
     const auth = Buffer.from(`${DFS_LOGIN}:${DFS_PASSWORD}`).toString('base64');
-    const r = await fetchT(DFS_ORGANIC_URL, {
-      method: 'POST',
-      headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify([{ keyword: String(query), location_code: 2840, language_code: 'en', device: 'desktop', depth: 20, load_async_ai_overview: true }]),
-    }, 20000);
-    const parsed = parseOrganicSerp(await safeJson(r), dom, companyName);
+    // Localized exactly like the finder read — one decision, see
+    // dfsLocalization; the organic coordinate takes a RADIUS, not a zoom.
+    const _loc = dfsLocalization({ bizLat, bizLng, city, mode: 'organic' });
+    let parsed = null;
+    for (let _try = 0; _try < 2 && !(parsed && parsed.ok); _try++) {
+      if (_try > 0) console.log(`↺ ORGANIC RANK [${query}]: no usable answer on the first ask (${parsed && parsed.why}) — asking once more.`);
+      try {
+        const r = await fetchT(DFS_ORGANIC_URL, {
+          method: 'POST',
+          headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify([{ keyword: String(query), ..._loc.arg, language_code: 'en', device: 'desktop', depth: 20, load_async_ai_overview: true }]),
+        }, DFS_LIVE_TIMEOUT_MS);
+        parsed = parseOrganicSerp(await safeJson(r), dom, companyName);
+      } catch (e) {
+        parsed = { ok: false, why: `the call itself failed: ${(e && e.message) || e}` };
+        continue;
+      }
+      if (!parsed.ok && /40\d\d\d|task error/i.test(String(parsed.why || ''))) break;
+    }
     // The serp extras (LSA block, AI answer) survive a refused POSITION read:
     // they are positive-only presence facts about the page, not positions.
     if (!parsed.ok) return { checked: false, why: parsed.why, serp: parsed.serp || null };
@@ -34873,7 +35310,7 @@ const checkOrganicRank = async ({ query, city, website, companyName }) => {
     if (parsed.scanned < 8) return { checked: false, why: `only ${parsed.scanned} organic result(s) came back, too small a field to call a position`, serp: parsed.serp || null };
     console.log(`\u{1F517} ORGANIC RANK [${query}]: ${parsed.position ? '#' + parsed.position : 'NOT FOUND'} of ${parsed.scanned} blue links. This is a different ranking from the map pack and a business can sit high in one and nowhere in the other.`);
     if (parsed.serp && (parsed.serp.lsaBlockPresent || parsed.serp.aiOverviewPresent)) {
-      console.log(`\u{1F4E1} SERP SURFACES [${query}]: ${parsed.serp.lsaBlockPresent ? `Sponsored services (LSA) block PRESENT with ${parsed.serp.lsaShownCount || 0} provider(s)${parsed.serp.lsaUs ? ' \u2014 THEIR AD IS IN IT (shown #' + parsed.serp.lsaUsIndex + ' on this pull; the block rotates by design, so the slot is not a stable rank)' : ' \u2014 their name not among the ones shown on this pull (rotation means this is NEVER evidence they do not advertise)'}` : 'no LSA block on this pull'}${parsed.serp.aiOverviewPresent ? `; AI Overview present${parsed.serp.aiOverviewCitesUs ? ' and it CITES their site' : ''}` : ''}.`);
+      console.log(`\u{1F4E1} SERP SURFACES [${query}]: ${parsed.serp.lsaBlockPresent ? `Sponsored services (LSA) block PRESENT with ${parsed.serp.lsaShownCount || 0} provider(s)${parsed.serp.lsaUs ? ' \u2014 THEIR AD IS IN IT (shown #' + parsed.serp.lsaUsIndex + ' on this pull; the block rotates by design, so the slot is not a stable rank)' : ' \u2014 their name not among the ones shown on this pull (rotation means this is NEVER evidence they do not advertise)'}` : 'no LSA block on this pull'}${parsed.serp.aiOverviewPresent ? `; AI Overview present${parsed.serp.aiOverviewCitesUs ? ' and it CITES their site' : ''}` : ''}${parsed.serp.packUs ? `; the page's own MAP PACK shows their listing at #${parsed.serp.packUsIndex}` : ''}.`);
     }
     return { checked: true, found: parsed.position !== null, position: parsed.position, scanned: parsed.scanned, query, city, serp: parsed.serp || null };
   } catch (e) {
@@ -34934,6 +35371,12 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
   // a contractor in an ambiguous town types the state; so do we now.
   const city = parseCityState(location).cityState;
   if (!city) return { checked: false, why: 'no city could be parsed from the location' };
+  // A whole state is not a market. "pest control company in Colorado" returns
+  // no local pack a customer sees — the search that shipped came off a
+  // /service-areas/ slug — and a rank or absence read off it is meaningless.
+  if (isBareStateName(city)) {
+    return { checked: false, why: `"${city}" is a whole state, not a market a customer searches in. A state-level search returns no local pack, so no rank or absence claim is permitted from it.` };
+  }
 
   const query = `${phrase} in ${city}`;
   try {
@@ -35299,6 +35742,9 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
       const city = parts.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') + (_st ? `, ${_st}` : '');
       const key = city.toLowerCase();
       if (!city || city.length < 3 || seen.has(key) || key === homeCity) continue;
+      // A /service-areas/colorado slug is a service AREA, not a market — a
+      // state-level query buys a search no customer runs. See isBareStateName.
+      if (isBareStateName(city)) continue;
       seen.add(key);
       out.push(city);
     }
@@ -36044,13 +36490,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         const t0 = Date.now();
         let r;
         try {
-          r = await fcSerial(() => fetchT('https://api.firecrawl.dev/v1/scrape', {
+          r = await fcCall('https://api.firecrawl.dev/v1/scrape', {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${firecrawlKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: target, formats, onlyMainContent: false, waitFor,
               maxAge: FC_CACHE_MS, blockAds: true, removeBase64Images: true,
               ...(opts && opts.mobile === true ? { mobile: true } : {}) }),
-          }, timeout));
+          }, timeout);
         } catch (e) {
           const ms = Date.now() - t0;
           console.log(`FIRECRAWL NO ANSWER [${kind}] ${target} — nothing came back within ${ms}ms (${e.message}). The request may still be running on their side.`);
@@ -36207,15 +36653,20 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // mobile layout stayed invisible on a live sheet. Asked only when the
       // desktop read produced something: paying to photograph a dead site
       // twice helps nobody.
-      let _mobUrl = null;
+      // ...and no longer awaited here: the phone render rides a promise and
+      // is collected where the shots are assembled — long after it has
+      // resolved — so it adds nothing to the critical path of the front fan.
+      // Serialized, it added a full paced gate transit (up to ~25s) to every
+      // lead before anything downstream could start.
+      let _mobPromise = null;
       if (_full || _view || usable(cRes)) {
-        const _mob = settle((await Promise.allSettled([askMobile(target)]))[0]);
-        if (_mob && !_mob.refused) _mobUrl = viewOf(_mob.body) || null;
+        _mobPromise = askMobile(target)
+          .then((res) => (res && !res.refused) ? (viewOf(res.body) || null) : null)
+          .catch(() => null);
       }
-      return { ..._body, data: { ...(_body.data || {}),
+      return { ..._body, _mobilePromise: _mobPromise, data: { ...(_body.data || {}),
         screenshot: _full || _view || null,
-        'screenshot@fullPage': _full || null,
-        screenshotMobile: _mobUrl } };
+        'screenshot@fullPage': _full || null } };
     };
 
     req._setPhase && req._setPhase('reading their pages');
@@ -36812,7 +37263,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         req._setPhase && req._setPhase('reading their Google listing');
         gbpHealth = await fetchGBPHealth(effectivePlaceId, placesKey);
         if (gbpHealth) {
-          console.log(`GBP HEALTH [${company}]: ${gbpHealth.gapCount} profile gap(s)${gbpHealth.gapCount ? ' — ' + gbpHealth.gaps.join('; ') : ' (profile looks complete)'} | ${gbpHealth.photosAtCap ? 'at least ' + gbpHealth.photosSeen + ' photos (API cap - real count unknown)' : gbpHealth.photosSeen + ' photos'} | hours:${gbpHealth.hasHours} site-link:${gbpHealth.hasWebsiteLink} | reviewRecency:${gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? gbpHealth.reviewRecency.newestDays + 'd' : 'n/a'} | category:${gbpHealth.primaryCategory || 'n/a'}${Number.isFinite(gbpHealth.categoryCount) ? ` (${gbpHealth.categoryCount} in total: ${(gbpHealth.placeCategories || []).slice(0, 6).join(', ')}${(gbpHealth.placeCategories || []).length > 6 ? ` +${(gbpHealth.placeCategories || []).length - 6} more` : ''})` : ''}`);
+          console.log(`GBP HEALTH [${company}]: ${gbpHealth.gapCount} profile gap(s)${gbpHealth.gapCount ? ' — ' + gbpHealth.gaps.join('; ') : ' (profile looks complete)'} | ${gbpHealth.photosAtCap ? 'at least ' + gbpHealth.photosSeen + ' photos (API cap - real count unknown)' : gbpHealth.photosSeen + ' photos'} | hours:${gbpHealth.hasHours} site-link:${gbpHealth.hasWebsiteLink} | reviewRecency:${gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? gbpHealth.reviewRecency.newestDays + 'd' : 'n/a'} | category:${gbpHealth.primaryCategory || 'only generic API taxonomy - the real Business Profile category is not visible through this API'}${Number.isFinite(gbpHealth.categoryCount) && gbpHealth.categoryCount > 0 ? ` (${gbpHealth.categoryCount} in total: ${(gbpHealth.placeCategories || []).slice(0, 6).join(', ')}${(gbpHealth.placeCategories || []).length > 6 ? ` +${(gbpHealth.placeCategories || []).length - 6} more` : ''})` : ''}`);
         }
       }
       // ══ REVIEW-PATTERN MINE — the highest-reply-rate asset the system produces ══
@@ -37024,7 +37475,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           const _headRow = (lv.results || []).find(r => r && r.kind === 'primary trade') || lv.results[0];
           if (_headRow && _headRow.query && _headRow.city) {
             try {
-              organicRank = await checkOrganicRank({ query: _headRow.query, city: _headRow.city, website, companyName: company });
+              organicRank = await checkOrganicRank({ query: _headRow.query, city: _headRow.city, website, companyName: company,
+                bizLat: gbpHealth && Number.isFinite(gbpHealth.lat) ? gbpHealth.lat : null,
+                bizLng: gbpHealth && Number.isFinite(gbpHealth.lng) ? gbpHealth.lng : null });
             } catch (e) { organicRank = { checked: false, why: (e && e.message) || 'organic read threw' }; }
           }
           for (const r of lv.results) {
@@ -37052,7 +37505,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
                 console.log(`\u26a0 RANK UNSTABLE [${company}]: ${r.rankSamples ? r.rankSamples.join(' and ') : '?'} on the same query minutes apart. The position is NOT sayable. What survives the drift is that businesses with fewer reviews rank above them \u2014 that is true at every one of those positions and is what the email may claim.`);
               }
             } else {
-              console.log(`LOCAL RANK [${company}]: NOT IN TOP ${r.scanned} for "${r.query}" (${r.kind}) — top of that list: ${r.topRivals.map(t => `${t.name} (${t.reviews} rev)`).join(', ')}`);
+              console.log(`LOCAL RANK [${company}]: NOT IN TOP ${r.scanned} for "${r.query}" (${r.kind})${(r.topRivals && r.topRivals.length) ? ` — top of that list: ${r.topRivals.map(t => `${t.name} (${t.reviews} rev)`).join(', ')}` : ' — the top of that list is not stated: the fallback source ranks by name relevance, so its order is not the real pack'}`);
             }
           }
           if (lv.invisibleCount) {
@@ -37134,6 +37587,12 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // footer — so it needs no new contract field and no second wire. A
       // homepage-only lead has no sitePages to join; the response literal
       // carries the row on its own for that case, so the SHEET still shows it.
+      // Collect the phone render started back in the front fan — resolved
+      // long ago by now, so this await costs nothing on the happy path and a
+      // refusal already logged itself inside fcAsk.
+      if (!mobileShotUrl && firecrawlData && firecrawlData._mobilePromise) {
+        try { mobileShotUrl = (await firecrawlData._mobilePromise) || null; } catch (e) { void e; }
+      }
       if (mobileShotUrl && sitePages && Array.isArray(sitePages.pageShots)) {
         sitePages.pageShots.push({ key: 'homepage (mobile)', url: String(website || ''), shot: mobileShotUrl });
       }
@@ -37616,6 +38075,16 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // INTERNAL ONLY and labeled an estimate — see fetchTrafficEstimate.
     trafficEstimate = await fetchTrafficEstimate(website);
     if (trafficEstimate.checked && trafficEstimate.inIndex) {
+      // The named half of "where does the traffic come from": bought only for
+      // a domain the index has already answered for, and it RIDES the
+      // trafficEstimate object, so no new persistence contract is needed.
+      try {
+        const _kw = await fetchRankedKeywords(website);
+        if (_kw && _kw.checked && Array.isArray(_kw.rows) && _kw.rows.length) {
+          trafficEstimate.topKeywords = _kw.rows;
+          console.log(`\u{1F511} TOP KEYWORDS [${company}]: ${_kw.rows.slice(0, 5).map(k => `"${k.keyword}"${k.position ? ' #' + k.position : ''}${k.volume ? ' (' + k.volume + '/mo searched)' : ''}`).join(', ')} — a third-party model of what already brings them Google traffic. INTERNAL: the call sheet and the screen, never an email.`);
+        }
+      } catch (e) { void e; }
       console.log(`\u{1F4C8} TRAFFIC ESTIMATE [${company}]: ~${trafficEstimate.organicEtvMonthly ?? '?'} organic visits/month modeled from ${trafficEstimate.organicKeywords ?? '?'} ranked keyword(s)${Number(trafficEstimate.paidKeywords) > 0 ? `, and the index has seen ${trafficEstimate.paidKeywords} PAID keyword(s) on this domain — corroboration that ads have run` : ''}. A third-party model, roughly $0.01 — internal and the call sheet only, never a claim to the owner.`);
     } else if (trafficEstimate.checked) {
       console.log(`\u{1F4C8} TRAFFIC ESTIMATE [${company}]: the index holds no model for this domain. That is a fact about the INDEX — say nothing about their traffic volume.`);
@@ -38107,6 +38576,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           lsaShownCount: (organicRank && organicRank.serp && Number.isFinite(Number(organicRank.serp.lsaShownCount))) ? Number(organicRank.serp.lsaShownCount) : null,
           aiOverviewPresent: !!(organicRank && organicRank.serp && organicRank.serp.aiOverviewPresent),
           aiOverviewCitesUs: !!(organicRank && organicRank.serp && organicRank.serp.aiOverviewCitesUs),
+          lsaUsIndex: (organicRank && organicRank.serp && Number.isFinite(Number(organicRank.serp.lsaUsIndex))) ? Number(organicRank.serp.lsaUsIndex) : null,
+          packUs: !!(organicRank && organicRank.serp && organicRank.serp.packUs),
+          packUsIndex: (organicRank && organicRank.serp && Number.isFinite(Number(organicRank.serp.packUsIndex))) ? Number(organicRank.serp.packUsIndex) : null,
           brokenPages: (sitePages && sitePages.brokenPages) || [],
           // The four fields the ledger produces. Delivered through
           // observationHarmInputs so the boot check runs the shipping code
@@ -38867,7 +39339,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         if (gbpHealth.gaps && gbpHealth.gaps.length) push(`Google profile gaps: ${gbpHealth.gaps.join('; ')}`);
       }
       if (Number.isFinite(ownerReplyCount) && Number.isFinite(reviewsRead) && reviewsRead > 0) push(`The owner replies to ${ownerReplyCount} of the ${reviewsRead} reviews we read`);
-      if (publicPainSignals && publicPainSignals.length) push(`Repeating complaint in their own reviews: ${publicPainSignals.join('; ')}`);
+      if (publicPainSignals && publicPainSignals.length) push(`Repeating complaints in their own reviews, each a DISTINCT pattern (never sum their counts into one claim): ${publicPainSignals.join('; ')}`);
       if (sitePages && sitePages.booking) push(`Booking path: ${sitePages.booking}${htmlSignals && htmlSignals.checked && htmlSignals.formFieldCount ? ` (${htmlSignals.formFieldCount}-field form)` : ''}`);
       if (sitePages && sitePages.services && sitePages.services.length) push(`What they sell: ${sitePages.services.slice(0,6).join(', ')}`);
       if (sitePages && sitePages.ownerStory) push(`The owner's own story: ${String(sitePages.ownerStory).slice(0,260)}`);
@@ -40168,7 +40640,7 @@ ${moneyOnFire.fires.map(f => `[${f.severity.toUpperCase()}] ${f.fire}\n   → ${
 ${moneyOnFire.isBurning ? '→ ⚠ THIS COMPANY IS BURNING ON MULTIPLE FRONTS AT ONCE. The audit essentially writes itself — lead with the arithmetic.' : ''}` : 'No confirmed money-on-fire signals — the audit must come from the site and operational evidence only. Do NOT invent financial leaks.'}
 
 ═══ THE FIRE HE IS ACTUALLY FIGHTING (highest-value intel we have) ═══
-${painSummary ? 'THE SINGLE BIGGEST OPERATIONAL FIRE: ' + painSummary + '\n' : ''}${publicPainSignals.length > 0 ? 'VERIFIED OPERATIONAL PAIN (from real reviews, complaints, and employee feedback — each carries the exact quote that proves it):\n' + publicPainSignals.map(p => '- ' + p).join('\n') + `
+${painSummary ? 'THE SINGLE BIGGEST OPERATIONAL FIRE: ' + painSummary + '\n' : ''}${publicPainSignals.length > 0 ? 'VERIFIED OPERATIONAL PAIN (from real reviews, complaints, and employee feedback — each carries the exact quote that proves it). These are DISTINCT patterns: never add their counts together, and never attribute the sum to one complaint — a same-thing count is only ever true of one single pattern:\n' + publicPainSignals.map(p => '- ' + p).join('\n') + `
 
 → THIS IS THE MOST IMPORTANT INPUT IN THIS ENTIRE PROMPT. Mike's core insight is that owners are trapped putting out fires in areas they already delegated. THIS is that fire, and we can PROVE it.
 → A pitch that names the operational fire ("your reviews say quotes take three weeks and you're hiring four schedulers to keep up") is in a completely different league from one that names a website flaw ("your homepage has no lead capture form"). The first makes the owner feel SEEN. The second sounds like every other agency email.
@@ -41571,6 +42043,27 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
             if (k.charAt(0) === '_') continue;
             parsed[k] = stripPostContactClaimsDeep(parsed[k], _pcx, 1);
           }
+          // Distinct patterns never sum, and a tag never becomes spend — the
+          // two families the 2026-08-25 sheets carried. Both read MEASUREMENTS:
+          // the per-pattern counts from the miner's own strings, and the one
+          // proof of live spend this system can buy (their ad SEEN on the
+          // search we ran).
+          const _confCounts = (publicPainSignals || []).map(s => reviewPainMentions(String(s)) || 1);
+          const _adsLiveNow = !!((localRank && localRank.paidIsUs === true) || (organicRank && organicRank.serp && organicRank.serp.lsaUs === true));
+          const _conf = { cut: [] };
+          for (const k of _mf) {
+            if (k.charAt(0) === '_') continue;
+            parsed[k] = stripPatternConflationDeep(parsed[k], _conf, 1, _confCounts);
+          }
+          parsed._conflationRemoved = _conf.cut.slice(0, 4);
+          if (_conf.cut.length) console.log(`⛔ PATTERN CONFLATION: removed ${_conf.cut.length} sentence(s) that attributed the SUMMED count of distinct review patterns to one complaint. First: "${_conf.cut[0]}"`);
+          const _adspend = { cut: [] };
+          for (const k of _mf) {
+            if (k.charAt(0) === '_') continue;
+            parsed[k] = stripUnprovenAdSpendDeep(parsed[k], _adspend, 1, _adsLiveNow);
+          }
+          parsed._adSpendRemoved = _adspend.cut.slice(0, 4);
+          if (_adspend.cut.length) console.log(`⛔ UNPROVEN AD SPEND: removed ${_adspend.cut.length} sentence(s) asserting active ad payment with no live-ad proof behind it (a tag proves an account, never spend). First: "${_adspend.cut[0]}"`);
           // ══ AND NO OWNERSHIP CLAIM WITHOUT CODE-CHECKED EVIDENCE ═══════
           const _ownAllow = {
             names: [verifiedCEO, decisionMaker && decisionMaker.name, heldBackContact && heldBackContact.name].filter(Boolean),
@@ -41922,6 +42415,10 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                   _srx = stripImpossibleReviewCountsDeep(_srx, _srg.irc, 1, reviewsRead, _srProf, reviewsNegativeCount, competitorCountsFrom(localRank));
                   _srx = stripCompetitorSiteClaimsDeep(_srx, _srg.cc, 1);
                   _srx = stripPostContactClaimsDeep(_srx, _srg.pc, 1);
+                  _srg.conf = { cut: [] };
+                  _srx = stripPatternConflationDeep(_srx, _srg.conf, 1, (publicPainSignals || []).map(s => reviewPainMentions(String(s)) || 1));
+                  _srg.spend = { cut: [] };
+                  _srx = stripUnprovenAdSpendDeep(_srx, _srg.spend, 1, !!((localRank && localRank.paidIsUs === true) || (organicRank && organicRank.serp && organicRank.serp.lsaUs === true)));
                   _srg.own = { cut: [] };
                   _srx = stripUnverifiedOwnershipDeep(_srx, _srg.own, 1, {
                     names: [verifiedCEO, decisionMaker && decisionMaker.name, heldBackContact && heldBackContact.name].filter(Boolean),
@@ -41932,7 +42429,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                     console.log(`\u26d4 OWNERSHIP CLAIM [${company}]: the story named somebody the owner with no code-checked evidence \u2014 removed ${_srg.own.cut.length} sentence(s). First one: "${String(_srg.own.cut[0]).slice(0, 110)}".`);
                   }
                   situationRead = _srx;
-                  const _srCut = _srg.q.cut.length + _srg.m.cut.length + _srg.sq.cut.length + _srg.rc.cut.length + _srg.irc.cut.length + _srg.cc.cut.length + _srg.pc.cut.length;
+                  const _srCut = _srg.q.cut.length + _srg.m.cut.length + _srg.sq.cut.length + _srg.rc.cut.length + _srg.irc.cut.length + _srg.cc.cut.length + _srg.pc.cut.length + _srg.conf.cut.length + _srg.spend.cut.length;
                   if (_srCut) {
                     console.log(`⛔ SITUATION READ GATED [${company}]: removed ${_srCut} sentence(s) from the synthesis — quotes ${_srg.q.cut.length}, money ${_srg.m.cut.length}, spelled scale ${_srg.sq.cut.length}, recency conclusions ${_srg.rc.cut.length}, review counts ${_srg.irc.cut.length}, competitor sites ${_srg.cc.cut.length}, post-contact claims ${_srg.pc.cut.length}. First: "${String(_srg.rc.cut[0] || _srg.pc.cut[0] || _srg.q.cut[0] || _srg.m.cut[0] || _srg.sq.cut[0] || _srg.irc.cut[0] || _srg.cc.cut[0] || '').slice(0, 140)}". The synthesis is what Mike reads in THE BUSINESS, and until now it was the one block of prose no gate ever touched.`);
                   }
@@ -43099,7 +43596,7 @@ RAW EVIDENCE (what we actually confirmed):
 - ICP CHECK: ${verifiedEmployees ? (verifiedEmployees <= 200 ? '✓ PASS — ' + verifiedEmployees + ' employees, founder likely reachable' : verifiedEmployees <= 500 ? '⚠ SOFT — ' + verifiedEmployees + ' employees, may have management layers' : '✗ FAIL — ' + verifiedEmployees + ' employees, this is an enterprise, NOT our ICP') : 'Size unknown — could not verify'}
 - Firecrawl scraped: ${content.length} characters of homepage content
 - LOCAL SEARCH RANK: ${localVisibility && localVisibility.checked ? 'MEASURED \u2014 we ran real Google local searches for this business via the Places API. Results: ' + localVisibility.results.map(r => (r.found ? `#${r.rank} of ${r.scanned} for "${r.query}"` : `NOT IN TOP ${r.scanned} for "${r.query}"`) + ((() => { const _riv = (Array.isArray(r.above) && r.above.length) ? r.above : (Array.isArray(r.topRivals) ? r.topRivals : []); if (!_riv.length) return ''; return ` \u2014 businesses actually returned above them for that query, WITH their real Google review counts: ${_riv.map(t => `${t.name} (${t.reviews} reviews${t.rating ? ', ' + t.rating + '\u2605' : ''})`).join(', ')}` + (r.ours && r.ours.reviews != null ? `; this business itself has ${r.ours.reviews} reviews${r.ours.rating ? ' at ' + r.ours.rating + '\u2605' : ''}` : '') + (r.weakerAbove ? `; \u2605 ${r.weakerAbove} of the businesses ranked ABOVE them have FEWER reviews than this business does \u2014 that comparison is MEASURED and must NOT be flagged. \u26a0 AND ITS ARITHMETIC: the copy may state it as ONE NAMED competitor plus ${r.weakerAbove - 1} other(s) \u2014 the named one plus the others equals the same measured ${r.weakerAbove}, so that split is NOT an understatement and must not be flagged either` : ''); })())).join('; ') + '. \u26a0 THE COMPETITOR NAMES AND REVIEW COUNTS ABOVE ARE MEASURED FACTS returned by the Places API for that exact search \u2014 they are the businesses a customer sees instead of this one. If the audit names those companies or quotes those review counts, that is CORRECT and must NOT be flagged as unverified or as "competitor data stated as fact". \u26a0 BUT ONLY THE NAMES AND THE COUNTS ARE MEASURED. We do NOT measure how old a competitor review is, how recent or active that competitor is, their rating trend, their ad spend, or why they rank higher. Any claim that competitor reviews are recent, newer or fresher, or that a competitor is more active, MUST STILL BE FLAGGED \u2014 that is an embellishment resting on top of a real number, which is harder to spot and just as false.' + '. \u26a0 THESE ARE MEASURED FACTS. Any claim in the audit matching these results is CORRECT and must NOT be flagged as a fabrication or as an unmeasured search claim.' : 'NOT MEASURED — no rank check ran for this lead, so ANY claim about search results, rankings, or visibility IS a fabrication and must be flagged.'}
-- THEIR OWN GOOGLE REVIEWS: ${publicPainSignals && publicPainSignals.length ? 'MEASURED \u2014 we pulled their actual review text from Google and found ' + publicPainSignals.length + ' pattern(s) that REPEAT across multiple reviews, each with a verbatim quote checked against the source: ' + publicPainSignals.join(' || ') + '. \u26a0 WE DID READ THE REVIEW TEXT. A claim naming one of these patterns, or its count, is a MEASURED FACT and must NOT be flagged as unverified or as "we did not read the reviews" \u2014 that exact false flag has fired on a live run. \u26a0 WHAT IS STILL BANNED: what a reviewer MEANT or INTENDED (they did not "warn" anyone unless they wrote that), sentiment we did not measure, any count beyond the numbers above, and anything about customers who did NOT leave a review.' : 'NOT MEASURED \u2014 no review text was read for this lead, so ANY claim about what their reviews say IS unverified and must be flagged.'}
+- THEIR OWN GOOGLE REVIEWS: ${publicPainSignals && publicPainSignals.length ? 'MEASURED \u2014 we pulled their actual review text from Google and found ' + publicPainSignals.length + ' pattern(s) that REPEAT across multiple reviews, each with a verbatim quote checked against the source: ' + publicPainSignals.join(' || ') + '. \u26a0 WE DID READ THE REVIEW TEXT. A claim naming one of these patterns, or its count, is a MEASURED FACT and must NOT be flagged as unverified or as "we did not read the reviews" \u2014 that exact false flag has fired on a live run. \u26a0 AND THEIR ARITHMETIC: these are DISTINCT patterns. A sentence that adds their counts together and attributes the SUM to one single complaint ("the same thing four times", "four different customers describe the same experience" when no single pattern has four) is a FABRICATION and MUST be flagged. \u26a0 WHAT IS STILL BANNED: what a reviewer MEANT or INTENDED (they did not "warn" anyone unless they wrote that), sentiment we did not measure, any count beyond the numbers above, and anything about customers who did NOT leave a review.' : 'NOT MEASURED \u2014 no review text was read for this lead, so ANY claim about what their reviews say IS unverified and must be flagged.'}
 - OFFER STRENGTH: ${offerStrength && offerStrength.checked ? 'MEASURED from their own page copy \u2014 guarantee ' + (offerStrength.guarantee ? 'present' : 'ABSENT') + ', real urgency ' + (offerStrength.urgency ? 'present' : 'ABSENT') + ', stacked value/financing ' + (offerStrength.bonus ? 'present' : 'ABSENT') + ', generic-ask-only ' + offerStrength.genericOnly + '. \u26a0 These are MEASURED by scanning every page we scraped. If the audit says they lack a guarantee, lack urgency, or have only a generic ask, that is CORRECT and must NOT be flagged as unverified.' : 'NOT MEASURED \u2014 make no claim about their offer.'}
 - GOOGLE BUSINESS PROFILE: ${gbpHealth && gbpHealth.checked ? 'MEASURED from their live listing — ' + (gbpHealth.rating ? `rating ${gbpHealth.rating}★ from ${gbpHealth.reviewCount} Google reviews — BOTH MEASURED, so if the audit quotes this rating or this review count it is CORRECT and must NOT be flagged as fabricated or unverified. ` : '') + (gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked ? `Newest review is ${gbpHealth.reviewRecency.newestDays} days old, MEASURED from its publish date - but review AGE is internal intelligence, so DO flag any claim that a prospect notices it, reads it as the business being inactive, or that it is costing them trust. ` : '') + (gbpHealth.primaryCategory ? `Google lists their category as "${gbpHealth.primaryCategory}" (MEASURED). ` : '') + (gbpHealth.photosAtCap ? 'at least ' + gbpHealth.photosSeen + ' photos (API cap - the real count is unknown, so FLAG any specific photo count as unverifiable), hours ' : gbpHealth.photosSeen + ' photos, hours ') + (gbpHealth.hasHours ? 'listed' : 'MISSING') + ', description ' + (gbpHealth.hasDescription ? 'present' : 'MISSING') + ', website link ' + (gbpHealth.hasWebsiteLink ? 'present' : 'MISSING') + (gbpHealth.gapCount ? '. Observed gaps: ' + gbpHealth.gaps.join('; ') : '. No gaps found') + '. \u26a0 MEASURED FACTS — do not flag claims that match these.' : 'NOT MEASURED — make no claim about their Google listing.'}
 - WHAT THE SCREENSHOT ACTUALLY SHOWED (a vision model READ their rendered homepage image \u2014 this is a MEASUREMENT, not a guess): ${visualAnalysis ? `MEASURED. Above the fold we saw: headline present = ${visualAnalysis.hasHeadline}, visible call-to-action present = ${visualAnalysis.hasVisibleCTA}, hero area blank = ${visualAnalysis.heroIsBlank}, overall conversion readiness = ${visualAnalysis.overallConversionReadiness}.${brainVisual && brainVisual.heroHeadline ? ` The headline read: "${brainVisual.heroHeadline}".` : ''}${brainVisual && brainVisual.ctaText ? ` The CTA read: "${brainVisual.ctaText}".` : ''}
@@ -43126,7 +43623,8 @@ RAW EVIDENCE (what we actually confirmed):
 - Copyright year: ${builtWith.copyrightYear || 'not found'}
 - Title tag: "${builtWith.titleTag || 'not found'}"
 - A route in beyond the phone: ${(sitePages && sitePages.captureMeasured === true) ? 'YES \u2014 a contact form or scheduler exists in the source of a page we read (MEASURED \u2014 do not flag a claim that matches it)' : builtWith.hasEmailCapture === true ? 'YES \u2014 an email-capture form on the homepage' : (sitePages && sitePages.hasCapture === true) ? 'the pages we read appear to offer one (model read, unmeasured)' : (builtWith.hasEmailCapture === false && sitePages) ? 'none found on the pages we read' : 'not readable \u2014 make no claim'}
-- Booking route: this is the "Booking path" line in THE MEASURED FACTS above \u2014 the ONE measured truth the copy is built on. There is no second booking measurement; do not infer one from any other line here.
+- Booking route: this is the "Booking path" line in THE MEASURED FACTS above \u2014 the ONE measured truth the copy is built on. There is no second booking measurement; do not infer one from any other line here. \u26a0 AND ITS TWO HALVES: a Booking path of "form" means BOTH of these are true at once — a route in EXISTS (the form) AND nothing on the site books a TIME. A sentence saying nothing books a time beside a measured form route is NOT a contradiction and must NOT be flagged; that exact false flag withdrew a correct email on a live run.
+- Phone on the site: ${htmlSignals && htmlSignals.checked ? (htmlSignals.hasTelLink ? 'MEASURED \u2014 a tap-to-call link is in their page source, so the phone number IS on the site. Never write "no evidence the phone number exists on the site"; that exact false flag has fired on a live run.' : 'the page source carries no tap-to-call link (the number may still appear as plain text or an image \u2014 make no claim either way)') : 'NOT MEASURED \u2014 the page source was not captured, so make no claim about a phone number on the site'}
 - PageSpeed mobile: ${pageSpeed.mobileScore ? `${pageSpeed.mobileScore}/100${pageSpeed.mobileScoreSource === 'lab' ? ' (Google lab test)' : ''}${pageSpeed.fieldSaysFine ? ' — BUT Google\'s real-visitor field data says the site performs FINE. The record beats the simulation: make NO claim that this site is slow.' : ''}` : 'not checked'}
 
 AUDIT PRODUCED BY FIRST CALL:
@@ -47751,6 +48249,235 @@ app.listen(PORT, () => {
     console.log(`⛔ LSA SURFACE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ THE SEARCH IS LOCALIZED TO THEIR MARKET, AND THE PACK RIDES FREE ═════
+  // Round 99. Every DFS call before this localized to location_code 2840 —
+  // the whole United States — so no lead ever saw the Sponsored services
+  // block, the AI answer or the real pack order, while Vin's own browser
+  // showed all three on every hand-check; and the 20-second timeout killed
+  // every depth-100 finder read besides. This check EXECUTES the localization
+  // decision, the pack-rows parse, the keywords parse, the walk branch and
+  // both rung stand-downs, and pins every wire with runtime-assembled
+  // needles, because a fixture that supplies its own arguments cannot see a
+  // dropped wire.
+  try {
+    const _fails = [];
+    const _n = (...p) => p.join('');
+    // 1. The localization decision, all three branches.
+    const _lc = dfsLocalization({ bizLat: 35.2271, bizLng: -80.8431, city: 'Charlotte, NC', mode: 'finder' });
+    if (!_lc.arg.location_coordinate || _lc.arg.location_coordinate !== '35.2271000,-80.8431000') _fails.push(`the finder coordinate came out "${_lc.arg.location_coordinate}" — it must be lat,lng with no third component so DataForSEO's documented 9z default applies`);
+    const _lo = dfsLocalization({ bizLat: 35.2271, bizLng: -80.8431, city: 'Charlotte, NC', mode: 'organic' });
+    if (!/,30000$/.test(String(_lo.arg.location_coordinate))) _fails.push('the organic coordinate lost its radius — the two endpoints take DIFFERENT third components and mixing them is undocumented behaviour');
+    const _ln = dfsLocalization({ bizLat: null, bizLng: null, city: 'San Antonio, TX', mode: 'finder' });
+    if (!_ln.arg.location_name || _ln.arg.location_name !== 'San Antonio,Texas,United States') _fails.push(`the location_name fallback came out "${_ln.arg.location_name}" — their database holds "San Antonio,Texas,United States" and nothing else`);
+    const _l0 = dfsLocalization({ bizLat: null, bizLng: null, city: 'Springfield', mode: 'finder' });
+    if (!_l0.arg.location_code || _l0.arg.location_code !== 2840) _fails.push('with no coordinate and no resolvable state the read must fall back to 2840 out loud, not guess a location name');
+    if (dfsLocationName('Washington, DC') !== 'Washington,District of Columbia,United States') _fails.push('DC does not resolve — the district is in the state table for exactly this');
+    // 2. A whole state is not a market — and a real city that shares a state
+    //    name must survive, or the guard is the recorded too-tight failure.
+    if (!isBareStateName('Colorado')) _fails.push('"pest control company in Colorado" ships again — a state-level query returns no local pack and its absence read is meaningless');
+    if (!isBareStateName('colorado, usa')) _fails.push('a state with a country suffix walks past the guard');
+    if (isBareStateName('New York')) _fails.push('New York the CITY is refused to catch New York the state — the guard-too-tight failure, recorded at the size gate');
+    if (isBareStateName('Overland Park, KS')) _fails.push('a real city+state string reads as a bare state');
+    // 3. The pack rows ride the organic response, positive-only.
+    const _pk = parseOrganicSerp({ tasks: [{ status_code: 20000, result: [{ items: [
+      { type: 'local_pack', title: 'Somebody Else', domain: 'else.com', rating: { value: 4.9, votes_count: 200 } },
+      { type: 'local_pack', title: 'Axiom Eco-Pest Control', domain: 'axiompest.com', rating: { value: 4.8, votes_count: 120 } },
+      { type: 'local_pack', title: 'Third Co', domain: 'third.com', rating: { value: 4.1, votes_count: 12 }, is_paid: true },
+      { type: 'organic', domain: 'reddit.com' }, { type: 'organic', domain: 'axiompest.com' },
+    ] }] }] }, 'axiompest.com', 'Axiom Eco-Pest Control');
+    if (!_pk.serp || _pk.serp.packUs !== true || _pk.serp.packUsIndex !== 2) _fails.push(`their listing in the page's own map pack is not recognised (packUs ${_pk.serp && _pk.serp.packUs}, index ${_pk.serp && _pk.serp.packUsIndex})`);
+    if (_pk.position !== 2) _fails.push('local_pack rows shifted the organic position — a pack row is not a blue link');
+    if (!_pk.serp.packRows || _pk.serp.packRows.length !== 3 || _pk.serp.packRows[2].isPaid !== true) _fails.push('the pack rows lost their shape or the paid flag');
+    const _pk0 = parseOrganicSerp({ tasks: [{ status_code: 20000, result: [{ items: [{ type: 'organic', domain: 'other.com' }] }] }] }, 'axiompest.com', 'Axiom');
+    if (!_pk0.serp || _pk0.serp.packUs !== false) _fails.push('a page with no pack must read packUs false — and nothing downstream may consume false, only true');
+    // 4. The walk: packUs beats a finder absence (the finder can fail while
+    //    the organic page proves visibility), and reads as a strength.
+    const _wp = buildFunnelStory({ rankChecked: true, rankFound: false, rankAbsenceConfirmed: true, scanned: 100, rankQuery: 'pest control company in Charlotte, NC', lsaChecked: true, packUs: true, packUsIndex: 2 }, {});
+    const _wpF = ((_wp && _wp.stages) || []).find(s => s.id === 'who_finds_them') || null;
+    if (!_wpF || /not among/.test(_wpF.text)) _fails.push('the walk still writes the finder absence beside a map pack that SHOWS their listing — a flat contradiction on one sheet');
+    if (!_wpF || !/map beside/i.test(_wpF.text)) _fails.push('the pack strength is measured and never said');
+    if (!_wp || _wp.strong.found !== true) _fails.push('their listing in the pack does not count as being found');
+    if (_wpF) {
+      const _f = plainEnglishFaults(_wpF.text, { trade: 'pest control', mined: '' });
+      if (_f.length) _fails.push(`the pack sentence fails the plain-English gate (${_f[0]})`);
+    }
+    // 5. Both rung stand-downs, both directions.
+    const _absR = HARM_LADDER.find(h => h.id === 'absent_from_search');
+    const _payR = HARM_LADDER.find(h => h.id === 'paying_for_a_search_they_lose');
+    if (_absR && _absR.test({ rankChecked: true, rankFound: false, rankAbsenceConfirmed: true, packUs: true })) _fails.push('INVISIBLE fires on a business the map pack itself is showing — the one-search-disproof class through the second source');
+    if (_absR && !_absR.test({ rankChecked: true, rankFound: false, rankAbsenceConfirmed: true, packUs: false })) _fails.push('the absence rung no longer fires on its genuine case with the pack read false');
+    if (_payR && _payR.test({ googleAdsTag: true, rankChecked: true, rankFound: true, rank: 7, scanned: 100, packUs: true })) _fails.push('"paying for a search they lose" fires on a business the map pack shows winning');
+    // 5b. The facts strip carries the two new positions, positive-only.
+    const _af99 = buildAuditFacts({ lsaChecked: true, lsaUs: true, lsaUsIndex: 2, lsaBlockPresent: true, packUs: true, packUsIndex: 3 }, null);
+    if (!_af99.pack || _af99.pack.us !== true || _af99.pack.usIndex !== 3) _fails.push('the pack sighting never reaches the facts strip — measured and invisible on the sheet');
+    if (!_af99.lsa || _af99.lsa.usIndex !== 2) _fails.push('the LSA slot number never reaches the facts strip — the sponsored position was the direct ask');
+    const _af99n = buildAuditFacts({ lsaChecked: true, lsaUs: false, packUs: false }, null);
+    if (_af99n.pack !== null) _fails.push('a pack fact exists without a sighting — absence consumed as a fact');
+    // 6. The keywords parse — the named top of their funnel, sorted here.
+    const _kw = parseRankedKeywords({ tasks: [{ status_code: 20000, result: [{ items: [
+      { keyword_data: { keyword: 'pest control charlotte', keyword_info: { search_volume: 320 } }, ranked_serp_element: { serp_item: { rank_absolute: 9 } } },
+      { keyword_data: { keyword: 'exterminator near charlotte', keyword_info: { search_volume: 1900 } }, ranked_serp_element: { serp_item: { rank_group: 4 } } },
+    ] }] }] });
+    if (!_kw.checked || !_kw.rows || _kw.rows.length !== 2) _fails.push('the ranked-keywords parse lost its rows');
+    else if (_kw.rows[0].keyword !== 'exterminator near charlotte' || _kw.rows[0].volume !== 1900 || _kw.rows[0].position !== 4) _fails.push('the rows are not sorted by search volume, biggest first — the request carries no ordering parameter on purpose, so the sort HERE is the ordering');
+    const _kwBad = parseRankedKeywords({ tasks: [{ status_code: 40101, status_message: 'auth' }] });
+    if (_kwBad.checked !== false) _fails.push('a Labs auth error still reads as a checked result');
+    // 7. The wires. A fixture supplies its own arguments; these cannot.
+    const _src = selfSourceNoCommentsLF();
+    if (!_src.includes(_n('dfsLocalization({ bizLat, bizLng, city, mode: ', "'finder' });"))) _fails.push('the finder request no longer asks the localization decision — back to country-level 2840 in silence');
+    if (!_src.includes(_n('dfsLocalization({ bizLat, bizLng, city, mode: ', "'organic' });"))) _fails.push('the organic request no longer asks the localization decision');
+    // ...and the DECISION reaching the request body is a separate wire: the
+    // first falsification cut the spread and left the decision line standing,
+    // and both needles above stayed green — computed-but-not-passed, inside
+    // this very check. The spread is pinned on its own now.
+    if (!_src.includes(_n('              ..._loc', '.arg,'))) _fails.push('the finder request body lost the localization spread — the decision is computed and the request still goes out country-level');
+    if (!_src.includes(_n('String(query), ..._loc', '.arg, language_code'))) _fails.push('the organic request body lost the localization spread');
+    if ((_src.match(new RegExp(_n('}, DFS_LIVE_', 'TIMEOUT_MS\\);'), 'g')) || []).length < 2) _fails.push('a DFS live call is back on a hand-written timeout — 20 seconds is what killed every depth-100 read on the first credentialed run');
+    if ((_src.match(new RegExp(_n('&& m\\.packUs !== ', 'true'), 'g')) || []).length < 3) _fails.push('the pack stand-down reaches fewer than three consumers (two rungs and the walk absence) — a gate applied per consumer is a gate somebody forgets to apply');
+    if (!_src.includes(_n('packUs: !!(organicRank && organicRank.serp && ', 'organicRank.serp.packUs),'))) _fails.push('the pack read never reaches the harm inputs — measured, paid for, dropped one line before use');
+    if (!_src.includes(_n('if (_par) { a2 = await ', '_par; }')) || !_src.includes(_n('if (_par) { b = await ', '_par; }'))) _fails.push('the stability samples are sequential again — two 75-second calls back to back on every lead');
+    if (!_src.includes(_n('if (isBareStateName(', 'city)) {'))) _fails.push('the rank read lost its state guard');
+    if (!_src.includes(_n('if (isBareStateName(city)) ', 'continue;'))) _fails.push('the service-area harvest lost its state guard — /service-areas/colorado buys a state-level search again');
+    if (!_src.includes(_n('trafficEstimate.topKeywords = ', '_kw.rows;'))) _fails.push('the ranked keywords never reach the lead — computed, paid for, and dropped');
+    if (!_src.includes(_n('the top of that list ', 'is not stated'))) _fails.push('the NOT IN TOP log prints an empty "top of that list:" tail again on the fallback source');
+    if (!_src.includes(_n('mobileShotUrl = (await firecrawlData.', '_mobilePromise) || null'))) _fails.push('the phone render is started and never collected — paid for and invisible');
+    if (!_src.includes(_n('output_config: { effort: ', 'SITUATION_EFFORT }'))) _fails.push('the situation-read effort dial is disconnected — the priciest call on the lead is back on a hardcoded constant');
+    if (_fails.length) {
+      console.log(`⛔ RANK LOCALIZATION CHECK: ${_fails.slice(0, 8).join(' | ')}.`);
+    } else {
+      console.log(`✓ RANK LOCALIZATION CHECK: every DFS search now stands where the searcher stands — their own coordinates first, the full-state location name second, and country-level 2840 only as a LOUD last resort — with 75-second timeouts (their own guidance is 120), one retry on the retriable half, both stability samples in flight at once, and a whole-state "market" refused at both doors. The organic page's own map pack is parsed as a second free read: their listing in it stands down INVISIBLE and the paying band, and the top ranked keywords land on the lead as the named top of their funnel. Executed here: the localization decision, the pack parse, the keywords parse, the walk branch, both stand-downs both ways, and thirteen call-site wires.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RANK LOCALIZATION CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ DISTINCT PATTERNS NEVER SUM, AND A TAG NEVER BECOMES SPEND ═══════════
+  // The two claim families the 2026-08-25 sheets carried: "Four different
+  // customers describe the same experience" over four DISTINCT two-mention
+  // patterns, and "they are paying to bring people to the door" off a tag
+  // that only ever proves an account. Both strippers executed both ways, and
+  // the quote-label family that put "Review quotes:" inside a quoted span.
+  try {
+    const _fails = [];
+    const _n = (...p) => p.join('');
+    // conflation: the summed count attributed to one complaint is cut...
+    const _c1 = stripPatternConflation('Four different customers describe the same experience. The form is eight fields long.', [2, 2, 2]);
+    if (_c1.cut.length !== 1 || /Four different/.test(_c1.text)) _fails.push('the Bob Ray conflation sentence survives — the summed count of distinct patterns attributed to one complaint');
+    if (!/eight fields/.test(_c1.text)) _fails.push('the conflation stripper took an innocent neighbouring sentence with it');
+    const _c2 = stripPatternConflation('Customers hit the same wall four separate times.', [2, 2]);
+    if (!_c2.cut.length) _fails.push('the same-thing-N-times shape walks past the stripper');
+    // ...a count a single pattern actually carries survives...
+    const _c3 = stripPatternConflation('Two customers describe the same delay.', [2, 2, 2]);
+    if (_c3.cut.length) _fails.push('a TRUE same-thing count (a single pattern really has two mentions) is cut — a gate that eats true sentences is one somebody switches off');
+    // ...and a single-pattern lead cannot conflate anything.
+    const _c4 = stripPatternConflation('Four customers describe the same problem.', [4]);
+    if (_c4.cut.length) _fails.push('a single-pattern lead is stripped — with one pattern there is nothing to conflate and the sentence is the measurement');
+    // ad spend: asserted payment with no live-ad proof is cut...
+    const _s1 = stripUnprovenAdSpend('The ad code is live on their site, so they are paying to bring people to the door.', false);
+    if (!_s1.cut.length) _fails.push('the live synthesis sentence survives — active spend asserted off a tag that proves an account, never a campaign');
+    // ...the honest conditional survives...
+    const _s2 = stripUnprovenAdSpend('If those ads are live, they are paying for the harder sell while the easier customer walks past.', false);
+    if (_s2.cut.length) _fails.push('the honest conditional is cut — "if those ads are live" is the sanctioned form and a question only he can answer');
+    // ...and with their ad SEEN on our own pull, the claim is measured.
+    const _s3 = stripUnprovenAdSpend('They are paying for every click that arrives.', true);
+    if (_s3.cut.length) _fails.push('a spend sentence is cut on a lead whose ad our own pull SAW — the one measured proof of live spend no longer licenses the claim');
+    // the quote-label family: the miner's label dies, a real quote survives.
+    if (!/^Someone came in March/.test(stripQuoteLabel("Review quotes: 'Someone came in March to give a quote'"))) _fails.push(`the miner's own "Review quotes:" label still rides inside the quoted span — live on a sheet as their-own-words`);
+    if (stripQuoteLabel('Reviews matter to us: we answer every one') !== 'Reviews matter to us: we answer every one') _fails.push('a real quote that merely BEGINS with the word Reviews is mutilated — the separator requirement is the whole guard');
+    // the wires: both batteries, both strippers, and the verifier's return.
+    const _src = selfSourceNoCommentsLF();
+    if (!_src.includes(_n('stripPatternConflationDeep(parsed[k], ', '_conf, 1, _confCounts)'))) _fails.push('the audit battery lost the conflation stripper');
+    if (!_src.includes(_n('stripUnprovenAdSpendDeep(parsed[k], ', '_adspend, 1, _adsLiveNow)'))) _fails.push('the audit battery lost the ad-spend stripper');
+    if (!_src.includes(_n('stripPatternConflationDeep(_srx, ', '_srg.conf, 1,'))) _fails.push('the synthesis battery lost the conflation stripper — the story ships the family the audit refuses');
+    if (!_src.includes(_n('stripUnprovenAdSpendDeep(_srx, ', '_srg.spend, 1,'))) _fails.push('the synthesis battery lost the ad-spend stripper');
+    if ((_src.match(new RegExp(_n('evidence: stripLabel\\(', 'evidence\\)'), 'g')) || []).length < 2) _fails.push('a verifier return hands back the RAW evidence again — the label the matcher stripped rides to the sheet');
+    if ((_src.match(new RegExp(_n('hese are DISTINCT', ' patterns'), 'g')) || []).length < 2) _fails.push('a prompt lost its distinctness instruction — the mechanical stripper is the gate, but the instruction is what stops the retry writing the same sentence twice');
+    // the critique's two new do-not-flag notes, and the GBP generic-category
+    // fix, pinned at their call sites — the sheets these fix are the ones the
+    // caller dials from.
+    if (!_src.includes(_n('AND ITS TWO ', 'HALVES:'))) _fails.push("the critique lost the booking two-halves note — booking='form' beside 'nothing books a time' gets false-flagged again, which withdrew a correct email live");
+    if (!_src.includes(_n('- Phone on the ', 'site: ${htmlSignals'))) _fails.push('the critique lost its phone-on-site evidence line — "no evidence the phone number exists" fires again beside a measured tel link');
+    if (!_src.includes(_n('!/^(services?|establishment|point of ', 'interest)$/i.test'))) _fails.push('the GBP generic-category filter is gone — "category: Services (1 in total: service)" prints as a measurement on every trades lead again');
+    if (_fails.length) {
+      console.log(`⛔ CONFLATION GATE CHECK: ${_fails.slice(0, 8).join(' | ')}.`);
+    } else {
+      console.log(`✓ CONFLATION GATE CHECK: a same-thing sentence whose count exceeds the largest SINGLE pattern is cut in both batteries, a true count and a single-pattern lead survive untouched, active ad spend needs the one proof we can buy (their ad on our own pull) or the honest conditional, and the miner's "Review quotes:" label can never again ride inside a quoted span — the verifier returns the STRIPPED evidence from both of its exits.`);
+    }
+  } catch (e) {
+    console.log(`⛔ CONFLATION GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ AN UNTIED NAME IS A STRANGER — the DM evidence rules, executed ═══════
+  // August Hoppe, live 2026-08-25: a licence search for a Louisville tree
+  // company extracted the owner of Hoppe Tree Service, MILWAUKEE — the
+  // prompt's this-business rule was instructional only. And Bob Ray Co's own
+  // site named Tee Ray at high confidence while the business bears his name,
+  // and the resolver still bought the ~8-credit paid wave, because the
+  // eponymous rule demanded an independent-source count its own collapse rule
+  // made unreachable, and its 4-letter floor refused the 3-letter surname.
+  try {
+    const _fails = [];
+    const _n = (...p) => p.join('');
+    if (!isEponymousOwnerRule('Tee Ray', 'Bob Ray Co', 'bobrayco.com')) _fails.push('Tee Ray of Bob Ray Co is still refused — the 4-letter floor on a whole-word match it does not need');
+    if (isEponymousOwnerRule('Jane Ray', 'Raymond Plumbing', 'https://raymondplumbing.com')) _fails.push('"Ray" false-matches inside Raymond — the substring failure the whole-word rule exists to prevent');
+    if (!isEponymousOwnerRule('Julie L Stante', 'Julie L Stante, DDS', 'juliestantedds.com')) _fails.push('the recorded Julie Stante case no longer passes');
+    if (!isEponymousOwnerRule('John Ott', 'Ott Plumbing LLC', '')) _fails.push('a real 3-letter surname as a whole word in the company name is refused');
+    if (isEponymousOwnerRule('John Ott', 'Ottawa Services', '')) _fails.push('"Ott" matches inside Ottawa — the whole-word rule is gone');
+    const _hoppeHits = [{ title: 'Hoppe Tree Service — certified arborists Milwaukee', description: 'August Hoppe, president of Hoppe Tree Service in Milwaukee WI', url: 'https://hoppetree.com' }];
+    if (licenseHitTiesToCompany('August Hoppe', 'Bob Ray Co', _hoppeHits) !== false) _fails.push('the August Hoppe hit still ties — a wrong-company owner reaches the sheet again');
+    const _tiedHits = [{ title: 'Bob Ray Co., Inc. — ISA certified arborists, Louisville KY', description: 'Tee Ray, owner and president', url: 'https://bobray.com' }];
+    if (licenseHitTiesToCompany('Tee Ray', 'Bob Ray Co', _tiedHits) !== true) _fails.push('a genuinely tied licence hit is refused — the guard-too-tight failure');
+    if (licenseHitTiesToCompany('Sam Smith', 'The Service Company LLC', _hoppeHits) !== null) _fails.push('a company with no distinctive token must produce NO judgement, never a guess in either direction');
+    const _src = selfSourceNoCommentsLF();
+    if (!_src.includes(_n('const _isEponymousOwner = ', 'isEponymousOwnerRule;'))) _fails.push('the resolver no longer uses the module rule — two hand-kept copies of one decision again');
+    if (_src.includes(_n('const eponymousConfident = independent', ' >= 2'))) _fails.push('the unreachable independent-source floor is back on the eponymous settle — the paid wave is bought on every eponymous lead again');
+    if (!_src.includes(_n('licenseHitTiesToCompany(parsed.name, clean, ', 'hits) === false'))) _fails.push('the licence extraction lost its mechanical company tie — the August Hoppe class ships on the next similarly-named business');
+    if (_fails.length) {
+      console.log(`⛔ DM EVIDENCE CHECK: ${_fails.slice(0, 8).join(' | ')}.`);
+    } else {
+      console.log(`✓ DM EVIDENCE CHECK: the business named after its owner settles the resolver without the ~8-credit paid wave (whole-word surname match, 3-letter floor on the name half, 4-letter floor kept on the domain substring), and a licence hit that never ties the extracted name to THIS company's own name is discarded by mechanism — the August Hoppe and Tee Ray cases are both fixtures, executed on the real rules.`);
+    }
+  } catch (e) {
+    console.log(`⛔ DM EVIDENCE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A SEARCH IS NOT A BROWSER, PROVEN ON THE REAL GATE ═══════════════════
+  // /v1/search renders nothing, and it held one of the browser slots anyway —
+  // a twelve-credit owner-lookup wave starved the page renders behind it.
+  // Executed: a throwaway gate at concurrency 1 with a never-finishing scrape
+  // holding its only slot must still dispatch a search job, and must NOT
+  // dispatch a second scrape. Async, so the verdict is held open until it
+  // reports.
+  bootHold();
+  (async () => {
+    try {
+      const _fails = [];
+      const _n = (...p) => p.join('');
+      const _g = makeFcGate({ concurrency: () => 1, minGapMs: () => 0 });
+      let _searchRan = false, _scrape2Ran = false;
+      _g(() => new Promise(() => {}), 'scrape');            // holds the only slot forever
+      _g(() => { _searchRan = true; return Promise.resolve('ok'); }, 'search');
+      _g(() => { _scrape2Ran = true; return Promise.resolve('no'); }, 'scrape');
+      await new Promise(r => setTimeout(r, 400));
+      if (!_searchRan) _fails.push('a search queued behind a full gate never dispatched — /v1/search is consuming a browser slot again and the owner-lookup wave starves the renders');
+      if (_scrape2Ran) _fails.push('a second scrape dispatched past a full gate — the slot accounting is broken and the browser cap is fiction');
+      const _st = _g.stats();
+      if (_st.inFlight !== 1) _fails.push(`inFlight reads ${_st.inFlight} with one scrape running and one search finished — the search consumed a slot it must not hold`);
+      // and no production call site hand-rolls the old wrapper: fcCall derives
+      // the kind from the URL by construction, so the census is one line.
+      const _src = selfSourceNoCommentsLF();
+      const _bare = (_src.match(new RegExp(_n('fcSerial\\(\\(\\) => ', 'fetchT\\('), 'g')) || []).length;
+      if (_bare !== 1) _fails.push(`${_bare} call site(s) hand-roll the old arrow wrapper — only the fcCall definition itself may, because a hand-rolled site queues as kind 'other' and paces at the 7.5-second unknown-plan default`);
+      if (_fails.length) {
+        console.log(`⛔ SEARCH SLOT CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+      } else {
+        console.log(`✓ SEARCH SLOT CHECK: a search dispatches past a full browser gate without taking a slot, a scrape still cannot, and every production Firecrawl call goes through fcCall — the door that derives its pacing kind from the URL the caller already types, so the per-endpoint pacing §50 built finally applies to production traffic instead of a 7.5-second shared clock.`);
+      }
+    } catch (e) {
+      console.log(`⛔ SEARCH SLOT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+    } finally { bootRelease(); }
+  })();
+
   // ══ THE FOUR SIGNALS ADDED FOR THE MONEY MAP, EXECUTED BOTH WAYS ═══════
   // Vin, 2026-08-24: "#4 is a big one" (the retargeting gap), "quote to close
   // is huge" (financing on a five-figure trade), and the review complaints
@@ -48702,6 +49429,17 @@ app.listen(PORT, () => {
         _fails.push(`${name} still reads as a delivery-bound business off ${r.mentions} mention(s) in ${read} reviews (${r.themes} theme(s)) \u2014 that sentence tells Mike not to sell them leads`);
       }
     }
+    // BOB RAY, 2026-08-25: three DISTINCT delivery patterns of two mentions
+    // each cleared every aggregate bar and bound THROUGHPUT — three pairs of
+    // bad days read as a business drowning in work. The bar now needs one
+    // REAL pattern: at least one theme with three or more mentions, the same
+    // floor the email's own anchor carries.
+    const _bobRay = readOperationalPain([
+      'slow or no follow-up after estimate appointments — 2 of the 90 reviews we read say it',
+      'scheduling delays and missed windows — 2 of the 90 reviews we read say it',
+      'calls not returned after the job — 2 of the 90 reviews we read say it',
+    ], 90);
+    if (_bobRay.binding) _fails.push(`three 2-mention patterns in 90 reviews still bind THROUGHPUT (max single pattern ${_bobRay.maxMentions}) — three pairs of bad days read as a team at capacity, and that sentence tells Mike not to sell them leads`);
     // A REAL ONE MUST STILL BIND, or the fix has deleted the diagnosis.
     const _real = readOperationalPain([
       'callbacks that never come \u2014 6 of the 40 reviews we read say it',
@@ -52414,7 +53152,7 @@ app.listen(PORT, () => {
     // the function's real last statement is not inside it and this says so
     // instead of quietly checking a fragment.
     if (!_home) _fails.push('scrapeHomepage could not be located');
-    else if (!/return \{ \.\.\._body, data:/.test(_home)) {
+    else if (!/return \{ \.\.\._body, _mobilePromise: _mobPromise, data:/.test(_home)) {
       _fails.push('the scrapeHomepage slice does not reach its own return statement — the block boundary is wrong, so nothing below this line was really checked');
     } else {
       // 1. EVERY SHAPE MUST BE ONE WE HAVE WATCHED SUCCEED.
@@ -60538,7 +61276,12 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     {
       const _src = selfSource();
       const _code = _src.split('\n').filter(l => !/^\s*\/\//.test(l)).join('\n');
-      const _all = [...(_code.matchAll(/(\w+)\(\s*(?:\(\) => )?fetchT\(\s*['`]https:\/\/api\.firecrawl\.dev\/v1\/([\w/-]+)/g))];
+      // fcCall replaced the hand-written fcSerial(() => fetchT(...)) wrappers
+      // in round 99: the kind the per-endpoint pacing needs is derived from
+      // the URL by construction, so a call site cannot forget it. The census
+      // counts fcCall sites, and one hand-rolled fcSerial wrapper is also
+      // still a wrapped call.
+      const _all = [...(_code.matchAll(/(?:fcCall|fcSerial)\(\s*(?:\(\) => fetchT\(\s*)?['`]https:\/\/api\.firecrawl\.dev\/v1\/([\w/-]+)/g))];
       const _direct = [...(_code.matchAll(/await fetchT\(\s*['`]https:\/\/api\.firecrawl\.dev\/v1\/([\w/-]+)/g))]
         .map(m => m[1])
         // The credit-balance endpoint is deliberately NOT serialised: it is a

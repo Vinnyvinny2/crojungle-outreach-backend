@@ -1131,7 +1131,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260830;
+const CLIENT_CONTRACT = 20260831;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -2594,7 +2594,7 @@ const signalRowsFor = (stageId, ctx) => {
     R('Sponsored services block', (af.lsa && typeof af.lsa === 'object')
       ? (af.lsa.blockPresent === true
         ? (af.lsa.us === true
-          ? "their ad was in Google's pay-per-lead block on our pull"
+          ? ("their ad was in Google's pay-per-lead block on our pull" + (Number.isFinite(Number(af.lsa.usIndex)) ? ' (shown #' + af.lsa.usIndex + '; the block rotates)' : ''))
           : ('present for this search' + (Number.isFinite(Number(af.lsa.shown)) && Number(af.lsa.shown) > 0 ? ', ' + af.lsa.shown + ' advertisers shown' : '') + ' (rotates; not seeing their ad proves nothing)'))
         : 'none appeared for this search on our pull')
       : null, null);
@@ -2603,8 +2603,17 @@ const signalRowsFor = (stageId, ctx) => {
         ? (af.aiOverview.citesUs === true ? 'above the results, and it cites their site' : 'above the results on this search')
         : 'none appeared for this search on our pull')
       : null, null);
+    if (af.pack && af.pack.us === true) R('The map beside the results', 'their listing is in it' + (Number.isFinite(Number(af.pack.usIndex)) ? ' at #' + af.pack.usIndex : '') + ' \u2014 a second read of the map, from the results page itself', null);
     const tr = (ctx && ctx.traffic) || null;
     if (tr) R('Traffic, estimated', '~' + (Number(tr.organicEtvMonthly) || 0) + ' unpaid' + (Number(tr.paidKeywords) > 0 ? ' + ~' + (Number(tr.paidEtvMonthly) || 0) + ' paid' : '') + ' visits/month, third-party estimate', null, true);
+    // The named half of "where does the traffic come from": what they already
+    // rank for, biggest searches first. A third-party model \u2014 INTERNAL, the
+    // sheet and the screen only, never said to the owner.
+    if (tr && Array.isArray(tr.topKeywords) && tr.topKeywords.length) {
+      R('What already brings traffic', tr.topKeywords.slice(0, 5).map(function (k) {
+        return '"' + k.keyword + '"' + (Number.isFinite(Number(k.position)) ? ' #' + k.position : '') + (Number.isFinite(Number(k.volume)) ? ' (' + k.volume + '/mo searched)' : '');
+      }).join(' \u00b7 '), null, true);
+    }
   } else if (stageId === 'door') {
     R('Ad clicks land on', af.adLanding
       ? ({ homepage: 'their homepage, not a page built for the ad', interior: 'an ordinary page of the site', unlinked: 'a page the site never links — landing-page shaped', offsite: 'a page on a different domain' })[af.adLanding]
@@ -3273,7 +3282,14 @@ const batchCandidates = (allLeads, o) => {
   // already-audited tick still needs the re-audit box.
   const picked = (opts.pickedIds instanceof Set && opts.pickedIds.size) ? opts.pickedIds : null;
   const limit = picked ? picked.size : Math.max(1, Number(opts.limit) || BATCH_DEFAULT_SIZE);
-  const includeDone = !!opts.includeResearched;
+  // A tick is the operator's own hand on a specific lead — Vin, live: "when i
+  // rerun a lead it only lets me do one not multiple leads to rerun." The
+  // round-96 rule made a ticked audited lead ALSO need the re-audit checkbox,
+  // and the tick-only flow failed into an error message nobody connected to a
+  // checkbox further down the panel. Ticking an audited lead now IS the
+  // re-audit intent; the checkbox still governs the no-picks top-N flow, where
+  // nothing else says "re-runs wanted". The panel copy prices it.
+  const includeDone = !!opts.includeResearched || !!picked;
   const inflight = opts.inflight || null;
   return (allLeads || [])
     .filter((l) => l && l.id)
@@ -6515,11 +6531,15 @@ function LeadBriefing({ lead }) {
   // refused it, and nothing read the verdict.
   const email = (lead.emailResult && lead.emailResult.sendable === true && lead.emailResult.email)
     || lead.email || (lead.emailResult && lead.emailResult.email);
-  const emailNote = lead.emailResult
+  // The caption describes the ADDRESS, so with no address there is nothing to
+  // caption: Axiom's sheet rendered "\u2014" with "Pattern-built, not confirmed"
+  // under it — a confidence note about an email that does not exist. The
+  // export's twin already gated on the address; the screen never did.
+  const emailNote = (lead.emailResult && email)
     ? (/SMTP-verified/i.test(lead.emailResult.label || '') ? { text: 'Mailbox confirmed live' }
       : /scraped|Published/i.test(lead.emailResult.label || '') ? { text: 'Published on their own site' }
       : { text: 'Pattern-built, not confirmed \u2014 likely but unproven', warn: true })
-    : null;
+    : (lead.emailResult && !email ? { text: 'No usable address found', warn: true } : null);
 
   return React.createElement('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
 
@@ -7103,7 +7123,7 @@ function ResearchView({
     const pool = batchCandidates(getLeads(), { limit: batchSize, includeResearched: batchIncludeDone, inflight: getInflightJobs(), pickedIds: batchPick });
     if (!pool.length) {
       setResearchError(batchPick.size
-        ? 'None of your ticked leads can run: they are already running, already audited (tick re-audit to include them), or have no website to read.'
+        ? 'None of your ticked leads can run: they are already running, or have no website to read.'
         : 'Nothing to audit: every lead with a website has already been researched. Tick "include re-runs" to audit them again.');
       return;
     }
@@ -7894,7 +7914,8 @@ function ResearchView({
                     + BATCH_CONCURRENCY + ' run at a time.')
                 : _picked
                 ? (ready + ' of your ' + _picked + ' ticked lead' + (_picked === 1 ? '' : 's') + ' will run'
-                    + (ready < _picked ? ' \u2014 the rest are already running, already audited (tick re-audit to include them), or have no site to read' : '')
+                    + (ready < _picked ? ' \u2014 the rest are already running or have no site to read' : '')
+                    + ' (a ticked lead that is already audited re-runs, and each re-run pays a full research cycle)'
                     + (batchEmail ? ', each with an email written after it.' : '. Audit only \u2014 no emails.'))
                 : pool === 0
                 ? 'Nothing to audit. Every lead with a website has been done \u2014 tick re-audit below to run them again.'
@@ -8419,7 +8440,7 @@ function ResearchView({
           detail:(lead.reachabilityReasons||[]).length?(lead.reachabilityReasons||[]).join('\n'):'How likely the owner is to see and reply to a cold email \u2014 based on company size, whether we found an owner-level contact, and whether the email is verified.'},
          {label:'Owner',value:lead.decisionMaker?.name||lead.verifiedCEO||'\u2014',sub:lead.decisionMaker?.title||lead.verifiedCEOTitle||null,
           detail:lead.decisionMaker?('Found via '+((lead.decisionMaker.sources||[]).join(' + ')||'search')+'. Confidence '+(lead.decisionMaker.score||'?')+'/100. '+(lead.decisionMaker.corroborated?'Corroborated across multiple sources.':'Single source \u2014 verify before sending.')):'No decision-maker confirmed yet.'},
-         {label:'Email',value:lead.email||'\u2014',sub:lead.emailResult?.label||null,mono:true,
+         {label:'Email',value:lead.email||'\u2014',sub:lead.email?(lead.emailResult?.label||null):(lead.emailResult?'no usable address found':null),mono:true,
           detail:lead.emailResult?('Tier: '+(lead.emailResult.label||'?')+'. '+(lead.emailResult.tier===1?'Scraped directly from their site.':lead.emailResult.tier===2?'SMTP-verified against their mail server.':lead.emailResult.tier===3?'Pattern-learned from a known address at this domain.':'Unverified \u2014 do not send.')):'No email found yet.'}
         ].map(tile => React.createElement(DetailTile, { key: tile.label, tile: tile }))
       ),
