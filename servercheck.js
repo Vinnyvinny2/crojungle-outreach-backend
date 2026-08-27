@@ -54,8 +54,9 @@ const biz = (n) => ({
   placeId: `ChIJ_scenario_${n}`,
 });
 
-const HOMEPAGE_MD = (b) => `# ${b.company}\n\nRoof repair and replacement for Dallas homeowners. Pete Barnes, Owner.\n\nWe answer the phone ourselves and we stand behind our work.\n\nBook online any time from our booking page, or call us.\n\nOur crews photograph every stage of the job so you can see what we saw.\n\nContact: info@${b.host}\n`;
-const HOMEPAGE_HTML = (b) => `<!doctype html><html><head><title>${b.company}</title><meta name="viewport" content="width=device-width"><meta name="description" content="Roofing in Dallas"></head><body><nav><a href="https://${b.host}/about">About</a> <a href="https://${b.host}/booking">Book online</a> <a href="https://${b.host}/contact">Contact</a></nav><h1>${b.company}</h1><p>Roof repair and replacement for Dallas homeowners. Pete Barnes, Owner.</p><p>We answer the phone ourselves and we stand behind our work.</p><a href="https://${b.host}/booking" class="btn">Book online</a><form action="/contact"><input type="email" name="email"><input type="tel" name="phone"><textarea name="msg"></textarea></form><a href="tel:+12145550188">(214) 555-0188</a><a href="mailto:info@${b.host}">info@${b.host}</a><footer>&copy; 2026 ${b.company}</footer></body></html>`;
+const OWNER_LINE = () => (state.mode === 'nosettle' ? '' : ' Pete Barnes, Owner.');
+const HOMEPAGE_MD = (b) => `# ${b.company}\n\nRoof repair and replacement for Dallas homeowners.${OWNER_LINE()}\n\nWe answer the phone ourselves and we stand behind our work.\n\nBook online any time from our booking page, or call us.\n\nOur crews photograph every stage of the job so you can see what we saw.\n\nContact: info@${b.host}\n`;
+const HOMEPAGE_HTML = (b) => `<!doctype html><html><head><title>${b.company}</title><meta name="viewport" content="width=device-width"><meta name="description" content="Roofing in Dallas"></head><body><nav><a href="https://${b.host}/about">About</a> <a href="https://${b.host}/booking">Book online</a> <a href="https://${b.host}/contact">Contact</a></nav><h1>${b.company}</h1><p>Roof repair and replacement for Dallas homeowners.${OWNER_LINE()}</p><p>We answer the phone ourselves and we stand behind our work.</p><a href="https://${b.host}/booking" class="btn">Book online</a><form action="/contact"><input type="email" name="email"><input type="tel" name="phone"><textarea name="msg"></textarea></form><a href="tel:+12145550188">(214) 555-0188</a><a href="mailto:info@${b.host}">info@${b.host}</a><footer>&copy; 2026 ${b.company}</footer></body></html>`;
 
 // Review texts the miner fixture quotes VERBATIM: the deep-mine verifier runs
 // a punctuation-stripped four-word window over '[N stars] <text>' lines, so
@@ -170,6 +171,16 @@ const anthropicAnswer = (bodyText, b) => {
     });
   }
   if (/WEBSITE TEXT:|CONTENT:|SEARCH RESULTS:|RESULTS:|REPLIES:/.test(t)) {
+    // 'nosettle' is the ONLY state in which the calling-mode branch is
+    // reachable: a name with no TITLE scores authority 30, which clears
+    // neither the corroboration floor (75) nor the own-site floor (90), and
+    // 'Barnes' is nowhere in the company name or the domain so the eponymous
+    // settle cannot fire either. Without this the callOnly lead would settle at
+    // stage 1 like the golden one and the scenario would report a clean pass
+    // while exercising nothing - the vacuous-check trap.
+    if (state.mode === 'nosettle') {
+      return wrap({ name: null, title: null, evidence: '', confidence: 'low' });
+    }
     return wrap({ name: 'Pete Barnes', title: 'Owner', evidence: 'Pete Barnes, Owner appears on the homepage', confidence: 'high' });
   }
   if (/PAGES:/.test(t)) {
@@ -331,7 +342,13 @@ const runLead = async (b, over, capMs) => {
     // ── A: THE GOLDEN LEAD ──────────────────────────────────────────────
     console.log('\n── scenario A: the golden lead');
     state.mode = 'golden'; state.biz = biz('A');
+    // The model-call count on a COMPLETE lead. Scenario D compares against this
+    // rather than against a number written here, so the comparison stays true
+    // as the pipeline grows or shrinks.
+    const anthCalls = () => state.requests.filter(q => q.host === 'api.anthropic.com').length;
+    const a0 = anthCalls();
     const A = await runLead(state.biz);
+    const goldenModelCalls = anthCalls() - a0;
     ok(A.httpStatus === 200 && A.result, `the golden lead did not complete 200 — got ${JSON.stringify({ httpStatus: A.httpStatus, error: (A.error || '').slice(0, 160) })}`);
     const R = A.result || {};
     if (!(Array.isArray(R.problemList) && R.problemList.length > 0)) {
@@ -397,11 +414,69 @@ const runLead = async (b, over, capMs) => {
     // ── D: THE BRAIN HUSK ───────────────────────────────────────────────
     console.log('── scenario D: the audit comes back empty — BRAIN GATE 422');
     state.mode = 'husk'; state.biz = biz('D');
+    const d0 = anthCalls();
     const D = await runLead(state.biz);
+    const huskModelCalls = anthCalls() - d0;
     ok(D.httpStatus === 422, `an empty audit did not 422 (got ${D.httpStatus}) — the husk ships as a real audit`);
+    // AND IT MUST STOP SPENDING. The refusal is unchanged; what changed is that
+    // a lead already destined for the 422 no longer buys the strategic read and
+    // the fact-check first, whose answers are discarded with it. Compared
+    // against the golden lead on this same boot, so the assertion cannot rot
+    // into a hardcoded number.
+    ok(/BRAIN GATE \(early\)/.test(srv.log()), 'the husk never hit the early gate — it is still paying for the strategic read and the fact-check before being refused ~2,000 lines later');
+    ok(huskModelCalls < goldenModelCalls, `a husk lead made ${huskModelCalls} model call(s) against the golden lead's ${goldenModelCalls} — it is buying as much as a lead that ships`);
+    ok(goldenModelCalls > 0, 'the golden lead made no model calls at all, so the husk comparison above proves nothing');
 
-    // ── E: FIRECRAWL OUT OF CREDITS ─────────────────────────────────────
-    // LAST on this boot: the 402 latch is process state by design.
+    // ── G: CALLING MODE ──────────────────────────────────
+    // Driven end to end, in BOTH directions, on a lead that deliberately cannot
+    // settle at stage 1 - a name with no title, on a business it is not named
+    // after. That state is the only one in which the branch is reachable, and
+    // without it this scenario would report a clean pass having exercised
+    // nothing, which is the vacuous-check trap.
+    //
+    // The control runs FIRST so the comparison is against this build, not
+    // against a remembered number.
+    console.log('── scenario G: calling mode — the paid owner wave is not bought');
+    const fcSearches = () => state.requests.filter(q => q.host === 'api.firecrawl.dev' && /\/v1\/search/.test(q.path)).length;
+    state.mode = 'nosettle'; state.biz = biz('G');
+    const g0 = fcSearches();
+    const Gctl = await runLead(state.biz);
+    const ctlSearches = fcSearches() - g0;
+    ok(Gctl.httpStatus === 200, `the control lead for calling mode did not complete (got ${Gctl.httpStatus})`);
+    ok(ctlSearches > 0, 'the control lead bought ZERO owner searches, so this fixture settles at stage 1 and the calling-mode comparison below proves nothing');
+
+    state.biz = biz('G2');
+    const g1 = fcSearches();
+    const Gcall = await runLead(state.biz, { callOnly: true });
+    const callSearches = fcSearches() - g1;
+    ok(Gcall.httpStatus === 200, `a calling-mode lead did not complete (got ${Gcall.httpStatus}) — the flag must change what is BOUGHT, never whether the audit ships`);
+    ok(callSearches === 0, `calling mode still bought ${callSearches} owner search(es) against the control's ${ctlSearches} — the flag is not reaching findDecisionMaker`);
+    ok(/CALL MODE/.test(srv.log()), 'the calling-mode branch never printed its own name, so the run has no record of why the owner lookups were skipped');
+    // The audit itself must be UNCHANGED: this cuts a name lookup, not evidence.
+    // Compared against the control on the SAME fixture rather than asserted
+    // absolutely - the no-owner fixture is deliberately thin, so an absolute
+    // assertion here would be testing the fixture instead of the flag, and would
+    // pass or fail for reasons that have nothing to do with calling mode.
+    const _pl = (x) => (((x || {}).result || {}).brainAudit || {}).problemList;
+    const ctlFindings = Array.isArray(_pl(Gctl)) ? _pl(Gctl).length : -1;
+    const callFindings = Array.isArray(_pl(Gcall)) ? _pl(Gcall).length : -1;
+    info(`calling mode: ${ctlSearches} owner search(es) on the control and ${callSearches} in calling mode; ${ctlFindings} finding(s) either side`);
+    ok(callFindings === ctlFindings,
+      `calling mode changed the AUDIT: ${callFindings} finding(s) against the control's ${ctlFindings}. It must change what is BOUGHT, never what is measured.`);
+    // The finding count can legitimately be zero on this deliberately thin
+    // fixture, so the evidence GATHERED is asserted separately: the same pages
+    // must be read either way. This is the half that would catch a flag which
+    // had quietly reached the page budget instead of the owner ladder.
+    const _chars = (x) => (((x || {}).result || {}).corpusRead || {}).homepageChars;
+    // Not equality: the two fixtures carry their own company name and host, and
+    // those appear in the page, so the counts differ by exactly that much. What
+    // must hold is that BOTH read the whole page.
+    ok(_chars(Gcall) > 200 && Math.abs(_chars(Gcall) - _chars(Gctl)) < 20,
+      `calling mode read ${_chars(Gcall)} characters of their homepage against the control's ${_chars(Gctl)} - it has reached the evidence, not just the owner lookups`);
+
+    // ── E: FIRECRAWL OUT OF CREDITS ─────────────────────
+    // LAST on this boot: the 402 latch is process state by design, so every
+    // scenario that needs to SPEND has to run above this line.
     console.log('── scenario E: Firecrawl 402 — the latch and the bounded hold');
     state.mode = 'fc402'; state.biz = biz('E');
     const E = await runLead(state.biz, {}, 90000);

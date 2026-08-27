@@ -1154,7 +1154,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260904;
+const CLIENT_CONTRACT = 20260905;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -1361,6 +1361,14 @@ const buildResearchBody = (lead, settings, extra) => {
     publicPainSignals: L.publicPainSignals || [],
     // Measured in the browser, so it can only come from the caller.
     browserData: X.browserData || null,
+    // CALLING MODE. A batch that exists to be dialled does not buy an owner
+    // NAME: the paid web-search and licence lookups are ~10 Firecrawl credits
+    // and two model calls spent on a question the rep answers in four seconds by
+    // asking whoever picks up. Stage 1 - their own site, Google News, the
+    // business name, the review-reply signature - is free and still runs on
+    // every lead. Absent or false is today's behaviour exactly, so nothing here
+    // changes for a single-lead research or for an emailing batch.
+    callOnly: X.callOnly === true,
   };
 };
 
@@ -2344,6 +2352,10 @@ const runBatchAudit = async (opts) => {
   const queue = (o.leads || []).slice();
   const settings = o.settings || {};
   const withEmail = !!o.withEmail;
+  // A batch that exists to be CALLED. It stops the paid owner-name lookups on
+  // the server (see callOnly in buildResearchBody); everything free still runs,
+  // and the sheet keeps saying "(no title found)" rather than inventing one.
+  const callOnly = !!o.callOnly;
   const conc = Math.max(1, Math.min(8, Number(o.concurrency) || BATCH_CONCURRENCY));
   const stopped = () => !!(typeof o.shouldStop === 'function' && o.shouldStop());
   // A throwing progress callback must not kill the run: the batch is the
@@ -2376,7 +2388,7 @@ const runBatchAudit = async (opts) => {
     let row = lead;
     try {
       const r = await researchViaQueue(
-        buildResearchBody(lead, settings, { website: lead.website || '', forceRefresh: false, browserData: null }),
+        buildResearchBody(lead, settings, { website: lead.website || '', forceRefresh: false, browserData: null, callOnly }),
         { trigger: 'bulk-audit', onJobId: (jid) => setInflightJob(lead.id, jid),
           onStatus: (stx) => report({ phase: 'lead-status', lead, leadPhase: stx.phase, workedMs: stx.workedMs }) }
       );
@@ -7286,6 +7298,10 @@ function ResearchView({
   // failure this file has recorded three times.
   const [batchSize, setBatchSize] = useState(BATCH_DEFAULT_SIZE);
   const [batchEmail, setBatchEmail] = useState(false);
+  // CALLING BATCH. Stops the paid owner-NAME lookups on the server: the rep
+  // asks whoever answers the phone. Off by default, because on an emailing
+  // batch the name and title are what the email is addressed to.
+  const [batchCallOnly, setBatchCallOnly] = useState(false);
   const [batchIncludeDone, setBatchIncludeDone] = useState(false);
   // The operator's hand-picked batch: lead ids ticked on the board. Empty set
   // means the old behaviour (top scores first, up to the number box).
@@ -7345,6 +7361,7 @@ function ResearchView({
         leads: pool,
         settings,
         withEmail: batchEmail,
+        callOnly: batchCallOnly,
         shouldStop: () => batchStopRef.current,
         onProgress: (ev) => {
           setBatchAt(s => batchProgressReduce(s, ev));
@@ -8122,6 +8139,11 @@ function ResearchView({
             React.createElement('label', { style: { display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 11.5, color: 'var(--m2)', marginBottom: 6, cursor: 'pointer' } },
               React.createElement('input', { type: 'checkbox', checked: batchEmail, disabled: batchRunning, onChange: e => setBatchEmail(e.target.checked), style: { marginTop: 2 } }),
               React.createElement('span', null, 'Write the emails too')),
+            React.createElement('label', { style: { display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 11.5, color: 'var(--m2)', marginBottom: 6, cursor: 'pointer' } },
+              React.createElement('input', { type: 'checkbox', checked: batchCallOnly, disabled: batchRunning, onChange: e => setBatchCallOnly(e.target.checked), style: { marginTop: 2 } }),
+              // Says what it STOPS and what it costs, because a box that only
+              // says "calling batch" tells the operator nothing about the trade.
+              React.createElement('span', null, 'This batch is for calling \u2014 skip the paid owner-name lookups (their own site and review signature still run; the sheet may say "no title found" instead of naming one)')),
             React.createElement('label', { style: { display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 11.5, color: 'var(--m2)', marginBottom: 9, cursor: 'pointer' } },
               React.createElement('input', { type: 'checkbox', checked: batchIncludeDone, disabled: batchRunning, onChange: e => setBatchIncludeDone(e.target.checked), style: { marginTop: 2 } }),
               // The price is on the tick box because this is the box that
