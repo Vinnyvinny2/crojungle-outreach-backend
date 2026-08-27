@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260905;
+const CONTRACT_VERSION = 20260906;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -5886,8 +5886,26 @@ const GP_RATE_DETAILS_PER_1K = Number(process.env.GP_RATE_DETAILS_PER_1K || 35);
 const GP_FREE_SEARCH = Math.max(0, parseInt(process.env.GP_FREE_SEARCH || '1000', 10));
 const GP_FREE_DETAILS = Math.max(0, parseInt(process.env.GP_FREE_DETAILS || '1000', 10));
 const _gpCalls = { search: 0, details: 0 };
-const notePlacesCall = (kind) => {
+// ══ A METER THAT CANNOT NAME THE CALL INVITES THE WRONG CUT ═════════════
+// Live 2026-08-27, a five-lead run with DataForSEO credentialed: "5 text
+// search(es) + 5 profile read(s)". Two Places calls per lead, where the
+// design says there should be ONE profile read and no search at all -
+// every rank and duplicate-listing search goes to DataForSEO now. Four
+// different call sites can produce that search and the line names none of
+// them, so the largest remaining question about the Places bill could not
+// be answered from a log at all.
+//
+// This is section 54's Anthropic-label fix one service across: nineteen of
+// twenty-four model calls printed as the word "anthropic", and three
+// separate sessions proposed cuts to a bill nobody had measured. A meter
+// covering a fifth of a thing is worse than none, because it invites
+// confident decisions about the wrong number. The WHY is required at every
+// site; an unlabelled call prints as 'unnamed' rather than disappearing.
+const _gpWhy = Object.create(null);
+const notePlacesCall = (kind, why) => {
   if (kind === 'details') _gpCalls.details++; else _gpCalls.search++;
+  const _w = `${kind === 'details' ? 'details' : 'search'}:${String(why || 'unnamed')}`;
+  _gpWhy[_w] = (_gpWhy[_w] || 0) + 1;
   // Counted at DISPATCH, like everything through this door: Google bills a
   // request it received even when we give up waiting for the answer.
   noteRunSpend('places', 1, kind === 'details' ? 'places-details' : 'places-search');
@@ -5900,7 +5918,11 @@ const placesSpendLine = (label) => {
   const s = _gpCalls.search, d = _gpCalls.details;
   if (!s && !d) return '';
   const cost = (s * GP_RATE_SEARCH_PER_1K + d * GP_RATE_DETAILS_PER_1K) / 1000;
-  return `\u{1F4B3} GOOGLE PLACES [${label}]: ${s} text search(es) + ${d} profile read(s) since this instance started. `
+  // Sorted by count, so the line's first entry is the one to look at.
+  const _by = Object.keys(_gpWhy).sort((a, b) => _gpWhy[b] - _gpWhy[a])
+    .map(k => `${k} x${_gpWhy[k]}`).join(', ');
+  return `\u{1F4B3} GOOGLE PLACES [${label}]: ${s} text search(es) + ${d} profile read(s) since this instance started`
+    + (_by ? ` \u2014 ${_by}. ` : '. ')
     + `At $${GP_RATE_SEARCH_PER_1K}/1k and $${GP_RATE_DETAILS_PER_1K}/1k that is ~$${cost.toFixed(2)}, `
     + `against free allowances of ${GP_FREE_SEARCH} searches and ${GP_FREE_DETAILS} profile reads PER CALENDAR MONTH `
     + `(this counter resets on every deploy, so it is a run total, not a month). `
@@ -6342,7 +6364,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
       do {
       const _body = { textQuery: `${cat.q} in ${city}`, includePureServiceAreaBusinesses: true, pageSize: 20 };
       if (_pageToken) _body.pageToken = _pageToken;
-      notePlacesCall('search');   // counted at DISPATCH: Google bills a request it received, even on a request we give up waiting for
+      notePlacesCall('search', 'find-discovery');   // counted at DISPATCH: Google bills a request it received, even on a request we give up waiting for
       const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': `${FIELD_MASK},nextPageToken` },
@@ -11477,7 +11499,7 @@ const fetchGoogleReviews = async (placeId, placesKey) => {
     }
   }
   try {
-    notePlacesCall('details');  // counted at DISPATCH, same reason
+    notePlacesCall('details', 'place-details');  // counted at DISPATCH, same reason
     const r = await fetchT(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
       headers: { 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': 'reviews' },
     }, 12000);
@@ -11630,7 +11652,7 @@ const fetchGBPHealth = async (placeId, placesKey) => {
       // is the one shape the duplicate-listing address match can never work on.
       'utcOffsetMinutes','addressComponents','pureServiceAreaBusiness'
     ].join(',');
-    notePlacesCall('details');  // counted at DISPATCH, same reason
+    notePlacesCall('details', 'place-details');  // counted at DISPATCH, same reason
     const r = await fetchT(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
       headers: { 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': mask },
     }, 12000);
@@ -17044,7 +17066,25 @@ const stripQuoteLabel = (t) => String(t || '')
 // gate. Bounded hard in the expensive direction: anything CRITICAL_FACT_RE
 // matches is never cleared, so "the claim is correct but the number is wrong"
 // is still a warning.
-const _FACT_CONFIRMS = /\b(is correct|are correct|is accurate|is supported|correct per|accurate per|is measured and correct|measured and correct|matches the measured|supported by the measured)\b/i;
+const _FACT_CONFIRMS = /\b(is correct|are correct|is accurate|is supported|correct per|accurate per|is measured and correct|measured and correct|matches the measured|supported by the measured|correctly (?:identifies|states|notes|describes|reports|flags)|accurately (?:identifies|states|describes|reports)|is factually correct)\b/i;
+// ══ A NOTE ABOUT OUR OWN MACHINERY IS NOT A WARNING ══════════════════════
+// Live on the Tuck & Howell sheet, 2026-08-27, in "Do not say": "the audit
+// leads on review_pattern while gbp_gap is tied within noise" and "The
+// 'Reason' field correctly identifies that the real problem is
+// operational". Neither describes anything a prospect could disprove. They
+// are the checker talking about our ranking and our field names, and a
+// junior rep holding the sheet while a phone rings cannot act on either.
+// Do-not-say exists to stop a FALSE sentence being read out loud; filling
+// it with engineering reasoning is how an operator learns to skip it -
+// the same cost section 45 recorded for true sentences and section 24 for
+// a CTA precaution that fired on nearly every lead.
+//
+// TWO halves required, because either alone over-reaches: a name only this
+// system uses (a snake_case rung id, or one of our own field names), AND
+// our own selection vocabulary. CRITICAL is tested first and always wins,
+// so a real fabrication that happens to quote a rung id still warns.
+const _FACT_OUR_NAMES = /\b[a-z]{3,}_[a-z]{3,}(?:_[a-z]{2,})?\b|['"\u2018\u201c]?\b(reason|pitch ?angle|summary|situation ?read|problem ?list|real ?pain|embarrassing ?finding|recommended ?reason)\b['"\u2019\u201d]?\s+field\b/i;
+const _FACT_OUR_MACHINERY = /\b(leads on|tie[sd]?[ -]?(?:within|break)|within (?:the )?noise|noise band|rung|harm (?:score|\d)|ranked (?:above|below|higher|lower)|scored \d|pillar|funnel stage|leak ?[123]\b|internal[ -]only|correctly (?:identifies|states|notes|describes)|the ladder)\b/i;
 const _FACT_OBJECTS = /\b(phras\w*|imply|implies|implying|implication|could be read|read as|connotation|wording|tone|framing)\b/i;
 const _FACT_STYLE = /^\s*(VOICE FAILURE|VOICE|TONE|REGISTER|STYLE)\b|\bvoice failure\b/i;
 // An entry whose own text says no flag is warranted is the checker AGREEING —
@@ -17056,15 +17096,29 @@ const _FACT_DOUBT = /\b(but|however|though|although|not measured|never measured|
 // 'wording'  a confirmed claim whose only objection is how it is phrased
 // 'style'    a note about register, which is reasoning and not a warning
 // 'clean'    a confirmation carrying no objection of any kind
+// 'internal' a note about OUR ranking or OUR field names, not about them
 // 'real'     everything else: a claim a prospect could disprove
 const factCheckNoteKind = (flag) => {
   const f = String(flag || '');
   if (CRITICAL_FACT_RE.test(f)) return 'real';
+  if (_FACT_OUR_NAMES.test(f) && _FACT_OUR_MACHINERY.test(f)) return 'internal';
   if (_FACT_SELF_CLEARED.test(f)) return 'clean';
   if (_FACT_STYLE.test(f)) return 'style';
   if (_FACT_CONFIRMS.test(f) && !_FACT_DOUBT.test(f)) return 'clean';
   if (_FACT_CONFIRMS.test(f) && _FACT_OBJECTS.test(f)) return 'wording';
   return 'real';
+};
+// ══ WHAT EACH SYNTHESIS GATE IS CALLED, IN ONE PLACE ═════════════════════════
+// The SITUATION READ GATED line reports a total and a per-family breakdown, and
+// those used to be two hand-written lists: the total counted nine buckets and
+// the breakdown named seven, so on 2026-08-27 a live lead printed "removed 2
+// sentence(s)" with every family reading zero and an empty First. Both now come
+// off one object and this table only supplies the words. A bucket with no row
+// here prints its own key - visible and ugly, never silently zero.
+const SITUATION_GATE_LABEL = {
+  q: 'quotes', m: 'money', sq: 'spelled scale', rc: 'recency and tenure',
+  irc: 'review counts', cc: 'competitor sites', pc: 'post-contact claims',
+  conf: 'pattern conflation', spend: 'unproven ad spend',
 };
 const BUSINESS_MODELS = new Set(['LOCAL_CONSUMER', 'B2B_INSTITUTIONAL', 'REFERRAL_PROFESSIONAL', 'NATIONAL_REMOTE']);
 const resolveBusinessModel = (raw, corpus) => {
@@ -23799,12 +23853,43 @@ const scoreWebsite = (m = {}, extras = {}) => {
       why: `only ${graded.length} of ${graded.length + skipped.length} components could be measured - no grade is honest on that little`,
       basedOn: `${graded.length} of ${graded.length + skipped.length} components measured` };
   }
+  // ══ THE DOOR IS NOT OPTIONAL - round 106 ═══════════════════════════════
+  // Live 2026-08-27: 10/10 on sites the same sheet calls broken. The
+  // arithmetic is the whole story. The booking route is 3 of the 10 points
+  // and it is the component that most often LOSES them, so when it goes
+  // unmeasured it leaves the denominator and the remaining components -
+  // viewport, https, build age, speed - are the ones that most often pass.
+  // Worse, the 7.5 cap below is gated on bookingMeasured === true, so the
+  // one safety net is disabled by the same absence. The grade improved the
+  // LESS we knew, which is the recorded unmeasured-as-flattering class
+  // pointed at a number an operator repeats to an owner.
+  //
+  // Same reasoning as the five-component floor above: the door is the money
+  // stage the whole depth ordering is built on, and a build grade that
+  // excludes it is a grade of the wrapper.
+  if (!graded.some(g => g.what === 'a way to book')) {
+    return { checked: false, thin: true, graded, skipped,
+      why: 'the route a ready customer actually gets was never read, and it is the heaviest thing this grade measures - the rest of the build cannot stand in for it',
+      basedOn: `${graded.length} of ${graded.length + skipped.length} components measured, but not the booking route` };
+  }
   // One decimal, scaled to ten whatever was measurable.
   let score = Math.round((got / of) * 100) / 10;
   // ══ THE DOOR CAPS THE SCORE ═══════════════════════════════════════════════
   let capped = null;
   if (m.bookingMeasured === true && m.booking !== 'online_booking' && score > 7.5) {
     capped = 'capped at 7.5: nothing on the site books a time, and a clean build around a form-and-wait door is still a form-and-wait door';
+    score = 7.5;
+  }
+  // ══ AND THE GRADE MAY NOT ARGUE WITH THE LEAKS ON THE SAME PAGE ════════
+  // "how tf did we give this a 9/10" was asked of a sheet whose own
+  // numbered leaks named the site. A leak the ladder placed at the DOOR is
+  // a measured fault on this website - the grade cannot sit in the top band
+  // beside it and still be read as one answer. The cap names the leak, so
+  // the number and the finding are one statement rather than two.
+  const _leakRows = Array.isArray(extras.leaks) ? extras.leaks : [];
+  const _doorLeak = _leakRows.find(x => x && Number(x.leakRank) >= 1 && x.funnelStage === 'door');
+  if (!capped && _doorLeak && score > 7.5) {
+    capped = `capped at 7.5: leak ${Number(_doorLeak.leakRank)} is a measured fault on this site (${String(_doorLeak.problem || 'their door').replace(/\.\s*$/, '').slice(0, 90)}), so the build cannot read as top-of-the-range on the same page`;
     score = 7.5;
   }
   return { checked: true, score, outOf: 10, graded, skipped, capped,
@@ -23872,6 +23957,26 @@ const buildAuditFacts = (m = {}, unlinked = null, extras = null) => {
       && Number.isFinite(Number(m.organicPosition)) && Number(m.organicScanned) >= 6) ? Number(m.organicPosition) : null,
     organicScanned: (m.organicChecked === true && m.organicFound === true
       && Number.isFinite(Number(m.organicPosition)) && Number(m.organicScanned) >= 6) ? Number(m.organicScanned) : null,
+    // ══ A MEASURED ABSENCE IS NOT AN UNMEASURED SURFACE ══════════════════
+    // Tuck & Howell, live 2026-08-27: the funnel printed "Not measured:
+    // Search, blue links" and eleven lines below it the ladder said "They do
+    // not appear anywhere in the first 19 search results". Both came off the
+    // same measurement. organic_invisible fires on checked && !found, and the
+    // only thing the strip could carry was a POSITION - so the one state the
+    // rung exists for had no representation and rendered as a blank.
+    //
+    // Three states, like every other measurement on this strip: they are in
+    // the list at #N, we read the list and they are not in it, or nobody
+    // looked. The absent state carries the window it was read over, because
+    // "not in the results" without the depth is the section 74 overclaim.
+    organicState: (m.organicChecked !== true) ? null
+      : (m.organicFound === true && Number.isFinite(Number(m.organicPosition)) && Number(m.organicScanned) >= 6) ? 'found'
+      : (m.organicFound === false && Number(m.organicScanned) >= 6) ? 'absent'
+      : null,
+    // The window the absence was read over. Null unless the state is absent,
+    // so it can never be read as a position.
+    organicAbsentOf: (m.organicChecked === true && m.organicFound === false && Number(m.organicScanned) >= 6)
+      ? Number(m.organicScanned) : null,
     recurring: m.recurringChecked === true ? (m.hasRecurringOffer === false ? 'none' : 'offered') : null,
     // Which source measured the search read: 'dataforseo' is the real local
     // pack (positions sayable); 'places' is the lookup fallback (absence only,
@@ -24044,6 +24149,8 @@ const FACTS_RENDER = {
   adLanding:         'client',
   organicPosition:   'client',
   organicScanned:    'client',
+  organicState:      'client',
+  organicAbsentOf:   'client',
   recurring:         'client',
   searchSource:      'client',
   searchQuery:       'client',
@@ -27677,9 +27784,40 @@ const diagnosisConflict = (layer, bottleneck) => {
   }
   return null;
 };
+// ══ A RATIO IS ONE MEASUREMENT, NOT TWO STITCHED TOGETHER ═════════════
+// Tuck & Howell, live 2026-08-27: "16 of the 1 businesses ranked above them
+// have FEWER reviews", and Bradley Construction the same shape at "20 of the
+// 1". Neither number was wrong on its own. The NUMERATOR came from the outrank
+// row - which round 101 split off on purpose, because the sharpest outranked
+// evidence can legitimately sit on a service query - and the DENOMINATOR was
+// re-derived downstream from the HEAD row's position. Two searches, one
+// sentence, and arithmetic that refutes itself on the page.
+//
+// So the denominator travels WITH its numerator, off the same row, or there is
+// no ratio to state. Same rule section 24 earned when weakerAbove was counted
+// over the whole field and weakerNames was read off a three-row display list.
+// Returns above=null rather than guessing: the caller has a durable
+// no-denominator sentence for exactly that case.
+const outrankRatioFrom = (row) => {
+  if (!row || row.found !== true || row.orderTrusted !== true) return { weakerAbove: 0, above: null, query: null };
+  const w = Number(row.weakerAbove);
+  const p = Number(row.rank);
+  const q = row.query ? String(row.query) : null;
+  if (!Number.isFinite(w) || w <= 0) return { weakerAbove: 0, above: null, query: q };
+  // Number(null) is 0 and 0 is finite, so the position is type-checked before
+  // it can become a denominator of zero dressed up as one.
+  const above = (typeof row.rank === 'number' && Number.isFinite(p) && p > 1) ? p - 1 : null;
+  // A numerator larger than its own denominator is the impossible shape this
+  // exists to stop. Refuse the ratio; the durable sentence still stands.
+  if (above !== null && w > above) return { weakerAbove: w, above: null, query: q };
+  return { weakerAbove: w, above, query: q };
+};
 const measureGrowthConstraint = ({
   marketClarity = { checked: false },
   rank, rankScanned, rankAbsentConfirmed, reviewCount, reviewRating, weakerAbove,
+  // The denominator of the weaker-above ratio and the search it was measured
+  // on. Both come from the SAME row as weakerAbove - see outrankRatioFrom.
+  weakerAboveOf = null, weakerAboveQuery = null, rankQuery = null,
   offerStrength, valueEquation, opsPainCount, opsPain, bottleneck, city, trade,
   recurringOffer = { checked: false },
 } = {}) => {
@@ -27868,9 +28006,18 @@ const measureGrowthConstraint = ({
     // the form that survives him checking it.
     const _rankKnown = haveRank && Number.isFinite(Number(rank));
     const _buried = _rankKnown && Number(rank) > 3;
+    // The denominator arrives WITH its numerator or it does not arrive.
+    // Never Math.max(1, rank - 1): rank is the head term's position and
+    // weakerAbove can be measured on a different search entirely.
+    const _outAbove = (Number.isFinite(Number(weakerAboveOf)) && Number(weakerAboveOf) >= 1
+      && Number(weakerAboveOf) >= Number(weakerAbove)) ? Math.round(Number(weakerAboveOf)) : null;
+    // When the two searches differ the sentence says so - two true numbers
+    // from two searches read as one false ratio unless the reader is told.
+    const _outWhere = (weakerAboveQuery && rankQuery && String(weakerAboveQuery) !== String(rankQuery))
+      ? ` on the search "${weakerAboveQuery}"` : '';
     condition = rankNotFound
       ? `We searched what a customer in their city would type and they are not in the top ${rankScanned} at all. Not buried \u2014 absent.`
-      : (weakerAbove > 0 && _buried)
+      : (weakerAbove > 0 && _buried && _outAbove !== null)
         ? (() => {
             // ── SAY THE PROPORTION, NOT JUST THE COUNT ────────────────────
             // This read "Their reputation is stronger than the businesses
@@ -27886,10 +28033,10 @@ const measureGrowthConstraint = ({
             // a claim we handed it. A count without its denominator invites
             // exactly that, so the denominator is now always attached and the
             // language scales with the ratio.
-            const _above = Math.max(1, Number(rank) - 1);
+            const _above = _outAbove;
             const _share = weakerAbove / _above;
             const _frame = _share >= 0.5
-              ? `MOST of the businesses ranked above them \u2014 ${weakerAbove} of ${_above} \u2014 have FEWER reviews`
+              ? `MOST of the businesses ranked above them \u2014 ${weakerAbove} of ${_above}${_outWhere} \u2014 have FEWER reviews`
               // "even one of the 6 businesses ranked above them has FEWER reviews"
               // reads as though we are straining to make one sound like a lot,
               // and it is the exact opposite of the instruction two lines below
@@ -27897,8 +28044,8 @@ const measureGrowthConstraint = ({
               // version of this finding and the copy should say so plainly rather
               // than dressing it up.
               : weakerAbove === 1
-                ? `just 1 of the ${_above} businesses ranked above them has FEWER reviews`
-                : `${weakerAbove} of the ${_above} businesses ranked above them have FEWER reviews`;
+                ? `just 1 of the ${_above} businesses ranked above them${_outWhere} has FEWER reviews`
+                : `${weakerAbove} of the ${_above} businesses ranked above them${_outWhere} have FEWER reviews`;
             return `${_frame}, and they still sit at #${rank}. ${rank <= (_above + 1) / 2 ? 'They ARE in the results, in the middle of them' : 'They ARE in the results; they are near the bottom of them'}, and people choose from the top of a list. \u26a0 OUR NUMBER AND HIS SCREEN DO NOT MATCH. We read the Places API, which returns organic results only. What he sees has SPONSORED listings above them, so his count is always one or two higher than ours \u2014 verified live: we measured a Cincinnati dentist at #9 and counting on the actual page put her at #10, because of one ad. NEVER put the raw digit in an email as something he can count. Say the band \u2014 "in the middle of the first twenty", "not in the top few" \u2014 which survives the ads being there. The digit stays here for the call sheet.
 \u2605 SAY WHERE THEY ACTUALLY ARE. At #${rank} with ${_above} above them, "near the bottom" is only true in the lower half \u2014 a live audit wrote "near the bottom of the first twenty" about a business ranked #9 and its own fact-checker caught it as an overstatement. Mid-pack is still a real problem and it is a more credible sentence, because he can count. \u26a0 THE EXACT COUNT (${weakerAbove} of ${_above}) IS A SNAPSHOT. Local rank shifts a place or two between checks \u2014 this same business measured #7, #8 and #9 on the same query inside an hour, and the ratio recomputes with it. Never inflate it into "most" or "many". Equally, do not put the bare digits in the email as though he could re-count them tomorrow and get the same answer. Write the durable form \u2014 "businesses with fewer reviews than yours are ranking above you" \\u2014 which is true at every one of those positions and survives him checking. The exact figures stay here, for the audit and the call sheet, where precision is free.`;
           })()
@@ -27909,8 +28056,8 @@ const measureGrowthConstraint = ({
         // not first" \u2014 a positional claim about a position we just declared
         // unsayable. With no rank there is no ratio and no standing, only the
         // durable fact.
-        ? (_rankKnown
-            ? `${weakerAbove} of the ${Math.max(1, Number(rank) - 1)} businesses ranked above them have FEWER reviews. They rank well, but not first, and the difference is not review counts. \u26a0 Use that exact ratio; do not inflate it.`
+        ? ((_rankKnown && _outAbove !== null)
+            ? `${weakerAbove} of the ${_outAbove} businesses ranked above them${_outWhere} have FEWER reviews. They rank well, but not first, and the difference is not review counts. \u26a0 Use that exact ratio; do not inflate it.`
             : `${weakerAbove} business(es) ranking above them have FEWER reviews. \u26a0 Their own position was NOT stable enough to measure, so say NOTHING about where they rank \u2014 no digit, no band, no "they rank well". The only claim available is that businesses with fewer reviews are above them.`)
         : `Customers searching for exactly what they sell, in their own city, do not find them in the results.`;
     why = rankNotFound
@@ -35966,7 +36113,7 @@ const resolvePlaceId = async ({ companyName, website, location, placesKey }) => 
   const city = String(location || '').split(',')[0].trim();
   const query = city ? `${companyName} ${city}` : String(companyName);
   try {
-    notePlacesCall('search');   // counted at DISPATCH: Google bills a request it received, even on a request we give up waiting for
+    notePlacesCall('search', 'place-id-recovery');   // counted at DISPATCH: Google bills a request it received, even on a request we give up waiting for
     const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey,
@@ -36372,7 +36519,7 @@ const findDuplicateListing = async ({ companyName, placeId, website, phone, loca
   }
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env and no DataForSEO answer' };
   try {
-    notePlacesCall('search');   // counted at DISPATCH: Google bills a request it received
+    notePlacesCall('search', 'duplicate-listing-fallback');   // counted at DISPATCH: Google bills a request it received
     const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey,
@@ -36856,7 +37003,7 @@ const fetchLocalPack = async ({ query, city, placesKey, bizLat, bizLng, noPlaces
   }
   if (noPlacesFallback) return { ok: false, why: 'DataForSEO could not localize this market, and the Places fallback is disabled for this read - its relevance order would be noise about a market this small' };
   if (!placesKey) return { ok: false, why: 'no rank source configured' };
-  notePlacesCall('search');   // counted at DISPATCH: Google bills a request it received
+  notePlacesCall('search', 'rank-fallback');   // counted at DISPATCH: Google bills a request it received
   const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey,
@@ -40550,6 +40697,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // measures. The later assignment is left in place and simply reuses this
         // value, so no downstream reader can observe a different constraint than
         // the ladder did.
+        const _gcRatio = outrankRatioFrom(outrankRow || localRank);
         growthConstraint = measureGrowthConstraint({
           rank: localRank && localRank.found ? localRank.rank : undefined,
           rankScanned: localRank ? localRank.scanned : undefined,
@@ -40565,7 +40713,19 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             : (localRank && localRank.ours ? localRank.ours.reviews : undefined),
           reviewRating: (gbpHealth && Number.isFinite(Number(gbpHealth.rating))) ? Number(gbpHealth.rating)
             : (localRank && localRank.ours ? localRank.ours.rating : undefined),
-          weakerAbove: (outrankRow || localRank) ? ((outrankRow || localRank).weakerAbove || 0) : 0,
+          // ══ ONE ROW SUPPLIES BOTH HALVES OF THE RATIO ═══════════════════
+        // This read weakerAbove off the OUTRANK row while rank came from the
+        // HEAD row, and the constraint then re-derived the denominator from
+        // rank - which is how "16 of the 1 businesses ranked above them have
+        // FEWER reviews" reached a live call sheet. outrankRatioFrom takes
+        // both halves off ONE row and refuses the ratio when that row cannot
+        // supply a position - or when the source is a relevance lookup, which
+        // may never state an order (the section 52 wall, finally applied at
+        // the one consumer that never had it).
+        weakerAbove: _gcRatio.weakerAbove,
+        weakerAboveOf: _gcRatio.above,
+        weakerAboveQuery: _gcRatio.query,
+        rankQuery: (localRank && localRank.query) || null,
           offerStrength, valueEquation, marketClarity, recurringOffer,
           opsPainCount: (publicPainSignals && publicPainSignals.length) || 0,
           opsPain: readOperationalPain(publicPainSignals, reviewsRead),
@@ -41786,6 +41946,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // (the ladder sits inside a try, and a throw there must not silently leave
     // the audit with no constraint at all).
     if (!growthConstraint || !growthConstraint.checked) {
+      const _gcRatio2 = outrankRatioFrom(outrankRow || localRank);
       growthConstraint = measureGrowthConstraint({
         rank: localRank && localRank.found ? localRank.rank : undefined,
         rankScanned: localRank ? localRank.scanned : undefined,
@@ -41797,7 +41958,19 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           : (localRank && localRank.ours ? localRank.ours.reviews : undefined),
         reviewRating: (gbpHealth && Number.isFinite(Number(gbpHealth.rating))) ? Number(gbpHealth.rating)
           : (localRank && localRank.ours ? localRank.ours.rating : undefined),
-        weakerAbove: (outrankRow || localRank) ? ((outrankRow || localRank).weakerAbove || 0) : 0,
+        // ══ ONE ROW SUPPLIES BOTH HALVES OF THE RATIO ═══════════════════
+        // This read weakerAbove off the OUTRANK row while rank came from the
+        // HEAD row, and the constraint then re-derived the denominator from
+        // rank - which is how "16 of the 1 businesses ranked above them have
+        // FEWER reviews" reached a live call sheet. outrankRatioFrom takes
+        // both halves off ONE row and refuses the ratio when that row cannot
+        // supply a position - or when the source is a relevance lookup, which
+        // may never state an order (the section 52 wall, finally applied at
+        // the one consumer that never had it).
+        weakerAbove: _gcRatio2.weakerAbove,
+        weakerAboveOf: _gcRatio2.above,
+        weakerAboveQuery: _gcRatio2.query,
+        rankQuery: (localRank && localRank.query) || null,
         offerStrength, valueEquation, marketClarity, recurringOffer,
         opsPainCount: (publicPainSignals && publicPainSignals.length) || 0,
         opsPain: readOperationalPain(publicPainSignals, reviewsRead),
@@ -42535,6 +42708,29 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     const _staleSite = builtWith.copyrightYear && builtWith.copyrightYear < 2021;
     const _weakSite = !hasCTA || _staleSite || (visualAnalysis && (visualAnalysis.heroIsBlank || /dated/i.test(visualAnalysis.designObservation || '') || visualAnalysis.overallConversionReadiness === 'weak'));
     const _hasAds = (fbAds.adCount || 0) > 0 || !!builtWith.hasGoogleAdsTag;
+    // ══ THE PLAIN FETCH IS NOT THE FUNNEL ═══════════════════════════════
+    // The blind guard below tested builtWith.checked, which is a fact about
+    // the no-JavaScript fetch - a bot-hardened site refuses that routinely
+    // while the RENDERED homepage beside it reads perfectly, and every
+    // booking, form, phone and tag measurement comes off the rendered copy.
+    // Live 2026-08-27: "Fix first: unknown - we could not read enough of
+    // their pages" printed under a story that says "Fix the form first",
+    // with three numbered leaks above it. Section 64 found this exact
+    // mis-aimed gate for the six ad fields; the cascade was the consumer
+    // nobody re-aimed.
+    //
+    // POSITIVE evidence only, which is what proves we looked: markup we
+    // actually read, a booking route we actually measured, an interior page
+    // we actually opened, the plain fetch when it DID answer, or a numbered
+    // leak the ladder placed at the door - a leak about their door cannot
+    // exist unless their door was measured.
+    const _doorLeak = !!(_harmsForResponse && Array.isArray(_harmsForResponse.problemList)
+      && _harmsForResponse.problemList.some(x => x && Number(x.leakRank) >= 1 && x.funnelStage === 'door'));
+    const _funnelRead = !!((htmlSignals && htmlSignals.checked === true)
+      || (sitePages && sitePages.bookingMeasured === true)
+      || (sitePages && Array.isArray(sitePages.pagesRead) && sitePages.pagesRead.length > 0)
+      || (builtWith && builtWith.checked === true)
+      || _doorLeak);
     // _underMarketed was computed here and read by nothing — the DEMAND branch
     // below already covers the under-marketed shape in its final else. A dead
     // signal invites the next reader to assume it gates something. Removed.
@@ -42691,9 +42887,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // low to fire. Every branch above here rests on POSITIVE evidence (a hire, a
     // headcount, an ads tag, a booking read), which proves we looked; everything
     // from FOUNDATION down rests on absences, so the guard goes here.
-    } else if (sitePages === null || !builtWith || builtWith.checked === false) {
+    } else if (!_funnelRead) {
       bottleneck = 'NOT MEASURED';
-      bottleneckWhy = 'We could not read enough of their funnel to name the first broken link. That is a statement about our read, not about their business, and nothing should be sold off it. Re-run this lead before using this section.';
+      bottleneckWhy = 'We could not read enough of their pages to name the first thing to fix. That is a statement about our read, not about their business, and nothing should be sold off it. Re-run this lead before using this section.';
     } else if (!_siteConverts) {
       bottleneck = 'FOUNDATION';
       bottleneckWhy = 'No ad code was found, and the pages we read give a visitor no clear way to act. The site is the first broken link: money spent sending people to it is wasted until the page gives them something to do.';
@@ -43637,11 +43833,27 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // already exists for this — it was written when an email opened
           // mid-question because a quote was cut at the wrong boundary — so the
           // SENTENCE is quoted and the match only locates it.
-          const _flag = (re, why) => {
+          // ══ A REGISTER NOTE IS NOT A DO-NOT-SAY ═══════════════════════════
+          // Two of these flags judge how a sentence READS, not whether it is
+          // true - marketing jargon and developer register. Both landed in
+          // _claimRisks, which is rendered as "Do not say" on the call sheet,
+          // and one of them fired on OUR OWN honest sentence "We could not
+          // read enough of their funnel to name the first broken link" for
+          // containing the word funnel. A gate written to police the model's
+          // voice, applied to a fact we assembled, in the section that exists
+          // to stop a FALSE sentence being read down a phone.
+          //
+          // The rules do not move and nothing stops being detected. Only the
+          // destination changes: register notes are reasoning, they are
+          // logged and stored, and they never reach the sheet. Same split
+          // section 61 made for VOICE notes.
+          const _registerNotes = [];
+          const _flag = (re, why, kind) => {
             const m = _allProse.match(re);
             if (!m) return;
             const sentence = phraseAround(_allProse, m[0]) || String(m[0]);
-            _claimRisks.push(`${why} — "${String(sentence).trim().slice(0, 220)}"`);
+            const _entry = `${why} — "${String(sentence).trim().slice(0, 220)}"`;
+            if (kind === 'register') _registerNotes.push(_entry); else _claimRisks.push(_entry);
           };
           // 1. Backend / post-submit behaviour we never observed. The rows
           // live in AUDIT_BACKEND_CLAIM_ROWS at module scope, because the
@@ -43787,7 +43999,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // 8. Marketing jargon the prompt already bans for the email voice. The
           // reader owns a dental practice or a gravel business; "the pixel is live"
           // is not a sentence anyone has said to him.
-          _flag(/\b(pixel|retargeting|conversion rate|funnel|CRM|SEO|schema markup|meta description|H1 tag|above the fold|attribution|impressions)\b/i, 'marketing jargon banned in the email voice \u2014 rewrite in the owner\u2019s words');
+          _flag(/\b(pixel|retargeting|conversion rate|funnel|CRM|SEO|schema markup|meta description|H1 tag|above the fold|attribution|impressions)\b/i, 'marketing jargon banned in the email voice \u2014 rewrite in the owner\u2019s words', 'register');
           // ── INVENTED CREDENTIALS ────────────────────────────────────────
           // A live audit told a plastic surgeon "Cincinnati Magazine has
           // recognized twice" with nothing in the evidence supporting it. This is
@@ -43833,7 +44045,7 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // a measurement, and this system does not ship claims on that basis.
           _flag(/\b(clos(es?|ing|ed)|opens?|available|answer(s|ing)?|line|phone|office|hours?)\b[^.]{0,40}\b(at\s+)?\d{1,2}\s*(:\d{2})?\s*(am|pm)\b|\b(mon|tues?|wed|thur?s?|fri|sat|sun)[a-z]*\s*(day)?s?\b[^.]{0,30}\b\d{1,2}\s*(:\d{2})?\s*(am|pm)\b/i,
             'SPECIFIC OPERATING HOURS \u2014 we never measured their hours, only whether their Google profile lists any. A time like "closes at 3pm on Fridays" is invented, and it is the most checkable false statement an email can contain');
-          _flag(/\btel:\s*link\b|\bmeta tag\b|\bpage is coded\b|\bpage actively blocks\b|\bcoded to block\b|\bblocks the tap\b|\bconversion tag\b|\bviewport\b|\bauto-?detection\b|\bpage source\b|\bmarkup\b/i, 'MECHANISM/DEVELOPER REGISTER — includes "the page actively blocks it", "coded to block", tel: link etc. Write what it costs him, never how it works. This is the sentence he forwards to whoever built the site.');
+          _flag(/\btel:\s*link\b|\bmeta tag\b|\bpage is coded\b|\bpage actively blocks\b|\bcoded to block\b|\bblocks the tap\b|\bconversion tag\b|\bviewport\b|\bauto-?detection\b|\bpage source\b|\bmarkup\b/i, 'MECHANISM/DEVELOPER REGISTER — includes "the page actively blocks it", "coded to block", tel: link etc. Write what it costs him, never how it works. This is the sentence he forwards to whoever built the site.', 'register');
           // 2. Search-surface claims with no local-rank measurement
           if (!_lrChecked) {
             _flag(/\bnobody (searching|who searches).{0,40}\b(sees|finds|is seeing)\b/i, 'search-result claim with NO local-rank measurement');
@@ -43993,6 +44205,13 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           }
 
           if (_readLimits.length) parsed._readLimits = _readLimits;
+          // Stored and logged, never rendered on the sheet. A register note is
+          // reasoning for whoever tunes the prompt; the caller needs the list
+          // of sentences that are FALSE, and nothing else in that section.
+          if (_registerNotes.length) {
+            parsed._registerNotes = _registerNotes;
+            console.log(`\u{1F50E} REGISTER NOTE [${company}]: ${_registerNotes.length} sentence(s) read as jargon or as developer register. Kept OUT of "Do not say", which exists to stop a FALSE sentence being read down a phone. First: "${String(_registerNotes[0]).slice(0, 150)}"`);
+          }
           // Two rules flagging one sentence produce one warning, not two — the
           // span is what must not be said, and the first reason stands for it.
           const _dedupedRisks = dedupeClaimRisks(_claimRisks);
@@ -44760,14 +44979,14 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                   _srx = stripPatternConflationDeep(_srx, _srg.conf, 1, (publicPainSignals || []).map(s => reviewPainMentions(String(s)) || 1));
                   _srg.spend = { cut: [] };
                   _srx = stripUnprovenAdSpendDeep(_srx, _srg.spend, 1, !!((localRank && localRank.paidIsUs === true) || (organicRank && organicRank.serp && organicRank.serp.lsaUs === true)));
-                  _srg.own = { cut: [] };
-                  _srx = stripUnverifiedOwnershipDeep(_srx, _srg.own, 1, {
+                  const _srOwn = { cut: [] };
+                  _srx = stripUnverifiedOwnershipDeep(_srx, _srOwn, 1, {
                     names: [verifiedCEO, decisionMaker && decisionMaker.name, heldBackContact && heldBackContact.name].filter(Boolean),
                     emailLocal: String((email && email.email) || '').split('@')[0],
                     company,
                   });
-                  if (_srg.own.cut.length) {
-                    console.log(`\u26d4 OWNERSHIP CLAIM [${company}]: the story named somebody the owner with no code-checked evidence \u2014 removed ${_srg.own.cut.length} sentence(s). First one: "${String(_srg.own.cut[0]).slice(0, 110)}".`);
+                  if (_srOwn.cut.length) {
+                    console.log(`\u26d4 OWNERSHIP CLAIM [${company}]: the story named somebody the owner with no code-checked evidence \u2014 removed ${_srOwn.cut.length} sentence(s). First one: "${String(_srOwn.cut[0]).slice(0, 110)}".`);
                   }
                   situationRead = _srx;
                   // ══ TWO NAMES FOR THE OWNER ON ONE CALL SHEET ═══════════
@@ -44789,9 +45008,28 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                       console.log(`\u26a0 OWNER NAME CONFLICT [${company}]: ${_ocn}`);
                     }
                   }
-                  const _srCut = _srg.q.cut.length + _srg.m.cut.length + _srg.sq.cut.length + _srg.rc.cut.length + _srg.irc.cut.length + _srg.cc.cut.length + _srg.pc.cut.length + _srg.conf.cut.length + _srg.spend.cut.length;
+                  // ══ THE TALLY AND THE TOTAL WERE TWO HAND-KEPT LISTS ═══════
+                  // Live 2026-08-27: "removed 2 sentence(s) - quotes 0, money 0,
+                  // spelled scale 0, recency conclusions 0, review counts 0,
+                  // competitor sites 0, post-contact claims 0. First: """. The
+                  // TOTAL counted nine buckets and the BREAKDOWN named seven, so
+                  // the two families added since it was written (pattern
+                  // conflation and unproven ad spend) removed sentences that the
+                  // line then reported as nothing at all - and the "First:" chain
+                  // could not reach them either. A log that says a gate fired and
+                  // cannot say which is worse than none: it is the SMTP lesson
+                  // this file records three times, pointed at our own instruments.
+                  //
+                  // Both now come off the SAME object, so a stripper added
+                  // tomorrow appears in the breakdown by construction. An
+                  // unlabelled bucket prints its own key rather than vanishing.
+                  const _srCuts = Object.keys(_srg).map(k => [k, (_srg[k] && _srg[k].cut) || []]);
+                  const _srCut = _srCuts.reduce((n, pair) => n + pair[1].length, 0);
                   if (_srCut) {
-                    console.log(`⛔ SITUATION READ GATED [${company}]: removed ${_srCut} sentence(s) from the synthesis — quotes ${_srg.q.cut.length}, money ${_srg.m.cut.length}, spelled scale ${_srg.sq.cut.length}, recency conclusions ${_srg.rc.cut.length}, review counts ${_srg.irc.cut.length}, competitor sites ${_srg.cc.cut.length}, post-contact claims ${_srg.pc.cut.length}. First: "${String(_srg.rc.cut[0] || _srg.pc.cut[0] || _srg.q.cut[0] || _srg.m.cut[0] || _srg.sq.cut[0] || _srg.irc.cut[0] || _srg.cc.cut[0] || '').slice(0, 140)}". The synthesis is what Mike reads in THE BUSINESS, and until now it was the one block of prose no gate ever touched.`);
+                    const _srBreak = _srCuts.map(pair => `${SITUATION_GATE_LABEL[pair[0]] || pair[0]} ${pair[1].length}`).join(', ');
+                    const _srFirstPair = _srCuts.find(pair => pair[1].length);
+                    const _srFirst = _srFirstPair ? String(_srFirstPair[1][0] || '') : '';
+                    console.log(`⛔ SITUATION READ GATED [${company}]: removed ${_srCut} sentence(s) from the synthesis — ${_srBreak}. First: "${_srFirst.slice(0, 140)}". The synthesis is what Mike reads in THE BUSINESS, and until now it was the one block of prose no gate ever touched.`);
                   }
                 }
               }
@@ -47335,7 +47573,11 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       // a fact the ladder scored on. websiteScore is the /10 with every point
       // traceable; auditFacts is ads yes/no/unreadable, the booking route, the
       // campaign pages the site does not link to, and real-visitor speed.
-      websiteScore: scoreWebsite(_harmInputs, { htmlSignals, visualAnalysis }),
+      // The numbered leaks travel WITH the grade, so a top-band number and a
+      // measured fault on the same site cannot appear side by side as two
+      // independent answers.
+      websiteScore: scoreWebsite(_harmInputs, { htmlSignals, visualAnalysis,
+        leaks: (_harmsForResponse && Array.isArray(_harmsForResponse.problemList)) ? _harmsForResponse.problemList : [] }),
       auditFacts: buildAuditFacts(_harmInputs, sitePages && sitePages.unlinkedPages, {
         htmlSignals,
         // A Wix/Squarespace build measures its own traffic natively with no
@@ -49629,7 +49871,22 @@ app.listen(PORT, () => {
     // because it sat BELOW the !_siteConverts branch, and an unread site
     // satisfies "cannot convert". The guard must come before every branch that
     // is built on an absence.
-    const _blindAt = _src.indexOf(_needle('} else if (sitePages === null || ', '!builtWith || builtWith.checked === false) {'));
+    // ══ RE-AIMED, NOT WORKED AROUND - round 106 ═══════════════════════════
+    // The guard's condition changed, so this needle changed with it. It used
+    // to pin builtWith.checked, which is the PLAIN no-JavaScript fetch: a
+    // bot-hardened site refuses that routinely while the rendered homepage
+    // beside it reads perfectly, and "Fix first: unknown" printed live under
+    // three numbered leaks. The ORDER rule below is unchanged and is what
+    // this check has always been about.
+    const _blindAt = _src.indexOf(_needle('} else if (!_funnel', 'Read) {'));
+    // And the merged read must actually include the rendered markup, or the
+    // guard is pointed back at the plain fetch under a new name.
+    if (!_src.includes(_needle('const _funnelRead = !!((htmlSignals && ', 'htmlSignals.checked === true)'))) {
+      _fails.push('the blind guard no longer consults the rendered markup, so a site whose plain fetch was refused is diagnosed as unread while every measurement on it succeeded');
+    }
+    if (!_src.includes(_needle('|| _door', 'Leak);'))) {
+      _fails.push('a numbered leak at the door no longer counts as proof the funnel was read - a leak about their door cannot exist unless their door was measured');
+    }
     const _foundationAt = _src.indexOf(_needle('} else if (!_siteConverts) {', ''));
     if (_blindAt < 0) _fails.push('the blind guard is gone from the cascade');
     else if (_foundationAt >= 0 && _blindAt > _foundationAt) {
@@ -50023,6 +50280,44 @@ app.listen(PORT, () => {
     if (_five.checked !== true) _fails.push('a five-component read no longer grades at all — the floor is eating honest partial reads');
     else if (_five.score < 9) _fails.push(`a clean five-component read scored ${_five.score}/10 — the unmeasured components are being scored as ZERO, which is the exact class PART 6 names, pointed at a number an operator will repeat`);
     if (scoreWebsite({}).checked !== false) _fails.push('a lead with nothing measured produced a score from nothing');
+    // ══ THE DOOR IS NOT OPTIONAL - round 106 ══════════════════════════════
+    // "how tf did we give this a 9/10" and 10/10 on sites the same sheet calls
+    // broken. The path: the booking route is 3 of the 10 points AND the gate on
+    // the 7.5 cap, so an unmeasured door removed the biggest deduction and
+    // disabled the safety net in one move - the grade improved the less we knew.
+    const _noDoor = scoreWebsite({ viewportChecked: true, hasViewport: true, siteAgeScore: 0,
+      formFieldCountIsSingleForm: true, formFieldCount: 3, mobileFieldMeasured: true,
+      mobileFieldSlow: false, isHttps: true, pricingMeasured: true, pricesPublished: 2 });
+    if (_noDoor.checked !== false || _noDoor.thin !== true) {
+      _fails.push(`a lead whose booking route was never read still grades ${_noDoor.score}/10 - the heaviest component left the denominator and the cap that depends on it never ran`);
+    }
+    if (!/booking route/.test(String(_noDoor.why || '') + String(_noDoor.basedOn || ''))) {
+      _fails.push('the refusal does not name the door, so the card cannot say which measurement is missing');
+    }
+    // AND a measured door still grades - the requirement is a measurement, not a tax.
+    const _withDoor = scoreWebsite({ viewportChecked: true, hasViewport: true, siteAgeScore: 0,
+      bookingMeasured: true, booking: 'online_booking', formFieldCountIsSingleForm: true, formFieldCount: 3,
+      mobileFieldMeasured: true, mobileFieldSlow: false, isHttps: true });
+    if (_withDoor.checked !== true || _withDoor.score < 9) _fails.push(`the same lead WITH a measured scheduler door scores ${_withDoor && _withDoor.score} - the requirement is eating honest reads`);
+    // ══ AND THE GRADE MAY NOT ARGUE WITH THE LEAKS ON THE SAME PAGE ═══════
+    const _cleanBuild = { viewportChecked: true, hasViewport: true, siteAgeScore: 0,
+      bookingMeasured: true, booking: 'online_booking', formFieldCountIsSingleForm: true, formFieldCount: 3,
+      mobileFieldMeasured: true, mobileFieldSlow: false, isHttps: true };
+    const _doorLeakRows = [{ leakRank: 2, funnelStage: 'door', problem: 'their contact form asks for 11 things before anything happens' }];
+    const _leaky = scoreWebsite(_cleanBuild, { leaks: _doorLeakRows });
+    if (!_leaky.checked || _leaky.score > 7.5) _fails.push(`a site carrying a numbered leak at its own door still grades ${_leaky && _leaky.score}/10 beside that leak`);
+    if (_leaky.checked && !_leaky.capped) _fails.push('the leak cap fired without naming itself - a silently capped number reads as an earned one');
+    if (_leaky.capped && !/11 things/.test(String(_leaky.capped))) _fails.push('the cap does not name the leak it deferred to, so the number and the finding stay two separate answers');
+    // A leak somewhere OTHER than the door is not a fault of the build.
+    const _farLeak = scoreWebsite(_cleanBuild, { leaks: [{ leakRank: 1, funnelStage: 'found', problem: 'they are not in the results' }] });
+    if (!_farLeak.checked || _farLeak.capped) _fails.push('a search-visibility leak taxes the BUILD grade - the caption says these are judged separately and it must stay true');
+    // And the call site, or the rule runs on fixtures and never on a lead.
+    {
+      const _sn = (...p) => p.join('');
+      if (!selfSourceNoComments().includes(_sn('leaks: (_harmsForResponse && Array.isArray(', '_harmsForResponse.problemList))'))) {
+        _fails.push('the numbered leaks never reach the grade, so the cap runs on fixtures only');
+      }
+    }
     // ══ V2 (round 101): THE DOOR CAPS THE SCORE ═══════════════════════════
     // Windows Plus shipped 9/10 over a form-and-wait door and the owner's
     // verdict was "this site IS NOT A 9/10 not even close". A clean build
@@ -50072,12 +50367,24 @@ app.listen(PORT, () => {
     if (buildAuditFacts({}).recurring !== null) _fails.push('an unmeasured recurring read invents an answer');
     if (buildAuditFacts({ organicChecked: true, organicFound: true, organicPosition: 14, organicScanned: 19 }).organicPosition !== 14) _fails.push('a measured blue-links position does not reach the strip');
     if (buildAuditFacts({ organicChecked: true, organicFound: true, organicPosition: 3, organicScanned: 5 }).organicPosition !== null) _fails.push('a five-result organic field produces a position — below six results a rank is arithmetic, not a finding');
+    // ══ AND A MEASURED ABSENCE IS A THIRD STATE - round 106 ═════════════
+    // organic_invisible fires on checked && !found, and the strip could only
+    // ever carry a POSITION - so the exact state that rung exists for had no
+    // representation and rendered as "Not measured: Search, blue links", on
+    // the same sheet whose ladder said they appear nowhere in 19 results.
+    const _oAbs = buildAuditFacts({ organicChecked: true, organicFound: false, organicScanned: 19 });
+    if (_oAbs.organicState !== 'absent') _fails.push(`a measured absence from the blue links reports state ${_oAbs.organicState} - the one state the rung exists for is still invisible on the strip`);
+    if (_oAbs.organicAbsentOf !== 19) _fails.push('the absence does not carry the window it was read over, so the row cannot say how deep we looked');
+    if (_oAbs.organicPosition !== null) _fails.push('an absence produced a position');
+    if (buildAuditFacts({ organicChecked: true, organicFound: true, organicPosition: 14, organicScanned: 19 }).organicState !== 'found') _fails.push('a measured position no longer reports as found');
+    if (buildAuditFacts({}).organicState !== null) _fails.push('a surface nobody read reports a state - unmeasured has become a third claim');
+    if (buildAuditFacts({ organicChecked: true, organicFound: false, organicScanned: 4 }).organicState !== null) _fails.push('an absence from a four-result field is stated as an absence - below six results that is arithmetic, not a finding, and the found side already refuses it');
     if (buildAuditFacts({ adsLiveInPack: false }).adsLive !== null) _fails.push('adsLive false hardened into a claim — no sponsored row for one sampled search is not proof they run no ads');
 
     // ── the call site, because a fixture supplies its own arguments ────────
     const _wn = (...p) => p.join('');
     const _wsrc = selfSourceNoComments();
-    if (!_wsrc.includes(_wn('websiteScore: scoreWebsite(', '_harmInputs, { htmlSignals, visualAnalysis }),'))) {
+    if (!_wsrc.includes(_wn('websiteScore: scoreWebsite(', '_harmInputs, { htmlSignals, visualAnalysis,'))) {
       _fails.push('the response no longer carries the score, so the card computes on the client from fields it does not have — or not at all');
     }
     if (!_wsrc.includes(_wn('auditFacts: buildAuditFacts(', '_harmInputs, sitePages && sitePages.unlinkedPages, {'))) {
@@ -51369,6 +51676,184 @@ app.listen(PORT, () => {
     console.log(`⛔ NEW SIGNAL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══════════ PLACES LABEL CHECK — every billed call names itself ═════════
+  // Live 2026-08-27, five leads, DataForSEO credentialed: "5 text search(es) +
+  // 5 profile read(s)". Two Places calls a lead, where the design says one
+  // profile read and no search - and FOUR call sites can produce that search,
+  // none of which the line named. So the largest remaining question about the
+  // Places bill could not be answered from a log at all.
+  //
+  // Section 54 fixed exactly this for Anthropic: nineteen of twenty-four calls
+  // printed as the word "anthropic", and three sessions proposed cuts to a bill
+  // nobody had measured. The inventory is computed from the file's own call
+  // sites, not from a hand-kept list, so a call added tomorrow fails the boot
+  // until somebody names it.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoComments();
+    const _sites = _src.match(/notePlacesCall\([^)]*\)/g) || [];
+    if (_sites.length < 5) _fails.push(`only ${_sites.length} Places call site(s) found - the scan matched almost nothing and would report a clean pass while seeing none of them`);
+    const _named = new Set();
+    for (const s of _sites) {
+      const m = s.match(/notePlacesCall\(\s*'(search|details)'\s*,\s*'([a-z0-9-]+)'\s*\)/);
+      if (!m) { _fails.push(`a Places call is billed with no name: ${s} - it prints as "unnamed" and the invoice question stays unanswerable`); continue; }
+      _named.add(`${m[1]}:${m[2]}`);
+    }
+    // The four searches are four different decisions and must stay tellable
+    // apart: one is discovery (Find), one is a recovery when a lead arrives
+    // with no place id, and two are DataForSEO fallbacks that should not fire
+    // at all on a credentialed instance.
+    for (const want of ['search:find-discovery', 'search:place-id-recovery', 'search:duplicate-listing-fallback', 'search:rank-fallback', 'details:place-details']) {
+      if (!_named.has(want)) _fails.push(`the "${want}" Places call is gone or renamed, so the breakdown can no longer tell that decision from the others`);
+    }
+    // And the breakdown must actually be printed, or the labels are collected
+    // and delivered nowhere - the class this file records most often.
+    const _n = (...p) => p.join('');
+    if (!_src.includes(_n('_gpWhy[_w] = (_gpWhy[_w] ', '|| 0) + 1;'))) _fails.push('the per-call counts are no longer recorded');
+    if (!_src.includes(_n('.map(k => `${k} x${_gpWhy[k]}`)', ".join(', ');"))) _fails.push('the per-call breakdown never reaches the spend line, so the meter still cannot name which call fired');
+    if (_fails.length) {
+      console.log(`⛔ PLACES LABEL CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ PLACES LABEL CHECK: all ${_sites.length} billed Google Places calls name themselves, the five decisions stay tellable apart, and the spend line prints the breakdown sorted by count - so one live run answers which call is producing the per-lead text search instead of leaving it to arithmetic.`);
+    }
+  } catch (e) {
+    console.log(`⛔ PLACES LABEL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══════════ SYNTHESIS GATE TALLY CHECK — the total and the breakdown ════
+  // Live 2026-08-27: "SITUATION READ GATED: removed 2 sentence(s) - quotes 0,
+  // money 0, spelled scale 0, recency conclusions 0, review counts 0,
+  // competitor sites 0, post-contact claims 0. First: \"\"". The total counted
+  // nine buckets and the printed breakdown named seven. Two families added
+  // since that line was written removed real sentences and reported as
+  // nothing, and the First chain could not reach them either. A log saying a
+  // gate fired and unable to say which is the message-names-nothing failure
+  // this file records three times, pointed at our own instruments.
+  //
+  // The DECLARATION discipline, same shape as STEM_COMPLETE_WORDS and
+  // NICHE_BRIEF_EXPECT: a bucket cannot be added without a human writing down
+  // what it is called, and a label with no bucket behind it fails too.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoComments();
+    const _lit = _src.match(/const _srg = \{([^;]*?)\};/);
+    const _keys = new Set();
+    if (!_lit) {
+      _fails.push('the synthesis gate bucket object could not be found at all, so this check is asserting nothing');
+    } else {
+      let m;
+      const _kre = /(\w+):\s*\{/g;
+      while ((m = _kre.exec(_lit[1]))) _keys.add(m[1]);
+    }
+    let a;
+    const _are = /_srg\.(\w+)\s*=\s*\{/g;
+    while ((a = _are.exec(_src))) _keys.add(a[1]);
+    if (_keys.size < 7) _fails.push(`only ${_keys.size} gate bucket(s) were found in the source - the scan matched almost nothing and would report a clean pass while seeing nothing`);
+    for (const k of _keys) {
+      if (!SITUATION_GATE_LABEL[k]) _fails.push(`the "${k}" synthesis gate has no name, so its cuts print as a bare key or, worse, are counted in the total and named nowhere`);
+    }
+    for (const k of Object.keys(SITUATION_GATE_LABEL)) {
+      if (!_keys.has(k)) _fails.push(`"${k}" is named in the label table and no longer exists as a gate - a row that looks checked and guards nothing`);
+    }
+    // AND the total and the breakdown must come off the same object, or the
+    // two lists drift apart again the next time a stripper is added.
+    const _n = (...p) => p.join('');
+    for (const [what, needle] of [
+      ['the total is hand-written again rather than derived from the buckets', _n('const _srCut = _srCuts.reduce(', '(n, pair) => n + pair[1].length, 0);')],
+      ['the breakdown is hand-written again rather than derived from the buckets', _n('_srCuts.map(pair => `${SITUATION_GATE_LABEL[pair[0]]', ' || pair[0]} ${pair[1].length}`)')],
+      ['the first cut is picked from a hand-kept chain again, so a family outside it prints an empty quote', _n('const _srFirstPair = _srCuts.find(', 'pair => pair[1].length);')],
+      ['the ownership cuts are back inside the tally object, so they are counted twice - once in the total and once in their own line', _n('const _srOwn = ', '{ cut: [] };')],
+    ]) { if (!_src.includes(needle)) _fails.push(what); }
+    if (_fails.length) {
+      console.log(`⛔ SYNTHESIS GATE TALLY CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ SYNTHESIS GATE TALLY CHECK: all ${_keys.size} synthesis gates are named, the total and the per-family breakdown are derived from ONE object so a stripper added tomorrow cannot report as zero, the first removed sentence is found wherever it was cut, and the ownership cuts stay out of the total they already have their own line for.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SYNTHESIS GATE TALLY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══════════ RATIO INTEGRITY CHECK — one row supplies both halves ════════
+  // Tuck & Howell and Bradley Construction, live 2026-08-27: "16 of the 1"
+  // and "20 of the 1 businesses ranked above them have FEWER reviews", on the
+  // System one-change diagnosis a caller reads out loud. The numerator came
+  // from the outrank row (round 101 split it off on purpose - the sharpest
+  // outranked evidence can sit on a service query) and the denominator was
+  // re-derived from the HEAD row's position. Both numbers true, the sentence
+  // arithmetically impossible. EXECUTED on the live shape.
+  try {
+    const _fails = [];
+    const _n = (...p) => p.join('');
+    const HEAD = { checked: true, found: true, orderTrusted: true, rank: 2, scanned: 100,
+      query: 'HVAC contractor in Greenville, SC', weakerAbove: 0 };
+    const SVC = { checked: true, found: true, orderTrusted: true, rank: 17, scanned: 100,
+      query: 'ac repair in Greenville, SC', weakerAbove: 16 };
+    // 1. The rule itself, both directions.
+    const _rt = outrankRatioFrom(SVC);
+    if (_rt.weakerAbove !== 16 || _rt.above !== 16) _fails.push(`the ratio rule does not read both halves off one row (got ${_rt.weakerAbove} of ${_rt.above})`);
+    if (_rt.query !== SVC.query) _fails.push('the ratio does not carry the search it was measured on');
+    if (outrankRatioFrom({ ...SVC, orderTrusted: false }).weakerAbove !== 0) _fails.push('a relevance-lookup row still supplies a ratio - the section 52 wall is open at the constraint');
+    if (outrankRatioFrom({ ...SVC, rank: null }).above !== null) _fails.push('a row with no position still supplies a denominator');
+    if (outrankRatioFrom({ ...SVC, rank: 3 }).above !== null) _fails.push('a numerator larger than its own denominator is not refused - the impossible shape can still print');
+    // 2. The live sentence. rank 2 from the head row, weakerAbove 16 from the
+    //    service row: the old build printed "16 of the 1".
+    const _mkArgs = (ratio) => ({
+      rank: HEAD.rank, rankScanned: HEAD.scanned, rankQuery: HEAD.query,
+      reviewCount: 120, reviewRating: 4.6,
+      weakerAbove: ratio.weakerAbove, weakerAboveOf: ratio.above, weakerAboveQuery: ratio.query,
+      offerStrength: { checked: true, gapCount: 1 }, valueEquation: { checked: true, denominator: 1, friction: [] },
+      marketClarity: { checked: true, band: 'partial', signals: [], gaps: [], isConstraint: false },
+      opsPain: { themes: 0, mentions: 0, reviewsRead: 90, share: 0, binding: false }, opsPainCount: 0,
+    });
+    const _live = measureGrowthConstraint(_mkArgs(outrankRatioFrom(SVC)));
+    const _cond = String((_live && _live.condition) || '');
+    if (_live.layer !== 'LEADS') _fails.push(`the Tuck & Howell shape diagnoses ${_live.layer} rather than LEADS, so this check is measuring nothing`);
+    if (/\bof the 1 business/.test(_cond)) _fails.push(`the impossible ratio is back: "${_cond.slice(0, 90)}"`);
+    if (!/16 of the 16/.test(_cond)) _fails.push(`the ratio does not use the denominator from its own row: "${_cond.slice(0, 90)}"`);
+    if (!/ac repair in Greenville/.test(_cond)) _fails.push('the sentence does not name the search its numbers came from, so two true numbers from two searches still read as one false ratio');
+    // 3. A same-search ratio must NOT carry the extra clause - a note printed
+    //    on every lead is one nobody reads.
+    const _same = measureGrowthConstraint(_mkArgs(outrankRatioFrom({ ...SVC, query: HEAD.query })));
+    if (/on the search/.test(String(_same.condition || ''))) _fails.push('a ratio measured on the head term still names a different search');
+    // 4. No denominator, no ratio - the durable sentence stands instead.
+    const _noDen = measureGrowthConstraint(_mkArgs({ weakerAbove: 16, above: null, query: SVC.query }));
+    const _ndCond = String(_noDen.condition || '');
+    if (/16 of the/.test(_ndCond)) _fails.push(`a ratio was printed with no measured denominator: "${_ndCond.slice(0, 90)}"`);
+    if (!/FEWER reviews/.test(_ndCond)) _fails.push('the durable no-denominator sentence was lost with the ratio');
+    // 5. The buried branch is the other half of the same arithmetic - and the
+    //    first version of this assertion measured NOTHING. It looked for the
+    //    words "of the 11 businesses", and the buried branch's MOST framing
+    //    writes "16 of 11" instead, so reverting the fix left it green. The
+    //    assertion now READS the printed ratio and checks the arithmetic,
+    //    which no rewording can slip past.
+    const _bur = measureGrowthConstraint({ ..._mkArgs(outrankRatioFrom(SVC)), rank: 12 });
+    const _burM = String(_bur.condition || '').match(/(\d+) of (?:the )?(\d+)/);
+    if (!_burM) _fails.push(`the buried branch printed no ratio at all: "${String(_bur.condition || '').slice(0, 90)}"`);
+    else {
+      if (Number(_burM[2]) !== 16) _fails.push(`the buried branch printed a denominator of ${_burM[2]} where its own row measured 16 - it is being re-derived from the head rank`);
+      if (Number(_burM[1]) > Number(_burM[2])) _fails.push(`the buried branch printed ${_burM[1]} of ${_burM[2]}, which is arithmetically impossible on its face`);
+    }
+    // 6. THE CALL SITES. A fixture supplies its own arguments and cannot see a
+    //    caller - the ninth recorded instance of half-a-check in this file.
+    const _s = selfSourceNoComments();
+    for (const [what, needle] of [
+      ['the ladder call site does not take both halves off one row', _n('const _gcRatio = outrankRatio', 'From(outrankRow || localRank);')],
+      ['the fallback call site does not take both halves off one row', _n('const _gcRatio2 = outrankRatio', 'From(outrankRow || localRank);')],
+      ['the ladder call site never passes the denominator', _n('weakerAboveOf: _gcRatio', '.above,')],
+      ['the fallback call site never passes the denominator', _n('weakerAboveOf: _gcRatio2', '.above,')],
+    ]) { if (!_s.includes(needle)) _fails.push(what); }
+    if (_s.includes(_n('${weakerAbove} of the ${Math.max(1, Number(rank) - 1)}', ' businesses ranked above them'))) {
+      _fails.push('the denominator is being re-derived from the head rank again');
+    }
+    if (_fails.length) {
+      console.log(`⛔ RATIO INTEGRITY CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`✓ RATIO INTEGRITY CHECK: the numerator and the denominator of "N of the M above them have fewer reviews" now come off ONE search row, both call sites pass the pair, a row that cannot supply a position produces the durable sentence instead of an invented denominator, a relevance-lookup row supplies no ratio at all, an impossible numerator is refused, and a ratio measured on a different search says which one.`);
+    }
+  } catch (e) {
+    console.log(`⛔ RATIO INTEGRITY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══════════ PRIMARY TRADE RANK CHECK — the lead's rank is its own trade ══
   // Round 101, off the Windows Plus sheet Vin hand-checked against live Google.
   // pickRankRow's absent-service promotion fed the LEAD's rank, so the sheet
@@ -51900,7 +52385,7 @@ app.listen(PORT, () => {
       ['the gated synthesis is not written back, so the sheet still reads the raw one', _dn('situationRead = ', '_srx;')],
       ['the audit fields do not pass through the post-contact stripper', _dn('stripPostContactClaimsDeep(parsed[k], ', '_pcx, 1)')],
       ['the audit fields do not pass through the ownership stripper', _dn('stripUnverifiedOwnershipDeep(parsed[k], ', '_ownx, 1, _ownAllow)')],
-      ['the synthesis does not pass through the ownership stripper', _dn('stripUnverifiedOwnershipDeep(_srx, ', '_srg.own, 1, {')],
+      ['the synthesis does not pass through the ownership stripper', _dn('stripUnverifiedOwnershipDeep(_srx, ', '_srOwn, 1, {')],
       ['the resolver and the brain-add no longer share the ONE surname rule', _dn('surnameInCompanyName(best.name, ', 'companyName) && _onOwnSite')],
       ['the brain-read name never earns its code-checked evidence line', _dn('ownerNameEvidence = `Read off their own pages', ' \\u2014 no title is published')],
       // Re-scoped by the owner, round 101: the floor is three mentions OR two
@@ -52689,6 +53174,24 @@ app.listen(PORT, () => {
     // rendered as a warning about a correctly-working safeguard.
     _wording.push(`VOICE: The pitch reads as a template diagnosis rather than a founder's observation. It should open with the specific measured finding.`);
     _wording.push(`INTERNAL ONLY LEAK: The product and price appear in the 'Recommended product' field which is correctly marked INTERNAL ONLY. Both are internal scaffolding and are correctly sequestered\u2014no email flag warranted.`);
+    // LIVE 2026-08-27, Tuck & Howell and Bradley Construction. Both of these
+    // reached "Do not say" on a sheet a junior rep dials from. Neither is a
+    // claim about the prospect: the first is the checker agreeing with us in
+    // words the old CONFIRMS pattern did not know, the second is the checker
+    // describing OUR OWN ranking, in our own vocabulary, about our own rung ids.
+    _wording.push(`The 'Reason' field correctly identifies that the real problem is operational rather than a visibility gap.`);
+    _wording.push(`The audit leads on review_pattern while gbp_gap is tied within noise, so the ordering is defensible either way.`);
+    // AND a plain confirmation with no machinery vocabulary in it, which ONLY
+    // the widened confirm pattern can clear - the first version of this check
+    // had both fixtures matching the internal rule as well, so reverting the
+    // widening left it green. Two fixes hiding each other, which is a recorded
+    // class in this file and was found by running the revert.
+    _wording.push(`The pitch angle correctly states the measured review count and the measured position for this business.`);
+    // AND THE OTHER DIRECTION, which is the expensive one: a rung id inside a
+    // sentence that IS a false claim must still warn. Without this the internal
+    // rule is a hole rather than a filter.
+    _realErrors.push(`CRITICAL: the outranked_by_weaker rung claims 16 of the 1 businesses above them have fewer reviews. That is a fabrication and must be corrected.`);
+    _realErrors.push(`The pitch claims 'no conversion tracking anywhere on their site' \u2014 the measured evidence says a conversion label IS present. The claim is backwards.`);
     for (const f of _wording) {
       if (factCheckNoteKind(f) === 'real') {
         _fails.push(`a flag that is not a claim a prospect could disprove is still going into "Do not say" \u2014 "${f.slice(0, 90)}"`);
@@ -52704,6 +53207,23 @@ app.listen(PORT, () => {
     const _src = selfSourceNoComments();
     if (!_src.includes(_needle('const _realFlags = _rawFlags.filter(f => !_CLEARED.test(f) && ', "factCheckNoteKind(f) === 'real');"))) {
       _fails.push('the fact-check flag list no longer separates confirmed-correct wording notes, so "Do not say" fills with true sentences again');
+    }
+    // ── AND THE REGISTER FLAGS MUST LEAVE THE SHEET ───────────────────────
+    // Live 2026-08-27: OUR OWN sentence "We could not read enough of their
+    // funnel to name the first broken link" was pushed into Do-not-say by the
+    // marketing-jargon flag, for containing the word funnel. A gate written to
+    // police the model's VOICE, fired on a fact we assembled, in the section
+    // that exists to stop a FALSE sentence being read down a phone. The rule
+    // still detects; only the destination moved.
+    if (!_src.includes(_needle("if (kind === 'register') _registerNotes", '.push(_entry); else _claimRisks.push(_entry);'))) {
+      _fails.push('register flags go back into the Do-not-say list, so a note about how a sentence READS is rendered as a warning that it is FALSE');
+    }
+    for (const [what, tail] of [
+      ['the marketing-jargon flag', _needle("words'", ", 'register');")],
+      ['the developer-register flag', _needle('he forwards to whoever built the site.\'', ", 'register');")],
+    ]) { if (!_src.includes(tail)) _fails.push(`${what} is no longer routed away from "Do not say"`); }
+    if (!_src.includes(_needle('parsed._registerNotes = ', '_registerNotes;'))) {
+      _fails.push('the register notes are computed and delivered nowhere \u2014 the class this file records most');
     }
 
     // ── AND THE CODE-ASSEMBLED CREDIT THAT CAUSED IT ──────────────────────
@@ -57484,7 +58004,7 @@ app.listen(PORT, () => {
     // 10. THE METER COUNTS BOTH BILLED SKUs SEPARATELY.
     {
       const _before = _gpCalls.search + _gpCalls.details;
-      notePlacesCall('search'); notePlacesCall('details');
+      notePlacesCall('search', 'boot-check'); notePlacesCall('details', 'boot-check');
       if (_gpCalls.search + _gpCalls.details !== _before + 2) _fails.push('the Places meter did not count a call');
       if (!/text search/.test(placesSpendLine('selftest')) || !/profile read/.test(placesSpendLine('selftest'))) {
         _fails.push('the spend line does not separate the two SKUs, which have different rates and different free allowances');

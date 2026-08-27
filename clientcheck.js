@@ -674,6 +674,40 @@ const mergeStat = runMergeCheck();
           sitemapNewest: new Date(Date.now() - 10 * 86400000).toISOString().slice(0, 10) } }, rows: [] })
           .rows.find(r => /Search setup/.test(String(r.label)));
         if (_sbClean && /(not the city|only \d+ of their|has changed since)/.test(String(_sbClean.value))) fails.push('a site with its title, its images and its sitemap all in order is being given a fault - a row that flags every site tells a caller nothing');
+        // ══ ROUND 106: A MEASURED ABSENCE IS NOT AN UNMEASURED SURFACE ═════
+        // Tuck & Howell, live 2026-08-27: the funnel printed "Not measured:
+        // Search, blue links" while the ladder eleven lines below said "They do
+        // not appear anywhere in the first 19 search results". ONE measurement,
+        // two readings, on one page. The row could only carry a POSITION, so
+        // the exact state organic_invisible exists for rendered as a blank.
+        {
+          const _abs = mod.sig('found', { af: { organicState: 'absent', organicAbsentOf: 19,
+            searchQuery: 'HVAC contractor in Greenville, SC' }, rows: [] });
+          const _absRow = _abs.rows.find(r => /blue links/i.test(String(r.label)));
+          if (!_absRow) fails.push('a MEASURED absence from the blue links renders no row at all - the sheet says "not measured" beside a ladder finding built on that same measurement');
+          if (_absRow && !/not in the 19 results/i.test(String(_absRow.value))) fails.push('the blue-links absence does not say the window it was read over - "not in the results" without the depth is the overclaim round 97 removed everywhere else');
+          if ((_abs.unmeasured || []).some(u => /blue links/i.test(String(u)))) fails.push('a measured absence is still reported as an unmeasured surface');
+          const _pos = mod.sig('found', { af: { organicState: 'found', organicPosition: 14, organicScanned: 19 }, rows: [] })
+            .rows.find(r => /blue links/i.test(String(r.label)));
+          if (!_pos || !/#14 of 19/.test(String(_pos.value))) fails.push('a measured blue-links POSITION stopped rendering');
+          const _none = mod.sig('found', { af: {}, rows: [] });
+          if (_none.rows.some(r => /blue links/i.test(String(r.label)))) fails.push('a surface nobody read renders a blue-links row - unmeasured has become a third claim');
+        }
+        // ══ ROUND 106: ONE MAP POSITION PER SHEET ══════════════════════════
+        // Live 2026-08-27: "Search, map: #2 of 100" three rows above "The map
+        // beside the results: their listing is in it at #1". Both reads are
+        // honest and pulled separately, so they disagree by a place - and a
+        // caller handed two positions for one surface cannot say either.
+        {
+          const _packWithPos = mod.sig('found', { af: { pack: { us: true, usIndex: 1 } },
+            rank: { found: true, rank: 2, scanned: 100, query: 'plumber in Dallas, TX' }, rows: [] })
+            .rows.find(r => /map beside the results/i.test(String(r.label)));
+          if (!_packWithPos) fails.push('the second map read stopped rendering entirely - the proof that they ARE in the map went with it');
+          if (_packWithPos && /#\d/.test(String(_packWithPos.value))) fails.push('the second map read still prints its own slot beside a stated finder position - two positions for one surface, and the caller can quote neither');
+          const _packNoPos = mod.sig('found', { af: { pack: { us: true, usIndex: 1 } }, rows: [] })
+            .rows.find(r => /map beside the results/i.test(String(r.label)));
+          if (!_packNoPos || !/#1/.test(String(_packNoPos.value))) fails.push('with no finder position on the sheet the second read withholds the only slot we have - the guard is eating real information');
+        }
         const _chat102 = mod.sig('door', { af: { liveChat: true }, rows: [] }).rows.find(r => /Live chat/.test(String(r.label)));
         if (!_chat102 || !/installed/.test(String(_chat102.value))) fails.push('the chat row went back to asserting a visitor CAN ask — installation is not operation, and nobody measured whether anyone answers it');
         if (mod.scoreLine({ checked: false, thin: true, graded: [], basedOn: '2 of 9' }, false) !== '') fails.push('scoreSentence invents a caption for a thin score');
@@ -925,7 +959,18 @@ const mergeStat = runMergeCheck();
         // "the build is fine" over a form-and-wait door is the caption the
         // owner rejected on the live Windows Plus 9/10.
         if (!/solid build|build is fine/i.test(mod.scoreLine({ checked: true, score: 8 }, true))) fails.push('a high score does not read as a healthy build');
-        if (!/door caps the grade/i.test(mod.scoreLine({ checked: true, score: 7.5, capped: 'x' }, true))) fails.push('a capped score does not say the door capped it - a silently capped number reads as an earned one');
+        // Round 106: the cap has TWO reasons now (a door that cannot book a
+        // time, and a numbered leak that is a measured fault on this site), so
+        // the caption prints the SERVER'S reason instead of a second hand-kept
+        // copy that would have said "nothing books a time" about a site whose
+        // scheduler works fine. Assert the pass-through and the prefix trim.
+        {
+          const _capDoor = mod.scoreLine({ checked: true, score: 7.5, capped: 'capped at 7.5: nothing on the site books a time, and a clean build around a form-and-wait door is still a form-and-wait door' }, true);
+          if (!/nothing on the site books a time/i.test(_capDoor)) fails.push('a capped score does not say WHY it stopped where it did - a silently capped number reads as an earned one');
+          if (/^capped at/i.test(_capDoor)) fails.push('the caption repeats the machine prefix instead of the reason');
+          const _capLeak = mod.scoreLine({ checked: true, score: 7.5, capped: 'capped at 7.5: leak 2 is a measured fault on this site (their form asks for 11 things)' }, true);
+          if (!/leak 2 is a measured fault/i.test(_capLeak)) fails.push('a leak-capped score still prints the door sentence - the client is keeping its own copy of a reason the server already wrote');
+        }
         if (!/part of the problem/i.test(mod.scoreLine({ checked: true, score: 3 }, true))) fails.push('a low score does not say the build itself is a problem');
         if (mod.scoreLine(null, true) !== '' || mod.scoreLine({ checked: false, score: 8 }, true) !== '') fails.push('an unmeasured score produced a sentence');
         // The rendered sheet: the segments, the spout and the drip actually

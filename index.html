@@ -1154,7 +1154,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260905;
+const CLIENT_CONTRACT = 20260906;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -2657,7 +2657,18 @@ const signalRowsFor = (stageId, ctx) => {
         ? (lr.absenceConfirmed ? ('not among the ' + (Number.isFinite(Number(lr.scanned)) ? lr.scanned + ' ' : '') + 'listings returned (checked twice)') : 'not seen on one look (unconfirmed)')
         : (Number.isFinite(Number(lr.rank)) && Number(lr.rank) >= 1 ? '#' + lr.rank + ' of ' + (lr.scanned || '?') : "they appear; no position on this run's source")) + qTag)
       : null, 'search');
-    R('Search, blue links', Number.isFinite(af.organicPosition) ? ('#' + af.organicPosition + ' of ' + af.organicScanned + (q ? ' \u2014 same search' : '')) : null, 'organic');
+    // Three states. Tuck & Howell, live 2026-08-27: this row rendered as
+    // "Not measured: Search, blue links" while the ladder eleven lines below
+    // said "They do not appear anywhere in the first 19 search results" — one
+    // measurement, two readings, on one page. A MEASURED absence is not an
+    // unmeasured surface, and it is the state the rung exists for.
+    R('Search, blue links',
+      af.organicState === 'found' && Number.isFinite(af.organicPosition)
+        ? ('#' + af.organicPosition + ' of ' + af.organicScanned + (q ? ' \u2014 same search' : ''))
+      : af.organicState === 'absent'
+        ? ('not in the ' + (Number.isFinite(af.organicAbsentOf) ? af.organicAbsentOf + ' ' : '') + 'results that search returned'
+            + (q ? ' \u2014 same search' : ''))
+      : null, 'organic');
     // Their own service pages and published service areas, each by ITS query.
     const _vres = (ctx && ctx.vis && Array.isArray(ctx.vis.results)) ? ctx.vis.results : [];
     _vres.filter(function (r) { return r && r.kind !== 'primary trade' && r.checked !== false && r.query; }).slice(0, 4).forEach(function (r) {
@@ -2722,7 +2733,24 @@ const signalRowsFor = (stageId, ctx) => {
         R('Search setup', bits.join(' \u00b7 ') + ' \u2014 minor inputs, never the reason for a map position', null, true);
       }
     }
-    if (af.pack && af.pack.us === true) R('The map beside the results', 'their listing is in it' + (Number.isFinite(Number(af.pack.usIndex)) ? ' at #' + af.pack.usIndex : '') + ' \u2014 a second read of the map, from the results page itself', null);
+    // ONE MAP POSITION PER SHEET. Live 2026-08-27: "Search, map: #2 of 100"
+    // three rows above "The map beside the results: their listing is in it at
+    // #1". Both reads are honest and they are pulled separately, so they can
+    // disagree by a place — and a caller handed two positions for one surface
+    // cannot say either out loud. The finder read is the authority (a 100-row
+    // window, two agreeing samples, localized to the city); this three-row
+    // block is a SECOND read whose value is proving they are in the map at
+    // all. So it states presence when a position is already on the sheet, and
+    // states its own slot only when nothing else could.
+    if (af.pack && af.pack.us === true) {
+      const _haveFinderPos = !!(lr && lr.found !== false && Number.isFinite(Number(lr.rank)) && Number(lr.rank) >= 1);
+      R('The map beside the results',
+        _haveFinderPos
+          ? 'their listing is in it — a second read of the map, from the results page itself; the position above is the one to quote'
+          : ('their listing is in it' + (Number.isFinite(Number(af.pack.usIndex)) ? ' at #' + af.pack.usIndex + ' of the three shown' : '')
+              + ' — read off the results page, one pull'),
+        null);
+    }
     const tr = (ctx && ctx.traffic) || null;
     if (tr) R('Traffic, estimated', '~' + (Number(tr.organicEtvMonthly) || 0) + ' unpaid' + (Number(tr.paidKeywords) > 0 ? ' + ~' + (Number(tr.paidEtvMonthly) || 0) + ' paid' : '') + ' visits/month, third-party estimate', null, true);
     // The named half of "where does the traffic come from": what they already
@@ -2917,7 +2945,12 @@ const scoreSentence = (ws, anyBroken) => {
   // Round 101: a capped score says WHY it stopped where it did - "the build is
   // fine" over a form-and-wait door is the exact caption the owner rejected
   // ("this site IS NOT A 9/10 not even close").
-  if (ws.capped) return 'built cleanly, but nothing on it books a time — the door caps the grade';
+  // Round 106: the cap now has TWO reasons — a door that cannot book a time,
+  // and a numbered leak that is a measured fault on this site. The server
+  // writes the reason; printing our own sentence here was a second hand-kept
+  // copy of one rule, and it would have said "nothing books a time" about a
+  // site whose scheduler works fine.
+  if (ws.capped) return String(ws.capped).replace(/^capped at [\d.]+:\s*/i, '');
   if (sc >= 8.5) return anyBroken ? 'the build is fine — the leaks are in the path around it' : 'the build is fine';
   if (sc >= 7) return anyBroken ? 'a solid build — the leaks are in the path around it' : 'a solid build';
   if (sc <= 4) return 'the site build itself is part of the problem';
