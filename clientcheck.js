@@ -495,7 +495,7 @@ const mergeStat = runMergeCheck();
   // function without its dependencies is how a harness starts lying: it would
   // throw here rather than silently pass, which is the good failure mode, but
   // only if the name is actually required.
-  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'replyLatencySay', 'websiteForReading', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
+  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'replyLatencySay', 'websiteForReading', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor', 'leakWhereFor', 'scoreboardFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -511,9 +511,9 @@ const mergeStat = runMergeCheck();
   } else {
     let mod = null;
     try {
-      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.replyLatencySay + '\n' + found.websiteForReading + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
+      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.leakWhereFor + '\n' + found.scoreboardFor + '\n' + found.RISK_REASONS + '\n' + found.replyLatencySay + '\n' + found.websiteForReading + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
         + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
-        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, norm: normalizedLeakRows, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, replyLatency: replyLatencySay, web: websiteForReading, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, taper: FUNNEL_TAPER, segClip: funnelSegClip, segFill: funnelSegFill, walkStage: walkTextsByStage, scoreLine: scoreSentence, sig: signalRowsFor };')();
+        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, norm: normalizedLeakRows, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, replyLatency: replyLatencySay, web: websiteForReading, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, taper: FUNNEL_TAPER, segClip: funnelSegClip, segFill: funnelSegFill, walkStage: walkTextsByStage, scoreLine: scoreSentence, sig: signalRowsFor, board: scoreboardFor, leakWhere: leakWhereFor };')();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -602,8 +602,19 @@ const mergeStat = runMergeCheck();
       // The three-openers section and the signals-at-their-stage grid (Vin,
       // 2026-08-25: "3 options for this section at all times based on the top
       // revenue leaks" and "matching [the signals] up with the funnel is ideal").
-      if (page.indexOf('MARKER_OPENQ') < 0 || page.indexOf('Leak 1:') < 0) {
-        fails.push('a numbered leak\'s conversation opener never reaches the sheet\'s Worth-asking section');
+      // Round 108: the opener moved ONTO the leak card, beside the finding it
+      // is about, and this asserts that home rather than the old list — the
+      // card must carry the number, the question and the Open-with label in
+      // one block, so a rep never has to match a question to a leak by eye.
+      {
+        const _card = (page.match(/<div class="lk">[\s\S]*?<\/div>\s*<\/div>/) || [''])[0];
+        if (page.indexOf('MARKER_OPENQ') < 0) fails.push("a numbered leak's conversation opener never reaches the sheet at all");
+        else if (_card.indexOf('MARKER_OPENQ') < 0 || _card.indexOf('Open with') < 0 || _card.indexOf('LEAK 1') < 0) {
+          fails.push("the leak card does not carry its own opening question — the opener is back in a separate list a rep has to match up by eye");
+        }
+        if ((page.match(/MARKER_OPENQ/g) || []).length !== 1) {
+          fails.push('the leak opener renders more than once — the leak cards and the call block are printing the same question twice');
+        }
       }
       if (page.indexOf('Ad clicks land on') < 0 || page.indexOf('never links') < 0) {
         fails.push('the ad-landing signal row never reaches the sheet\'s funnel stage — the measurement Vin called very important information');
@@ -1033,8 +1044,17 @@ const mergeStat = runMergeCheck();
           { problem: 'dup A', funnelStage: 'door', harm: 80, leakRank: 2, callOpener: 'Is the front desk picking up after five?' },
           { problem: 'dup B', funnelStage: 'found', harm: 70, leakRank: 2, callOpener: 'Who shows up when you search your own trade?' }] };
         const dpp = mod.html([mod.rec(dupLead)], { title: 'T', at: 'now' });
-        if ((dpp.match(/Leak 1:/g) || []).length !== 1 || (dpp.match(/Leak 2:/g) || []).length !== 1) {
-          fails.push('two legacy rank-2 openers do not render as Leak 1 and Leak 2 once each — the Worth-asking list is reading raw stored ranks again');
+        // Two cards, numbered 1 and 2 (both rows carry a STORED rank of 2 —
+        // the normalizer is what makes them distinct), each carrying its own
+        // opener exactly once. The badge itself legitimately appears in three
+        // places (the index, the card, the position marker at its funnel
+        // stage), so the badge count proves nothing and the QUESTION does.
+        if ((dpp.match(/<div class="lk">/g) || []).length !== 2
+          || dpp.indexOf('class="lkb">LEAK 1</span><span class="lkw">') < 0
+          || dpp.indexOf('class="lkb">LEAK 2</span><span class="lkw">') < 0
+          || (dpp.match(/Is the front desk picking up after five\?/g) || []).length !== 1
+          || (dpp.match(/Who shows up when you search your own trade\?/g) || []).length !== 1) {
+          fails.push('two legacy rank-2 findings do not render as two cards numbered LEAK 1 and LEAK 2, each carrying its own opener once — the cards are reading raw stored ranks again');
         }
         for (const mk of ['MARKER_STAGEROW', 'LEAK 1', 'MARKER_STAGEMONEY', 'MARKER_RANKNOTE', 'Getting found']) {
           if (sp.indexOf(mk) < 0) fails.push('the funnel render drops "' + mk + '" — the stage, the number or the money line never reaches the sheet');
@@ -1187,6 +1207,101 @@ const mergeStat = runMergeCheck();
         if (LOADS.test(page)) {
           fails.push('the export is no longer self-contained — it loads a script, stylesheet, image or font over the network, so it cannot be relied on to open on a machine that has none of them');
         }
+        // ══ ROUND 108: TWO TIERS, AND A TAKEAWAY ON EVERY POINT ═══════════
+        // Vin's junior rep "has no clue what these audits mean" and the sheet
+        // reads "like speaking in code". The approved answer is a sheet with a
+        // TOP — everything needed to make the call above one rule, every
+        // measurement below a second — and a "so what?" line on every point.
+        // Executed here because a layout nothing runs is a layout that rots.
+        {
+          const _at = (needle) => page.indexOf(needle);
+          // The apostrophe is HTML-escaped on the sheet, so the heading is
+          // matched on the half of it that survives escaping.
+          const _call = _at('For the call'), _sb = _at('s working, what');
+          const _lk = _at('The biggest leaks'), _dns = _at('Do not say on this call');
+          const _rec = _at('The full record'), _fun = _at('The funnel');
+          if (_call < 0 || _rec < 0) fails.push('the sheet lost its two tiers — a rep is back to reading the whole record to find the call');
+          else {
+            if (!(_call < _sb && _sb < _lk)) fails.push('the call tier is out of order: the scoreboard and the numbered leaks must follow the "For the call" rule, in that order');
+            if (!(_lk < _rec)) fails.push('the numbered leaks fell below the record rule — the three things the call is built on are in the half a rep never scrolls to');
+            if (!(_dns > 0 && _dns < _rec)) fails.push('Do not say is no longer inside the call tier — a rep who reads only the top never meets the guardrails, which is exactly the reader they exist for');
+            if (!(_rec < _fun)) fails.push('the funnel is back above the record rule — the long half of the sheet is in the ten-second half again');
+          }
+          // A numbered leak is written out in ONE place. At its funnel stage
+          // it is a POSITION MARKER: the first version of this assertion
+          // counted a marker that renders twice either way and passed on a
+          // build with the whole dedupe reverted — the
+          // fixture-that-measures-nothing trap, found by the falsification run.
+          // The mechanism itself is what gets asserted now.
+          {
+            const _dupPage = mod.html([mod.rec({ ...LEAD, problemList: [{
+              problem: 'DUPCHECK the only way in is a form', costs: 'DUPCOST a customer who is ready has to wait',
+              moneyLine: 'DUPMONEY every one of those is a job', harm: 80, moneyRank: 1, leakRank: 1,
+              pillar: 'LEAKING', funnelStage: 'door', id: 'form_only_no_booking', callOpener: 'DUPOPEN?' }] })], { title: 'T', at: 'now' });
+            if (_dupPage.indexOf('written out in full above') < 0) {
+              fails.push('a numbered leak prints in full at its funnel stage as well as on its card — the same finding twice on one sheet, the repetition the two-tier layout exists to remove');
+            }
+            for (const [mk, cap] of [['DUPCOST', 1], ['DUPMONEY', 1], ['DUPOPEN', 1]]) {
+              const n = (_dupPage.match(new RegExp(mk, 'g')) || []).length;
+              if (n > cap) fails.push('a numbered leak\'s ' + mk + ' renders ' + n + ' times on one sheet, not ' + cap);
+            }
+          }
+          // The scoreboard, executed. A won item is suppressed by the finding
+          // that would contradict it; a win on a DIFFERENT search survives.
+          if (!mod.board) fails.push('scoreboardFor is not exposed for execution, so the ten-second read is unverified');
+          else {
+            const _bk = mod.board({ af: { booking: 'online_booking', https: true }, rows: [{ id: 'form_only_no_booking', problem: 'form only' }] });
+            if (_bk.won.some(w => /book a time/.test(w.text))) {
+              fails.push('the scoreboard claims the booking route works beside a finding that says it does not — the two columns contradict each other on one page');
+            }
+            // Leo Lantz: #1 for his named trade AND invisible for one service
+            // page. Two true facts about two different searches. Suppressing
+            // the win on the whole search GROUP would delete a real strength.
+            const _rk = mod.board({ af: {}, rank: { found: true, rank: 1, scanned: 100, query: 'kitchen remodeling contractor in Glen Allen, VA' },
+              rows: [{ id: 'service_invisibility', problem: 'a service page nobody finds', leakRank: 1 }] });
+            if (!_rk.won.some(w => /#1 of 100/.test(w.text))) {
+              fails.push('a top-three position is suppressed by a finding about a DIFFERENT search — the sheet loses the one strength that decides how the call opens');
+            }
+            if (!_rk.leaking.some(x => x.leak === 1 && /service page nobody finds/.test(x.text))) {
+              fails.push('the leaking column is not an index of the findings — a revenue signal can be buried again');
+            }
+            const _abs = mod.board({ af: {}, rank: { found: false }, rows: [{ id: 'absent_from_search', problem: 'not in the results' }] });
+            if (_abs.won.some(w => /#/.test(w.text))) fails.push('a position renders as a win on a lead with no position');
+            // Every won item must carry its takeaway: the whole point of the
+            // column is that a rep knows what NOT to sell against.
+            const _full = mod.board({ af: { booking: 'online_booking', liveChat: true, https: true, analytics: true, formFields: 3 },
+              reviews: { count: 132, rating: 5, replies: 78, read: 78 }, rows: [] });
+            if (!_full.won.length || _full.won.some(w => !w.so)) {
+              fails.push('a won item renders with no takeaway — a bare measurement is the "speaking in code" complaint this round exists to fix');
+            }
+            if (_full.won.length > 6) fails.push('the won column is unbounded — a wall of green is the same unreadable page in a different colour');
+          }
+          // The takeaway is built in the SAME branch as the value it explains.
+          const _sog = mod.sig('door', { af: { booking: 'form' }, rows: [] }).rows.find(r => /Booking route/.test(r.label));
+          if (!_sog || !_sog.so) fails.push('a measured signal row carries no takeaway — the value is on the sheet and what it means for the call is not');
+          const _sob = mod.sig('door', { af: { booking: 'online_booking' }, rows: [] }).rows.find(r => /Booking route/.test(r.label));
+          if (!_sob || _sob.so === (_sog && _sog.so)) fails.push('two opposite booking measurements produce the same takeaway — the so-what is keyed on the label rather than written in the branch that produced the value');
+          if (page.indexOf('class="sgso"') < 0) fails.push('the signal takeaways never reach the exported sheet');
+          // The call sites, because a check that does not assert its call site
+          // is half a check. Both surfaces must read the ONE builder.
+          const _n108 = (...p) => p.join('');
+          if (!src.includes(_n108('scoreboardFor({ af: af ', '|| {}'))) fails.push('the exported sheet no longer builds its scoreboard through scoreboardFor');
+          if (!src.includes(_n108('scoreboardFor({ af: lead.', 'auditFacts'))) fails.push('the audit screen no longer builds its scoreboard through scoreboardFor');
+          const _wn = (src.match(new RegExp(_n108('leakWhereFor\\(x, ', 'n\\)'), 'g')) || []).length;
+          if (_wn !== 2) fails.push('leakWhereFor is called at ' + _wn + ' place(s), not both — one of the two surfaces has a leak card that no longer names where on the funnel it sits');
+        }
+        // ══ THE SAMPLE SIZE REACHES THE EXPORTED SHEET ═══════════════════
+        // The export's own signal context passed r.reviewsRead from the day the
+        // denominator was added and auditRecordFor never set it, so every
+        // EXPORTED sheet said the sample size "was not recorded" while the
+        // screen showed it. Computed, wired, dropped one line before use.
+        {
+          const _rr = mod.html([mod.rec({ ...LEAD, reviewsRead: 47, opsBuckets: [{ label: 'quotes take too long', mentions: 5 }] })], { title: 'T', at: 'now' });
+          if (_rr.indexOf('of 47 reviews read') < 0) {
+            fails.push('the review complaint reaches the sheet without the sample size it was read from — half a measurement, and the half that decides whether it is a pattern');
+          }
+          if (/was not recorded/.test(_rr)) fails.push('the sheet still reports the review sample size as unrecorded on a lead that carries it');
+        }
       }
       // An empty run must produce nothing rather than an empty-looking file.
       try {
@@ -1206,7 +1321,7 @@ const mergeStat = runMergeCheck();
 // block into The conversation — two homes is the drift this file records), and
 // a null lead must return null rather than throw.
 {
-  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'replyLatencySay', 'websiteForReading', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
+  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'replyLatencySay', 'websiteForReading', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor', 'leakWhereFor', 'scoreboardFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -1228,7 +1343,7 @@ const mergeStat = runMergeCheck();
     } };
     let briefing = null;
     try {
-      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.replyLatencySay + '\n' + found.websiteForReading + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
+      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.leakWhereFor + '\n' + found.scoreboardFor + '\n' + found.RISK_REASONS + '\n' + found.replyLatencySay + '\n' + found.websiteForReading + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
     } catch (e) { fails.push('the audit screen cannot be lifted: ' + e.message); }
     if (briefing) {
       const LEAD = {
@@ -1264,8 +1379,8 @@ const mergeStat = runMergeCheck();
         // numbered leaks render AT their stages.
         if (joined.indexOf('RANKNOTE_MARKER') < 0) fails.push('the rank-causation note never reaches the audit screen \u2014 the sheet prints two review counts with nothing stopping the reviews-decide-rank misreading');
         for (const label of ['Not sendable as written', 'Who to talk to', 'The story', 'The funnel', 'The conversation',
-          'The email led with', 'He will likely say', 'Worth asking', 'Do not say',
-          'The sell']) {
+          'The email led with', 'He will likely say', 'Also worth asking', 'Do not say',
+          'The sell', "What's working, what's leaking", 'The biggest leaks', 'For the call', 'The full record']) {
           if (joined.indexOf(label) < 0) fails.push('the audit screen no longer renders "' + label + '" — a category of the approved funnel layout is dark');
         }
         for (const gone of ['The money', 'The one thing', 'The smaller leaks']) {
@@ -1275,7 +1390,32 @@ const mergeStat = runMergeCheck();
         if (joined.indexOf('OWNER_EV_MARKER') < 0) fails.push('the code-checked owner-name evidence never reaches the screen');
         const askCount = texts.filter(t => t === 'ASKQ_MARKER').length;
         if (askCount !== 1) fails.push('askOnTheCall renders ' + askCount + ' time(s) on the audit screen, not once — it belongs in The conversation and nowhere else, or the two copies drift');
-        if (joined.indexOf('OPENQ_MARKER') < 0) fails.push("a numbered leak's conversation opener never reaches the screen's Worth-asking section — the three starts Vin asked for are dark");
+        // Round 108: on its own leak card, exactly once. Twice means the card
+        // and the call block are both printing it.
+        const _opCount = texts.filter(t => String(t).indexOf('OPENQ_MARKER') >= 0).length;
+        if (_opCount < 1) fails.push("a numbered leak's conversation opener never reaches the audit screen — the three starts Vin asked for are dark");
+        if (_opCount > 1) fails.push('the leak opener renders ' + _opCount + ' times on the screen — the leak card and the call block are printing the same question');
+        if (joined.indexOf('Open with') < 0) fails.push('the leak card lost its Open-with label, so the question is not attached to the finding it belongs to');
+        // ══ ROUND 108: the screen carries the SAME two tiers as the sheet ══
+        // A rep and the person who built the audit must be reading one
+        // document in two places. The recording stub captures text in
+        // createElement order, which is source order for children — so the
+        // order of these labels IS the order of the page.
+        {
+          const _ix = (t) => texts.findIndex(x => String(x).indexOf(t) === 0 || String(x) === t);
+          const o = ['For the call', "What's working, what's leaking", 'The biggest leaks', 'Do not say', 'The full record', 'The funnel'].map(_ix);
+          if (o.some(x => x < 0)) fails.push('the audit screen is missing one of the two-tier landmarks, so its order cannot be checked');
+          else for (let k = 1; k < o.length; k++) {
+            if (o[k] <= o[k - 1]) { fails.push('the audit screen renders its sections out of order — the call tier and the record tier are interleaved, which is the layout a rep cannot read'); break; }
+          }
+          if (joined.indexOf('So what') < 0) fails.push("a leak card on the screen carries no So-what line — the takeaway Vin asked for is missing from the surface he reads");
+          if (joined.indexOf('ML') < 0) fails.push('the leak money line never reaches the screen leak card');
+          if (joined.indexOf('do not sell against this') < 0) fails.push("the screen lost the won column — a rep cannot tell what NOT to sell against");
+          // A numbered leak is written out ONCE. Its cost line used to print at
+          // the card, at its funnel stage and in the leak list all at once.
+          const _costN = texts.filter(t => String(t).indexOf('COSTS') >= 0).length;
+          if (_costN > 2) fails.push("a numbered leak's cost line renders " + _costN + ' times on the screen — the repetition the two-tier layout exists to remove');
+        }
         if (joined.indexOf('a visitor can book a time on the site') < 0) fails.push('the signal rows are not lined up at their funnel stages on the screen (the booking read never renders at the door)');
         // The walk's measured sentence renders at its stage ON THE SCREEN —
         // the export fixture cannot see the screen's separate wiring. HONEST

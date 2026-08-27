@@ -1154,7 +1154,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260907;
+const CLIENT_CONTRACT = 20260908;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -2628,9 +2628,17 @@ const adsFactsLabel = (af) => {
 // carried no "fix we sell" line at all).
 const PILLAR_LABEL = { BURNING: 'money leaving now', UNCAUGHT: 'people who tried and could not reach them',
   INVISIBLE: 'people who never found them', LEAKING: 'arrived and lost', ROTTING: 'in hand, then lost', TAXED: 'reputation tax' };
-const PILLAR_PRODUCT = { BURNING: 'ad + tracking cleanup inside a retainer', UNCAUGHT: 'automated response layer (AI Brain)',
-  INVISIBLE: 'search ownership (marketing retainer)', LEAKING: 'website rebuild / conversion work',
-  ROTTING: 'follow-up automation (AI Brain)', TAXED: 'reputation operations' };
+// Vin, 2026-08-27: "the language in the audits needs to be much simpler."
+// "conversion work", "search ownership" and "automated response layer" are
+// our vocabulary, not his — a junior rep reading them aloud is repeating a
+// category name instead of describing a job. Same six products, said as what
+// they DO. The catalogue keys are untouched: they are the stored vocabulary.
+const PILLAR_PRODUCT = { BURNING: 'clean up the ads and the tracking, inside a retainer',
+  UNCAUGHT: 'an automatic answer for the people who reach out (AI Brain)',
+  INVISIBLE: 'own the searches he is missing \u2014 monthly retainer',
+  LEAKING: 'rebuild the site so the page turns visitors into jobs',
+  ROTTING: 'automatic follow-up so a finished job comes back (AI Brain)',
+  TAXED: 'take over the review and reputation work' };
 // The same finding was printing twice in THE EVIDENCE: the copy-quote findings
 // were merged INTO problemList on the server (AUDIT UNIQUENESS) and the
 // standalone originalFindings list still carried them. Drop an original whose
@@ -2665,7 +2673,10 @@ const trimRepeatedJobValue = (moneyLine, firstMoneyLine, idx) => {
 // screen and the export, like groupAuditFindings before it.
 const FUNNEL_STAGE_DEFS = [
   { id: 'found', label: 'Getting found', sub: 'do the people looking for this work see them' },
-  { id: 'door', label: 'The door', sub: 'what a click lands on' },
+  // "The door" is our shorthand; the server's own fix-first sentence already
+  // says "the page a visitor lands on", so this was the last copy carrying the
+  // metaphor a rep has to decode.
+  { id: 'door', label: 'The page they land on', sub: 'what a click actually arrives at' },
   { id: 'after', label: 'After they reach out', sub: 'a request becoming a job' },
 ];
 const PILLAR_TO_STAGE = { BURNING: 'found', INVISIBLE: 'found', UNCAUGHT: 'door', LEAKING: 'door', ROTTING: 'after', TAXED: 'work' };
@@ -2700,8 +2711,19 @@ const signalRowsFor = (stageId, ctx) => {
   const hot = (key) => (SIGNAL_RUNGS[key] || []).some(id => ids.has(id));
   const rows = [], unmeasured = [];
   const R = (label, value, key, internal) => {
+    // ══ THE VALUE AND ITS TAKEAWAY COME OUT OF ONE CONDITION ═══════════
+    // Vin, 2026-08-27: "i need everythign said in the audit to bascially be
+    // like so what? so we know the takeaway for eahc point." A takeaway keyed
+    // on the LABEL, or matched against the rendered text, would be a second
+    // copy of the condition that produced the value — the two-hand-kept-copies
+    // disease this file records more than any other, and the copy that rots is
+    // always the one that only runs where nobody looks. So a row may hand back
+    // a PAIR, written inside the same branch: [what we measured, what it means
+    // for the call]. A row with no pair is a row whose value speaks for itself.
+    let so = '';
+    if (Array.isArray(value)) { so = value[1] || ''; value = value[0]; }
     if (value == null || value === '') { unmeasured.push(label); return; }
-    rows.push({ label, value, red: !!(key && hot(key)), internal: !!internal });
+    rows.push({ label, value, so, red: !!(key && hot(key)), internal: !!internal });
   };
   if (stageId === 'found') {
     const lr = (ctx && ctx.rank) || null;
@@ -2710,10 +2732,24 @@ const signalRowsFor = (stageId, ctx) => {
     // neither named, and the owner read the section as at war with itself.
     const q = (af.searchQuery || (lr && (lr.query || lr.phrase)) || '') + '';
     const qTag = q ? ' \u2014 for "' + q + '" (their named trade)' : '';
-    R('Search, map', lr ? ((lr.found === false
-        ? (lr.absenceConfirmed ? ('not among the ' + (Number.isFinite(Number(lr.scanned)) ? lr.scanned + ' ' : '') + 'listings returned (checked twice)') : 'not seen on one look (unconfirmed)')
-        : (Number.isFinite(Number(lr.rank)) && Number(lr.rank) >= 1 ? '#' + lr.rank + ' of ' + (lr.scanned || '?') : "they appear; no position on this run's source")) + qTag)
-      : null, 'search');
+    R('Search, map', (() => {
+      if (!lr) return null;
+      if (lr.found === false) {
+        return lr.absenceConfirmed
+          ? [('not among the ' + (Number.isFinite(Number(lr.scanned)) ? lr.scanned + ' ' : '') + 'listings returned (checked twice)') + qTag,
+             'He can run that exact search on his own phone in twenty seconds and see it for himself.']
+          : ['not seen on one look (unconfirmed)' + qTag,
+             'One look only. Never say this out loud — an unconfirmed miss is not an absence.'];
+      }
+      const _rk = Number(lr.rank);
+      if (Number.isFinite(_rk) && _rk >= 1) {
+        return ['#' + lr.rank + ' of ' + (lr.scanned || '?') + qTag,
+          _rk <= 3 ? 'They are winning the search they are named for. Never open on getting found.'
+                   : 'They come up, but not in the top three, and the top three take most of the calls.'];
+      }
+      return ["they appear; no position on this run's source" + qTag,
+        'We know they are in the results and cannot say where. Never state a position.'];
+    })(), 'search');
     // Three states. Tuck & Howell, live 2026-08-27: this row rendered as
     // "Not measured: Search, blue links" while the ladder eleven lines below
     // said "They do not appear anywhere in the first 19 search results" — one
@@ -2721,10 +2757,14 @@ const signalRowsFor = (stageId, ctx) => {
     // unmeasured surface, and it is the state the rung exists for.
     R('Search, blue links',
       af.organicState === 'found' && Number.isFinite(af.organicPosition)
-        ? ('#' + af.organicPosition + ' of ' + af.organicScanned + (q ? ' \u2014 same search' : ''))
+        ? ['#' + af.organicPosition + ' of ' + af.organicScanned + (q ? ' \u2014 same search' : ''),
+           Number(af.organicPosition) <= 3
+             ? 'They win the plain blue links under the map too. Two surfaces, both working.'
+             : 'A separate ranking from the map. Both have to work; this one is not.']
       : af.organicState === 'absent'
-        ? ('not in the ' + (Number.isFinite(af.organicAbsentOf) ? af.organicAbsentOf + ' ' : '') + 'results that search returned'
-            + (q ? ' \u2014 same search' : ''))
+        ? [('not in the ' + (Number.isFinite(af.organicAbsentOf) ? af.organicAbsentOf + ' ' : '') + 'results that search returned'
+            + (q ? ' \u2014 same search' : '')),
+           'Being in the map and missing from the links below it is a gap he can see in one search.']
       : null, 'organic');
     // Their own service pages and published service areas, each by ITS query.
     const _vres = (ctx && ctx.vis && Array.isArray(ctx.vis.results)) ? ctx.vis.results : [];
@@ -2739,9 +2779,15 @@ const signalRowsFor = (stageId, ctx) => {
     R('Check it yourself', (lr && (lr.query || lr.phrase))
       ? ('search Google for "' + (lr.query || lr.phrase) + '" \u2014 the sponsored block, the AI answer and the map all move, so read the live page before quoting a position')
       : null, null);
-    R('Google ads code', af.ads === 'yes' ? ('on their site' + (af.adsLive === true ? ' · their own sponsored result appeared' : ''))
-      : af.ads === 'lsa_only' ? 'none on their pages \u2014 their pay-per-lead ad was seen live, and that product needs no site code'
-      : af.ads === 'no' ? 'none found on their pages' : null, 'adsCode');
+    R('Google ads code', af.ads === 'yes'
+        ? ['on their site' + (af.adsLive === true ? ' · their own sponsored result appeared' : ''),
+           af.adsLive === true
+             ? 'Their ad ran on our own pull, so the spend is real. Everything below the click is costing him money today.'
+             : 'The code proves an ads ACCOUNT, never a live campaign. Ask him whether anything is running — do not tell him.']
+      : af.ads === 'lsa_only'
+        ? ['none on their pages \u2014 their pay-per-lead ad was seen live, and that product needs no site code',
+           'He is buying leads through Google directly. "No ad code" is not "no ads" on this one.']
+      : af.ads === 'no' ? ['none found on their pages', 'Nothing on the pages we read is set up to buy clicks.'] : null, 'adsCode');
     R('Facebook ad code', af.metaPixel === true ? 'on their site' : af.metaPixel === false ? 'none found' : null, 'meta');
     R('Sponsored services block', (af.lsa && typeof af.lsa === 'object')
       ? (af.lsa.blockPresent === true
@@ -2820,34 +2866,73 @@ const signalRowsFor = (stageId, ctx) => {
     }
   } else if (stageId === 'door') {
     R('Ad clicks land on', af.adLanding
-      ? ({ homepage: 'their homepage, not a page built for the ad', interior: 'an ordinary page of the site', unlinked: 'a page the site never links — landing-page shaped', offsite: 'a page on a different domain' })[af.adLanding]
-      : (af.ads === 'yes' ? 'only their ads account shows it — worth asking' : null), 'adLanding');
-    R('What a click becomes', af.roiStatus === 'counted' ? 'the site carries code that can count when a click becomes a call or a job'
-      : af.roiStatus === 'hidden' ? 'hidden inside their tag container — could not see'
-      : af.roiStatus === 'blind' ? 'nothing visible on the pages we read \u2014 only their ads account can say' : null, 'roi');
-    R('Booking route', ({ online_booking: 'a visitor can book a time on the site', form: 'a form, then waiting', phone_only: 'a phone call', none_found: 'no route found on the pages read' })[af.booking] || null, 'booking');
+      ? ({ homepage: ['their homepage, not a page built for the ad',
+             'Paid clicks landing on a homepage have to find their own way. That is where the ad money goes.'],
+           interior: ['an ordinary page of the site',
+             'An ordinary page, not one built to turn an ad click into a job.'],
+           unlinked: ['a page the site never links — landing-page shaped',
+             'Somebody built a page for the ads. Worth opening it and asking who made it.'],
+           offsite: ['a page on a different domain',
+             'The ads point somewhere else entirely. Ask what is on it and who runs it.'] })[af.adLanding]
+      : (af.ads === 'yes' ? ['only their ads account shows it — worth asking',
+           'We can see the wiring, never the destination. His answer tells you where the money lands.'] : null), 'adLanding');
+    R('What a click becomes', af.roiStatus === 'counted'
+        ? ['the site carries code that can count when a click becomes a call or a job',
+           'He can already tell which clicks turned into work. Do not sell him tracking.']
+      : af.roiStatus === 'hidden' ? ['hidden inside their tag container — could not see',
+           'A tag container can hold the counting code where we cannot see it. Ask, never assert.']
+      : af.roiStatus === 'blind' ? ['nothing visible on the pages we read \u2014 only their ads account can say',
+           'If ads are running, nothing on the pages we read ties a paid click to a booked job. Ask him what he sees.'] : null, 'roi');
+    R('Booking route', ({
+      online_booking: ['a visitor can book a time on the site',
+        'The door works. Do not sell him a booking tool.'],
+      form: ['a form, then waiting',
+        'Somebody ready to hire has to send a message and wait. Some of them just call the next name.'],
+      phone_only: ['a phone call',
+        'Everyone who cannot call right now leaves with nothing.'],
+      none_found: ['no route found on the pages read',
+        'We found no way in at all on the pages we read. Worth checking the site yourself before saying it.'],
+    })[af.booking] || null, 'booking');
     // Round 101, Vin: the chat row earns its place only when a chat was FOUND.
-    R('Live chat', af.liveChat === true ? 'a chat product is installed on the site \u2014 installed is not proof anyone answers it' : null, null);
+    R('Live chat', af.liveChat === true ? ['a chat product is installed on the site \u2014 installed is not proof anyone answers it',
+      'He already pays to catch people who will not fill in a form. He believes in this problem.'] : null, null);
     // Round 102 measured this "for the call sheet" and delivered it nowhere.
     // Only the CONTRADICTION earns a row - a button that says book, over a
     // door that cannot. Silent when they neither say it nor do it.
     R('What the site promises', af.bookingLabelOnly === true
       ? 'a button on the page invites a visitor to book, and the route behind it is not a booking tool \u2014 worth opening on the call'
       : null, 'booking');
-    R('Form length', Number.isFinite(af.formFields) ? af.formFields + ' fields' : null, 'form');
+    R('Form length', Number.isFinite(af.formFields)
+      ? [af.formFields + ' fields', Number(af.formFields) <= 4
+          ? 'Short. He avoided the long-form mistake — give him credit before naming what is missing.'
+          : 'Every extra box is a person who starts and stops.']
+      : null, 'form');
     // Round 101: the price row reads the SERVER's four-state answer. "Not
     // measured: Price on the site" used to print about a lead whose pricing
     // page sat unread AND about one whose homepage shows a dollar figure.
-    R('Price on the site', af.price === 'shown' ? 'shown on the pages we read'
-      : af.price === 'none' ? 'none on the pages we read'
-      : af.price === 'unread' ? 'a pricing page exists that we did not open'
-      : (Number(ctx && ctx.pricesShown) > 0 ? 'shown' : (ids.has('no_published_pricing') ? 'none on the pages read' : null)), 'price');
+    R('Price on the site', af.price === 'shown'
+        ? ['shown on the pages we read', 'He already answers the first question a buyer asks. Nothing to sell here.']
+      : af.price === 'none'
+        ? ['none on the pages we read', 'Somebody comparing three companies has to phone him to find out, and the first one to answer usually gets the job.']
+      : af.price === 'unread'
+        ? ['a pricing page exists that we did not open', 'We never opened it, so say nothing about his pricing either way.']
+      : (Number(ctx && ctx.pricesShown) > 0
+          ? ['shown', 'He already answers the first question a buyer asks.']
+          : (ids.has('no_published_pricing')
+            ? ['none on the pages read', 'They have to phone him to find out what it costs.'] : null)), 'price');
     // Round 103: the finds in words, not a count. A code-only old build says
     // so with the honest scope (the build is dated; a visitor never sees the
     // code) - the customer-perception CLAIM stays with the rung's own gate.
     R('Site build', (Array.isArray(af.buildMarkers) && af.buildMarkers.length)
-      ? ('signs of an old build \u2014 ' + af.buildMarkers.join('; ') + (Number(af.buildVisibleCount) === 0 ? ' (all in the page code \u2014 a visitor never sees these; it is the build that is dated)' : ''))
-      : (Number.isFinite(af.siteAgeMarkers) ? (af.siteAgeMarkers >= 2 ? af.siteAgeMarkers + ' old-build markers in the source' : 'no meaningful age markers') : null), 'build');
+      ? ['signs of an old build \u2014 ' + af.buildMarkers.join('; ') + (Number(af.buildVisibleCount) === 0 ? ' (all in the page code \u2014 a visitor never sees these; it is the build that is dated)' : ''),
+         Number(af.buildVisibleCount) === 0
+           ? 'Nobody visiting sees any of this. It is a fact about the build, not about how the site looks.'
+           : 'A customer comparing two quotes takes the fresher site as the safer company, and the tie goes to the other name.']
+      : (Number.isFinite(af.siteAgeMarkers)
+          ? (af.siteAgeMarkers >= 2
+              ? [af.siteAgeMarkers + ' old-build markers in the source', 'Old enough to show. Worth opening the site while you are on the call.']
+              : ['no meaningful age markers', 'Nothing about the build is dated. Do not go looking for it.'])
+          : null), 'build');
     // Round 103: the seconds he cannot argue with, never the adjective he can.
     // Google's own 28-day record of their REAL visitors - the one measurement
     // in this system taken from the prospect's own customers. Collapsed to
@@ -2859,9 +2944,12 @@ const signalRowsFor = (stageId, ctx) => {
       (_mf && _mf.hasRecord === true && _mfSecs !== null)
         ? (_mf.isProblem === true
             ? (_mf.faultMetric === 'lcp'
-                ? ('a quarter of phone visitors wait more than ' + (_mfSecs >= 4 && _mfSecs < 4.1 ? '4' : _mfSecs) + ' seconds before the main thing on the page appears \u2014 Google counts over 4 as failing.' + _mfScope)
-                : ('the wait itself is ' + _mfSecs + ' seconds, under Google\'s failing line of 4 \u2014 what Google measured as failing on their real visitors is something else on this page.' + _mfScope))
-            : ('a quarter of phone visitors wait about ' + _mfSecs + ' seconds, under Google\'s failing line of 4, so nothing Google measured on their real visitors is a fault.' + _mfScope))
+                ? [('a quarter of phone visitors wait more than ' + (_mfSecs >= 4 && _mfSecs < 4.1 ? '4' : _mfSecs) + ' seconds before the main thing on the page appears \u2014 Google counts over 4 as failing.' + _mfScope),
+                   'Google measured this on their own customers\' phones, not ours. He can read the same number himself on PageSpeed Insights.']
+                : [('the wait itself is ' + _mfSecs + ' seconds, under Google\'s failing line of 4 \u2014 what Google measured as failing on their real visitors is something else on this page.' + _mfScope),
+                   'Something on the page fails for real phone visitors and it is not the load time. Name the seconds, not the word slow.'])
+            : [('a quarter of phone visitors wait about ' + _mfSecs + ' seconds, under Google\'s failing line of 4, so nothing Google measured on their real visitors is a fault.' + _mfScope),
+               'Their real visitors are fine. Do not raise speed.'])
         : (_mf && _mf.hasRecord === false)
           ? null
           : (af.mobile === 'slow' ? 'slow for their real visitors' : af.mobile === 'fine' ? 'fine for their real visitors' : null),
@@ -2875,7 +2963,12 @@ const signalRowsFor = (stageId, ctx) => {
       if (ck.sharedInboxOnly === true) R('Published email', 'shared inboxes only (info@/office@) \u2014 no named person is reachable', null);
       if (Number(ck.firstFoldCtaKinds) >= 3) R('First-screen asks', ck.firstFoldCtaKinds + ' competing calls to action on the first screen', null);
     }
-    R('Anything measuring the site', af.analytics === false ? 'no analytics of any kind on the pages read \u2014 no dashboard anywhere can tell them how many people came' : af.analytics === true ? 'an analytics tag is on the site' : null, null, af.analytics === false);
+    R('Anything measuring the site', af.analytics === false
+        ? ['no analytics of any kind on the pages read \u2014 no dashboard anywhere can tell them how many people came',
+           'No dashboard anywhere can tell him how many people came last month. He is running blind on his own numbers.']
+      : af.analytics === true
+        ? ['an analytics tag is on the site', 'He can see his own numbers, so he will follow a conversation about them.']
+      : null, null, af.analytics === false);
     // Round 101 (Burbank): their own pages sell emergency work while the way in
     // is a form. Internal - a question for the call, never a claim to him.
     R('Emergency copy vs the way in', af.emergencyMismatch === true ? 'their own pages sell emergency or 24/7 work, and the site\u2019s way in is a form and a wait \u2014 worth asking who answers the 2am call' : null, 'booking', true);
@@ -2883,7 +2976,10 @@ const signalRowsFor = (stageId, ctx) => {
     // public place a human can confirm live ads in ten seconds.
     R('Check their ads yourself', af.ads === 'yes' ? 'adstransparency.google.com \u2014 search the business name; a live campaign shows its ads there' : null, null);
   } else if (stageId === 'after') {
-    R('Service plan', af.recurring === 'none' ? 'none on the pages read' : af.recurring === 'offered' ? 'they sell one' : null, 'recurring');
+    R('Service plan', af.recurring === 'none'
+        ? ['none on the pages read', 'Every finished job ends at the invoice, so the same customer has to be won again from scratch.']
+      : af.recurring === 'offered'
+        ? ['they sell one', 'He already sells repeat work. Do not pitch him a plan he has.'] : null, 'recurring');
     const ob = Array.isArray(ctx && ctx.opsBuckets) && ctx.opsBuckets.length ? ctx.opsBuckets[0] : null;
     // The mention count without its denominator is half a measurement, and the
     // half that is missing is the one that decides whether it is a pattern. A
@@ -2894,12 +2990,133 @@ const signalRowsFor = (stageId, ctx) => {
       const den = Number.isFinite(rr) && rr > 0
         ? ' of ' + rr + ' reviews read'
         : ', and how many reviews that came from was not recorded';
-      R('Top review complaint', String(ob.label || '') + ' (' + (Number(ob.mentions) || 0) + ' mention' + (Number(ob.mentions) === 1 ? '' : 's') + den + ')', 'followup', true);
+      R('Top review complaint', [String(ob.label || '') + ' (' + (Number(ob.mentions) || 0) + ' mention' + (Number(ob.mentions) === 1 ? '' : 's') + den + ')',
+        'Never say where this came from. It is how we read the business, not something to quote at him.'], 'followup', true);
     }
-    if (Number(ctx && ctx.negUnanswered) > 0) R('Unanswered negative reviews', String(ctx.negUnanswered) + ' with no reply', null, true);
+    if (Number(ctx && ctx.negUnanswered) > 0) R('Unanswered negative reviews', [String(ctx.negUnanswered) + ' with no reply',
+      'The cheapest fix on this sheet, and free. Background for us — never opened with.'], null, true);
   }
   return { rows, unmeasured };
 };
+// ══ WHAT THEY HAVE ALREADY WON, AND WHERE THE MONEY FALLS OUT ═════════════
+// The ten-second read a rep needs before he dials: what NOT to sell against,
+// and every measured leak as one line. Both columns are built from
+// measurements only — the won side restates a value we actually read, the
+// leaking side is the ladder's own sayable findings — so neither column can
+// invent a sentence about the business.
+//
+// Every won item is SUPPRESSED by the findings that would contradict it, and
+// the suppression is written as the exact rung ids rather than a signal group:
+// a business can be #1 for its own trade AND invisible for one service page,
+// and those are two true facts about two different searches. Suppressing the
+// win on the whole 'search' group would have deleted a real strength.
+//
+// ONE builder, both surfaces, like every other grouping on this sheet.
+// Which stage of the funnel a numbered leak sits at, said in the same words
+// the funnel uses. ONE derivation, both surfaces — the stage label and the
+// leak card cannot drift into two names for one place.
+const leakWhereFor = (row, n) => {
+  const st = (row && (row.funnelStage || PILLAR_TO_STAGE[row.pillar])) || null;
+  const d = FUNNEL_STAGE_DEFS.find(x => x.id === st);
+  const base = d ? d.label : String((row && row.area) || '');
+  return [base, n === 1 ? 'biggest dollar leak' : ''].filter(Boolean).join(' \u00b7 ');
+};
+const scoreboardFor = (ctx) => {
+  const c = ctx || {};
+  const af = c.af || {};
+  const rows = (Array.isArray(c.rows) ? c.rows : []).filter(Boolean);
+  const ids = new Set(rows.filter(x => !x.internalOnly && x.id).map(x => x.id));
+  const anyId = (list) => list.some(id => ids.has(id));
+  const won = [];
+  const W = (block, text, so) => { if (!text || (block && anyId(block))) return; won.push({ text, so }); };
+
+  const lr = c.rank || null;
+  const _rk = (lr && lr.found !== false) ? Number(lr.rank) : NaN;
+  if (Number.isFinite(_rk) && _rk >= 1 && _rk <= 3) {
+    W(['absent_from_search', 'buried_in_results', 'rank_slipped', 'outranked_by_weaker'],
+      '#' + _rk + ' of ' + (lr.scanned || '?') + ' on Google' + (lr.query ? ' for "' + lr.query + '"' : ''),
+      'He is one of the first names people see. Never open on getting found.');
+  }
+  if (af.organicState === 'found' && Number(af.organicPosition) >= 1 && Number(af.organicPosition) <= 3) {
+    W(['organic_invisible'], '#' + af.organicPosition + ' in the plain links under the map',
+      'Two search surfaces, both working for him.');
+  }
+  const rv = c.reviews || {};
+  const _cnt = Number(rv.count), _rat = Number(rv.rating);
+  if (Number.isFinite(_cnt) && _cnt >= 20 && Number.isFinite(_rat) && _rat >= 4.5) {
+    W(null, _cnt + ' reviews at ' + _rat + ' stars',
+      'A record like that is not the problem. Say it as a compliment and move on.');
+  }
+  const _read = Number(rv.read), _rep = Number(rv.replies);
+  if (Number.isFinite(_read) && _read >= 10 && Number.isFinite(_rep) && _rep >= Math.ceil(_read * 0.7)) {
+    W(null, 'he replied to ' + _rep + ' of the ' + _read + ' reviews we read'
+      + (c.replyLatency ? ', typically ' + c.replyLatency : ''),
+      'He is hands-on and fast. Whatever is broken here, it is not his effort.');
+  }
+  if (af.booking === 'online_booking') {
+    W(['form_only_no_booking', 'no_after_hours'], 'a visitor can book a time on the site',
+      'The way in works. Do not sell him a booking tool.');
+  }
+  if (af.liveChat === true) {
+    W(null, 'live chat is installed and running',
+      'He already pays to catch people who will not fill in a form.');
+  }
+  if (Number.isFinite(af.formFields) && Number(af.formFields) <= 4) {
+    W(['long_form'], 'the contact form is only ' + af.formFields + ' fields',
+      'He avoided the long-form mistake. Give him credit before naming what is missing.');
+  }
+  if (af.price === 'shown') {
+    W(['no_published_pricing'], 'prices are on the pages we read',
+      'He already answers the first question a buyer asks.');
+  }
+  if (af.recurring === 'offered') {
+    W(['no_recurring_offer'], 'they sell a plan or a membership',
+      'Repeat work is already built in. Do not pitch him one.');
+  }
+  if (af.roiStatus === 'counted') {
+    W(['ads_untracked'], 'the site can count when a click turns into a call or a job',
+      'He can already see which clicks became work.');
+  }
+  if (af.analytics === true) {
+    W(null, 'visitor tracking is installed',
+      'He can see his own numbers, so he will follow a conversation about them.');
+  }
+  if (af.https === true) {
+    W(['no_https', 'expired_certificate'], 'the site loads over a secure connection',
+      'Nothing to raise. Noted so nobody claims otherwise.');
+  }
+  const ws = c.ws || null;
+  if (ws && ws.checked === true && Number(ws.score) >= 8 && !ws.capped) {
+    W(null, 'the site build scores ' + ws.score + ' out of 10',
+      'The build itself is not the problem. The leaks are in the path around it.');
+  }
+  // A clean review record is a strength ONLY where we actually read enough
+  // reviews to have found a pattern. Silence on an unread profile is our
+  // blindness, and stating it as a strength is the false-absence failure.
+  if (Number.isFinite(_read) && _read >= 10 && !(Array.isArray(c.opsBuckets) && c.opsBuckets.length)) {
+    W(['review_pain_pattern'], 'no complaint repeats across the ' + _read + ' reviews we read',
+      'How he does the work is not the leak. Do not go looking for one.');
+  }
+
+  // The leaking column is an INDEX, not a second copy of the leak cards: every
+  // sayable finding in one clause, the numbered ones marked, so a revenue
+  // signal can never be buried below the fold — the owner's own rule.
+  const ranked = new Map(normalizedLeakRows(rows).map(([r, n]) => [r, n]));
+  const dep = { after: 0, door: 1, found: 2 };
+  const stageOf = (r) => r.funnelStage || PILLAR_TO_STAGE[r.pillar] || null;
+  const leaking = rows.filter(r => !r.internalOnly && !r.ambient && String(r.problem || '').trim())
+    .sort((a, b) => (ranked.has(a) ? ranked.get(a) : 90) - (ranked.has(b) ? ranked.get(b) : 90)
+      || ((dep[stageOf(a)] === undefined ? 9 : dep[stageOf(a)]) - (dep[stageOf(b)] === undefined ? 9 : dep[stageOf(b)]))
+      || ((b.harm || 0) - (a.harm || 0)))
+    .slice(0, 8)
+    // A NUMBERED leak is spelled out in full a few centimetres below, so the
+    // index carries only its clause and its number. Repeating the cost line
+    // here is exactly the "same fact five times" the owner rejected.
+    .map(r => ({ text: String(r.problem), so: ranked.has(r) ? '' : String(r.costs || r.moneyLine || ''), leak: ranked.get(r) || null }));
+
+  return { won: won.slice(0, 6), leaking };
+};
+
 const groupByFunnelStage = (pl, fs) => {
   const rows = (Array.isArray(pl) ? pl : []).filter(Boolean);
   const seen = new Set();
@@ -3091,6 +3308,16 @@ const auditRecordFor = (lead) => {
         })
       : null,
     pricesShown: (l.sitePages && Array.isArray(l.sitePages.prices)) ? l.sitePages.prices.length : null,
+    // ══ THE SAMPLE SIZE THE SHEET WAS ALREADY ASKING FOR ═════════════════
+    // The export's own signal context passed `r.reviewsRead` from the moment
+    // the denominator was added, and the record never set it — so on every
+    // EXPORTED sheet the top review complaint read "how many reviews that came
+    // from was not recorded" while the screen, reading the lead directly,
+    // showed it correctly. Computed, wired, and dropped one line before use.
+    reviewsRead: Number.isFinite(Number(l.reviewsRead)) ? Number(l.reviewsRead) : null,
+    reviewCount: Number.isFinite(Number(l.reviewCount)) ? Number(l.reviewCount) : null,
+    rating: Number.isFinite(Number(l.rating)) ? Number(l.rating) : null,
+    ownerReplies: Number.isFinite(Number(l.ownerReplies)) ? Number(l.ownerReplies) : null,
     background: (sr && sr.background) || '',
     // THE ONE THING
     oneThing: t ? {
@@ -3269,7 +3496,7 @@ const auditExportHtml = (records, meta) => {
       return r.status === 'not audited' ? '' : '<span class="tw">Nothing was flagged on this audit. This is a checked result, not a missing one.</span>';
     })();
     r._doNotSay = doNotSay;
-    return '<article id="a' + i + '">'
+    const _partA = '<article id="a' + i + '">'
       + '<header><div class="hrow"><div><h2>' + e(r.company) + '</h2><div class="meta">'
       + [r.trade, r.location, r.website, measured].filter(Boolean).map(e).join(' &middot; ')
       + '</div><div class="pill">' + e(r.status) + (r.icpScore != null ? ' &middot; score ' + r.icpScore : '') + '</div></div>'
@@ -3305,6 +3532,13 @@ const auditExportHtml = (records, meta) => {
       + '</div>'
       + (r.phone ? '<div class="cphone">' + e(r.phone) + '</div>' : '')
       + '</section>'
+      // ══ TWO TIERS, NOTHING DELETED ════════════════════════════════════
+      // Vin's junior rep "has no clue what these audits mean", and the fix he
+      // approved is not a shorter sheet — it is a sheet with a top. Everything
+      // needed to make the call is above the second rule; every measurement we
+      // took is below it, unabridged. "i feel we do need all of this detial."
+      + '<div class="tier"><span class="tierl">For the call</span>'
+      + '<span class="tiers">Everything a rep needs. If you read nothing else on this sheet, you can make the call.</span></div>'
       // ═══ THE STORY — one thinking voice, the only prose on the page ═══
       + cat('The story', 'what is going on here, in one read — every number in it is measured',
           (r.background ? '<p>' + p(r.background) + '</p>' : '')
@@ -3316,9 +3550,13 @@ const auditExportHtml = (records, meta) => {
             ? r.funnelStory.stages.map(s2 => '<p>' + p(s2.text) + '</p>').join('') : '')
           + (r.whatHeNeeds ? '<p><b>The sell:</b> ' + p(r.whatHeNeeds) + '</p>' : '')
           + (r.whatHeCaresAbout ? '<p class="dim"><b>He clearly cares about:</b> ' + p(r.whatHeCaresAbout) + '</p>' : ''))
-      // ═══ THE FUNNEL — the skeleton. Every finding at its stage, exactly once,
-      // as terse evidence; the top three leaks numbered where they sit. ═══
-      + (() => {
+      ;
+      // ═══ THE FUNNEL — the skeleton. Every measured signal at its stage, and
+      // the numbered leaks marked WHERE THEY SIT (they are spelled out in full
+      // in the leak cards above; a second copy here is the repetition V2 was
+      // built to kill). Rendered in the record tier, because it is the long
+      // half of the sheet and a rep on a call does not scroll it. ═══
+      const _funnelHtml = (() => {
           const anyRows = fg.stages.some(s3 => s3.rows.length) || fg.work.length || fg.unstaged.length;
           if (!anyRows && !r.funnelStory && !(t && (t.friction || []).length)) return '';
           const lead1Row = [...fg.rankOf.entries()].find(x => x[1] === 1);
@@ -3346,8 +3584,17 @@ const auditExportHtml = (records, meta) => {
               + (s3.id === 'found' && fbSearch ? ' The search was read on the fallback source this run, so no position could be measured.' : '');
             const rowsHtml = s3.rows.map(x => {
               const lr = fg.rankOf.get(x);
-              const ml = Number.isFinite(lr) ? trimRepeatedJobValue(x.moneyLine, lead1, lr - 1) : null;
-              return '<div class="ferow">' + (Number.isFinite(lr) ? '<span class="lkb">LEAK ' + lr + '</span>' : '')
+              // A numbered leak is written out in full above. Here it is a
+              // POSITION MARKER: which stage of the funnel it sits at, and
+              // nothing else. Printing its sentence, its cost line and its
+              // product a second time is the "info everywhere" complaint.
+              if (Number.isFinite(lr)) {
+                return '<div class="ferow"><span class="lkb">LEAK ' + lr + '</span>'
+                  + '<span class="tw">' + p(String(x.problem).slice(0, 90)) + (String(x.problem).length > 90 ? '\u2026' : '')
+                  + ' — written out in full above.</span></div>';
+              }
+              const ml = null;
+              return '<div class="ferow">'
                 + '<b>' + p(x.problem) + '</b>'
                 + (x.costs ? ' <span class="tw">— ' + p(x.costs) + '</span>' : '')
                 + (x.rankNote ? '<div class="tw">' + p(x.rankNote) + '</div>' : '')
@@ -3372,7 +3619,8 @@ const auditExportHtml = (records, meta) => {
             const sigHtml = sg.rows.length
               ? '<div class="sgrid">' + sg.rows.map(g =>
                   '<div class="sgr' + (g.red ? ' sgred' : '') + '">' + e(g.label) + ': ' + p(g.value)
-                  + (g.internal ? ' <span class="lkchip">INTERNAL</span>' : '') + '</div>').join('')
+                  + (g.internal ? ' <span class="lkchip">INTERNAL</span>' : '')
+                  + (g.so ? '<div class="sgso">' + p(g.so) + '</div>' : '') + '</div>').join('')
                 + (sg.unmeasured.length ? '<div class="sgr">Not measured: ' + e(sg.unmeasured.join(', ')) + '</div>' : '')
                 + '</div>'
               : '';
@@ -3400,14 +3648,16 @@ const auditExportHtml = (records, meta) => {
             '<div class="fwrap">' + stagesHtml
             + '<div class="fspoutrow"><div class="fspoutbar"></div><div class="fspoutlbl">booked jobs</div></div><div></div>'
             + '<div class="ffull">' + ffHtml + workHtml + unstagedHtml + '</div></div>');
-        })()
+        })();
       // ═══ THE CALL PREP ═══
-      + (() => {
+      const _callHtml = (() => {
           const rows = [];
-          const opq = normalizedLeakRows(r.problemList).filter(([x]) => x.callOpener);
-          if (opq.length || r.askOnTheCall) rows.push(['Worth asking',
-            opq.map(([x, n]) => '<div><b>Leak ' + n + ':</b> ' + p(x.callOpener) + '</div>').join('')
-            + (r.askOnTheCall ? (opq.length ? '<div class="sgr">From the read:</div>' : '') + '<span class="ask">' + p(r.askOnTheCall) + '</span>' : ''), '']);
+          // Each numbered leak carries its own opening question ON ITS CARD,
+          // beside the finding it is about. This row keeps the one question the
+          // READ produced, which belongs to no single leak — printing the three
+          // leak openers here as well was the same sentence twice on one page.
+          if (r.askOnTheCall) rows.push(['Also worth asking',
+            '<span class="ask">' + p(r.askOnTheCall) + '</span>', '']);
           if (r.expectObjection) rows.push(['He will likely say',
             '<q>' + p(r.expectObjection) + '</q> <span class="tw">Our prospect model reading this as the owner — one reading, not a rule. Have an answer ready.</span>', '']);
           if (r.pitch) rows.push(['The email led with',
@@ -3416,7 +3666,71 @@ const auditExportHtml = (records, meta) => {
           if (!rows.length) return '';
           return cat('The call', 'what we know about how it will go — the opening is your call',
             '<div class="grid">' + rows.map(x => '<div class="gl">' + e(x[0]) + '</div><div>' + x[1] + '</div>').join('') + '</div>');
-        })(); };
+        })();
+
+      // ═══ WHAT IS WON, WHAT IS LEAKING — the ten-second read ═══
+      const _sb = scoreboardFor({ af: af || {}, ws: r.websiteScore, rank: r.rank || null,
+        rows: Array.isArray(r.problemList) ? r.problemList : [],
+        reviews: { count: r.reviewCount, rating: r.rating, replies: r.ownerReplies, read: r.reviewsRead },
+        replyLatency: replyLatencySay(r.replyMedianDays), opsBuckets: r.opsBuckets });
+      const _sbHtml = (_sb.won.length || _sb.leaking.length)
+        ? cat("What's working, what's leaking", 'the ten-second read before you dial',
+            '<div class="two">'
+            + '<div class="pan g"><div class="ph">Already won \u2014 do not sell against this</div>'
+            + (_sb.won.length
+              ? '<ul class="pl g">' + _sb.won.map(x => '<li>' + p(x.text)
+                  + (x.so ? '<span class="sw">' + p(x.so) + '</span>' : '') + '</li>').join('') + '</ul>'
+              : '<div class="tw">Nothing measured came back clean on this lead.</div>')
+            + '</div>'
+            + '<div class="pan b"><div class="ph">Where the money falls out</div>'
+            + (_sb.leaking.length
+              ? '<ul class="pl b">' + _sb.leaking.map(x => '<li>'
+                  + (x.leak ? '<span class="lkb">LEAK ' + x.leak + '</span>' : '') + p(x.text)
+                  + (x.so ? '<span class="sw">' + p(x.so) + '</span>' : '') + '</li>').join('') + '</ul>'
+              : '<div class="tw">No measured finding cleared the bar on this lead.</div>')
+            + '</div></div>')
+        : '';
+
+      // ═══ THE NUMBERED LEAKS, EACH WITH ITS SO-WHAT, ITS PRODUCT AND ITS
+      // OPENING QUESTION — the one place a leak is written out in full ═══
+      const _leakRows = normalizedLeakRows(r.problemList);
+      const _leak1Money = (_leakRows[0] || [])[0] ? (_leakRows[0][0].moneyLine || '') : '';
+      const _leakHtml = _leakRows.length
+        ? cat('The biggest leaks', "the system's ranking — every finding is in the record below; the pick is yours",
+            _leakRows.map(([x, n]) => {
+              const ml = trimRepeatedJobValue(x.moneyLine, _leak1Money, n - 1);
+              const prod = (!x.fromTheirPages && x.pillar && PILLAR_PRODUCT[x.pillar]) ? PILLAR_PRODUCT[x.pillar] : '';
+              return '<div class="lk"><div class="lkt"><span class="lkb">LEAK ' + n + '</span>'
+                + '<span class="lkw">' + e(leakWhereFor(x, n)) + '</span></div>'
+                + '<div class="lkh">' + p(x.problem) + '</div>'
+                + (x.costs ? '<p>' + p(x.costs) + '</p>' : '')
+                + (x.rankNote ? '<p class="tw">' + p(x.rankNote) + '</p>' : '')
+                + (ml ? '<div class="lkc"><span>So what</span>' + p(ml) + '</div>' : '')
+                + ((prod || x.callOpener)
+                  ? '<div class="lkf">'
+                    + (prod ? '<div class="lkfx"><em>What we would sell him</em>' + e(prod) + '</div>' : '')
+                    + (x.callOpener ? '<div class="lkop"><em>Open with</em>' + p(x.callOpener) + '</div>' : '')
+                    + '</div>' : '')
+                + '</div>';
+            }).join(''))
+        : '';
+
+      // Do-not-say closes the CALL tier rather than the whole sheet. A rep who
+      // never scrolls past the top must still meet the guardrails: leaving them
+      // at the foot of the record made them invisible to exactly the reader
+      // they exist for.
+      const _dnsHtml = doNotSay
+        ? '<section class="dns"><h3>Do not say on this call</h3>' + doNotSay + '</section>' : '';
+      // ══ PAGE ONE IS THE CALL SHEET ═══════════════════════════════════
+      // The two tiers doubled the page count (7 audits, 7 pages to 14), and
+      // shrinking the type again would undo the density fix rather than
+      // answer the complaint. The honest answer is a page BREAK: the call tier
+      // ends the page, so a rep can print or hand over page one per lead and
+      // the record follows behind it. Same paper, a usable first page.
+      const _tier2 = '<div class="tier tier2"><span class="tierl">The full record</span>'
+        + '<span class="tiers">Nothing deleted. Every measurement we took, for call two, an objection, or the email.</span></div>';
+
+      return _partA + _sbHtml + _leakHtml + _callHtml + _dnsHtml + _tier2 + _funnelHtml; };
 
   // ══ THE SEGMENT BRIEF, ONCE PER TRADE INSTEAD OF ONCE PER LEAD ══════════
   // On a 50-lead export the crew-trades brief printed fifty times — a page of
@@ -3528,8 +3842,7 @@ const auditExportHtml = (records, meta) => {
       + (modelRows ? '<h4>The read, grouped by the model</h4>' + modelRows : '')
       + (sysDiag || '')
       + (internal.length ? '<h4>Internal — never say to him</h4>' + internal.map(x => '<p class="dim">' + x + '</p>').join('') : '')
-      + (couldNot ? '<h4>What we could not check</h4>' + couldNot : '')
-      + (r._doNotSay ? '<h4 style="color:#b91c1c">Do not say</h4>' + r._doNotSay : '');
+      + (couldNot ? '<h4>What we could not check</h4>' + couldNot : '');
     const reference = refBody ? '<section class="ref"><h3>Reference<span class="cap">read if you need it — internal intelligence and guardrails</span></h3>' + refBody + '</section>' : '';
     const foot = (r.renders.length || r.niche)
       ? '<div class="foot"><div>' + (r.renders.length ? 'Pages rendered: ' + r.renders.map(sh => '<a href="' + e(sh.url) + '">' + e(sh.label) + '</a>').join(' · ') : '') + '</div>'
@@ -3545,6 +3858,35 @@ const auditExportHtml = (records, meta) => {
     + 'h1{font-size:22px;margin:0 0 4px;letter-spacing:-.3px}h2{font-size:24px;margin:0 0 2px;letter-spacing:-.4px}h3{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 10px;font-weight:700}'
     + 'h4{font-size:12px;margin:14px 0 4px;color:#1d1d1f}p{margin:0 0 8px}.big{font-size:16px;font-weight:600}.dim{color:#1d1d1f;font-size:13.5px}.cap{font-weight:400;text-transform:none;letter-spacing:0;color:#1d1d1f;font-size:12.5px;margin-left:8px}section{border-top:1px solid #d2d2d7;padding-top:18px;margin-top:20px}.call{background:#f5f5f7;border-radius:14px;padding:16px 20px;border-top:none;display:flex;justify-content:space-between;align-items:center;gap:18px}.call h3{display:none}.cname{font-size:17px;font-weight:700}.cname span{font-weight:400;color:#1d1d1f;font-size:13.5px}.cphone{font-size:21px;font-weight:700;letter-spacing:-.3px;white-space:nowrap}.hrow{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}.scoren{font-size:19px;font-weight:700;text-align:right}.scoren span{color:#1d1d1f;font-weight:400;font-size:13px}.mrow{display:flex;gap:13px;margin-bottom:12px}.mrow .n{font-size:15px;font-weight:700;min-width:16px}.mline{font-weight:600;font-size:13.5px;margin-top:4px}.grid{display:grid;grid-template-columns:118px 1fr;gap:10px 18px;font-size:14px;line-height:1.5}.gl{color:#1d1d1f;font-size:13px;padding-top:1px}.gl.no{color:#b91c1c;font-weight:600}.erow{padding:10px 0;border-bottom:1px solid #e8e8ed;font-size:14px;line-height:1.5}.erow:last-child{border-bottom:none}.tw{color:#1d1d1f;font-size:13.5px}.cols{display:flex;gap:36px}.cols>div{flex:1;min-width:0}.cols h4{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#1d1d1f;margin:0 0 8px;font-weight:700}.qlist{font-size:13.5px;line-height:1.7;color:#1d1d1f}.foot{border-top:1px solid #d2d2d7;padding-top:12px;margin-top:20px;display:flex;justify-content:space-between;gap:24px;font-size:12px;color:#1d1d1f}.fwrap{display:grid;grid-template-columns:180px 1fr;gap:14px 22px;align-items:stretch}.fseg{position:relative;min-height:64px}.fsegbg{position:absolute;inset:0}.fseglbl{position:relative;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:4px 26px}.fseglbl b{font-size:12.5px;line-height:1.3;color:#1d1d1f}.fsegst{font-size:12.5px;font-weight:700;letter-spacing:.03em;color:#1d1d1f}.fseg.fb .fsegst{color:#b91c1c}.fdrip{position:absolute;right:9%;bottom:0;font-size:13px}.fspoutrow{position:relative;height:30px}.fspoutbar{position:absolute;left:44%;right:44%;top:0;height:13px;background:#f5f5f7}.fspoutlbl{position:absolute;top:14px;left:0;right:0;text-align:center;font-size:12.5px;font-weight:700;letter-spacing:.03em;color:#1d1d1f}.ffull{grid-column:1 / -1}.fstage{border-left:2px solid #d2d2d7;padding-left:13px}.fstage.fb{border-left-color:#dc2626}.fsh{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}.fsh b{font-size:14px}.fss{color:#1d1d1f;font-size:12.5px}.fst{font-size:11.5px;font-weight:700;letter-spacing:.04em;color:#1d1d1f}.fb .fst{color:#b91c1c}.fev{color:#1d1d1f;font-size:13.5px;line-height:1.65;margin-top:3px}.ferow{font-size:13px;line-height:1.6;margin-top:4px}.lkb{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#fff;background:#b91c1c;border-radius:4px;padding:1px 6px;margin-right:6px;vertical-align:1px}.ffirst{margin-top:2px;font-size:13.5px;line-height:1.55}.sgrid{margin:4px 0 2px}.sgr{font-size:12.5px;line-height:1.55;color:#1d1d1f}.sgred{color:#b91c1c;font-weight:600}.lkchip{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.05em;color:#92400e;background:#fef3c7;border-radius:4px;padding:0 5px;vertical-align:1px}.fwork{background:#fafafa;border-radius:10px;padding:9px 12px;font-size:13px;color:#1d1d1f;line-height:1.6}.ref{background:#fafafa;border-radius:10px;padding:14px 16px;border-top:none;font-size:13px}.ref h4{margin:12px 0 5px}.ref .erow{border-bottom:none;padding:4px 0}'
     + '.stop{margin:12px 0 4px;padding:11px 14px;border:1px solid #dc2626;border-radius:10px;background:#fef2f2;color:#7f1d1d;font-size:13.5px;line-height:1.55}'
+    // The two tiers, the scoreboard and the leak cards.
+    + '.tier{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;border-top:2px solid #1d1d1f;padding-top:9px;margin:26px 0 2px}'
+    + '.tierl{font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:#1d1d1f;white-space:nowrap}'
+    + '.tiers{font-size:12.5px;color:#1d1d1f}'
+    + '.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}'
+    + '.pan{border:1px solid #e8e8ed;border-radius:10px;padding:13px 15px}.pan.g{border-top:3px solid #166f4a}.pan.b{border-top:3px solid #b91c1c}'
+    + '.pan .ph{font-size:11px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;margin-bottom:8px}.pan.g .ph{color:#166f4a}.pan.b .ph{color:#b91c1c}'
+    + '.pl{list-style:none;margin:0;padding:0}.pl li{font-size:13px;line-height:1.45;padding:8px 0 8px 18px;position:relative;border-top:1px solid #f0f1f3}'
+    + '.pl li:first-child{border-top:none;padding-top:0}.pl.g li:before{content:"\u2713";position:absolute;left:0;color:#166f4a;font-weight:700}'
+    + '.pl.b li:before{content:"\u2715";position:absolute;left:0;color:#b91c1c;font-weight:700}'
+    + '.sw{display:block;margin-top:3px;font-size:12.5px;line-height:1.45;color:#1d1d1f}'
+    + '.lk{border:1px solid #e8e8ed;border-left:3px solid #b91c1c;border-radius:10px;padding:13px 16px;margin-bottom:10px}'
+    + '.lkt{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}'
+    + '.lkw{font-size:10.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:#1d1d1f}'
+    + '.lkh{font-size:15.5px;font-weight:700;line-height:1.3;margin-bottom:5px}'
+    + '.lkc{margin-top:8px;padding:9px 11px;border-radius:8px;background:#fef2f2;border:1px solid #f0c9ca;font-size:13.5px;font-weight:600;line-height:1.45}'
+    + '.lkc span{display:block;font-size:10px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:#b91c1c;margin-bottom:2px}'
+    + '.lkf{display:flex;gap:10px;flex-wrap:wrap;margin-top:9px}.lkfx,.lkop{flex:1;min-width:200px;font-size:13px;line-height:1.45;padding:8px 10px;border-radius:8px;border:1px solid #e8e8ed}'
+    + '.lkfx{background:#f5f5f7}.lkfx em,.lkop em{font-style:normal;display:block;font-size:9.5px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:#1d1d1f;margin-bottom:2px}'
+    + '.sgso{font-size:12px;line-height:1.45;color:#1d1d1f;padding-left:11px;border-left:2px solid #e8e8ed;margin:2px 0 5px}'
+    + 'section.dns{border-top:none;border:1px dashed #f0c9ca;background:#fef2f2;border-radius:10px;padding:13px 16px;margin-top:16px}'
+    + 'section.dns h3{color:#b91c1c}'
+    + '@media print{.tier{padding-top:5px;margin:11px 0 1px}.tierl,.tiers{font-size:8pt}.two{gap:9px}'
+    + '.pan{padding:7px 9px}.pan .ph{font-size:7.5pt;margin-bottom:5px}.pl li{font-size:8.5pt;line-height:1.35;padding:4px 0 4px 13px}'
+    + '.sw{font-size:8pt;margin-top:2px}.lk{padding:7px 10px;margin-bottom:6px}.lkh{font-size:10pt}.lkw{font-size:7pt}'
+    + '.lkc{padding:5px 7px;font-size:8.5pt;margin-top:5px}.lkc span{font-size:6.5pt}.lkf{gap:6px;margin-top:5px}'
+    + '.lkfx,.lkop{padding:4px 7px;font-size:8pt;min-width:130px}.lkfx em,.lkop em{font-size:6.5pt}'
+    + '.sgso{display:inline;font-size:8pt;padding:0;margin:0;border:0}.sgso:before{content:" \u2014 "}section.dns{padding:7px 9px;margin-top:8px}'
+    + '.lk,.pan,.pl li,.lkc,section.dns{break-inside:avoid}.tier{break-after:avoid}}'
     + 'article{padding:30px 0;border-top:3px solid #1d1d1f}article:first-of-type{border-top:none}header .meta{color:#1d1d1f;font-size:13.5px;margin-bottom:6px}'
     + '.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:#f5f5f7;color:#1d1d1f}'
     + ''
@@ -6968,6 +7310,14 @@ function LeadBriefing({ lead }) {
     // app had nothing equivalent — it went straight from contact details to a
     // verdict, so a reader who had never heard of the business met a conclusion
     // about a company they could not picture.
+    // ══ TWO TIERS ON THE SCREEN TOO ═══════════════════════════════════════
+    // The same shape as the exported sheet, so a rep and the person who built
+    // the audit are reading one document in two places. Above the first rule:
+    // everything needed to make the call. Below the second: every measurement
+    // we took, unabridged — "i feel we do need all of this detial."
+    React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', borderTop: '2px solid var(--t)', paddingTop: 8, marginTop: 4 } },
+      React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--t)' } }, 'For the call'),
+      React.createElement('span', { style: { fontSize: 12.5, color: 'var(--t)' } }, 'Everything a rep needs. If you read nothing else, you can make the call.')),
     // ── THE STORY — the one narrator. Background, headline and read in one
     // card; the walk prose is gone from here because the funnel section below
     // renders the same facts as staged evidence — nothing said twice.
@@ -6989,112 +7339,63 @@ function LeadBriefing({ lead }) {
             + (gc && gc.layer ? '  Biggest blocker: ' + layerPlain(gc.layer) + '.' : ''))
     ) : null,
 
-    // ── THE FUNNEL — the skeleton. Every finding at its stage, exactly once;
-    // the top three leaks numbered where they sit; red only where it breaks.
+    // ── WHAT IS WON, WHAT IS LEAKING — the ten-second read ──────────────────
     (() => {
-      const fg = groupByFunnelStage(Array.isArray(lead.problemList) ? lead.problemList : [], lead.funnelStory);
-      const t = (lead.theOneThing && typeof lead.theOneThing === 'object') ? lead.theOneThing : null;
-      const anyRows = fg.stages.some(s3 => s3.rows.length) || fg.work.length || fg.unstaged.length;
-      if (!anyRows && !lead.funnelStory && !(t && (t.friction || []).length)) return null;
-      const lead1Row = [...fg.rankOf.entries()].find(x => x[1] === 1);
-      const lead1 = lead1Row && lead1Row[0].moneyLine;
-      const DARK = { broken: 'rgba(248,113,113,.08)', brokenLine: '#f87171', clean: 'rgba(255,255,255,.03)', cleanLine: '#6b7280', noread: 'rgba(255,255,255,.015)', noreadLine: '#4b5563', text: '#f2f4f7', brokenText: '#f87171', dim: '#e8eaee' };
-      const badge = (n) => React.createElement('span', { style: { display: 'inline-block', fontSize: 12, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '1px 6px', marginRight: 6, verticalAlign: '1px' } }, 'LEAK ' + n);
-      const walkT = walkTextsByStage(lead.funnelStory);
-      const fbSearch = !!(lead.auditFacts && lead.auditFacts.searchSource === 'places');
-      const fThin = (lead.funnelStory && lead.funnelStory.thin) || {};
-      const sigCtx = { af: lead.auditFacts || {}, rows: Array.isArray(lead.problemList) ? lead.problemList : [],
+      const sb = scoreboardFor({ af: lead.auditFacts || {}, ws: lead.websiteScore,
         rank: (lead.brainAudit && lead.brainAudit.localRank && lead.brainAudit.localRank.checked) ? lead.brainAudit.localRank : null,
-        vis: lead.localVisibility || null,
-        traffic: (lead.trafficEstimate && lead.trafficEstimate.checked && lead.trafficEstimate.inIndex) ? lead.trafficEstimate : null,
-        pricesShown: (lead.sitePages && Array.isArray(lead.sitePages.prices)) ? lead.sitePages.prices.length : null,
-        negUnanswered: Number(lead.reviewsNegativeUnanswered) > 0 ? Number(lead.reviewsNegativeUnanswered) : null,
-        opsBuckets: Array.isArray(lead.opsBuckets) ? lead.opsBuckets : null,
-        reviewsRead: lead.reviewsRead };
-      const stageBlocks = fg.stages.map((s3, si) => {
-        const broken = s3.status === 'broken';
-        const partial = (s3.id === 'found' && s3.status === 'clean' && fbSearch)
-          || (s3.status === 'clean' && fThin[s3.id] === true);
-        const stTxt = broken ? 'BROKEN' : s3.status === 'mixed' ? 'WORKS \u2014 WITH LEAKS' : s3.status === 'clean' ? (partial ? 'PARTLY MEASURED' : 'NO FAULT FOUND') : 'NOT MEASURED';
-        const wt = ((walkT[s3.id] || []).join(' ')
-          + (s3.id === 'found' && fbSearch ? ' The search was read on the fallback source this run, so no position could be measured.' : '')).trim();
-        const rowsEls = s3.rows.map((x, ri) => {
-          const lr = fg.rankOf.get(x);
-          const ml = Number.isFinite(lr) ? trimRepeatedJobValue(x.moneyLine, lead1, lr - 1) : null;
-          return React.createElement('div', { key: 'fr' + ri, style: { fontSize: 13, lineHeight: 1.6, marginTop: 4 } },
-            Number.isFinite(lr) ? badge(lr) : null,
-            React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
-            x.costs ? React.createElement('span', { style: { color: 'var(--t)', fontSize: 12.5 } }, ' \u2014 ' + x.costs) : null,
-            x.rankNote ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 2 } }, x.rankNote) : null,
-            ml ? React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--t)', marginTop: 3 } }, ml) : null,
-            Number.isFinite(lr) && !x.fromTheirPages && x.pillar && PILLAR_PRODUCT[x.pillar] ? React.createElement('div', { style: { fontSize: 12, color: 'var(--t)', marginTop: 2 } }, 'fix we sell: ' + PILLAR_PRODUCT[x.pillar]) : null);
-        });
-        const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
-          ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginTop: 4 } }, t.friction.join(' \u00b7 ')) : null;
-        const sg = signalRowsFor(s3.id, sigCtx);
-        const emptyNote = (!s3.rows.length && !legacyFriction && !wt && !sg.rows.length)
-          ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginTop: 3 } },
-              s3.status === 'no_read'
-                ? ('Nothing measured here' + (s3.id === 'after' ? ' \u2014 what happens after someone reaches out is a question for the call, not a claim.' : '.'))
-                : 'Measured \u2014 no fault found.')
-          : null;
-        const walkEl = wt ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.65, marginTop: 3 } }, wt) : null;
-        const sigEls = (sg.rows.length || sg.unmeasured.length) ? React.createElement('div', { style: { margin: '4px 0 2px' } },
-          sg.rows.map((g, gi) => React.createElement('div', { key: 'sg' + gi, style: { fontSize: 12.5, lineHeight: 1.55, color: g.red ? '#f87171' : 'var(--t)', fontWeight: g.red ? 600 : 400 } },
-            g.label + ': ' + g.value,
-            g.internal ? React.createElement('span', { style: { display: 'inline-block', fontSize: 10, fontWeight: 700, letterSpacing: '.05em', color: '#92400e', background: '#fef3c7', borderRadius: 4, padding: '0 5px', marginLeft: 6, verticalAlign: '1px' } }, 'INTERNAL') : null)),
-          sg.unmeasured.length ? React.createElement('div', { key: 'sgu', style: { fontSize: 12, color: 'var(--t)' } }, 'Not measured: ' + sg.unmeasured.join(', ')) : null) : null;
-        // Segment + card as ONE grid row with ONE stTxt, so the funnel is
-        // exactly as tall as the text beside it and the two can never disagree.
-        return [
-          React.createElement('div', { key: 'fseg' + si, style: { position: 'relative', minHeight: 64 } },
-            React.createElement('div', { style: { position: 'absolute', inset: 0, background: funnelSegFill(s3.status, true), clipPath: funnelSegClip(si) } }),
-            React.createElement('div', { style: { position: 'relative', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '4px 24px' } },
-              React.createElement('b', { style: { fontSize: 12.5, lineHeight: 1.3, color: 'var(--t)' } }, s3.label),
-              React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.03em', color: broken ? '#f87171' : 'var(--t)' } }, stTxt)),
-            (s3.status === 'broken' || s3.status === 'mixed') ? React.createElement('span', { style: { position: 'absolute', right: '9%', bottom: 0, fontSize: 13 } }, '\u{1F4A7}') : null),
-          React.createElement('div', { key: 'fst' + si, style: { borderLeft: '2px solid ' + (broken ? '#f87171' : 'var(--b)'), paddingLeft: 12 } },
-            React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
-              React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: broken ? 'var(--t)' : 'var(--t)' } }, s3.label),
-              React.createElement('span', { style: { fontSize: 12.5, color: 'var(--t)' } }, s3.sub),
-              React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.04em', color: broken ? '#f87171' : 'var(--t)' } }, stTxt)),
-            sigEls, walkEl, rowsEls, legacyFriction, emptyNote),
-        ];
-      });
-      const ff = (lead.funnelStory && lead.funnelStory.fixFirst) || null;
-      const ffEl = ff
-        ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.55, marginBottom: 10 } },
-            React.createElement('b', null, 'Fix first: '), String(ff.plain || '') + (ff.why ? ' \u2014 ' + ff.why : '') + (ff.join ? ' ' + ff.join : ''))
-        : (t && t.firstBrokenLinkWhy ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.55, marginBottom: 10 } },
-            React.createElement('b', null, 'Fix first' + (t.firstBrokenLink ? ' \u2014 ' + layerPlain(t.firstBrokenLink) : '') + ': '), t.firstBrokenLinkWhy) : null);
-      const wr = ((lead.funnelStory && lead.funnelStory.stages) || []).find(s4 => s4 && s4.id === 'what_repeats');
-      const workEl = (fg.work.length || wr) ? React.createElement('div', { style: { background: 'rgba(255,255,255,.02)', border: '1px solid var(--b)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginBottom: 8 } },
-        React.createElement('b', { style: { color: 'var(--t)' } }, 'Under the funnel \u2014 the work itself (context, not a leak): '),
-        fg.work.length ? fg.work.map(x => x.problem).join(' \u00b7 ') : String(wr.text)) : null;
-      const unstagedEl = fg.unstaged.length ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6 } },
-        fg.unstaged.map((x, i2) => React.createElement('div', { key: 'us' + i2, style: { marginTop: 3 } },
-          React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
-          (x.costs || x.area) ? ' \u2014 ' + [x.area, x.costs].filter(Boolean).join(' \u00b7 ') : ''))) : null;
-      // The layer answers "what holds the business back overall"; the numbered
-      // leaks answer "which measurable thing costs the most money". Different
-      // questions with different answers - the file's own TWO LADDERS rule -
-      // and nothing on the page said so, so a live sheet leading on OFFER over
-      // a door leak read as the sheet arguing with itself.
-      const sysDiag = t && t.diagnosis ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginTop: 8 } },
-        React.createElement('b', null, 'System one-change diagnosis' + (t.layer ? ' \u2014 ' + layerPlain(t.layer) : '') + ': '), t.diagnosis + (t.why ? ' ' + t.why : ''),
-        React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 3 } },
-          'What holds the business back overall \u2014 a different question from which leak costs most, which the numbered leaks answer.')) : null;
+        rows: Array.isArray(lead.problemList) ? lead.problemList : [],
+        reviews: { count: lead.reviewCount, rating: lead.rating, replies: lead.ownerReplies, read: lead.reviewsRead },
+        replyLatency: replyLatencySay(lead.ownerReplyMedianDays),
+        opsBuckets: Array.isArray(lead.opsBuckets) ? lead.opsBuckets : null });
+      if (!sb.won.length && !sb.leaking.length) return null;
+      const col = (title, items, accent, mark) => React.createElement('div', {
+        style: { border: '1px solid var(--b)', borderTop: '3px solid ' + accent, borderRadius: 8, padding: '13px 15px', minWidth: 0 } },
+        React.createElement('div', { style: { fontSize: 11, fontWeight: 700, letterSpacing: '.09em', textTransform: 'uppercase', color: accent, marginBottom: 8 } }, title),
+        items.length ? items.map((x, xi) => React.createElement('div', {
+          key: 'sb' + xi, style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.45, padding: xi ? '8px 0 8px 18px' : '0 0 8px 18px', position: 'relative', borderTop: xi ? '1px solid var(--b)' : 'none' } },
+          React.createElement('span', { style: { position: 'absolute', left: 0, color: accent, fontWeight: 700 } }, mark),
+          x.leak ? React.createElement('span', { style: { display: 'inline-block', fontSize: 11, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '0 5px', marginRight: 6, verticalAlign: '1px' } }, 'LEAK ' + x.leak) : null,
+          x.text,
+          x.so ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 3, lineHeight: 1.45 } }, x.so) : null))
+          : React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)' } }, 'Nothing measured on this lead.'));
       return React.createElement('div', null,
-        React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The funnel',
-          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, "a customer's path to hiring them \u2014 where it breaks, the money falls out")),
-        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '164px 1fr', gap: '14px 20px', alignItems: 'stretch' } },
-          stageBlocks,
-          React.createElement('div', { key: 'fspout', style: { position: 'relative', height: 30 } },
-            React.createElement('div', { style: { position: 'absolute', left: '44%', right: '44%', top: 0, height: 13, background: 'rgba(255,255,255,.05)' } }),
-            React.createElement('div', { style: { position: 'absolute', top: 14, left: 0, right: 0, textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--t)' } }, 'booked jobs')),
-          React.createElement('div', { key: 'fsp2' }),
-          React.createElement('div', { key: 'ffull', style: { gridColumn: '1 / -1', minWidth: 0 } }, ffEl, workEl, unstagedEl, sysDiag)));
+        React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, "What's working, what's leaking",
+          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, 'the ten-second read before you dial')),
+        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 12 } },
+          col('Already won \u2014 do not sell against this', sb.won, 'var(--g)', '\u2713'),
+          col('Where the money falls out', sb.leaking, 'var(--r)', '\u2715')));
     })(),
+
+    // ── THE NUMBERED LEAKS — the one place each is written out in full ──────
+    (() => {
+      const lrows = normalizedLeakRows(lead.problemList);
+      if (!lrows.length) return null;
+      const m1 = (lrows[0][0] && lrows[0][0].moneyLine) || '';
+      return React.createElement('div', null,
+        React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The biggest leaks',
+          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, "the system's ranking \u2014 every finding is in the record below; the pick is yours")),
+        lrows.map(([x, n]) => {
+          const ml = trimRepeatedJobValue(x.moneyLine, m1, n - 1);
+          const prod = (!x.fromTheirPages && x.pillar && PILLAR_PRODUCT[x.pillar]) ? PILLAR_PRODUCT[x.pillar] : '';
+          const boxed = (label, body) => React.createElement('div', { style: { flex: 1, minWidth: 210, fontSize: 13, lineHeight: 1.45, padding: '8px 10px', borderRadius: 7, border: '1px solid var(--b)' } },
+            React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 2 } }, label),
+            React.createElement('div', { style: { color: 'var(--t)' } }, body));
+          return React.createElement('div', { key: 'lk' + n, style: { border: '1px solid var(--b)', borderLeft: '3px solid var(--r)', borderRadius: 8, padding: '13px 16px', marginBottom: 10 } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 6 } },
+              React.createElement('span', { style: { display: 'inline-block', fontSize: 11, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '1px 6px' } }, 'LEAK ' + n),
+              React.createElement('span', { style: { fontSize: 10.5, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--t)' } }, leakWhereFor(x, n))),
+            React.createElement('div', { style: { fontSize: 15.5, fontWeight: 700, lineHeight: 1.3, color: 'var(--t)', marginBottom: 5 } }, x.problem),
+            x.costs ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.5 } }, x.costs) : null,
+            x.rankNote ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', lineHeight: 1.5, marginTop: 3 } }, x.rankNote) : null,
+            ml ? React.createElement('div', { style: { marginTop: 8, padding: '9px 11px', borderRadius: 7, background: 'rgba(239,68,68,.10)', border: '1px solid rgba(239,68,68,.35)' } },
+              React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 2 } }, 'So what'),
+              React.createElement('div', { style: { fontSize: 13.5, fontWeight: 600, color: 'var(--t)', lineHeight: 1.45 } }, ml)) : null,
+            (prod || x.callOpener) ? React.createElement('div', { style: { display: 'flex', gap: 10, flexWrap: 'wrap', marginTop: 9 } },
+              prod ? boxed('What we would sell him', prod) : null,
+              x.callOpener ? boxed('Open with', x.callOpener) : null) : null);
+        }));
+    })(),
+
 
     // (The one-thing card is gone from the screen: its fix-first and friction
     // render inside THE FUNNEL above, and its diagnosis is the funnel's dim
@@ -7221,12 +7522,10 @@ function LeadBriefing({ lead }) {
       ]));
       if (obj) rows.push(gl('He will likely say'), gv(['\u201c' + obj + '\u201d ',
         React.createElement('span', { key: 'n', style: { color: 'var(--t)', fontSize: 11.5 } }, 'Our prospect model reading this as the owner \u2014 one reading, not a rule. Have an answer ready.')]));
-      const opq = normalizedLeakRows(lead.problemList).filter(([x]) => x.callOpener);
-      if (opq.length || (sr && sr.askOnTheCall)) rows.push(gl('Worth asking'), gv([
-        ...opq.map(([x, n], qi) => React.createElement('div', { key: 'q' + qi, style: { marginBottom: 3 } },
-          React.createElement('b', null, 'Leak ' + n + ': '), x.callOpener)),
-        (sr && sr.askOnTheCall && opq.length) ? React.createElement('div', { key: 'qf', style: { fontSize: 12, marginTop: 2 } }, 'From the read:') : null,
-        (sr && sr.askOnTheCall) ? React.createElement('div', { key: 'qa' }, sr.askOnTheCall) : null,
+      // The three leak openers render on their own leak cards, beside the
+      // finding each one is about. This row is the read's own question.
+      if (sr && sr.askOnTheCall) rows.push(gl('Also worth asking'), gv([
+        React.createElement('div', { key: 'qa' }, sr.askOnTheCall),
       ]));
       // Do-not-say moved to its own section at the BOTTOM of the audit —
       // the owner's call, 2026-08-24: warnings last, the business first.
@@ -7237,6 +7536,139 @@ function LeadBriefing({ lead }) {
           React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8, color: 'var(--t)' } }, 'what we know about how it will go \u2014 the opening is your call')),
         React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '118px 1fr', gap: '10px 16px' } }, rows)
       );
+    })(),
+
+    // ── DO NOT SAY — LAST, BY DESIGN ────────────────────────────────────────
+    // Every flagged claim, rendered as the QUOTE plus one plain-English line of
+    // why — the engineering rationale stays in the stored lead. Placed at the
+    // bottom at the owner's direction: the caller reads the business first and
+    // the guardrails last.
+    risks.length ? React.createElement('div', { style: { borderTop: '1px solid var(--b)', paddingTop: 14 } },
+      React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 6 } }, 'Do not say'),
+      React.createElement('ul', { style: { margin: 0, paddingLeft: 16, listStyle: 'disc' } },
+        risks.slice(0, 8).map((x, i) => React.createElement('li', { key: i, style: { marginBottom: 5, lineHeight: 1.5, fontSize: 13, color: 'var(--t)' } }, plainRisk(x)))
+      )
+    ) : null,
+
+    // ══ TIER 2 — THE RECORD ═══════════════════════════════════════════════
+    React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', borderTop: '2px solid var(--t)', paddingTop: 8, marginTop: 8 } },
+      React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--t)' } }, 'The full record'),
+      React.createElement('span', { style: { fontSize: 12.5, color: 'var(--t)' } }, 'Nothing deleted. Every measurement we took, for call two, an objection, or the email.')),
+
+    // ── THE FUNNEL — the skeleton. Every finding at its stage, exactly once;
+    // the top three leaks numbered where they sit; red only where it breaks.
+    (() => {
+      const fg = groupByFunnelStage(Array.isArray(lead.problemList) ? lead.problemList : [], lead.funnelStory);
+      const t = (lead.theOneThing && typeof lead.theOneThing === 'object') ? lead.theOneThing : null;
+      const anyRows = fg.stages.some(s3 => s3.rows.length) || fg.work.length || fg.unstaged.length;
+      if (!anyRows && !lead.funnelStory && !(t && (t.friction || []).length)) return null;
+      const lead1Row = [...fg.rankOf.entries()].find(x => x[1] === 1);
+      const lead1 = lead1Row && lead1Row[0].moneyLine;
+      const DARK = { broken: 'rgba(248,113,113,.08)', brokenLine: '#f87171', clean: 'rgba(255,255,255,.03)', cleanLine: '#6b7280', noread: 'rgba(255,255,255,.015)', noreadLine: '#4b5563', text: '#f2f4f7', brokenText: '#f87171', dim: '#e8eaee' };
+      const badge = (n) => React.createElement('span', { style: { display: 'inline-block', fontSize: 12, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '1px 6px', marginRight: 6, verticalAlign: '1px' } }, 'LEAK ' + n);
+      const walkT = walkTextsByStage(lead.funnelStory);
+      const fbSearch = !!(lead.auditFacts && lead.auditFacts.searchSource === 'places');
+      const fThin = (lead.funnelStory && lead.funnelStory.thin) || {};
+      const sigCtx = { af: lead.auditFacts || {}, rows: Array.isArray(lead.problemList) ? lead.problemList : [],
+        rank: (lead.brainAudit && lead.brainAudit.localRank && lead.brainAudit.localRank.checked) ? lead.brainAudit.localRank : null,
+        vis: lead.localVisibility || null,
+        traffic: (lead.trafficEstimate && lead.trafficEstimate.checked && lead.trafficEstimate.inIndex) ? lead.trafficEstimate : null,
+        pricesShown: (lead.sitePages && Array.isArray(lead.sitePages.prices)) ? lead.sitePages.prices.length : null,
+        negUnanswered: Number(lead.reviewsNegativeUnanswered) > 0 ? Number(lead.reviewsNegativeUnanswered) : null,
+        opsBuckets: Array.isArray(lead.opsBuckets) ? lead.opsBuckets : null,
+        reviewsRead: lead.reviewsRead };
+      const stageBlocks = fg.stages.map((s3, si) => {
+        const broken = s3.status === 'broken';
+        const partial = (s3.id === 'found' && s3.status === 'clean' && fbSearch)
+          || (s3.status === 'clean' && fThin[s3.id] === true);
+        const stTxt = broken ? 'BROKEN' : s3.status === 'mixed' ? 'WORKS \u2014 WITH LEAKS' : s3.status === 'clean' ? (partial ? 'PARTLY MEASURED' : 'NO FAULT FOUND') : 'NOT MEASURED';
+        const wt = ((walkT[s3.id] || []).join(' ')
+          + (s3.id === 'found' && fbSearch ? ' The search was read on the fallback source this run, so no position could be measured.' : '')).trim();
+        const rowsEls = s3.rows.map((x, ri) => {
+          const lr = fg.rankOf.get(x);
+          // A numbered leak is written out in full in its card above. Here it
+          // marks WHERE on the funnel it sits, and nothing else — printing its
+          // sentence, its cost line and its product again is the repetition
+          // the two-tier layout exists to remove.
+          if (Number.isFinite(lr)) {
+            const _short = String(x.problem || '');
+            return React.createElement('div', { key: 'fr' + ri, style: { fontSize: 13, lineHeight: 1.6, marginTop: 4 } },
+              badge(lr),
+              React.createElement('span', { style: { color: 'var(--t)', fontSize: 12.5 } },
+                (_short.length > 90 ? _short.slice(0, 90) + '\u2026' : _short) + ' \u2014 written out in full above.'));
+          }
+          return React.createElement('div', { key: 'fr' + ri, style: { fontSize: 13, lineHeight: 1.6, marginTop: 4 } },
+            React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
+            x.costs ? React.createElement('span', { style: { color: 'var(--t)', fontSize: 12.5 } }, ' \u2014 ' + x.costs) : null,
+            x.rankNote ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 2 } }, x.rankNote) : null);
+        });
+        const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
+          ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginTop: 4 } }, t.friction.join(' \u00b7 ')) : null;
+        const sg = signalRowsFor(s3.id, sigCtx);
+        const emptyNote = (!s3.rows.length && !legacyFriction && !wt && !sg.rows.length)
+          ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginTop: 3 } },
+              s3.status === 'no_read'
+                ? ('Nothing measured here' + (s3.id === 'after' ? ' \u2014 what happens after someone reaches out is a question for the call, not a claim.' : '.'))
+                : 'Measured \u2014 no fault found.')
+          : null;
+        const walkEl = wt ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.65, marginTop: 3 } }, wt) : null;
+        const sigEls = (sg.rows.length || sg.unmeasured.length) ? React.createElement('div', { style: { margin: '4px 0 2px' } },
+          sg.rows.map((g, gi) => React.createElement('div', { key: 'sg' + gi, style: { fontSize: 12.5, lineHeight: 1.55, color: g.red ? '#f87171' : 'var(--t)', fontWeight: g.red ? 600 : 400 } },
+            g.label + ': ' + g.value,
+            g.internal ? React.createElement('span', { style: { display: 'inline-block', fontSize: 10, fontWeight: 700, letterSpacing: '.05em', color: '#92400e', background: '#fef3c7', borderRadius: 4, padding: '0 5px', marginLeft: 6, verticalAlign: '1px' } }, 'INTERNAL') : null,
+            // The takeaway, written in the same branch that produced the value.
+            g.so ? React.createElement('div', { style: { fontSize: 12, fontWeight: 400, color: 'var(--t)', lineHeight: 1.45, paddingLeft: 10, borderLeft: '2px solid var(--b)', margin: '2px 0 5px' } }, g.so) : null)),
+          sg.unmeasured.length ? React.createElement('div', { key: 'sgu', style: { fontSize: 12, color: 'var(--t)' } }, 'Not measured: ' + sg.unmeasured.join(', ')) : null) : null;
+        // Segment + card as ONE grid row with ONE stTxt, so the funnel is
+        // exactly as tall as the text beside it and the two can never disagree.
+        return [
+          React.createElement('div', { key: 'fseg' + si, style: { position: 'relative', minHeight: 64 } },
+            React.createElement('div', { style: { position: 'absolute', inset: 0, background: funnelSegFill(s3.status, true), clipPath: funnelSegClip(si) } }),
+            React.createElement('div', { style: { position: 'relative', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: '4px 24px' } },
+              React.createElement('b', { style: { fontSize: 12.5, lineHeight: 1.3, color: 'var(--t)' } }, s3.label),
+              React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.03em', color: broken ? '#f87171' : 'var(--t)' } }, stTxt)),
+            (s3.status === 'broken' || s3.status === 'mixed') ? React.createElement('span', { style: { position: 'absolute', right: '9%', bottom: 0, fontSize: 13 } }, '\u{1F4A7}') : null),
+          React.createElement('div', { key: 'fst' + si, style: { borderLeft: '2px solid ' + (broken ? '#f87171' : 'var(--b)'), paddingLeft: 12 } },
+            React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' } },
+              React.createElement('span', { style: { fontSize: 14, fontWeight: 700, color: broken ? 'var(--t)' : 'var(--t)' } }, s3.label),
+              React.createElement('span', { style: { fontSize: 12.5, color: 'var(--t)' } }, s3.sub),
+              React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.04em', color: broken ? '#f87171' : 'var(--t)' } }, stTxt)),
+            sigEls, walkEl, rowsEls, legacyFriction, emptyNote),
+        ];
+      });
+      const ff = (lead.funnelStory && lead.funnelStory.fixFirst) || null;
+      const ffEl = ff
+        ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.55, marginBottom: 10 } },
+            React.createElement('b', null, 'Fix first: '), String(ff.plain || '') + (ff.why ? ' \u2014 ' + ff.why : '') + (ff.join ? ' ' + ff.join : ''))
+        : (t && t.firstBrokenLinkWhy ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.55, marginBottom: 10 } },
+            React.createElement('b', null, 'Fix first' + (t.firstBrokenLink ? ' \u2014 ' + layerPlain(t.firstBrokenLink) : '') + ': '), t.firstBrokenLinkWhy) : null);
+      const wr = ((lead.funnelStory && lead.funnelStory.stages) || []).find(s4 => s4 && s4.id === 'what_repeats');
+      const workEl = (fg.work.length || wr) ? React.createElement('div', { style: { background: 'rgba(255,255,255,.02)', border: '1px solid var(--b)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginBottom: 8 } },
+        React.createElement('b', { style: { color: 'var(--t)' } }, 'Under the funnel \u2014 the work itself (context, not a leak): '),
+        fg.work.length ? fg.work.map(x => x.problem).join(' \u00b7 ') : String(wr.text)) : null;
+      const unstagedEl = fg.unstaged.length ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6 } },
+        fg.unstaged.map((x, i2) => React.createElement('div', { key: 'us' + i2, style: { marginTop: 3 } },
+          React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
+          (x.costs || x.area) ? ' \u2014 ' + [x.area, x.costs].filter(Boolean).join(' \u00b7 ') : ''))) : null;
+      // The layer answers "what holds the business back overall"; the numbered
+      // leaks answer "which measurable thing costs the most money". Different
+      // questions with different answers - the file's own TWO LADDERS rule -
+      // and nothing on the page said so, so a live sheet leading on OFFER over
+      // a door leak read as the sheet arguing with itself.
+      const sysDiag = t && t.diagnosis ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginTop: 8 } },
+        React.createElement('b', null, 'System one-change diagnosis' + (t.layer ? ' \u2014 ' + layerPlain(t.layer) : '') + ': '), t.diagnosis + (t.why ? ' ' + t.why : ''),
+        React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 3 } },
+          'What holds the business back overall \u2014 a different question from which leak costs most, which the numbered leaks answer.')) : null;
+      return React.createElement('div', null,
+        React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The funnel',
+          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, "a customer's path to hiring them \u2014 where it breaks, the money falls out")),
+        React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '164px 1fr', gap: '14px 20px', alignItems: 'stretch' } },
+          stageBlocks,
+          React.createElement('div', { key: 'fspout', style: { position: 'relative', height: 30 } },
+            React.createElement('div', { style: { position: 'absolute', left: '44%', right: '44%', top: 0, height: 13, background: 'rgba(255,255,255,.05)' } }),
+            React.createElement('div', { style: { position: 'absolute', top: 14, left: 0, right: 0, textAlign: 'center', fontSize: 12, fontWeight: 700, color: 'var(--t)' } }, 'booked jobs')),
+          React.createElement('div', { key: 'fsp2' }),
+          React.createElement('div', { key: 'ffull', style: { gridColumn: '1 / -1', minWidth: 0 } }, ffEl, workEl, unstagedEl, sysDiag)));
     })(),
 
 
@@ -7394,18 +7826,6 @@ function LeadBriefing({ lead }) {
       )
     ),
 
-
-    // ── DO NOT SAY — LAST, BY DESIGN ────────────────────────────────────────
-    // Every flagged claim, rendered as the QUOTE plus one plain-English line of
-    // why — the engineering rationale stays in the stored lead. Placed at the
-    // bottom at the owner's direction: the caller reads the business first and
-    // the guardrails last.
-    risks.length ? React.createElement('div', { style: { borderTop: '1px solid var(--b)', paddingTop: 14 } },
-      React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 6 } }, 'Do not say'),
-      React.createElement('ul', { style: { margin: 0, paddingLeft: 16, listStyle: 'disc' } },
-        risks.slice(0, 8).map((x, i) => React.createElement('li', { key: i, style: { marginBottom: 5, lineHeight: 1.5, fontSize: 13, color: 'var(--t)' } }, plainRisk(x)))
-      )
-    ) : null,
 
 
   );
