@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260909;
+const CONTRACT_VERSION = 20260911;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -33385,6 +33385,86 @@ const scoreReachability = (c) => {
   };
 };
 
+// == CONTACT_RANK_TERMS - "50 leads ranked" said as arithmetic ================
+// The goal this exists for is one sentence: 50 leads ranked, with an owner
+// email and a phone number, inside the ICP. Ranking that list is NOT a new
+// question - scoreReachability directly above has answered "can we put this in
+// front of the decision-maker" since the day it was written, on a 0-100 scale,
+// and it is already computed on every researched lead. Writing a second scorer
+// here would be the two-hand-kept-copies disease with the second copy inside a
+// feature nobody audits, so this does not score reachability again. It takes
+// reachability as the BASE and adds only what reachability does not know.
+//
+// Three terms, each declared with the reason it exists rather than tuned:
+//
+//   PHONE      this list is for CALLING. scoreReachability's own header says it
+//              answers "CAN WE PUT AN EMAIL IN FRONT OF THE DECISION-MAKER" -
+//              an email question, which gives a dialable number only a small
+//              nudge inside its no-mailbox branch. On a call list a number is
+//              not a nudge, it is the instrument.
+//   AUTHORITY  PART 3: "The owner is the buyer. Owner / CEO / President /
+//              Managing Partner can buy. VP and below is blocked." canBuy is
+//              computed by the resolver, and the ranking is where that verdict
+//              should show rather than only in a log line.
+//   ICP BAND   discovery DEMOTES rather than deletes a business outside the
+//              4.2-4.85 band or above the review ceiling (PART 4 sections 13
+//              and 17), because Google bills per call and deleting a result
+//              cannot save a penny. A demoted lead is "never audited while a
+//              better lead exists" - so it has to sort last HERE too, or a
+//              decision taken at discovery is silently undone at ranking.
+//
+// Magnitudes are deliberately small against a 0-100 base: this orders CLOSE
+// CALLS, exactly as OWNER_KNOWS does in the email ladder at a spread of 22. It
+// must never lift a lead with no owner and no mailbox over one that has both,
+// and CONTACT RANK CHECK asserts that at boot rather than trusting the comment.
+const CONTACT_RANK_TERMS = [
+  { id: 'phone',      points: 8,   why: 'a number to dial' },
+  { id: 'authority',  points: 6,   why: 'the person named can actually buy' },
+  { id: 'outOfBand',  points: -10, why: 'outside the star band discovery demotes on' },
+  { id: 'aboveSize',  points: -10, why: 'above the review ceiling discovery demotes on' },
+];
+const CONTACT_RANK_MAX_MODIFIER = 14;   // the two positives; asserted at boot
+
+// contactRankFor - the ONE place a contact list is ordered.
+// Returns { rank, why, terms } and never throws: a missing measurement is
+// SKIPPED, never read as zero. Number(null) is 0 and 0 is finite, and this file
+// records that trap more often than any other - so reachability has to be a
+// real number or there is no rank at all, rather than a confident 0 that sorts
+// a perfectly good lead to the bottom while looking measured.
+const contactRankFor = (c) => {
+  const lead = c || {};
+  const base = Number(lead.reachability);
+  if (typeof lead.reachability !== 'number' || !Number.isFinite(base)) {
+    return { rank: null, why: 'not ranked - reachability was never scored on this lead', terms: [] };
+  }
+  const applied = [];
+  let score = base;
+  const take = (id, on) => {
+    if (!on) return;
+    const t = CONTACT_RANK_TERMS.find(x => x.id === id);
+    if (!t) return;
+    score += t.points;
+    applied.push({ id: t.id, points: t.points, why: t.why });
+  };
+  // A phone NUMBER, not a phone FIELD: discovery hands over '' on plenty of
+  // leads and an empty string is not something a rep can dial.
+  take('phone', !!String(lead.phone || '').replace(/\D/g, ''));
+  // canBuy is the resolver's own verdict. A candidate held back below the
+  // buying floor is deliberately NOT authority - holding it back is the whole
+  // point, and reading heldBackContact here would quietly undo it.
+  take('authority', !!(lead.decisionMaker && lead.decisionMaker.canBuy === true));
+  take('outOfBand', lead.outsideBand === true);
+  take('aboveSize', lead.aboveSizeCeiling === true);
+  const rank = Math.max(0, Math.min(100, Math.round(score)));
+  return {
+    rank,
+    why: applied.length
+      ? 'reachability ' + Math.round(base) + ', then ' + applied.map(a => (a.points > 0 ? '+' : '') + a.points + ' ' + a.why).join(', ')
+      : 'reachability ' + Math.round(base) + ', with nothing to add or subtract',
+    terms: applied,
+  };
+};
+
 app.get('/api/verify-website', async (req, res) => {
   const { url, company } = req.query;
   if (!url || !company) return res.status(400).json({ error: 'url and company required' });
@@ -38615,6 +38695,32 @@ const _runResearchInner = async (req, res) => {
   // Firecrawl call actually SUCCEEDING (see fcNote), which is the only evidence
   // the balance is back.
   const _fcRunStartedAt = Date.now();
+  // == CONTACT-ONLY: the run that answers the goal and buys nothing else ======
+  // The standing goal is one sentence: "50 leads ranked with owner email and
+  // phone number that are in our ICP." Nothing in it needs an audit, and until
+  // this flag existed the ONLY way to obtain an owner email was to run this
+  // whole route - which also buys the review mine, the whole search-visibility
+  // half, PageSpeed, the sitemap, up to seven interior pages, three renders and
+  // four model calls, roughly 16 Firecrawl credits and $0.13-0.19 of model, to
+  // produce two fields.
+  //
+  // Deliberately a MODE on this route rather than a second route. The contact
+  // half is a strict PREFIX of this function - the homepage read, the domain
+  // confirmation, the owner ladder and the email engine, in that order - and a
+  // second implementation of it is the disease this file records more than any
+  // other: "the second copy is always the one that rots, because it only runs
+  // in the case nobody tests." A mode also inherits the boot-window gate, the
+  // preflight, the credit latch, the concurrency slot, the RSS gate, the day
+  // ceilings, the per-lead spend ledger and the kill clock for free. A new
+  // route would have to re-earn all nine, and /api/test-contact-engine is the
+  // standing proof of what happens when it does not: it double-buys every
+  // source, skips the contact cache in both directions, and bypasses preflight
+  // and the day ceiling while still charging the day ledger.
+  //
+  // Strict === true, for the same reason callOnly is: a truthy string from a
+  // hand-built body must never silently stop buying the audit somebody asked
+  // for. Absent means today's behaviour exactly.
+  const _contactOnly = req.body.contactOnly === true;
   const { company, keys, apiKey } = req.body;
   let website = req.body.website;  // mutable — the website guard may resolve/blank it
   // ══ AUDIT THE HOMEPAGE, NOT THE PAGE WE WERE HANDED ════════════════════════
@@ -39216,7 +39322,21 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         : { refused: true, status: 0, body: null, reason: String((s.reason && s.reason.message) || s.reason || 'threw'), ms: 0 };
 
       let target = website;
-      let [cRes, rRes] = (await Promise.allSettled([askCorpus(target), askFullPage(target)])).map(settle);
+      // A CONTACT-ONLY RUN STILL BUYS THIS PICTURE, AND THAT IS DELIBERATE.
+      // The render looks like pure audit decoration and it is not: it is an
+      // EMAIL SOURCE. visionAuditPage asks the model for "visibleEmail" and
+      // normalises the obfuscated forms a scraper cannot read ("jill [at] x dot
+      // com"), and the recovery branch below fires precisely when the text
+      // engine returned NOTHING - writing a tier 1 sendable result and logging
+      // "EMAIL RECOVERED BY VISION: the text scraper was blind to it".
+      // Skipping it to save a credit would cost the deliverable on exactly the
+      // leads where the cheap path already failed. FC_CONTACT_VISION=off drops
+      // it for an operator who would rather keep the credit than the address.
+      const _visionRescue = !_contactOnly || String(process.env.FC_CONTACT_VISION || 'on').toLowerCase() !== 'off';
+      const _noShot = { refused: true, status: 0, body: null, reason: 'contact-only run with FC_CONTACT_VISION=off: no render was bought, so no address can be read off the page', ms: 0 };
+      let [cRes, rRes] = _visionRescue
+        ? (await Promise.allSettled([askCorpus(target), askFullPage(target)])).map(settle)
+        : [settle((await Promise.allSettled([askCorpus(target)]))[0]), _noShot];
 
       // ── RETRY THE SAME URL, THEN RETRY A BETTER ONE ──────────────────────
       // Richard Joseph came to us as http://www.drrichardjoseph.com/ and both
@@ -39230,7 +39350,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         const _haveShot = !!fullOf(rRes.body);
         const [c2, r2] = (await Promise.allSettled([
           askCorpus(_https),
-          _haveShot ? Promise.resolve(rRes) : askFullPage(_https),
+          (_haveShot || !_visionRescue) ? Promise.resolve(rRes) : askFullPage(_https),
         ])).map(settle);
         if (usable(c2)) {
           console.log(`✓ Recovered over https for ${_https}. The http URL on this lead is stale; their site is fine.`);
@@ -39286,7 +39406,9 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // of them go"), so a lead with no homepage picture is a lead the brain
       // reads entirely as text.
       if (!fullOf(rRes.body) && !viewOf(rRes.body)) {
-        const v = settle((await Promise.allSettled([askViewport(target)]))[0]);
+        const v = _visionRescue
+          ? settle((await Promise.allSettled([askViewport(target)]))[0])
+          : { refused: true, status: 0, body: null, reason: 'contact-only run with FC_CONTACT_VISION=off: no render to rescue', ms: 0 };
         if (viewOf(v.body)) {
           console.log(`📷 RENDER RECOVERED [${target}]: the full-page render did not come back, a viewport one did. The brain sees the top of the page instead of nothing, and the interior renders are released.`);
           rRes = v;
@@ -39312,7 +39434,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // Serialized, it added a full paced gate transit (up to ~25s) to every
       // lead before anything downstream could start.
       let _mobPromise = null;
-      if (_full || _view || usable(cRes)) {
+      if (!_contactOnly && (_full || _view || usable(cRes))) {
         _mobPromise = askMobile(target)
           .then((res) => (res && !res.refused) ? (viewOf(res.body) || null) : null)
           .catch(() => null);
@@ -39337,13 +39459,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // The Meta TOKEN path is different: that IS a real per-advertiser lookup, so
       // it still runs whenever a token is present. Only the scrape fallback is
       // gated. Set AD_LIBRARY_SCRAPE=on to restore it.
-      fbToken
+      (!_contactOnly && fbToken)
         ? checkFacebookAds(company, fbToken)
-        : (process.env.AD_LIBRARY_SCRAPE === 'on'
+        : ((!_contactOnly && process.env.AD_LIBRARY_SCRAPE === 'on')
             ? checkAdLibraryViaFirecrawl(company, firecrawlKey)
             : Promise.resolve({ hasAds: false, adCount: 0, confirmed: false, countReliable: false, skipped: true })),
       domain ? checkBuiltWith(domain) : Promise.resolve({hasCRM:false}),
-      enrichCompany(domain, ninjaPearKey),
+      _contactOnly ? Promise.resolve(null) : enrichCompany(domain, ninjaPearKey),
     ]);
 
     const firecrawlData = firecrawlRes.value || {};
@@ -39737,7 +39859,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     }
 
     // ═══ THE COMPANIES API — authoritative size/industry (if key present) ═══════
-    if (companiesApiKey && website) {
+    if (companiesApiKey && website && !_contactOnly) {
       try {
         const capi = await enrichViaCompaniesAPI(website, companiesApiKey);
         if (capi) {
@@ -40037,7 +40159,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       } else if (!firecrawlKey && !placesKey) {
         console.log(`REVIEW MINE [${company}]: SKIPPED — no Firecrawl key and no GOOGLE_PLACES_KEY, so neither the deep scrape nor the API fallback can run.`);
       }
-      if (effectivePlaceId && apifyToken && apiKey && publicPainSignals.length === 0) {
+      if (effectivePlaceId && apifyToken && apiKey && publicPainSignals.length === 0 && !_contactOnly) {
         try {
           // Google's own review count for this place, from the profile read —
           // the independent number the truncation guard needs, so a throttled
@@ -40105,7 +40227,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       if (_deepWasAuthoritative && !reviewPainFound) {
         console.log(`REVIEW MINE [${company}]: skipping the API fallback \u2014 the deep read already covered ${_deepReadCount} review(s) and the fallback only sees the 5 the Places API exposes, which is a subset of what we read. It could not find anything new (saves a Places call and a model call).`);
       }
-      if (!_deepWasAuthoritative && !reviewPainFound && effectivePlaceId && placesKey && apiKey && publicPainSignals.length === 0) {
+      if (!_deepWasAuthoritative && !reviewPainFound && effectivePlaceId && placesKey && apiKey && publicPainSignals.length === 0 && !_contactOnly) {
         try {
           const gr = await painFromGoogleReviews(company, effectivePlaceId, placesKey, apiKey, null, false);
           // The denominator here is small ON PURPOSE - the Places API exposes a
@@ -40135,6 +40257,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // Places call and no Firecrawl credit, so it runs on every Places lead.
       let _siteUrls = [];
       try {
+        if (_contactOnly) throw { _contactSkip: true };
         // The sitemap is already cached from the owner/email passes, so re-asking
         // for it costs nothing and hands us their own service list as keywords.
         try { _siteUrls = await firecrawlMap(firecrawlKey, website); } catch {}
@@ -40274,7 +40397,18 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         } else {
           console.log(`LOCAL RANK [${company}]: skipped — ${lv.why}`);
         }
-      } catch(e) { console.log(`LOCAL RANK [${company}]: errored (non-fatal): ${e.message}`); }
+      } catch(e) {
+        // A deliberate skip is not a failure. Without this branch every
+        // contact-only lead would print "errored (non-fatal): undefined" - the
+        // message-names-the-wrong-cause class this file records three times
+        // over, arriving fifty times a day, every one of them a false alarm
+        // about a business and a search that are both fine.
+        if (e && e._contactSkip) {
+          console.log(`LOCAL RANK [${company}]: not run - this is a CONTACT-ONLY lead. A contact list states no search position about anybody, so the sitemap read, both stability samples, the organic SERP call and every rank fallback under them are spend that could not reach the answer. Nothing was bought.`);
+        } else {
+          console.log(`LOCAL RANK [${company}]: errored (non-fatal): ${e.message}`);
+        }
+      }
 
       // ── CREDIT GATES — buy a lookup only where it can actually pay off ──────
       // WEB PAIN SEARCH: two Firecrawl searches hunting Glassdoor/Indeed reviews and
@@ -40332,13 +40466,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       }
       const needRev  = !verifiedRevenue && firecrawlKey && apiKey && company && req.body.deepMode !== false;
       const [painRes, revRes, carRes, siteRes] = await Promise.allSettled([
-        needPain ? findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry, req.body.location) : Promise.resolve(null),
+        (needPain && !_contactOnly) ? findBusinessPain(company, website, firecrawlKey, apiKey, verifiedIndustry, req.body.location) : Promise.resolve(null),
         Promise.resolve(null),   // revenue moved BELOW the email gate — see findSizeViaSearch call
-        (website && _careersUseful && _siteConfirmable) ? scrapeCareersPage(website, firecrawlKey, apiKey, company) : Promise.resolve(null),
+        (website && _careersUseful && _siteConfirmable && !_contactOnly) ? scrapeCareersPage(website, firecrawlKey, apiKey, company) : Promise.resolve(null),
         // The homepage text goes in so the interior pages can be compared
         // against it: a redirect or a SPA shell returns the homepage for a URL
         // that is not the homepage, and until now nothing could tell.
-        (website && _siteConfirmable) ? auditSitePages(website, firecrawlKey, apiKey, company, content, homepageHtml, homepageDom) : Promise.resolve(null),
+        (website && _siteConfirmable && !_contactOnly) ? auditSitePages(website, firecrawlKey, apiKey, company, content, homepageHtml, homepageDom) : Promise.resolve(null),
       ]);
       careers = carRes.status === 'fulfilled' ? carRes.value : null;
       sitePages = siteRes.status === 'fulfilled' ? siteRes.value : null;
@@ -44016,7 +44150,10 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
         if (_cachedAudit) {
           console.log(`\u267b BRAIN CACHE HIT [${company}]: identical evidence AND identical prompt as a run within the last 24h \u2014 reusing that audit and skipping the Sonnet call. Saved ~$0.08. Any change to the evidence or to the instructions produces a fresh audit automatically, so this can never serve a stale answer after a prompt edit.`);
         }
-        const visionRes = _cachedAudit ? null : await anthropicFetch('https://api.anthropic.com/v1/messages', {
+        if (_contactOnly) {
+          console.log(`\u{1F9E0} AUDIT [${company}]: not asked for - this is a CONTACT-ONLY lead. The audit, the strategic read and the fact-check are the three most expensive calls on a lead and none of them produces an owner name, an address or a phone number. The vision read above still ran, because it is an EMAIL source.`);
+        }
+        const visionRes = (_cachedAudit || _contactOnly) ? null : await anthropicFetch('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
           body: JSON.stringify({
@@ -47582,7 +47719,10 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // The decision itself now comes from the ONE rule the early gate also asks,
     // so the two can never drift into refusing different leads. The branches
     // below keep their own wording because each names a different cause.
-    const _refusal = auditRefusalKind(brainAudit, brainError);
+    const _refusal = _contactOnly ? null : auditRefusalKind(brainAudit, brainError);
+    if (_contactOnly) {
+      console.log(`\u2713 BRAIN GATE [${company}]: not applied - this is a CONTACT-ONLY lead and no audit was ever asked for. An absent audit is the requested outcome here, not a failure, and refusing on it would throw away an owner name and an address that are already resolved and already paid for.`);
+    }
     if (brainError && brainAudit) {
       console.log(`\u26d4 BRAIN GATE [${company}]: an audit object survived the parse, but the API ALSO reported an error ("${String(brainError).slice(0, 90)}"). Nothing recovered from a failed response is trustworthy. Blocking rather than shipping a lead that would look researched.`);
     } else if (_auditUnusable) {
@@ -47813,6 +47953,21 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       companyTriggers,
     });
     console.log(`REACHABILITY [${company}]: ${reach.score}/100 — ${reach.verdict}`);
+    // The contact list's order, computed HERE so it can never disagree with the
+    // reachability it is built on. It is not a second scorer - see the header
+    // over CONTACT_RANK_TERMS for why reachability is the base rather than a
+    // thing this recomputes.
+    const _contactRank = contactRankFor({
+      reachability: reach.score,
+      decisionMaker,
+      phone: (phoneResult && phoneResult.phone) || req.body.phone || '',
+      // The two discovery DEMOTIONS ride the request because they are decided
+      // at Find time and nothing on the research path re-derives them. Absent
+      // means in-band, which is what every lead that predates the flags is.
+      outsideBand: req.body.outsideBand === true,
+      aboveSizeCeiling: req.body.aboveSizeCeiling === true,
+    });
+    if (_contactOnly) console.log(`\u{1F4C7} CONTACT RANK [${company}]: ${_contactRank.rank === null ? 'not ranked' : _contactRank.rank + '/100'} — ${_contactRank.why}`);
 
     // ── CLOSED LOOP: grade the Find-stage prediction against what Research found ──
     // reachPredict is a free guess made before we spend ~9-11 credits. Until now
@@ -47912,6 +48067,18 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       })(),
       reachabilityVerdict: reach.verdict,
       reachabilityReasons: reach.reasons,
+      // == THE CONTACT LIST ======================================================
+      // contactOnly is the mode flag, and the client needs it for one reason
+      // that has nothing to do with display: applyResearchResult writes
+      // brainAudit and then Object.assigns measuredFieldsFrom(brainAudit)
+      // UNCONDITIONALLY, and measuredFieldsFrom(null) returns seventeen empty
+      // defaults. Without this flag a contact pass over an already-audited
+      // pipeline would blank every audit already paid for, on the lead and
+      // permanently in Supabase, and flip the whole board from Audited back to
+      // Not audited. Nothing on screen would say why.
+      contactOnly: _contactOnly || false,
+      contactRank: _contactRank.rank,
+      contactRankWhy: _contactRank.why,
       // ══ INSTANCE TWENTY-ONE OF COMPUTED-BUT-NOT-PASSED ═══════════════════
       // The client merge has read data.reviewsRead and data.ownerReplyCount
       // since the engagement work landed, and this response never carried
@@ -48352,10 +48519,11 @@ const preflightResearch = (body, env) => {
   if (website && !String(keys.firecrawlKey || '').trim()) {
     return { refuse: 'this lead has a website and no Firecrawl key came with the request, so the entire website half of the audit would be dark while everything else still gets paid for. Nothing was spent. Add the Firecrawl key in Settings and re-run.' };
   }
-  if (!String(e.GOOGLE_PLACES_KEY || '').trim()) {
+  const _contactOnly = b.contactOnly === true;
+  if (!String(e.GOOGLE_PLACES_KEY || '').trim() && !_contactOnly) {
     return { refuse: 'GOOGLE_PLACES_KEY is not set on the server, so the rank check and the profile read would both return "not checked" '+String.fromCharCode(0x2014)+' eleven of the forty-one measured signals, including both findings that have ever earned a reply. Nothing was spent. Set the environment variable on the server and re-run.' };
   }
-  if (!String((keys.apifyToken || b.apifyToken || '')).trim()) {
+  if (!_contactOnly && !String((keys.apifyToken || b.apifyToken || '')).trim()) {
     warnings.push('no Apify token: the review mine is dark, so review_pain_pattern '+String.fromCharCode(0x2014)+' one of only two findings with a real reply behind it '+String.fromCharCode(0x2014)+' cannot fire on any lead in this state. The audit still runs; add the token in Settings to get the best finding back.');
   }
   // ══ A FREE MEASUREMENT NOBODY CONFIGURED IS A DARK RUNG ═══════════════
@@ -48365,7 +48533,7 @@ const preflightResearch = (body, env) => {
   // slow_mobile can never fire on any lead. A warning rather than a refusal:
   // the rest of the audit is unaffected, which is exactly the Apify shape one
   // line above and for the same reason.
-  if (!pageSpeedKeyFor(keys)) {
+  if (!_contactOnly && !pageSpeedKeyFor(keys)) {
     warnings.push('PAGESPEED_KEY is not set on the server, so slow_mobile cannot fire on any lead '+String.fromCharCode(0x2014)+' and it is the only finding in the ladder measured from the prospect'+String.fromCharCode(0x2019)+'s own visitors rather than from something we looked at. The key is FREE from Google Cloud (enable the PageSpeed Insights API on the same project as GOOGLE_PLACES_KEY). There is no Settings field for it and there should not be: it is a server key like the Places one. The audit still runs without it.');
   }
   return { ok: true, warnings };
@@ -48722,15 +48890,16 @@ app.post('/api/research-async', (req, res) => {
   // through a different door. The place ID is an identity; the domain is nearly
   // one; the name is a guess, so it is the last resort.
   const _jobKey = (b) => {
+    const mode = (b && b.contactOnly === true) ? 'contact/' : '';
     const pid = String((b && b.placeId) || '').trim();
-    if (pid) return 'pid:' + pid;
+    if (pid) return mode + 'pid:' + pid;
     const site = String((b && b.website) || '').trim().toLowerCase()
       .replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0];
-    if (site) return 'site:' + site;
-    return 'name:' + String((b && b.company) || '').trim().toLowerCase();
+    if (site) return mode + 'site:' + site;
+    return mode + 'name:' + String((b && b.company) || '').trim().toLowerCase();
   };
   const _co = _jobKey(req.body || {});
-  if (_co && _co !== 'name:') {
+  if (_co && !/^(?:contact\/)?name:$/.test(_co)) {
     for (const [, j] of _jobs) {
       if (j.status === 'running' && j.dedupeKey === _co) {
         console.log(`JOB [${j.company}]: duplicate request ignored \u2014 job ${j.id} is already running (started ${Math.round((Date.now() - j.startedAt) / 1000)}s ago). Returning the in-flight job instead of paying for a second full run.`);
@@ -55029,6 +55198,98 @@ app.listen(PORT, () => {
     console.log(`⛔ MEMORY CEILING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ---- 50 LEADS RANKED, AND NOTHING PAID FOR THAT CANNOT REACH THEM -------
+  // The mode is a set of guards scattered through a 9,700-line function, so
+  // reading them proves nothing: this EXECUTES the ranker in both directions
+  // and then pins every guard at its CALL SITE. A check that does not assert
+  // its call site is half a check, and four separate fixes have shipped dead
+  // in this file for exactly that reason.
+  try {
+    const _fails = [];
+    const _n = (...parts) => parts.join('');
+    const _src = selfSourceNoComments();
+
+    // ONE - the ranker is not a second reachability scorer. It must return the
+    // base unchanged when it has nothing to add.
+    const _plain = contactRankFor({ reachability: 74 });
+    if (_plain.rank !== 74) _fails.push(`a lead with nothing to add or subtract should rank at its reachability (74), got ${_plain.rank}`);
+    if (!/nothing to add/.test(_plain.why || '')) _fails.push('the plain case does not say that nothing was added');
+
+    // TWO - an unmeasured reachability is NOT zero. Number(null) is 0 and 0 is
+    // finite, and this file records that trap more often than any other; a
+    // laundered 0 would sort a perfectly good lead to the bottom looking
+    // measured. Every shape that is not a real number must refuse to rank.
+    for (const _bad of [undefined, null, '', '74', NaN, [], {}, true]) {
+      const _r = contactRankFor({ reachability: _bad });
+      if (_r.rank !== null) _fails.push(`reachability ${JSON.stringify(_bad)} produced rank ${_r.rank} instead of refusing to rank`);
+    }
+    if (contactRankFor(null).rank !== null) _fails.push('a null lead does not refuse to rank');
+
+    // THREE - each declared term applies, once, with its declared magnitude.
+    const _base = { reachability: 50 };
+    const _ph = contactRankFor({ ..._base, phone: '(512) 555-0134' });
+    if (_ph.rank !== 58) _fails.push(`a dialable number should add 8 (58), got ${_ph.rank}`);
+    if (contactRankFor({ ..._base, phone: '   ' }).rank !== 50) _fails.push('whitespace read as a phone number');
+    if (contactRankFor({ ..._base, phone: 'call us' }).rank !== 50) _fails.push('a string with no digits in it read as a phone number');
+    const _au = contactRankFor({ ..._base, decisionMaker: { name: 'A B', canBuy: true } });
+    if (_au.rank !== 56) _fails.push(`a confirmed buyer should add 6 (56), got ${_au.rank}`);
+    // A candidate HELD BACK below the buying floor is deliberately not
+    // authority: holding it back is the whole point, and crediting it here
+    // would undo the gate PART 4 section 41 exists for.
+    if (contactRankFor({ ..._base, decisionMaker: { name: 'A B', canBuy: false } }).rank !== 50) _fails.push('a decision-maker below the buying floor was credited as authority');
+    if (contactRankFor({ ..._base, decisionMaker: { name: 'A B' } }).rank !== 50) _fails.push('a decision-maker with no canBuy verdict was credited as authority');
+    if (contactRankFor({ ..._base, outsideBand: true }).rank !== 40) _fails.push('a band-demoted lead was not demoted here');
+    if (contactRankFor({ ..._base, aboveSizeCeiling: true }).rank !== 40) _fails.push('a size-demoted lead was not demoted here');
+
+    // FOUR - the modifiers order CLOSE CALLS. A lead with a phone and a buyer
+    // must never overtake one that is genuinely more reachable, or the small
+    // spread this is built on has quietly become a ranking of its own.
+    if (CONTACT_RANK_MAX_MODIFIER !== 14) _fails.push(`the positive modifiers total ${CONTACT_RANK_MAX_MODIFIER}, not the 14 this check is calibrated to`);
+    const _pos = CONTACT_RANK_TERMS.filter(t => t.points > 0).reduce((a, t) => a + t.points, 0);
+    if (_pos !== CONTACT_RANK_MAX_MODIFIER) _fails.push(`the declared positive terms sum to ${_pos} but CONTACT_RANK_MAX_MODIFIER says ${CONTACT_RANK_MAX_MODIFIER}`);
+    const _weak = contactRankFor({ reachability: 34, phone: '5125550134', decisionMaker: { name: 'A B', canBuy: true } });
+    const _strong = contactRankFor({ reachability: 95 });
+    if (_weak.rank >= _strong.rank) _fails.push(`an unreachable lead with a phone (${_weak.rank}) overtook an SMTP-confirmed one (${_strong.rank}) - the modifiers are too big to be tiebreakers`);
+    if (contactRankFor({ reachability: 98, phone: '5125550134', decisionMaker: { name: 'A B', canBuy: true } }).rank !== 100) _fails.push('the rank is not clamped to 100');
+    if (contactRankFor({ reachability: 2, outsideBand: true, aboveSizeCeiling: true }).rank !== 0) _fails.push('the rank is not clamped to 0');
+
+    // FIVE - the CALL SITES. Each guard is the difference between a contact
+    // lead costing about four Firecrawl credits and costing sixteen, and a
+    // fixture cannot see a caller.
+    const _sites = [
+      ['_contactOnly = req.body.contact', 'Only === true', 'the mode flag is not read from the request'],
+      ['&& !_contact', 'Only) {\r\n      try {\r\n        const capi = await enrichViaCompaniesAPI', 'the Companies API is still bought on a contact run'],
+      ['publicPainSignals.length === 0 && !_contact', 'Only) {', 'the Apify review mine is still bought on a contact run'],
+      ['if (_contact', 'Only) throw { _contactSkip: true };', 'the whole search-visibility half is still bought on a contact run'],
+      ['&& !_contactOnly) ? auditSitePages(', 'website, firecrawlKey', 'the interior-page read is still bought on a contact run'],
+      ['(needPain && !_contact', 'Only) ? findBusinessPain(', 'the web-pain search is still bought on a contact run'],
+      ['(_cachedAudit || _contactOnly) ? null : await anthropic', 'Fetch(', 'the audit model call is still made on a contact run'],
+      ['_refusal = _contactOnly ? null : audit', 'RefusalKind(brainAudit, brainError)', 'the brain gate still refuses a lead that never asked for an audit'],
+      ['contactRank: _contactRank.', 'rank,', 'the rank never reaches the response'],
+      ['mode + ', "'pid:' + pid", 'the job dedupe key has no mode, so a contact job and an audit job for one business collide'],
+    ];
+    for (const [a, b, msg] of _sites) { if (!_src.includes(_n(a, b))) _fails.push(msg); }
+
+    // SIX - the render is NOT skipped. It looks like audit decoration and it is
+    // an EMAIL source: visionAuditPage is asked for "visibleEmail" and the
+    // recovery branch writes a tier 1 sendable result precisely when the text
+    // engine returned nothing. An adversarial pass caught this being cut.
+    if (!_src.includes(_n('_visionRescue = !_contactOnly || String(process.env.FC_CONTACT_', "VISION || 'on')"))) {
+      _fails.push('the vision rescue flag is gone, so the render that recovers an address the scraper could not read is decided somewhere else');
+    }
+    if (!_src.includes(_n('let [cRes, rRes] = _vision', 'Rescue'))) {
+      _fails.push('the homepage render no longer follows the vision-rescue flag, so a contact run may be buying no picture and losing the addresses only the eyes can read');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ CONTACT RANK CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`✓ CONTACT RANK CHECK: the contact list's order was EXECUTED, not read - reachability is the base, the three declared terms apply once each at their declared size, an unmeasured reachability refuses to rank rather than laundering into a confident 0, and the modifiers are small enough that a phone number cannot lift an unreachable lead over an SMTP-confirmed one. All ten mode guards are pinned at their call sites, and the homepage render is asserted to SURVIVE a contact run because the eyes are an email source, not decoration.`);
+    }
+  } catch (e) {
+    console.log(`⛔ CONTACT RANK CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ---- NOT READY IS NOT A STATE THAT TAKES WORK ---------------------------
   // A lead worked during the boot window prints its own refusal glyphs, and
   // the verdict recorder cannot tell a lead's refusal from a failed boot
@@ -55359,8 +55620,16 @@ app.listen(PORT, () => {
       if (!_s.includes(_n('j.status === \'running\' && j.dedupe', 'Key === _co'))) {
         _fails.push('the duplicate-run guard matches on a display name again, so two businesses called the same thing share one audit');
       }
-      if (!_s.includes(_n("if (pid) return 'pid:'", ' + pid;'))) {
+      if (!_s.includes(_n("if (pid) return mode + 'pid:'", ' + pid;'))) {
         _fails.push('the job key no longer prefers the place ID, which is the only identity in the request');
+      }
+      // The mode belongs in the key for the same reason the place ID does: a
+      // contact-only job and a full-audit job for ONE business are different
+      // work, and without it the second caller is handed the first job's id and
+      // merges the wrong kind of answer onto a lead. Same shape as the defect
+      // three lines above, through the mode door.
+      if (!_s.includes(_n("const mode = (b && b.contactOnly === true) ? ", "'contact/' : '';"))) {
+        _fails.push('the job dedupe key no longer carries the mode, so a contact run and an audit run for the same business collide on one job');
       }
       // 5. NO SLUG, NO SEND. ensureHunterAttribute returns null when Hunter's
       //    API is down or the key is wrong, and every use of the result is

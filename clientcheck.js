@@ -25,8 +25,12 @@ const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
 // section added to one and not the other fails the build. The apostrophe in
 // the scoreboard heading is HTML-escaped on the sheet, so it is matched on the
 // half of it that survives escaping.
-const SHEET_ORDER = ['For the call', 'The story', 's working, what', 'The biggest leaks',
-  'The sell', 'The conversation', 'Do not say on this call', 'The full record', 'The funnel'];
+// Round 110: the two tiers are gone. Vin, after reading a live pair: "theres
+// no need to have al that extra detail on my screen lets just incoprate the
+// missing stuff ... into the teir 1." With the reprint removed there was not
+// enough left below the rule to be a second document.
+const SHEET_ORDER = ['The story', 's working, what', 'The biggest leaks',
+  'The sell', 'The conversation', 'Do not say on this call', 'The funnel'];
 const src = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]).join('\n;\n');
 const ast = acorn.parse(src, { ecmaVersion: 2022, sourceType: 'script', locations: true });
 
@@ -207,6 +211,17 @@ const runMergeCheck = () => {
   // throw that field away, written down where a reviewer sees it.
   const CONTROL_ONLY = new Set([]);
 
+  // BRANCH FLAGS are a different thing from CONTROL_ONLY and must not be
+  // confused with it. CONTROL_ONLY means "this field is deliberately thrown
+  // away". A branch flag is a BOOLEAN MODE the merge switches on, and a string
+  // marker cannot survive `data.x === true` however correctly the merge is
+  // written - so the marker scan would report a working wire as lost. Entries
+  // here are exempt from the SCAN only, and each one is instead covered by an
+  // executed test that runs the real merge with the flag set, which is a
+  // stronger guard than marker propagation and not a weaker one. Adding a name
+  // here without also adding that test is how this becomes a hole.
+  const BRANCH_FLAGS = new Set(['contactOnly']);
+
   // Type-shaped markers where the merge inspects the value rather than copying
   // it. A string where the code reads .length or spreads an object would fail
   // for the wrong reason, and a check that fails for the wrong reason is one
@@ -237,6 +252,14 @@ const runMergeCheck = () => {
   // all (they are set on the refusal and failure paths), so the success run has
   // to say so explicitly rather than leave them undefined.
   data.notAnOwner = false; data.brainFailed = false; data.outOfCredits = false;
+  // contactOnly is the fourth of that kind and the only one that IS in the
+  // response object: a MODE the merge branches on, not an answer that has to
+  // land. A string marker would make `data.contactOnly === true` false and the
+  // field would look lost; setting it TRUE would put this whole run down the
+  // contact branch and make every other assertion below vacuous. So the success
+  // run states it false, and the contact branch gets its own executed test
+  // (THE WIPE, below) which is a far stronger guard than marker propagation.
+  data.contactOnly = false;
 
   let out;
   try {
@@ -254,7 +277,7 @@ const runMergeCheck = () => {
   const json = JSON.stringify(out.lead);
   const lost = [];
   for (const k of reads) {
-    if (CONTROL_ONLY.has(k)) continue;
+    if (CONTROL_ONLY.has(k) || BRANCH_FLAGS.has(k)) continue;
     const marker = Object.prototype.hasOwnProperty.call(SHAPE, k)
       ? (typeof SHAPE[k] === 'number' ? String(SHAPE[k]) : 'MK_' + k)
       : 'MK_' + k;
@@ -263,7 +286,70 @@ const runMergeCheck = () => {
   if (lost.length) {
     fails.push(`the research merge reads ${lost.length} field(s) off the server's answer and puts ${lost.length === 1 ? 'it' : 'them'} nowhere on the lead: ${lost.sort().join(', ')} — measured, paid for, returned, and dropped one line before use. That is the exact shape of the lsa row that read "Not checked" on every lead for a week`);
   }
-  return { fields: reads.size, kept: reads.size - CONTROL_ONLY.size - lost.length };
+  // ══ THE WIPE — a contact run must not destroy an audit ═══════════════════
+  // applyResearchResult writes brainAudit and then Object.assigns
+  // measuredFieldsFrom(brainAudit) UNCONDITIONALLY, and measuredFieldsFrom(null)
+  // returns seventeen empty defaults. So a response with no audit in it BLANKED
+  // the audit already on the lead - and leadToRow persists that blanking to
+  // Supabase, permanently, flipping the whole board from Audited to Not audited
+  // with nothing on screen saying why. Running a contact pass over an existing
+  // pipeline to harvest addresses would have destroyed every audit already paid
+  // for. The merge check above could not see it: it builds a response where
+  // every key is present, so the destructive shape is unreachable by it.
+  //
+  // This runs the REAL merge over an ALREADY-AUDITED lead with a contact-only
+  // response, and asserts the audit survives while the contact fields land.
+  try {
+    const _prev = {
+      company: 'Prior Audit Co', status: 'researched',
+      brainAudit: { pitchAngle: 'KEEP_pitchAngle', recommendedProduct: 'KEEP_product' },
+      problemList: [{ id: 'KEEP_problem', problem: 'KEEP_problem_text' }],
+      factualSpine: 'KEEP_spine', situationRead: { headline: 'KEEP_headline' },
+      harmsRanked: [{ id: 'KEEP_harm' }], theOneThing: { layer: 'KEEP_layer' },
+    };
+    const _contactData = {
+      contactOnly: true, contactRank: 82, contactRankWhy: 'KEEP_why',
+      email: 'owner@example.com', founderName: 'Real Owner', founderTitle: 'Owner',
+      phone: '+1 512-555-0134', reachability: 88,
+      notAnOwner: false, brainFailed: false, outOfCredits: false,
+    };
+    const _res = new Function(deps.join('\n') + '\n' + fnSrc + '\nreturn applyResearchResult;')()(
+      _prev, _contactData, { website: 'https://example.com', emailData: {}, companyData: {}, pageSpeed: {}, httpStatus: 200 });
+    const _lead = (_res && _res.lead) || {};
+    const _blob = JSON.stringify(_lead);
+    const _keeps = ['KEEP_pitchAngle', 'KEEP_problem_text', 'KEEP_spine', 'KEEP_headline', 'KEEP_harm', 'KEEP_layer'];
+    const _gone = _keeps.filter(k => _blob.indexOf(k) < 0);
+    if (_gone.length) {
+      fails.push(`a CONTACT-ONLY response destroyed ${_gone.length} piece(s) of an audit already paid for on this lead (${_gone.join(', ')}). Object.assign(L, measuredFieldsFrom(null)) writes seventeen empty defaults, and leadToRow persists them to Supabase permanently`);
+    }
+    if (_lead.contactOnly !== true) fails.push('a contact-only response does not mark the lead as one, so nothing downstream can tell which kind of run produced what is on it');
+    if (_lead.contactRank !== 82) fails.push(`the contact rank did not land on the lead (got ${_lead.contactRank})`);
+    if (_lead.status !== 'researched' || _prev.status !== 'researched') {
+      // The prior status here is 'researched' BECAUSE it was audited; the point
+      // is that a contact run neither grants nor removes that word. The
+      // never-audited direction is asserted immediately below.
+      fails.push('a contact run changed the status of an already-audited lead');
+    }
+    const _fresh = new Function(deps.join('\n') + '\n' + fnSrc + '\nreturn applyResearchResult;')()(
+      { company: 'Never Audited Co', status: 'new' }, _contactData,
+      { website: 'https://example.com', emailData: {}, companyData: {}, pageSpeed: {}, httpStatus: 200 });
+    if (_fresh && _fresh.lead && _fresh.lead.status === 'researched') {
+      fails.push("a contact run marked a never-audited lead 'researched' — batchCandidates then excludes it from the audit batch it still needs, while the Generate queue admits it as ready to have an email written with nothing behind it");
+    }
+    if (_fresh && _fresh.lead && _fresh.lead.email !== 'owner@example.com') {
+      fails.push('a contact run on a fresh lead did not land the address, which is the entire deliverable');
+    }
+  } catch (e) {
+    fails.push(`the contact-only merge could not be executed: ${e.message}`);
+  }
+
+  // A branch flag exempted from the scan and NOT covered by an executed test is
+  // exactly the hole the exemption could become. Assert the cover exists.
+  for (const _f of BRANCH_FLAGS) {
+    if (_f === 'contactOnly') continue;   // covered by THE WIPE above
+    fails.push(`${_f} is exempt from the merge scan and no executed test covers it, so its wire is unguarded`);
+  }
+  return { fields: reads.size, kept: reads.size - CONTROL_ONLY.size - BRANCH_FLAGS.size - lost.length };
 };
 const mergeStat = runMergeCheck();
 
@@ -502,7 +588,7 @@ const mergeStat = runMergeCheck();
   // function without its dependencies is how a harness starts lying: it would
   // throw here rather than silently pass, which is the good failure mode, but
   // only if the name is actually required.
-  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'trimRepeatedLead', 'RISK_REASONS', 'replyLatencySay', 'websiteForReading', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor', 'leakWhereFor', 'scoreboardFor'];
+  const NEED = ['csvCell', 'CONTACT_TIER_SAY', 'contactConfidence', 'contactListRows', 'CONTACT_CSV_COLUMNS', 'contactListCsv', 'auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'trimRepeatedLead', 'RISK_REASONS', 'replyLatencySay', 'websiteForReading', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor', 'leakWhereFor', 'scoreboardFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -518,9 +604,9 @@ const mergeStat = runMergeCheck();
   } else {
     let mod = null;
     try {
-      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.leakWhereFor + '\n' + found.scoreboardFor + '\n' + found.RISK_REASONS + '\n' + found.replyLatencySay + '\n' + found.websiteForReading + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.trimRepeatedLead + '\n'
+      mod = new Function(found.csvCell + '\n' + found.CONTACT_TIER_SAY + '\n' + found.contactConfidence + '\n' + found.contactListRows + '\n' + found.CONTACT_CSV_COLUMNS + '\n' + found.contactListCsv + '\n' + found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.leakWhereFor + '\n' + found.scoreboardFor + '\n' + found.RISK_REASONS + '\n' + found.replyLatencySay + '\n' + found.websiteForReading + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.trimRepeatedLead + '\n'
         + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
-        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, norm: normalizedLeakRows, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, trimLead: trimRepeatedLead, plain: plainRisk, replyLatency: replyLatencySay, web: websiteForReading, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, taper: FUNNEL_TAPER, segClip: funnelSegClip, segFill: funnelSegFill, walkStage: walkTextsByStage, scoreLine: scoreSentence, sig: signalRowsFor, board: scoreboardFor, leakWhere: leakWhereFor };')();
+        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, norm: normalizedLeakRows, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, trimLead: trimRepeatedLead, plain: plainRisk, replyLatency: replyLatencySay, web: websiteForReading, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, taper: FUNNEL_TAPER, segClip: funnelSegClip, segFill: funnelSegFill, walkStage: walkTextsByStage, scoreLine: scoreSentence, sig: signalRowsFor, board: scoreboardFor, leakWhere: leakWhereFor, csvCell, contactConfidence, contactListRows, contactListCsv, CONTACT_CSV_COLUMNS };')();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -547,6 +633,86 @@ const mergeStat = runMergeCheck();
       }
     }
     if (mod) {
+      // == THE CONTACT LIST, EXECUTED ======================================
+      // The whole standing goal is this file: 50 leads ranked, with an owner
+      // email and a phone number. It is the first CSV this repo has ever
+      // written, and the one CSV writer that already existed has no
+      // formula-injection guard - so every rule below is run rather than read.
+      const _Q = String.fromCharCode(34);
+      const _nl = (s) => String(s).replace(/^\uFEFF/, '').split('\r\n');
+      // ONE - formula injection. A cell beginning =, +, - or @ executes when
+      // the file is opened in Excel or Sheets, and these values are business
+      // names scraped off arbitrary web pages, opened by a junior rep.
+      for (const _bad of ['=cmd|calc', '+1+1', '-2+3', '@SUM(A1)', '\tstart']) {
+        const _c = mod.csvCell(_bad);
+        if (_c.indexOf("\"'") !== 0) fails.push(`the contact CSV does not neutralise a formula cell starting "${_bad.slice(0, 4)}" — it opens as a live formula in Excel`);
+      }
+      // A legitimate value must NOT be mangled: a guard that eats real data is
+      // the more expensive failure.
+      if (mod.csvCell('Smith & Sons') !== '"Smith & Sons"') fails.push('the contact CSV mangles an ordinary company name');
+      if (mod.csvCell('Say ' + _Q + 'hi' + _Q) !== _Q + 'Say ' + _Q + _Q + 'hi' + _Q + _Q + _Q) fails.push('the contact CSV does not double an embedded quote, so the row shape breaks');
+      // TWO - the ORDER. Highest rank first, and an UNRANKED lead sorts LAST
+      // rather than as a zero: it was never scored, and a confident 0 reads as
+      // "we checked and it is bad".
+      // 'Aaa Co' is UNRANKED and sorts first alphabetically; 'Zzz Co' was
+      // MEASURED at zero. Anything that laundered an absent rank into a number
+      // makes them tie and the name decides, which is how a lead nobody scored
+      // overtakes one we scored and found bad. The fixture is built this way on
+      // purpose: with every other rank above zero it could not tell the two
+      // rules apart, and reverting the guard left it green.
+      const _rows = mod.contactListRows([
+        { name: 'Mid Co', contactRank: 55 },
+        { name: 'Aaa Co' },
+        { name: 'Top Co', contactRank: 91 },
+        { name: 'Zzz Co', contactRank: 0 },
+      ]);
+      const _order = _rows.map(r => r.company).join(',');
+      if (_order !== 'Top Co,Mid Co,Zzz Co,Aaa Co') fails.push(`the contact list is not ranked highest-first with unranked last: ${_order}`);
+      // THREE - the CONFIDENCE columns. Both existing captions derive
+      // confidence by regex over the human-readable label, so four materially
+      // different states collapse into one sentence. Each must be its own
+      // answer, read from the TIER.
+      const _tierSay = (t, extra) => mod.contactConfidence({ emailResult: Object.assign({ tier: t, sendable: t <= 3 }, extra || {}) });
+      const _t1 = _tierSay(1), _t3 = _tierSay(3), _t4 = _tierSay(4);
+      if (_t1.say === _t3.say || _t3.say === _t4.say) fails.push('the contact CSV gives two different email tiers the same confidence sentence, which is the defect the existing captions have');
+      if (_t4.sendable !== false) fails.push('a tier-4 address does not report as unsafe to send, and the row would read like any other');
+      if (!/cache/i.test(_tierSay(2, { label: 'SMTP-verified (cached)' }).say)) {
+        fails.push('a CACHED address up to 60 days old still reports as confirmed live, with nothing on the row saying when it was checked');
+      }
+      if (/cache/i.test(_t1.say)) fails.push('a fresh address is being labelled as cached');
+      // THREE-AND-A-HALF - AN AUDITED LEAD IS ALREADY A CONTACT ROW.
+      // contactRank is written by the contact-run path, so on the day this
+      // shipped it existed on nothing: a 189-lead pipeline with 128 audited
+      // leads, every one carrying a resolved owner, an address and a phone, and
+      // the export matched ZERO of them. The button never rendered and there
+      // was no way to tell why. The ranking is a formula over reachability and
+      // every audited lead has reachability - only the leads that happened to
+      // take one code path were allowed to use it.
+      const _audited = mod.contactListRows([
+        { name: 'Audited Co', reachability: 74, email: 'a@b.com', phone: '5125550100' },
+      ])[0];
+      if (!_audited || _audited.rank !== 74) {
+        fails.push(`a lead audited before the contact ranking existed does not rank at its reachability (got ${_audited && _audited.rank}) — the export would show nothing for a pipeline full of resolved owners and addresses`);
+      }
+      if (!/reachability alone/i.test(_audited.whyThisRank || '')) {
+        fails.push('a fallback rank does not say it is a fallback, so it reads as the full contact ranking');
+      }
+      // FOUR - a free page builder is not a domain the business owns, so an
+      // address built at it can be well-formed and undeliverable to them.
+      const _wix = mod.contactListRows([{ name: 'Z', website: 'https://z.wixsite.com/z' }])[0];
+      if (!_wix.websiteWarning) fails.push('a free-page-builder site carries no warning, so a CSV row offers an address at a domain the business does not own');
+      if (mod.contactListRows([{ name: 'Y', website: 'https://y.com' }])[0].websiteWarning) fails.push('an ordinary domain is being flagged as a free page builder');
+      // FIVE - "rank" means SEARCH POSITION nearly everywhere else in this
+      // codebase, so the column has to say which one it is or a rep reads a
+      // reachability score as a Google position.
+      const _head = (mod.CONTACT_CSV_COLUMNS.find(c => c[0] === 'rank') || [])[1] || '';
+      if (!/not a google position/i.test(_head)) fails.push('the rank column does not say it is NOT a Google position, and every other use of "rank" in this app is a search position');
+      // SIX - the file itself: one header, one row per lead, no row lost.
+      const _csv = _nl(mod.contactListCsv([{ name: 'A', contactRank: 5 }, { name: 'B', contactRank: 9 }]));
+      if (_csv.length !== 4 || _csv[3] !== '') fails.push(`the contact CSV emitted ${_csv.length} line(s) for two leads plus a header`);
+      if (_csv[0].split('","').length !== mod.CONTACT_CSV_COLUMNS.length) fails.push('the header does not have one cell per declared column');
+      if (String(mod.contactListCsv([{ name: 'A' }])).charCodeAt(0) !== 0xFEFF) fails.push('the contact CSV has no byte-order mark, so Excel reads it as Latin-1 and mangles every accented name');
+
       const LEAD = {
         id: 'x1', name: 'Smith & Sons <Roofing>', website: 'https://smith.example',
         verifiedCEO: 'MARKER_OWNER', verifiedCEOTitle: 'MARKER_TITLE', email: 'a@b.example',
@@ -1237,15 +1403,22 @@ const mergeStat = runMergeCheck();
           const _at = (needle) => page.indexOf(needle);
           // The apostrophe is HTML-escaped on the sheet, so the heading is
           // matched on the half of it that survives escaping.
-          const _call = _at('For the call'), _sb = _at('s working, what');
-          const _lk = _at('The biggest leaks'), _dns = _at('Do not say on this call');
-          const _rec = _at('The full record'), _fun = _at('The funnel');
-          if (_call < 0 || _rec < 0) fails.push('the sheet lost its two tiers — a rep is back to reading the whole record to find the call');
+          const _sb = _at('s working, what'), _lk = _at('The biggest leaks');
+          const _dns = _at('Do not say on this call'), _fun = _at('The funnel');
+          // Round 110: one document. The order that matters is that the
+          // scoreboard comes before the leaks, the leaks before the
+          // measurements, and Do-not-say before the measurements — a rep who
+          // stops reading at the funnel must already have met the guardrails.
+          if (_sb < 0 || _lk < 0 || _fun < 0) fails.push('the sheet lost one of the scoreboard, the numbered leaks or the funnel');
           else {
-            if (!(_call < _sb && _sb < _lk)) fails.push('the call tier is out of order: the scoreboard and the numbered leaks must follow the "For the call" rule, in that order');
-            if (!(_lk < _rec)) fails.push('the numbered leaks fell below the record rule — the three things the call is built on are in the half a rep never scrolls to');
-            if (!(_dns > 0 && _dns < _rec)) fails.push('Do not say is no longer inside the call tier — a rep who reads only the top never meets the guardrails, which is exactly the reader they exist for');
-            if (!(_rec < _fun)) fails.push('the funnel is back above the record rule — the long half of the sheet is in the ten-second half again');
+            if (!(_sb < _lk)) fails.push('the ten-second scoreboard renders after the leaks it is meant to introduce');
+            if (!(_lk < _fun)) fails.push('the numbered leaks fell below the measurements — the three things the call is built on are no longer the first thing a rep meets');
+            if (!(_dns > 0 && _dns < _fun)) fails.push('Do not say now renders after the measurements — a rep who stops reading at the funnel never meets the guardrails, which is exactly the reader they exist for');
+          }
+          // The tier rules are gone. A second document is what made the record
+          // a reprint of the fold above it.
+          if (page.indexOf('The full record') >= 0 || page.indexOf('class="tierl"') >= 0) {
+            fails.push('the sheet is back to two tiers — the record was mostly a reprint of the fold above it, which is what "the full record has the saem info as the section above" was about');
           }
           // A numbered leak is written out in ONE place. At its funnel stage
           // it is a POSITION MARKER: the first version of this assertion
@@ -1258,6 +1431,16 @@ const mergeStat = runMergeCheck();
               problem: 'DUPCHECK the only way in is a form', costs: 'DUPCOST a customer who is ready has to wait',
               moneyLine: 'DUPMONEY every one of those is a job', harm: 80, moneyRank: 1, leakRank: 1,
               pillar: 'LEAKING', funnelStage: 'door', id: 'form_only_no_booking', callOpener: 'DUPOPEN?' }] })], { title: 'T', at: 'now' });
+            // A finding that is NOT numbered renders in the index above and
+            // NOWHERE else. Reprinting it at its funnel stage is what made the
+            // record "the saem info as the section above".
+            const _rpPage = mod.html([mod.rec({ ...LEAD, problemList: [
+              { problem: 'RANKEDROW the only way in is a form', harm: 80, moneyRank: 1, leakRank: 1, pillar: 'LEAKING', funnelStage: 'door', id: 'form_only_no_booking' },
+              { problem: 'PLAINROW their pages repeat one promise', costs: 'a buyer sees no reason to pick them', harm: 50, pillar: 'LEAKING', funnelStage: 'door', id: 'undifferentiated' }] })], { title: 'T', at: 'now' });
+            const _plain = (_rpPage.match(/PLAINROW/g) || []).length;
+            if (_plain !== 1) {
+              fails.push('a finding that is not one of the numbered three renders ' + _plain + ' times on one sheet, not once — the funnel is reprinting the index above it, which is exactly "the full record has the saem info as the section above"');
+            }
             if (_dupPage.indexOf('written out in full above') < 0) {
               fails.push('a numbered leak prints in full at its funnel stage as well as on its card — the same finding twice on one sheet, the repetition the two-tier layout exists to remove');
             }
@@ -1292,6 +1475,21 @@ const mergeStat = runMergeCheck();
               { id: 'long_form', problem: 'UNNUMBERED an eleven-field form', costs: 'people start and stop', pillar: 'LEAKING', funnelStage: 'door', harm: 60 }] });
             if (_idx.leaking.some(x => /NUMBERED a service page/.test(x.text))) {
               fails.push('the leaking column reprints a numbered leak that is written out in full a few centimetres below — the repetition Vin rejected on the first live sheet');
+            }
+            // The workmanship strip under the funnel owns the 'work' rows —
+            // they are context, deliberately NOT a money leak, and listing one
+            // in a column headed "leaking" is a reputation note sold as lost
+            // revenue.
+            const _wk = mod.board({ af: {}, rows: [
+              { id: 'review_pain_pattern', problem: 'WORKROW quality complaints repeat', funnelStage: 'work', pillar: 'TAXED', harm: 50 },
+              { id: 'long_form', problem: 'DOORROW an eleven-field form', funnelStage: 'door', pillar: 'LEAKING', harm: 60 }] });
+            if (_wk.leaking.some(x => /WORKROW/.test(x.text))) {
+              fails.push('the workmanship context row is listed as a money leak — the strip under the funnel owns it, and one home each is the rule');
+            }
+            if (!_wk.leaking.some(x => /DOORROW/.test(x.text))) fails.push('the work exclusion swallowed an ordinary staged finding');
+            const _ar = mod.board({ af: {}, rows: [{ area: 'AREA_MARK', problem: 'a finding with no funnel stage at all', costs: 'its cost', harm: 40 }] });
+            if (!_ar.leaking.some(x => /AREA_MARK/.test(String(x.area || '')))) {
+              fails.push('a finding with no funnel stage loses its area label — it used to render under the funnel and that block was the reprint, so the index is its only home now');
             }
             if (!_idx.leaking.some(x => /UNNUMBERED an eleven-field form/.test(x.text))) {
               fails.push('a finding that is NOT one of the numbered leaks fell out of the index — that is a revenue signal with no home at all, which is the thing the owner said must never happen');
@@ -1438,10 +1636,10 @@ const mergeStat = runMergeCheck();
         if (joined.indexOf('RANKNOTE_MARKER') < 0) fails.push('the rank-causation note never reaches the audit screen \u2014 the sheet prints two review counts with nothing stopping the reviews-decide-rank misreading');
         for (const label of ['Not sendable as written', 'Who to talk to', 'The story', 'The funnel', 'The conversation',
           'The email led with', 'He will likely say', 'Also worth asking', 'Do not say',
-          'The sell', "What's working, what's leaking", 'The biggest leaks', 'For the call', 'The full record']) {
+          'The sell', "What's working, what's leaking", 'The biggest leaks']) {
           if (joined.indexOf(label) < 0) fails.push('the audit screen no longer renders "' + label + '" — a category of the approved funnel layout is dark');
         }
-        for (const gone of ['The money', 'The one thing', 'The smaller leaks']) {
+        for (const gone of ['The money', 'The one thing', 'The smaller leaks', 'For the call', 'The full record']) {
           if (joined.indexOf(gone) >= 0) fails.push('"' + gone + '" is back on the audit screen — its content lives at the funnel stages now, and a second copy is the exact repetition Vin flagged');
         }
         if (joined.indexOf('Jason Hicks') < 0) fails.push('the resolved contact name does not render under Who to talk to — the screen is back on the phantom lead.ownerName field, which exists nowhere and printed an em-dash beside shane.irwin@ on a live sheet');

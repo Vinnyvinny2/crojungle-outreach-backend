@@ -208,6 +208,15 @@ const persistedFieldsFrom = (l) => ({
       candidateFindings: l.candidateFindings ?? null,
       ownerReplyCount: l.ownerReplyCount ?? null,
       reviewsRead: l.reviewsRead ?? null,
+      // ── THE CONTACT LIST ─────────────────────────────────────────────
+      // Without these three a reload cannot tell a contact-only lead from an
+      // audited one, and the CSV loses its order. contactOnly in particular is
+      // the field that says WHICH KIND of run produced what is on this lead,
+      // which is the difference between "this audit is empty" and "nobody asked
+      // for an audit".
+      contactOnly: l.contactOnly ?? null,
+      contactRank: l.contactRank ?? null,
+      contactRankWhy: l.contactRankWhy ?? null,
       // ── THE AUDIT'S OWN CONTEXT ──────────────────────────────────────
       // auditedWebsite and domainMatch were merged onto the lead and never
       // saved, so after a reload the Research tab reported "No website audited
@@ -880,6 +889,9 @@ const rowToLead = (r) => ({
   candidateFindings: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.candidateFindings) ?? null,
   ownerReplyCount: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.ownerReplyCount) ?? null,
   reviewsRead: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.reviewsRead) ?? null,
+  contactOnly: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactOnly) === true,
+  contactRank: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactRank) ?? null,
+  contactRankWhy: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactRankWhy) || '',
   auditedWebsite: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.auditedWebsite) ?? null,
   homepageContent: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.homepageContent) || '',
   valueEquation: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.valueEquation) || null,
@@ -1154,7 +1166,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260909;
+const CLIENT_CONTRACT = 20260911;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -1375,6 +1387,23 @@ const buildResearchBody = (lead, settings, extra) => {
     // every lead. Absent or false is today's behaviour exactly, so nothing here
     // changes for a single-lead research or for an emailing batch.
     callOnly: X.callOnly === true,
+    // CONTACT-ONLY. The goal this serves is one sentence: 50 leads ranked, with
+    // an owner email and a phone number, inside the ICP. None of that needs an
+    // audit, and until this existed the only way to get an owner email was to
+    // run the whole audit - the review mine, the search half, PageSpeed, the
+    // sitemap, seven interior pages and four model calls - to produce two
+    // fields. Strict === true, same rule as callOnly: a truthy string from a
+    // hand-built body must never silently stop buying an audit somebody asked
+    // for, and absent is today's behaviour exactly.
+    contactOnly: X.contactOnly === true,
+    // The two DISCOVERY DEMOTIONS. A business outside the star band or above
+    // the review ceiling is kept and sorted last rather than deleted (Google
+    // bills per call, so deleting a result cannot save a penny) - and the
+    // contact ranking has to know, or a decision taken at Find time is silently
+    // undone when the list is ordered. They live on the lead from discovery and
+    // nothing on the research path re-derives them.
+    outsideBand: L.outsideBand === true,
+    aboveSizeCeiling: L.aboveSizeCeiling === true,
   };
 };
 
@@ -1538,7 +1567,22 @@ const applyResearchResult = (prev, data, ctx) => {
         L.buckets = data.buckets || null;
         L.topPain = data.topPain || null;
         L.recommendedProduct = data.recommendedProduct || null;
-        L.brainAudit = data.brainAudit || null;
+        // ══ A CONTACT RUN MUST NOT DESTROY AN AUDIT ══════════════════════
+        // This line read `L.brainAudit = data.brainAudit || null;` and the
+        // Object.assign four lines below it runs unconditionally, so a response
+        // with no audit in it BLANKS the audit already on the lead — and
+        // leadToRow then writes that blanking to Supabase, permanently. An
+        // adversarial pass lifted measuredFieldsFrom out and executed it with
+        // null: seventeen keys, every one an empty default. So a contact pass
+        // over a 200-lead pipeline to harvest addresses would have wiped every
+        // audit already paid for, flipped the whole board from Audited back to
+        // Not audited, and said nothing about why.
+        //
+        // The mode flag is the guard, not a truthiness test on the audit: an
+        // audit that legitimately came back empty on a FULL run still has to
+        // clear the lead, and only the server can say which run this was.
+        const _contactRun = data.contactOnly === true;
+        if (!_contactRun) L.brainAudit = data.brainAudit || null;
         // ══ AND THE FLAT COPY THE UI ACTUALLY READS ══════════════════════
         // brainAudit alone was written here. The audit screen renders
         // lead.problemList, the compose payload reads lead.harmsRanked, and the
@@ -1549,7 +1593,7 @@ const applyResearchResult = (prev, data, ctx) => {
         //
         // Same function rowToLead uses, so the two paths cannot disagree about
         // which fields are measured or where they come from.
-        Object.assign(L, measuredFieldsFrom(data.brainAudit));
+        if (!_contactRun) Object.assign(L, measuredFieldsFrom(data.brainAudit));
         // ── THE AUDIT'S MEASUREMENTS ─────────────────────────────────────
         // THIS is the merge path that actually runs after research. The other
         // one further down is a different branch, and fixing only that one meant
@@ -1752,6 +1796,15 @@ const applyResearchResult = (prev, data, ctx) => {
         // assigned: a re-run that read everything must clear a previous run's
         // "we read nothing", or the warning outlives the problem.
         L.corpusRead = data.corpusRead || null;
+        // ── THE CONTACT LIST ────────────────────────────────────────────
+        // contactOnly records WHICH KIND OF RUN produced what is on this lead,
+        // so nothing downstream has to infer it from an absence. contactRank is
+        // the order of the list itself. All three are always assigned: a lead
+        // re-run as a full audit must stop claiming it was a contact pass, and
+        // a re-run that now resolves an owner must not keep the old rank.
+        L.contactOnly = data.contactOnly === true;
+        L.contactRank = (typeof data.contactRank === 'number') ? data.contactRank : null;
+        L.contactRankWhy = data.contactRankWhy || '';
         // These three were computed and returned by the server but never copied
         // onto the lead, so their audit rows always read "Not checked"/"Not
         // assessed" no matter what was actually measured. Same wiring shape as
@@ -1836,7 +1889,13 @@ const applyResearchResult = (prev, data, ctx) => {
         L.breakup = null;
         L.copyFlags = null;
         L.promptPath = null;
-        L.status = 'researched';
+        // A contact run resolved a person and an address. It did not audit
+        // anything, so it must not claim the word that two other readers treat
+        // as "audited": batchCandidates excludes 'researched' from a later
+        // audit batch, and the Generate queue admits it as ready for an email.
+        // A contact lead would have been locked out of the one and fabricated
+        // into the other. It keeps whatever status it had.
+        if (!_contactRun) L.status = 'researched';
         if (_wasApproved || _hadDraft) {
           console.log('[re-research] ' + (L.company || 'lead') +
             ': cleared a previous ' + (_wasApproved ? 'approval' : 'draft') +
@@ -2357,11 +2416,22 @@ const runBatchAudit = async (opts) => {
   const o = opts || {};
   const queue = (o.leads || []).slice();
   const settings = o.settings || {};
-  const withEmail = !!o.withEmail;
+  // withEmail cannot survive a contact run: there is no audit to write copy
+  // from, so asking the composer would be paying for a refusal fifty times.
+  // Forced here rather than left to the caller, because a caller that forgets
+  // is the failure and a caller that remembers proves nothing.
+  const withEmail = !!o.withEmail && !o.contactOnly;
   // A batch that exists to be CALLED. It stops the paid owner-name lookups on
   // the server (see callOnly in buildResearchBody); everything free still runs,
   // and the sheet keeps saying "(no title found)" rather than inventing one.
   const callOnly = !!o.callOnly;
+  // A CONTACT-LIST run. It answers the standing goal - fifty leads ranked, with
+  // an owner email and a phone number - and buys nothing an audit needs. It is
+  // its own KIND of batch rather than a tick box on this one, because the two
+  // produce different artefacts: this one ends in a call sheet, that one ends
+  // in a CSV. withEmail is forced off, because there is no audit to write copy
+  // from and asking the composer for one would be paying for a refusal.
+  const contactOnly = !!o.contactOnly;
   const conc = Math.max(1, Math.min(8, Number(o.concurrency) || BATCH_CONCURRENCY));
   const stopped = () => !!(typeof o.shouldStop === 'function' && o.shouldStop());
   // A throwing progress callback must not kill the run: the batch is the
@@ -2394,7 +2464,7 @@ const runBatchAudit = async (opts) => {
     let row = lead;
     try {
       const r = await researchViaQueue(
-        buildResearchBody(lead, settings, { website: lead.website || '', forceRefresh: false, browserData: null, callOnly }),
+        buildResearchBody(lead, settings, { website: lead.website || '', forceRefresh: false, browserData: null, callOnly, contactOnly }),
         { trigger: 'bulk-audit', onJobId: (jid) => setInflightJob(lead.id, jid),
           onStatus: (stx) => report({ phase: 'lead-status', lead, leadPhase: stx.phase, workedMs: stx.workedMs }) }
       );
@@ -3148,11 +3218,17 @@ const scoreboardFor = (ctx) => {
   const ranked = new Map(normalizedLeakRows(rows).map(([r, n]) => [r, n]));
   const dep = { after: 0, door: 1, found: 2 };
   const stageOf = (r) => r.funnelStage || PILLAR_TO_STAGE[r.pillar] || null;
-  const leaking = rows.filter(r => !r.internalOnly && !r.ambient && !ranked.has(r) && String(r.problem || '').trim())
+  // A 'work' row is the workmanship context strip under the funnel — it is
+  // deliberately NOT a money leak, and listing it here would put a reputation
+  // note in a column headed "leaking".
+  const leaking = rows.filter(r => !r.internalOnly && !r.ambient && !ranked.has(r)
+      && stageOf(r) !== 'work' && String(r.problem || '').trim())
     .sort((a, b) => ((dep[stageOf(a)] === undefined ? 9 : dep[stageOf(a)]) - (dep[stageOf(b)] === undefined ? 9 : dep[stageOf(b)]))
       || ((b.harm || 0) - (a.harm || 0)))
     .slice(0, 8)
-    .map(r => ({ text: String(r.problem), so: String(r.costs || ''), leak: null }));
+    // The area label rode the under-the-funnel block, and that block was the
+    // reprint. This is its one home now.
+    .map(r => ({ text: String(r.problem), so: String(r.costs || ''), area: String(r.area || ''), leak: null }));
 
   return { won: won.slice(0, 6), leaking, ranked: ranked.size };
 };
@@ -3572,13 +3648,6 @@ const auditExportHtml = (records, meta) => {
       + '</div>'
       + (r.phone ? '<div class="cphone">' + e(r.phone) + '</div>' : '')
       + '</section>'
-      // ══ TWO TIERS, NOTHING DELETED ════════════════════════════════════
-      // Vin's junior rep "has no clue what these audits mean", and the fix he
-      // approved is not a shorter sheet — it is a sheet with a top. Everything
-      // needed to make the call is above the second rule; every measurement we
-      // took is below it, unabridged. "i feel we do need all of this detial."
-      + '<div class="tier"><span class="tierl">For the call</span>'
-      + '<span class="tiers">Everything a rep needs. If you read nothing else on this sheet, you can make the call.</span></div>'
       // ═══ THE STORY — one thinking voice, the only prose on the page ═══
       + cat('The story', 'what is going on here, in one read — every number in it is measured',
           (r.background ? '<p>' + p(r.background) + '</p>' : '')
@@ -3632,20 +3701,13 @@ const auditExportHtml = (records, meta) => {
                   + '<span class="tw">' + p(String(x.problem).slice(0, 52).replace(/[\s,;:.-]+\S*$/, '')) + '\u2026'
                   + ' written out in full above.</span></div>';
               }
-              const ml = null;
-              return '<div class="ferow">'
-                + '<b>' + p(x.problem) + '</b>'
-                + (x.costs ? ' <span class="tw">— ' + p(x.costs) + '</span>' : '')
-                + (x.rankNote ? '<div class="tw">' + p(x.rankNote) + '</div>' : '')
-                + (ml ? '<div class="mline">' + p(ml) + '</div>' : '')
-                // A copy observation carries pillar TAXED purely as a SORT
-                // position, and TAXED maps to "reputation operations" - so a
-                // finding about identical wording on two service pages came
-                // with a retainer pitch under it. One field doing two jobs.
-                // The neighbouring "products that fit" list already excludes
-                // fromTheirPages; this is the same rule, second copy.
-                + (Number.isFinite(lr) && !x.fromTheirPages && x.pillar && PILLAR_PRODUCT[x.pillar] ? '<div class="tw">fix we sell: ' + e(PILLAR_PRODUCT[x.pillar]) + '</div>' : '')
-                + '</div>';
+              // A finding that is NOT one of the numbered three is already in
+              // the index above, once, with its own cost line. Printing it
+              // again at its stage is what made the record a reprint of the
+              // fold: "the full record has the saem info as the section
+              // above." Its rankNote, which the index has no room for, is the
+              // one thing that still earns a line here.
+              return x.rankNote ? '<div class="ferow tw">' + p(x.rankNote) + '</div>' : '';
             }).join('');
             const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
               ? '<div class="ferow tw">' + t.friction.map(x => p(x)).join(' · ') + '</div>' : '';
@@ -3680,10 +3742,10 @@ const auditExportHtml = (records, meta) => {
           const wr = ((r.funnelStory && r.funnelStory.stages) || []).find(s4 => s4 && s4.id === 'what_repeats');
           const workHtml = (fg.work.length || wr)
             ? '<div class="fwork"><b>Under the funnel — the work itself (context, not a leak):</b> ' + (fg.work.length ? fg.work.map(x => p(x.problem)).join(' · ') : p(wr.text)) + '</div>' : '';
-          const unstagedHtml = fg.unstaged.length
-            ? '<div style="margin-top:8px">' + fg.unstaged.map(x => '<div class="ferow"><b>' + p(x.problem) + '</b>'
-              + (x.costs || x.area ? ' <span class="tw">— ' + [x.area ? e(x.area) : '', x.costs ? p(x.costs) : ''].filter(Boolean).join(' · ') + '</span>' : '') + '</div>').join('') + '</div>' : '';
-          return cat('The funnel', "a customer's path to hiring them, top to bottom — where it breaks, the money falls out",
+          // Rows with no funnel stage render in the index above, once. They
+          // used to print again here, which is the same reprint one row down.
+          const unstagedHtml = '';
+          return cat('The funnel', "their path to hiring them, and what we measured at each step — the leaks above are marked where they sit",
             '<div class="fwrap">' + stagesHtml
             + '<div class="fspoutrow"><div class="fspoutbar"></div><div class="fspoutlbl">booked jobs</div></div><div></div>'
             + '<div class="ffull">' + ffHtml + workHtml + unstagedHtml + '</div></div>');
@@ -3726,7 +3788,7 @@ const auditExportHtml = (records, meta) => {
             + ' written out below</div>'
             + (_sb.leaking.length
               ? '<ul class="pl b">' + _sb.leaking.map(x => '<li>' + p(x.text)
-                  + (x.so ? '<span class="sw">' + p(x.so) + '</span>' : '') + '</li>').join('') + '</ul>'
+                  + (x.so || x.area ? '<span class="sw">' + [x.area ? e(x.area) : '', x.so ? p(x.so) : ''].filter(Boolean).join(' \u00b7 ') + '</span>' : '') + '</li>').join('') + '</ul>'
               : '<div class="tw">' + (_sb.ranked
                   ? 'Nothing else measured as a leak. The ' + _sb.ranked + ' below are all of them.'
                   : 'No measured finding cleared the bar on this lead.') + '</div>')
@@ -3779,16 +3841,8 @@ const auditExportHtml = (records, meta) => {
       // they exist for.
       const _dnsHtml = doNotSay
         ? '<section class="dns"><h3>Do not say on this call</h3>' + doNotSay + '</section>' : '';
-      // ══ PAGE ONE IS THE CALL SHEET ═══════════════════════════════════
-      // The two tiers doubled the page count (7 audits, 7 pages to 14), and
-      // shrinking the type again would undo the density fix rather than
-      // answer the complaint. The honest answer is a page BREAK: the call tier
-      // ends the page, so a rep can print or hand over page one per lead and
-      // the record follows behind it. Same paper, a usable first page.
-      const _tier2 = '<div class="tier tier2"><span class="tierl">The full record</span>'
-        + '<span class="tiers">Nothing deleted. Every measurement we took, for call two, an objection, or the email.</span></div>';
 
-      return _partA + _sbHtml + _leakHtml + _sellHtml + _callHtml + _dnsHtml + _tier2 + _funnelHtml; };
+      return _partA + _sbHtml + _leakHtml + _sellHtml + _callHtml + _dnsHtml + _funnelHtml; };
 
   // ══ THE SEGMENT BRIEF, ONCE PER TRADE INSTEAD OF ONCE PER LEAD ══════════
   // On a 50-lead export the crew-trades brief printed fifty times — a page of
@@ -3973,6 +4027,146 @@ const auditExportHtml = (records, meta) => {
 
 // The download itself. A blob rather than a data: URI because fifty audits run
 // to megabytes and a data: URI of that size is refused by some browsers.
+// == THE CONTACT LIST =======================================================
+// The whole standing goal, as a file: "50 leads ranked with owner email and
+// phone number that are in our ICP." Pure module-scope functions, so
+// clientcheck can EXECUTE them rather than read them - the audit export earned
+// that discipline and this is the same shape.
+
+// csvCell - RFC 4180 quoting AND a formula-injection guard.
+// The only CSV writer that existed in this repo escapes quotes and commas
+// correctly and stops there. A value beginning =, +, - or @ executes as a
+// FORMULA when the file is opened in Excel or Sheets, and this file carries
+// business names and owner names scraped off arbitrary web pages, opened by a
+// junior rep on his own machine. A leading apostrophe is the standard
+// neutraliser: invisible in the cell, and the value stays readable.
+const csvCell = (v) => {
+  let s = (v === null || v === undefined) ? '' : String(v);
+  // A lone CR breaks the row shape. Normalise line endings, then drop the
+  // control characters that have no business in a cell at all.
+  s = s.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ');
+  if (/^[=+\-@\t]/.test(s)) s = "'" + s;
+  return '"' + s.replace(/"/g, '""') + '"';
+};
+
+// contactConfidence - what we actually know about this address, in three
+// columns rather than one guessed caption.
+// Both existing captions derive confidence by REGEX over the human-readable
+// label, so four materially different states collapse into one sentence: a
+// learned pattern, a catch-all domain (delivery certain, RECIPIENT unknown - a
+// wrong-person risk, not a bounce risk), an eponymous inference, and a tier-4
+// guess the resolver refused outright. A rep dialling from this file has to
+// tell them apart, so tier, sendable and the block reason each get their own
+// column and the sentence comes from the TIER, never from prose that happens
+// to contain the word "verified".
+const CONTACT_TIER_SAY = {
+  1: 'Published on their own site',
+  2: 'Mailbox confirmed live by the mail server',
+  3: 'Pattern-built - the shape is right, the mailbox was never confirmed',
+  4: 'A guess we refused - do not send to this',
+  5: 'No defensible address found',
+};
+const contactConfidence = (lead) => {
+  const er = (lead && lead.emailResult) || null;
+  const tier = (er && Number.isFinite(Number(er.tier))) ? Number(er.tier) : null;
+  const sendable = er ? er.sendable === true : null;
+  const cached = !!(er && /\(cached\)/i.test(String(er.label || '')));
+  let say = tier ? (CONTACT_TIER_SAY[tier] || '') : ((lead && lead.email) ? 'No confidence recorded' : 'No address');
+  // A stored contact is served for up to sixty days and the cached label still
+  // matches the verified wording, so "confirmed live" could be describing a
+  // check two months old with nothing on the row saying so.
+  if (cached && say) say += ' (from cache, up to 60 days old)';
+  return { tier: tier, sendable: sendable, say: say, blockReason: (er && er.blockedReason) || '' };
+};
+
+// contactListRows - the file, ordered. Ranked by contactRank, which is the
+// system's own answer to "can we put this in front of the decision-maker" and
+// NOT a Google position: this codebase uses "rank" for search position almost
+// everywhere else, so the column heading says which one it means.
+const contactListRows = (leads) => {
+  const rows = [];
+  for (const l of (leads || [])) {
+    if (!l) continue;
+    const c = contactConfidence(l);
+    const dm = l.decisionMaker || null;
+    // A site on a free page builder is not a domain the business owns, so an
+    // address built at it can be perfectly well-formed and undeliverable to
+    // them. Flagged, not dropped: the phone number is still good.
+    const host = String(l.website || '').replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0].toLowerCase();
+    const builder = /(^|\.)(wixsite\.com|business\.site|godaddysites\.com|weebly\.com|squarespace\.com|myshopify\.com|square\.site)$/.test(host);
+    rows.push({
+      rank: (typeof l.contactRank === 'number') ? l.contactRank
+            : ((typeof l.reachability === 'number') ? l.reachability : null),
+      company: l.name || l.company || '',
+      owner: (dm && dm.name) || l.verifiedCEO || l.founderName || '',
+      title: (dm && dm.title) || l.verifiedCEOTitle || l.founderTitle || '(no title found)',
+      canBuy: dm ? (dm.canBuy === true ? 'yes' : 'no') : '',
+      email: l.email || '',
+      emailTier: c.tier === null ? '' : c.tier,
+      emailSendable: c.sendable === null ? '' : (c.sendable ? 'yes' : 'no'),
+      emailConfidence: c.say,
+      emailBlockedBecause: c.blockReason,
+      phone: l.phoneDisplay || l.phone || '',
+      website: l.website || '',
+      websiteWarning: builder ? 'free page builder - this domain is not theirs, so an address at it may not reach them' : '',
+      city: l.location || l.city || '',
+      trade: l.industry || '',
+      rating: (typeof l.rating === 'number') ? l.rating : '',
+      reviews: (typeof l.reviewCount === 'number') ? l.reviewCount : '',
+      icpNote: [l.outsideBand ? 'outside the star band' : '', l.aboveSizeCeiling ? 'above the review ceiling' : ''].filter(Boolean).join('; '),
+      whyThisRank: l.contactRankWhy
+        || ((typeof l.reachability === 'number')
+            ? ('reachability ' + Math.round(l.reachability) + ' - this lead was audited before the contact ranking existed, so it is ranked on reachability alone')
+            : ''),
+    });
+  }
+  // Highest first. An unranked lead sorts LAST rather than as a zero: it was
+  // never scored, and a confident 0 reads as "we checked and it is bad".
+  rows.sort(function (a, b) {
+    const ar = (typeof a.rank === 'number') ? a.rank : -1;
+    const br = (typeof b.rank === 'number') ? b.rank : -1;
+    if (br !== ar) return br - ar;
+    return String(a.company).localeCompare(String(b.company));
+  });
+  return rows;
+};
+
+const CONTACT_CSV_COLUMNS = [
+  ['rank', 'Rank (how reachable, NOT a Google position)'],
+  ['company', 'Company'], ['owner', 'Decision maker'], ['title', 'Title'],
+  ['canBuy', 'Can sign'], ['email', 'Email'], ['emailTier', 'Email tier 1-5'],
+  ['emailSendable', 'Safe to send'], ['emailConfidence', 'What we know about this address'],
+  ['emailBlockedBecause', 'Why it was refused'], ['phone', 'Phone'],
+  ['website', 'Website'], ['websiteWarning', 'Website warning'],
+  ['city', 'City'], ['trade', 'Trade'], ['rating', 'Google rating'],
+  ['reviews', 'Google reviews'], ['icpNote', 'ICP note'], ['whyThisRank', 'Why this rank'],
+];
+
+const contactListCsv = (leads) => {
+  const rows = contactListRows(leads);
+  const head = CONTACT_CSV_COLUMNS.map(function (c) { return csvCell(c[1]); }).join(',');
+  const body = rows.map(function (r) {
+    return CONTACT_CSV_COLUMNS.map(function (c) { return csvCell(r[c[0]]); }).join(',');
+  });
+  // A byte-order mark, because Excel reads a UTF-8 CSV without one as Latin-1
+  // and turns every accented business name into mojibake.
+  return '\uFEFF' + [head].concat(body).join('\r\n') + '\r\n';
+};
+
+const downloadContactList = (leads) => {
+  const rows = contactListRows(leads);
+  if (!rows.length) return 0;
+  const url = URL.createObjectURL(new Blob([contactListCsv(leads)], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'crojungle-contacts-' + new Date().toISOString().slice(0, 10) + '-' + rows.length + '.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+  return rows.length;
+};
+
 const downloadAudits = (leads, title) => {
   // ══ ONE BAD LEAD MUST NOT COST YOU FORTY-NINE GOOD ONES ══════════════════
   // This was a bare .map, so a single lead with an unexpected shape threw and
@@ -7380,14 +7574,6 @@ function LeadBriefing({ lead }) {
     // app had nothing equivalent — it went straight from contact details to a
     // verdict, so a reader who had never heard of the business met a conclusion
     // about a company they could not picture.
-    // ══ TWO TIERS ON THE SCREEN TOO ═══════════════════════════════════════
-    // The same shape as the exported sheet, so a rep and the person who built
-    // the audit are reading one document in two places. Above the first rule:
-    // everything needed to make the call. Below the second: every measurement
-    // we took, unabridged — "i feel we do need all of this detial."
-    React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', borderTop: '2px solid var(--t)', paddingTop: 8, marginTop: 4 } },
-      React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--t)' } }, 'For the call'),
-      React.createElement('span', { style: { fontSize: 12.5, color: 'var(--t)' } }, 'Everything a rep needs. If you read nothing else, you can make the call.')),
     // ── THE STORY — the one narrator. Background, headline and read in one
     // card; the walk prose is gone from here because the funnel section below
     // renders the same facts as staged evidence — nothing said twice.
@@ -7426,7 +7612,8 @@ function LeadBriefing({ lead }) {
           React.createElement('span', { style: { position: 'absolute', left: 0, color: accent, fontWeight: 700 } }, mark),
           x.leak ? React.createElement('span', { style: { display: 'inline-block', fontSize: 11, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '0 5px', marginRight: 6, verticalAlign: '1px' } }, 'LEAK ' + x.leak) : null,
           x.text,
-          x.so ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 3, lineHeight: 1.45 } }, x.so) : null))
+          (x.so || x.area) ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 3, lineHeight: 1.45 } },
+            [x.area, x.so].filter(Boolean).join(' \u00b7 ')) : null))
           : React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)' } },
               mark === '\u2715' && sb.ranked
                 ? 'Nothing else measured as a leak. The ' + sb.ranked + ' below are all of them.'
@@ -7630,11 +7817,6 @@ function LeadBriefing({ lead }) {
       )
     ) : null,
 
-    // ══ TIER 2 — THE RECORD ═══════════════════════════════════════════════
-    React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', borderTop: '2px solid var(--t)', paddingTop: 8, marginTop: 8 } },
-      React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--t)' } }, 'The full record'),
-      React.createElement('span', { style: { fontSize: 12.5, color: 'var(--t)' } }, 'Nothing deleted. Every measurement we took, for call two, an objection, or the email.')),
-
     // ── THE FUNNEL — the skeleton. Every finding at its stage, exactly once;
     // the top three leaks numbered where they sit; red only where it breaks.
     (() => {
@@ -7677,10 +7859,14 @@ function LeadBriefing({ lead }) {
               React.createElement('span', { style: { color: 'var(--t)', fontSize: 12.5 } },
                 _short + '\u2026 written out in full above.'));
           }
-          return React.createElement('div', { key: 'fr' + ri, style: { fontSize: 13, lineHeight: 1.6, marginTop: 4 } },
-            React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
-            x.costs ? React.createElement('span', { style: { color: 'var(--t)', fontSize: 12.5 } }, ' \u2014 ' + x.costs) : null,
-            x.rankNote ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 2 } }, x.rankNote) : null);
+          // A finding that is NOT one of the numbered three is already in the
+          // index above, once, with its own cost line. Printing it again here
+          // is what made the record a reprint of the fold. Its rankNote, which
+          // the index has no room for, is the one thing that still earns a
+          // line at the stage.
+          return x.rankNote
+            ? React.createElement('div', { key: 'fr' + ri, style: { fontSize: 12.5, lineHeight: 1.6, marginTop: 4, color: 'var(--t)' } }, x.rankNote)
+            : null;
         });
         const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
           ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginTop: 4 } }, t.friction.join(' \u00b7 ')) : null;
@@ -7697,7 +7883,7 @@ function LeadBriefing({ lead }) {
             g.label + ': ' + g.value,
             g.internal ? React.createElement('span', { style: { display: 'inline-block', fontSize: 10, fontWeight: 700, letterSpacing: '.05em', color: '#92400e', background: '#fef3c7', borderRadius: 4, padding: '0 5px', marginLeft: 6, verticalAlign: '1px' } }, 'INTERNAL') : null,
             // The takeaway, written in the same branch that produced the value.
-            g.so ? React.createElement('div', { style: { fontSize: 12, fontWeight: 400, color: 'var(--t)', lineHeight: 1.45, paddingLeft: 10, borderLeft: '2px solid var(--b)', margin: '2px 0 5px' } }, g.so) : null)),
+            g.so ? React.createElement('span', { style: { fontWeight: 400, color: 'var(--t)' } }, ' \u2014 ' + g.so) : null)),
           sg.unmeasured.length ? React.createElement('div', { key: 'sgu', style: { fontSize: 12, color: 'var(--t)' } }, 'Not measured: ' + sg.unmeasured.join(', ')) : null) : null;
         // Segment + card as ONE grid row with ONE stTxt, so the funnel is
         // exactly as tall as the text beside it and the two can never disagree.
@@ -7726,10 +7912,8 @@ function LeadBriefing({ lead }) {
       const workEl = (fg.work.length || wr) ? React.createElement('div', { style: { background: 'rgba(255,255,255,.02)', border: '1px solid var(--b)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginBottom: 8 } },
         React.createElement('b', { style: { color: 'var(--t)' } }, 'Under the funnel \u2014 the work itself (context, not a leak): '),
         fg.work.length ? fg.work.map(x => x.problem).join(' \u00b7 ') : String(wr.text)) : null;
-      const unstagedEl = fg.unstaged.length ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6 } },
-        fg.unstaged.map((x, i2) => React.createElement('div', { key: 'us' + i2, style: { marginTop: 3 } },
-          React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
-          (x.costs || x.area) ? ' \u2014 ' + [x.area, x.costs].filter(Boolean).join(' \u00b7 ') : ''))) : null;
+      // Rows with no funnel stage render in the index above, once.
+      const unstagedEl = null;
       // The layer answers "what holds the business back overall"; the numbered
       // leaks answer "which measurable thing costs the most money". Different
       // questions with different answers - the file's own TWO LADDERS rule -
@@ -7741,7 +7925,7 @@ function LeadBriefing({ lead }) {
           'What holds the business back overall \u2014 a different question from which leak costs most, which the numbered leaks answer.')) : null;
       return React.createElement('div', null,
         React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The funnel',
-          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, "a customer's path to hiring them \u2014 where it breaks, the money falls out")),
+          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, "their path to hiring them, and what we measured at each step \u2014 the leaks above are marked where they sit")),
         React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '164px 1fr', gap: '14px 20px', alignItems: 'stretch' } },
           stageBlocks,
           React.createElement('div', { key: 'fspout', style: { position: 'relative', height: 30 } },
@@ -8003,9 +8187,17 @@ function ResearchView({
   // A ref, not state: the worker loop reads it between leads and a state value
   // captured in that closure would never see the change.
   const batchStopRef = React.useRef(false);
-  const startBatch = async () => {
+  const startBatch = async (kind) => {
     if (batchRunning) { batchStopRef.current = true; return; }
-    const pool = batchCandidates(getLeads(), { limit: batchSize, includeResearched: batchIncludeDone, inflight: getInflightJobs(), pickedIds: batchPick });
+    // A CONTACT-LIST run is its own kind, taken as an argument rather than read
+    // off a tick box, so the button that spends the money and the run that
+    // spends it cannot disagree about which one this is.
+    const _contactRun = kind === 'contact';
+    // A contact run does not care whether a lead was audited: it is after a
+    // person and an address, and an audited lead may still have neither. The
+    // audit exclusion would silently shrink the pool to nothing on exactly the
+    // pipeline this feature exists to work through.
+    const pool = batchCandidates(getLeads(), { limit: batchSize, includeResearched: _contactRun ? true : batchIncludeDone, inflight: getInflightJobs(), pickedIds: batchPick });
     if (!pool.length) {
       setResearchError(batchPick.size
         ? 'None of your ticked leads can run: they are already running, or have no website to read.'
@@ -8031,7 +8223,8 @@ function ResearchView({
         leads: pool,
         settings,
         withEmail: batchEmail,
-        callOnly: batchCallOnly,
+        callOnly: batchCallOnly && !_contactRun,
+        contactOnly: _contactRun,
         shouldStop: () => batchStopRef.current,
         onProgress: (ev) => {
           setBatchAt(s => batchProgressReduce(s, ev));
@@ -8824,10 +9017,67 @@ function ResearchView({
               className: 'btn btn-sm ' + (batchRunning ? 'btn-g' : 'btn-p'),
               style: { width: '100%' },
               disabled: !batchRunning && ready === 0,
-              onClick: startBatch,
+              onClick: () => startBatch('audit'),
             }, batchRunning
                 ? ('Stop \u2014 ' + batchAt.finished + ' of ' + batchAt.total + ' done')
-                : (ready === 0 ? 'Nothing to audit' : ('Audit ' + ready + (_picked ? ' ticked' : '') + ' lead' + (ready === 1 ? '' : 's')))));
+                : (ready === 0 ? 'Nothing to audit' : ('Audit ' + ready + (_picked ? ' ticked' : '') + ' lead' + (ready === 1 ? '' : 's')))),
+            // ── THE CONTACT LIST ──────────────────────────────────────────
+            // The standing goal in one button: fifty leads ranked, with an
+            // owner email and a phone number. It buys the homepage, the owner
+            // ladder, the address engine and the picture the eyes read an
+            // address off - and nothing else. No reviews, no search, no
+            // PageSpeed, no interior pages, no audit, no story, no fact-check.
+            // The price is on the button because it is the reason to press it.
+            batchRunning ? null : React.createElement('button', {
+              className: 'btn btn-sm btn-g',
+              style: { width: '100%', marginTop: 6 },
+              disabled: ready === 0,
+              title: 'Resolves the decision-maker, an email address and a phone number, then ranks them. Buys no audit at all.',
+              onClick: () => startBatch('contact'),
+            }, ready === 0
+                ? 'Nothing to build a list from'
+                : ('Build contact list from ' + ready + (_picked ? ' ticked' : '') + ' lead' + (ready === 1 ? '' : 's') + ' \u2014 no audit, about a quarter the cost')),
+            batchRunning ? null : React.createElement('div', {
+              style: { fontSize: 11, color: 'var(--m2)', marginTop: 4, lineHeight: 1.45 },
+            }, 'A contact run leaves any audit already on a lead untouched, and does not mark the lead as audited \u2014 so a lead can be listed today and audited later without paying twice.'));
+        })(),
+        // ── THE FILE ITSELF ───────────────────────────────────────────────
+        // A CSV, deliberately, where the audit export is deliberately not one:
+        // a contact list IS a table and a spreadsheet is what a rep sorts and
+        // dials from. Ranked highest first, with the email's tier, whether it
+        // is safe to send, and why it was refused as their OWN columns rather
+        // than one guessed caption.
+        (() => {
+          // Anything we could actually put in front of a person: an address,
+          // a dialable number, or a named owner. NOT "went through a contact
+          // run" - that made the file about which code path a lead took rather
+          // than about what we know, and on a 189-lead pipeline it matched
+          // nothing at all while 128 audited leads sat there with resolved
+          // owners, addresses and phones.
+          const listed = allLeads.filter(x => x && (
+            String(x.email || '').trim()
+            || String(x.phone || x.phoneDisplay || '').replace(/\D/g, '')
+            || (x.decisionMaker && x.decisionMaker.name) || x.verifiedCEO));
+          if (batchRunning || !listed.length) return null;
+          const _withEmail = listed.filter(x => String(x.email || '').trim()).length;
+          return React.createElement(React.Fragment, null,
+            React.createElement('button', {
+              className: 'btn btn-sm btn-g',
+              style: { marginTop: 6, width: '100%' },
+              title: 'Every lead with an address, a phone number or a named owner - ranked, as a CSV.',
+              onClick: () => { const n = downloadContactList(listed); if (!n) setResearchError('No contact rows to export yet.'); },
+            }, 'Download contact list (' + listed.length + ')'),
+            // The count on the button is what is IN the file. This line is what
+            // is in the file that you can actually email, which is a different
+            // number and the one that decides whether a contact run is worth
+            // pressing. Saying only the first would let a file of phone-only
+            // rows read as fifty addresses.
+            React.createElement('div', {
+              style: { fontSize: 11, color: 'var(--m2)', marginTop: 4, lineHeight: 1.45 },
+            }, _withEmail + ' of them have an email address'
+               + (_withEmail < listed.length
+                   ? '. The rest are phone and company only \u2014 a contact run resolves their owner and address.'
+                   : '.')));
         })(),
         // ── GETTING FIFTY AUDITS OUT ──────────────────────────────────────
         // Fifty audits on screen and no way to hand them to anybody. Exports
