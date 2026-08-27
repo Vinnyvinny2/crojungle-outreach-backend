@@ -8189,14 +8189,20 @@ reason for running them.
   a site that returned 52 internal links: the reason a corpus is empty now
   travels, and the sheet says which of the two it is.
 - **The browser cap sat at 10 on a plan that allows 25.** The cap took the most
-  restrictive endpoint of ALL, and `/v1/search` and `/v1/map` spin no browser —
-  the gate already gives search no slot. So a 500/min endpoint that renders
-  nothing was deciding how many renders we may run at once. The cap is sized
-  only from endpoints that render; `map` joins the slotless set (five map calls
-  per lead were each holding a slot the page renders queued behind); and until a
-  rendering endpoint has answered, the cap does not move at all. The existing
-  boot check asserted the cap was sized from the SEARCH limit — the defect
-  written down as an invariant — and that assertion is flipped.
+  restrictive endpoint of ALL, and every number in the tier table is a SCRAPE
+  per-minute figure — so feeding it any other endpoint reads the plan off the
+  wrong meter, and on one account `/v1/map` answers 500 while `/v1/scrape`
+  answers 5000. The cap is derived from `/v1/scrape` alone: `batch` is excluded
+  even though its pages render, because the batch STATUS POLL writes that same
+  key and a polling endpoint must never decide how many browsers we hold. Until
+  a scrape has answered, the cap does not move at all. `map` joins the slotless
+  set — five map calls a lead were each holding a slot the renders queued
+  behind — and its standing is stated honestly: no formats requested, one credit
+  however large the site, a 20s timeout against a render's 45-90s. Good
+  evidence, not proof, and the 429 gate-wide hold is the backstop if it is
+  wrong. The existing boot check asserted the cap was sized from the SEARCH
+  limit — the defect written down as an invariant — and that assertion is
+  flipped.
 - **Doomed retries into a host that had already stopped answering.** Three paid
   scrapes timed out on one lead after that host had already timed out once, and
   Firecrawl bills the submit. A per-lead host stand-down after two timeouts, on

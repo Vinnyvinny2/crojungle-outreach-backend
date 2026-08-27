@@ -636,10 +636,16 @@ const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, on
   // poll, whose own comment reads "a status read renders nothing." Search
   // jobs keep the per-kind spacing and the 429 hold — those are account
   // facts — and skip only the slot.
-  // /v1/search renders nothing and round 76 took it off the slots. /v1/map is
-  // the same fact and was missed: it reads a sitemap and a link graph, spins no
-  // browser, and firecrawlMap is called up to FIVE times per lead. Each of those
+  // /v1/search renders nothing and round 76 took it off the slots. /v1/map goes
+  // with it: firecrawlMap is called up to FIVE times per lead, and each of those
   // was holding one of the browser slots the page renders were queueing for.
+  //
+  // HONEST STANDING on map: good evidence, not proof. Its request body is
+  // {url, limit} with no formats asked for, its answer is a link list, it is
+  // priced at ONE credit however many pages the site has, and it is given a 20s
+  // timeout against a render's 45-90s. Firecrawl does not publish whether a map
+  // occupies a browser. If it does, the backstop is already here and already
+  // proven: a 429 holds the WHOLE gate, on their own Retry-After.
   const SLOTLESS_KINDS = new Set(['search', 'map']);
   const _slotless = (job) => SLOTLESS_KINDS.has(job.kind || 'other');
   const readyIndex = (now, full) => {
@@ -738,10 +744,18 @@ const fcKindOf = (url) => {
   if (/\/v1\/search/.test(u)) return 'search';
   return 'other';
 };
-// The endpoints that actually spin a browser. /v1/search and /v1/map do not:
-// they read an index and a link graph. Declared here, next to fcKindOf, so the
-// kinds and what each kind COSTS are read in one place.
-const FC_RENDER_KINDS = new Set(['scrape', 'batch']);
+// The endpoint the browser-cap table was actually built from, and the one that
+// unquestionably renders: /v1/scrape asks for markdown, a full-page screenshot,
+// rawHtml and html with a 4s wait and geo emulation. Every tier number in
+// fcBrowsersForLimit is a SCRAPE per-minute figure, so feeding that table any
+// other endpoint's bucket reads the plan off the wrong meter \u2014 on one account
+// /v1/map answers 500 while /v1/scrape answers 5000.
+//
+// 'batch' is deliberately NOT here even though its pages do render: the batch
+// STATUS POLL derives the same 'batch' kind from its own URL, and a polling
+// endpoint's bucket must never decide how many browsers we may hold. FC_BATCH
+// is off by default in any case.
+const FC_RENDER_KINDS = new Set(['scrape']);
 let FC_CONCURRENCY_LIVE = FC_CONCURRENCY;
 const FC_CONCURRENCY_EXPLICIT = !!(process.env.FC_CONCURRENCY || '').trim();
 const fcBrowsersForLimit = (perMin) => {
@@ -53034,7 +53048,13 @@ app.listen(PORT, () => {
         FC_LIMIT_BY_KIND.clear(); FC_GAP_BY_KIND.clear(); FC_LIMIT_PER_MIN = null;
         noteFirecrawlLimits(_resp('500'), 'map');
         if (FC_LIMIT_PER_MIN !== null) {
-          _fails.push('a MAP limit sized the browser cap - /v1/map reads a link graph and spins no browser, so it says nothing about how many renders we may run at once');
+          _fails.push('a MAP limit sized the browser cap - every number in fcBrowsersForLimit is a SCRAPE figure, so any other endpoint reads the plan off the wrong meter');
+        }
+        // The batch STATUS POLL derives 'batch' from its own URL, and a
+        // polling endpoint must never decide how many browsers we hold.
+        noteFirecrawlLimits(_resp('500'), 'batch');
+        if (FC_LIMIT_PER_MIN !== null) {
+          _fails.push("a BATCH bucket sized the browser cap - the status poll writes that same key, so a polling endpoint's meter would be setting the render concurrency");
         }
         // Restore EVERYTHING this probe touched, including the pace map an
         // assertion below reads - a check that leaves state behind fails its
