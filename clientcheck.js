@@ -495,7 +495,7 @@ const mergeStat = runMergeCheck();
   // function without its dependencies is how a harness starts lying: it would
   // throw here rather than silently pass, which is the good failure mode, but
   // only if the name is actually required.
-  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
+  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'replyLatencySay', 'websiteForReading', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -511,9 +511,9 @@ const mergeStat = runMergeCheck();
   } else {
     let mod = null;
     try {
-      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
+      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.replyLatencySay + '\n' + found.websiteForReading + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
         + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
-        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, norm: normalizedLeakRows, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, taper: FUNNEL_TAPER, segClip: funnelSegClip, segFill: funnelSegFill, walkStage: walkTextsByStage, scoreLine: scoreSentence, sig: signalRowsFor };')();
+        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, norm: normalizedLeakRows, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, replyLatency: replyLatencySay, web: websiteForReading, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, taper: FUNNEL_TAPER, segClip: funnelSegClip, segFill: funnelSegFill, walkStage: walkTextsByStage, scoreLine: scoreSentence, sig: signalRowsFor };')();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -1052,6 +1052,19 @@ const mergeStat = runMergeCheck();
         // The LIVE shape needs the SECOND apostrophe downstream — without it
         // the old regex found no closing quote and the fixture measured
         // nothing (caught by its own falsification run).
+        // == ONE DISPLAY FORM FOR THE WEBSITE ============================
+        // The Contact block and the export record each built their own, so
+        // one sheet could read "https://www.acme.com/" and the other
+        // "acme.com". Executed here; the two CALL SITES are pinned in the
+        // request block, because a fixture cannot see a caller.
+        if (mod.web) {
+          const _w = mod.web({ website: 'https://www.acme-roofing.com/?utm_source=gmb' });
+          if (_w !== 'acme-roofing.com') fails.push(`the one website display form no longer normalises a real stored URL — got "${_w}"`);
+          if (mod.web({}) !== '') fails.push('a lead with no website produces text instead of nothing');
+          if (mod.web({ website: 'http://acme.com', auditedWebsite: 'https://audited.com' }) !== 'audited.com') {
+            fails.push('the display form no longer prefers the domain we actually audited');
+          }
+        } else { fails.push('websiteForReading could not be lifted, so the one display form is unverified'); }
         const pr = mod.plain("The pitch reads as a template diagnosis rather than a founder's observation. It should open with the specific measured finding (search rank) without preamble, and skip the 'someone in Louisville searching' construction.");
         if (/^.s observation/.test(String(pr)) || /\u201cs observation/.test(String(pr))) fails.push('plainRisk still mistakes a possessive apostrophe for a quote — the mangled Do-not-say bullet is back');
       } catch (e) { fails.push('the funnel grouping check threw: ' + e.message); }
@@ -1102,6 +1115,16 @@ const mergeStat = runMergeCheck();
         if (!/waiting on a human to call them back/.test(_pr)) fails.push('the warning lost the quoted sentence — the one thing the caller must not say');
         if (/Legal as a general truth/.test(_pr)) fails.push('the warning still carries the detector rationale — engineering prose on a sales sheet');
         if (!/never watched what happens after someone contacts them/.test(_pr)) fails.push('the warning lost its plain-English reason');
+        // And the quote must have ONE home. Three of five entries on two live
+        // sheets printed the span twice, because the fallback reason is the raw
+        // entry and the entry BEGINS with the quote. This fixture deliberately
+        // matches no RISK_REASONS row, which is the only way to reach that
+        // branch - the live fixture above matches one and never exercises it.
+        const _dupeRisk = '\u201cthe form it lands on asks for 7 pieces of information first\u201d \u2014 Facebook ad code is present and no counting was visible';
+        const _dp = mod.plain ? mod.plain(_dupeRisk) : plainRiskMissing();
+        const _twice = _dp.split('asks for 7 pieces of information first').length - 1;
+        if (_twice > 1) fails.push(`the warning prints its quoted span ${_twice} times — the quote and the reason are the same words`);
+        if (!/Facebook ad code/.test(_dp)) fails.push('the quote strip ate the reason as well as the duplicate');
         // Layer codes translate; an unknown code passes through untouched.
         // Round 101: the raw code suffix is gone - Vin twice read '(LEADS)'
         // as noise. Plain words only on both surfaces.
@@ -1154,7 +1177,7 @@ const mergeStat = runMergeCheck();
 // block into The conversation — two homes is the drift this file records), and
 // a null lead must return null rather than throw.
 {
-  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
+  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'replyLatencySay', 'websiteForReading', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -1176,7 +1199,7 @@ const mergeStat = runMergeCheck();
     } };
     let briefing = null;
     try {
-      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
+      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.RISK_REASONS + '\n' + found.replyLatencySay + '\n' + found.websiteForReading + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
     } catch (e) { fails.push('the audit screen cannot be lifted: ' + e.message); }
     if (briefing) {
       const LEAD = {
@@ -1826,6 +1849,46 @@ const PENDING = [];
   // behaviour; this pins the one-line decision at its site).
   if (html.indexOf(_n99('const includeDone = !!opts.includeResearched || ', '!!picked;')) < 0) {
     fails.push('a ticked audited lead needs the re-audit checkbox again — the multi-re-run flow dies back to one-at-a-time');
+  }
+  // == THE COMPLAINT AND ITS DENOMINATOR TRAVEL TOGETHER, BOTH WAYS =========
+  // The browser seeds last run's pain signals into the research body. It sent
+  // the strings and not the sample size, so the server held a complaint with
+  // no denominator - and a live card printed "nobody responds (5 mentions)"
+  // one line under "After they reach out — NOT MEASURED". They are one
+  // measurement; sending one without the other is the defect.
+  if (builderKeys.indexOf('publicPainSignals') >= 0 && builderKeys.indexOf('reviewsRead') < 0) {
+    fails.push('the request builder seeds last run’s pain signals without the sample size behind them — the server then holds a complaint it is not licensed to state anything about');
+  }
+  // The three-state stage label, on BOTH surfaces. A stage we looked at but
+  // could not say enough about is neither "no fault found" nor "not measured".
+  // TWO surfaces render this, so ONE occurrence means a surface lost it.
+  // Reverting the export alone left this green while the needle only asked
+  // "does it appear anywhere" - the shared-needle trap, found by falsifying.
+  const _thinUses = html.split(_n99("(s3.status === 'clean' && fThin[s3.id] ", '=== true)')).length - 1;
+  if (_thinUses < 2) {
+    fails.push(`only ${_thinUses} of the two surfaces still renders the partly-measured state — a thin read is a verdict again on the other one`);
+  }
+  for (const [what, needle] of [
+    ['the exported sheet', _n99('const fThin = (r.funnelStory && r.funnelStory.thin)', ' || {};')],
+    ['the screen own read of it', _n99('const fThin = (lead.funnelStory && lead.funnelStory.thin)', ' || {};')],
+  ]) {
+    if (html.indexOf(needle) < 0) fails.push(`${what} lost the partly-measured state — a thin read renders as a verdict again`);
+  }
+  // == ONE DISPLAY FORM FOR THE WEBSITE, EXECUTED =========================
+  // The Contact block and the export record each built their own. A junior
+  // rep reading "https://www.acme.com/" on one sheet and "acme.com" on the
+  // other reads two facts. Executed on the real function, then pinned at
+  // BOTH call sites - a fixture supplies its own arguments and therefore
+  // cannot see a caller.
+  for (const [what, needle] of [
+    ['the export record', _n99('website: websiteFor', 'Reading(l),')],
+    ['the contact block', _n99("L('Website', websiteFor", 'Reading(lead),')],
+  ]) {
+    if (html.indexOf(needle) < 0) fails.push(`${what} builds its own website display form again — two spellings of one fact on one sheet`);
+  }
+  // And the chip must carry what it rests on.
+  if (html.indexOf(_n99("? ' of ' + rr + ", "' reviews read'")) < 0) {
+    fails.push('the top-complaint chip no longer states its denominator — a mention count with no sample behind it is half a measurement');
   }
 }
 
