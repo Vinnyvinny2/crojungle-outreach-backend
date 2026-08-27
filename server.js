@@ -36047,7 +36047,13 @@ const parseLocalFinder = (body) => {
   }
   const res = Array.isArray(task.result) ? task.result[0] : null;
   const items = res && Array.isArray(res.items) ? res.items : [];
-  if (!items.length) return { ok: false, why: 'DataForSEO returned no items for this search' };
+  // `settled: true` means ASKING AGAIN CANNOT CHANGE THE ANSWER. The retry loop
+  // below used to recognise only a 40xxx account error, and neither of these two
+  // strings carries a digit or the word "task error" - so a search that genuinely
+  // returns nothing was bought THREE TIMES for the same empty answer. Carried as a
+  // flag rather than matched out of the prose, because sniffing a message for
+  // meaning is the defect this round already fixed once in the credit meter.
+  if (!items.length) return { ok: false, settled: true, why: 'DataForSEO returned no items for this search' };
   const out = [];
   for (const it of items) {
     if (!it || typeof it !== 'object') continue;
@@ -36090,7 +36096,7 @@ const parseLocalFinder = (body) => {
         ? it.additional_categories.map(x => String(x || '').slice(0, 60)).filter(Boolean).slice(0, 8) : null,
     });
   }
-  if (!out.length) return { ok: false, why: 'DataForSEO returned items but none of them were business rows' };
+  if (!out.length) return { ok: false, settled: true, why: 'DataForSEO returned items but none of them were business rows' };
   return { ok: true, results: out };
 };
 
@@ -36209,6 +36215,13 @@ const fetchLocalPack = async ({ query, city, placesKey, bizLat, bizLng, noPlaces
           _fellBack = true; _locArg = _loc.fallback.arg; _locNote = _loc.fallback.note;
           console.log(`↺ LOCAL PACK [${query}]: DataForSEO's location database does not know this city — standing at ${_locNote} instead.`);
           continue;
+        }
+        // A transient failure presents as a timeout or an unparseable body, and
+        // both keep their retries. What breaks now is an answer that is COMPLETE
+        // and empty - re-asking buys the identical nothing at full price.
+        if (!parsed.ok && parsed.settled === true) {
+          console.log(`\u21ba LOCAL PACK [${query}]: DataForSEO answered and the answer was empty (${parsed.why}). Not asking again - a complete answer does not change on a retry, and each attempt is billed.`);
+          break;
         }
         if (!parsed.ok && /40\d\d\d|CREDENTIALS|task error/i.test(String(parsed.why || ''))) break;
       }
@@ -51982,6 +51995,45 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ DFS LABS GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ---- A COMPLETE ANSWER IS NOT A FAILED ONE ---------------------------
+  // The local-finder retry loop recognised only a 40xxx account error, so a
+  // search that ANSWERED and had nothing in it was bought three times for the
+  // identical nothing. The two parse exits that mean "complete and empty" carry
+  // no digit and no 'task error', so the pattern could never see them. They
+  // carry an explicit `settled` flag now rather than being matched out of their
+  // own prose - reading meaning out of a message is the defect this same round
+  // fixed in the credit meter, and it is not worth repeating one screen away.
+  //
+  // What must NOT break is a transient failure: a timeout or an unparseable
+  // body is exactly what the retry exists for, and both are asserted below to
+  // keep retrying.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    // Executed on the real parser: an answer with no items is settled.
+    const _empty = parseLocalFinder({ tasks: [{ status_code: 20000, result: [{ items: [] }] }] });
+    if (_empty.ok !== false) _fails.push('an empty DataForSEO answer is no longer reported as a failure');
+    if (_empty.settled !== true) _fails.push('a COMPLETE but empty DataForSEO answer is not marked settled, so the retry loop buys the same nothing three times');
+    // A transient shape must NOT be settled - this is the half that keeps the
+    // retry doing its job.
+    const _noTasks = parseLocalFinder({});
+    if (_noTasks.ok !== false) _fails.push('a task-less DataForSEO body is no longer a failure');
+    if (_noTasks.settled === true) _fails.push('a task-less body is being treated as settled — that is the transient case the retry exists for, and it would now never be retried');
+    if (!_src.includes(_n('if (!parsed.ok && parsed.settled ===', ' true) {'))) _fails.push('the retry loop no longer breaks on a settled answer — a complete empty search goes back to being bought three times');
+    // Two real halves, and deliberately just the PATTERN rather than the whole
+    // statement: counting closing parens in a needle is how a correct build gets
+    // failed by its own guard, which is what happened on this check's first boot.
+    if (!_src.includes(_n('/40', "\\d\\d\\d|CREDENTIALS|task error/i"))) _fails.push('the account-error break was lost, so a bad credential is retried at full price');
+    if (_fails.length) {
+      console.log(`⛔ DFS SETTLED ANSWER CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ DFS SETTLED ANSWER CHECK: a DataForSEO search that ANSWERED and was empty is bought once, not three times — the two "complete and empty" parse exits carry an explicit flag rather than being recognised from their own wording, and the transient cases (a task-less body, a timeout, an unparseable response) keep every retry they had. Executed on the real parser in both directions.`);
+    }
+  } catch (e) {
+    console.log(`⛔ DFS SETTLED ANSWER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ---- FIFTY LEADS CANNOT BURN AROUND ONE DEAD SETTINGS FIELD -----------

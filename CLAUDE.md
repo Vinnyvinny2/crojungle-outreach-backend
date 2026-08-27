@@ -7711,8 +7711,75 @@ ledger at once, and every Firecrawl plan estimate in this file is wrong. Until
 then, **the honest per-lead Firecrawl figure is a range, not a number** — and
 saying otherwise is the failure this file records more than any other.
 
-**251 boot checks green.** Five falsifications, each reverted alone and each red
-on its own named assertion.
+### A complete answer is not a failed one
+
+The local-finder retry loop recognised only a 40xxx account error, and the two
+parse exits that mean COMPLETE AND EMPTY — *"DataForSEO returned no items for
+this search"* and *"returned items but none of them were business rows"* —
+carry no digit and no "task error", so the pattern could never see them. **A
+search that answered and had nothing in it was bought three times for the
+identical nothing.** They carry an explicit `settled` flag now rather than being
+recognised from their own prose, which is the same defect this round fixed in
+the credit meter one screen away. The transient cases keep every retry they had,
+and `DFS SETTLED ANSWER CHECK` asserts BOTH directions — the falsification that
+mattered was widening it too far, which would have killed the retry the loop
+exists for.
+
+### What the recon found that this round deliberately did NOT act on
+
+Six agents read the paid surface and an adversarial pass mapped what must never
+be cut. Two findings were vetoed by that map and both vetoes were accepted:
+
+- **The BRAIN GATE runs two paid model calls too late.** A husk audit still buys
+  the situation read — the most expensive call on the lead — and the fact-check
+  before being 422'd, because both inputs the gate reads exist the moment the
+  audit parses and the gate sits ~3,400 lines later. Worth ~$0.15-0.19 plus
+  20-40s of the work clock on every blocked lead. NOT done tonight: `brainAudit`
+  is not assigned until long after `parsed`, so the honest fix extracts the
+  refusal into one function both gates call rather than duplicating it — and a
+  control-flow change to the main research route is not a thing to ship the night
+  before a fifty-lead batch.
+- **The second rank sample on a Places-fallback FOUND business cannot change a
+  consumed field**, because an untrusted source may never state a position. It
+  looks like free money. The quality map's verdict is DO NOT CUT, in those words:
+  *"this is the exact cut sections 6 and 47 are emphatic about, and it is now
+  cheap enough to look like free money"*, and the danger is scoping the skip one
+  step too wide and reinstating the single-draw bug on `absent_from_search`.
+  A ~$0.035 saving against the strongest sentence in the system is a bad trade.
+- **The audit cache saves only the audit call.** On a hit the log says "Saved
+  ~$0.08" while the vision read, the situation read and the fact-check are all
+  re-bought on byte-identical evidence — and the key already proves the
+  screenshot bytes are identical. Real, and it wants §19's isolation rules
+  thought through properly rather than at speed.
+- **The free owner source built for owner-operators can never corroborate.**
+  `findOwnerViaReviewReplies` is stage 1 and free, its own prompt says *"A first
+  name alone is fine and useful"*, and `rankOwnerCandidates` clusters on a
+  surname — so the source that could settle the owner structurally cannot, and
+  the paid wave is bought anyway.
+- **Three log lines price the owner ladder about 3x above the file's own credit
+  model**, including §76's "twelve-credit owner-lookup wave". `findOwnerViaWebSearch`
+  fires two snippet-only searches at 2 credits each. Any planning number taken
+  from those lines — including the "~15 credits" figure I repeated in a report —
+  is inflated.
+
+**The quality map's DO-NOT-CUT list, recorded so a future cost round does not
+have to re-derive it:** the second rank sample, DataForSEO credentials, the
+finder's depth-100 window, `APIFY_MAX_REVIEWS` below 90, the review-pain mine,
+the rendered homepage, the vision call, interior pages below two, the sitemap
+map, the Place Details call that supplies the authoritative review count, the
+service-page absence second look, `PAGESPEED_KEY`, and `REVIEW_CORPUS_CHARS`.
+Marked SAFE to reduce: `SITUATION_EFFORT` (it writes prose, sets no measured
+flag, gates no absence claim and produces no figure), the decision-maker web
+search, the three service-page rank searches, and the Labs pair already cut here.
+
+**252 boot checks green.** Eight falsifications, each reverted alone and each red
+on its own named assertion — including the over-widening direction, which is the
+one that proves a cost fix has not quietly eaten a guard.
+
+**And the settled-answer check failed a CORRECT build on its first boot**, on a
+needle with one closing paren too many. Eleventh recorded instance of a needle
+failing on its own shape rather than on the code; the needle now pins the pattern
+alone, because counting parens in a guard is how a green build gets called red.
 
 ---
 
