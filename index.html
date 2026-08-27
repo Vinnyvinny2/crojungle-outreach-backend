@@ -1154,7 +1154,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260906;
+const CLIENT_CONTRACT = 20260907;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -1359,6 +1359,12 @@ const buildResearchBody = (lead, settings, extra) => {
     verifiedCEO: L.verifiedCEO || null,
     verifiedCEOTitle: L.verifiedCEOTitle || null,
     publicPainSignals: L.publicPainSignals || [],
+    // The DENOMINATOR travels with the signals. Sending the complaints back
+    // without it is how a re-researched lead printed "nobody responds (5
+    // mentions)" one line under "After they reach out \u2014 NOT MEASURED":
+    // the server seeds the signals from this field and every gate that
+    // licenses a review claim reads the sample size, which was never sent.
+    reviewsRead: L.reviewsRead ?? null,
     // Measured in the browser, so it can only come from the caller.
     browserData: X.browserData || null,
     // CALLING MODE. A batch that exists to be dialled does not buy an owner
@@ -2526,6 +2532,35 @@ const RISK_REASONS = [
   [/marketing jargon/i, "marketing vocabulary, say it in the owner's words"],
   [/visitor disappears|unobserved/i, 'what a visitor does next is something we never observed'],
 ];
+// The median IS zero on a business that answers reviews the same day, so
+// "~0 day(s)" was a correct measurement rendered as a bug. The server has the
+// same three states for the audit prompt; this is the sheet's copy, and both
+// are executed by a check. Presentation, not truth - the number on the wire is
+// still the measurement.
+// == THE URL A PERSON READS ==============================================
+// A Google Business Profile link arrives carrying its own tracking, and the
+// export header printed it whole:
+//   https://tuckandhowell.com/?utm_source=google&utm_medium=organic&utm_campaign=gmb
+// The Contact block had a strip; the sheet header had none, and the screen
+// header dodged it only by reading auditedWebsite (which the research route
+// cleans into a different field). Three readers, one rule, one of them had it.
+// The STORED value is never touched - the confirm banner has to show the
+// operator exactly what he pasted, or he cannot tell why the wrong site was
+// audited.
+const websiteForReading = (lead) => {
+  const raw = String((lead && (lead.auditedWebsite || lead.website)) || '').trim();
+  return raw.replace(/^https?:\/\/(www\.)?/, '').replace(/[?#].*$/, '').replace(/\/$/, '');
+};
+const replyLatencySay = (d) => {
+  // Number(null) is 0 and 0 is finite, so an unmeasured latency would render
+  // as "the same day" - a confident sentence about replies we never dated.
+  if (d === null || d === undefined || d === '' || typeof d === 'boolean') return null;
+  const n = Number(d);
+  if (!Number.isFinite(n) || n < 0) return null;
+  if (n < 1) return 'the same day';
+  if (n < 1.5) return 'about a day';
+  return 'about ' + (n % 1 === 0 ? n : n.toFixed(1)) + ' days';
+};
 const plainRisk = (x) => {
   const t = String(x || '');
   const m = t.match(/[\u201c"]([^\u201c\u201d"]{6,220})[\u201d"][.\s]*$/) || t.match(/(?:^|[\s(\u2014])[\u2018']([^\u2018\u2019']{10,220})[\u2019'](?=[\s).,;:!?\u2014]|$)/) || t.match(/[\u201c"]([^\u201c\u201d"]{6,220})[\u201d"]/);
@@ -2535,8 +2570,30 @@ const plainRisk = (x) => {
   for (const [re, r] of RISK_REASONS) { if (re.test(t)) { reason = r; break; } }
   if (!reason) {
     reason = t.replace(/^fact-check:\s*/i, '').replace(/^[A-Z][A-Z -]{3,40}:\s*/, '').split(/(?<=[a-z0-9])\.\s/)[0];
+    // == THE QUOTE MUST HAVE ONE HOME ======================================
+    // The stored entry BEGINS with the quoted span, so falling back to the raw
+    // text printed it a second time: '"the form it lands on asks for 7 pieces
+    // of information first" \u2014 "the form it lands on asks for 7 pieces of
+    // information first" \u2014 Facebook ad code detected...'. Three of five
+    // entries on two separate live sheets. The quote is already displayed; the
+    // reason is what is LEFT of the sentence once it is taken out.
+    if (quote) {
+      const cut = reason.indexOf(quote);
+      if (cut >= 0) reason = (reason.slice(0, cut) + ' ' + reason.slice(cut + quote.length));
+      reason = reason
+        .replace(/[\u201c\u201d"\u2018\u2019']/g, ' ')
+        .replace(/\s+/g, ' ')
+        .replace(/^[\s\u2014,;:.-]+/, '')
+        .replace(/^(?:the )?(?:pitch angle|audit|email|embarrassing finding|reason field)\b[^a-z0-9]*/i, '')
+        .replace(/^(?:states?|says?|claims?|asserts?|reads?)\b[^a-z0-9]*/i, '')
+        .replace(/^[\s\u2014,;:.-]+/, '')
+        .trim();
+    }
     if (reason.length > 160) reason = reason.slice(0, 160).replace(/\s+\S*$/, '') + '\u2026';
   }
+  // With the quote taken out there may be nothing left to say. A bare quote is
+  // still a usable warning; a quote followed by an empty dash is not.
+  if (quote && !reason) return '\u201c' + quote + '\u201d';
   return quote ? '\u201c' + quote + '\u201d \u2014 ' + reason : reason;
 };
 // ══ THE HORMOZI LAYER NAMES, TRANSLATED ═════════════════════════════════════
@@ -2821,14 +2878,24 @@ const signalRowsFor = (stageId, ctx) => {
     R('Anything measuring the site', af.analytics === false ? 'no analytics of any kind on the pages read \u2014 no dashboard anywhere can tell them how many people came' : af.analytics === true ? 'an analytics tag is on the site' : null, null, af.analytics === false);
     // Round 101 (Burbank): their own pages sell emergency work while the way in
     // is a form. Internal - a question for the call, never a claim to him.
-    R('Emergency copy, scheduled door', af.emergencyMismatch === true ? 'their own pages sell emergency or 24/7 work, and the site\u2019s way in is a form and a wait \u2014 worth asking who answers the 2am call' : null, 'booking', true);
+    R('Emergency copy vs the way in', af.emergencyMismatch === true ? 'their own pages sell emergency or 24/7 work, and the site\u2019s way in is a form and a wait \u2014 worth asking who answers the 2am call' : null, 'booking', true);
     // Round 101 (Vin: "we need to know 100% they are running ads"): the one
     // public place a human can confirm live ads in ten seconds.
     R('Check their ads yourself', af.ads === 'yes' ? 'adstransparency.google.com \u2014 search the business name; a live campaign shows its ads there' : null, null);
   } else if (stageId === 'after') {
     R('Service plan', af.recurring === 'none' ? 'none on the pages read' : af.recurring === 'offered' ? 'they sell one' : null, 'recurring');
     const ob = Array.isArray(ctx && ctx.opsBuckets) && ctx.opsBuckets.length ? ctx.opsBuckets[0] : null;
-    if (ob) R('Top review complaint', String(ob.label || '') + ' (' + (Number(ob.mentions) || 0) + ' mention' + (Number(ob.mentions) === 1 ? '' : 's') + ')', 'followup', true);
+    // The mention count without its denominator is half a measurement, and the
+    // half that is missing is the one that decides whether it is a pattern. A
+    // live card printed "nobody responds (5 mentions)" one line under "After
+    // they reach out \u2014 NOT MEASURED"; the chip says what it rests on now.
+    if (ob) {
+      const rr = Number(ctx && ctx.reviewsRead);
+      const den = Number.isFinite(rr) && rr > 0
+        ? ' of ' + rr + ' reviews read'
+        : ', and how many reviews that came from was not recorded';
+      R('Top review complaint', String(ob.label || '') + ' (' + (Number(ob.mentions) || 0) + ' mention' + (Number(ob.mentions) === 1 ? '' : 's') + den + ')', 'followup', true);
+    }
     if (Number(ctx && ctx.negUnanswered) > 0) R('Unanswered negative reviews', String(ctx.negUnanswered) + ' with no reply', null, true);
   }
   return { rows, unmeasured };
@@ -2968,7 +3035,10 @@ const auditRecordFor = (lead) => {
   return {
     // WHO
     company: l.name || l.company || 'Unknown business',
-    website: l.website || '',
+    // The sheet header reads this. It carried the raw stored string, tracking
+    // parameters and all; the screen only looked clean because it happened to
+    // read auditedWebsite instead.
+    website: websiteForReading(l),
     owner: l.verifiedCEO || l.founderName || '',
     ownerEvidence: l.ownerNameEvidence || '',
     ownerTitle: l.verifiedCEOTitle || l.title || '',
@@ -3032,7 +3102,11 @@ const auditRecordFor = (lead) => {
     // THE READ
     headline: (sr && sr.headline) || '',
     read: (sr && sr.read) || srFlat || '',
-    rows: arr(sr && sr.rows).filter(r => r && (r.label || r.says)),
+    // A row the model gave a heading and no body renders as "The listing
+    // itself \u2014" with nothing after the dash. The OR let it through; the
+    // honest predicate is that a row must SAY something. A says-only row is
+    // still kept, which is why this is not `label && says`.
+    rows: arr(sr && sr.rows).filter(r => r && String(r.says || '').trim()),
     bindingLayer: (gc && gc.layer) || '',
     // EVIDENCE — own-words rows that already became problem rows render once.
     originalFindings: dedupeOwnWords(arr(l.problemList), arr(ba.originalFindings || l.originalFindings)),
@@ -3115,6 +3189,10 @@ const auditRecordFor = (lead) => {
     // phrased as an absence in anything that leaves the building.
     adsVerified: !!(l.adsTransparency && l.adsTransparency.found),
     unlinkedPages: ((l.sitePages && l.sitePages.unlinkedPages) || {}).pages || [],
+    // The half that means something. It was computed per URL and dropped at
+    // the server's return, so the sheet listed fifteen SEO location pages and
+    // portfolio case studies under a caption about ad landing pages.
+    campaignUrls: ((l.sitePages && l.sitePages.unlinkedPages) || {}).campaignUrls || [],
     unlinkedCount: ((l.sitePages && l.sitePages.unlinkedPages) || {}).unlinkedCount || 0,
     askOnTheCall: (sr && sr.askOnTheCall) || '',
     // ══ THIS AUDIT HAS NOTHING MEASURED UNDER IT ═════════════════════════
@@ -3250,12 +3328,19 @@ const auditExportHtml = (records, meta) => {
           // Places-read search cannot state a position, so a quiet found
           // stage must not read "no fault found" on that run.
           const fbSearch = !!(af && af.searchSource === 'places');
+          const fThin = (r.funnelStory && r.funnelStory.thin) || {};
           const sigCtx = { af: af || {}, rows: Array.isArray(r.problemList) ? r.problemList : [],
             rank: r.rank || null, vis: (r.visRows && r.visRows.length) ? { results: r.visRows } : null, traffic: r.traffic || null, pricesShown: r.pricesShown,
-            negUnanswered: r.negUnanswered, opsBuckets: r.opsBuckets || null };
+            negUnanswered: r.negUnanswered, opsBuckets: r.opsBuckets || null,
+            reviewsRead: r.reviewsRead };
           const stagesHtml = fg.stages.map((s3, si) => {
             const cls = s3.status === 'broken' ? 'fb' : (s3.status === 'clean' || s3.status === 'mixed') ? 'fc' : 'fn';
-            const partial = s3.id === 'found' && s3.status === 'clean' && fbSearch;
+            // A stage we DID look at but could not say enough about is neither
+            // "no fault found" nor "not measured". Both were wrong on a live
+            // card: five customers had written the same complaint and the chip
+            // said we never looked.
+            const partial = (s3.id === 'found' && s3.status === 'clean' && fbSearch)
+              || (s3.status === 'clean' && fThin[s3.id] === true);
             const st = s3.status === 'broken' ? 'BROKEN' : s3.status === 'mixed' ? 'WORKS \u2014 WITH LEAKS' : s3.status === 'clean' ? (partial ? 'PARTLY MEASURED' : 'NO FAULT FOUND') : 'NOT MEASURED';
             const wt = (walkT[s3.id] || []).join(' ')
               + (s3.id === 'found' && fbSearch ? ' The search was read on the fallback source this run, so no position could be measured.' : '');
@@ -3267,7 +3352,13 @@ const auditExportHtml = (records, meta) => {
                 + (x.costs ? ' <span class="tw">— ' + p(x.costs) + '</span>' : '')
                 + (x.rankNote ? '<div class="tw">' + p(x.rankNote) + '</div>' : '')
                 + (ml ? '<div class="mline">' + p(ml) + '</div>' : '')
-                + (Number.isFinite(lr) && x.pillar && PILLAR_PRODUCT[x.pillar] ? '<div class="tw">fix we sell: ' + e(PILLAR_PRODUCT[x.pillar]) + '</div>' : '')
+                // A copy observation carries pillar TAXED purely as a SORT
+                // position, and TAXED maps to "reputation operations" - so a
+                // finding about identical wording on two service pages came
+                // with a retainer pitch under it. One field doing two jobs.
+                // The neighbouring "products that fit" list already excludes
+                // fromTheirPages; this is the same rule, second copy.
+                + (Number.isFinite(lr) && !x.fromTheirPages && x.pillar && PILLAR_PRODUCT[x.pillar] ? '<div class="tw">fix we sell: ' + e(PILLAR_PRODUCT[x.pillar]) + '</div>' : '')
                 + '</div>';
             }).join('');
             const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
@@ -3361,7 +3452,7 @@ const auditExportHtml = (records, meta) => {
       (r.traffic && Number(r.traffic.paidKeywords) > 0) ? ('~' + (Number.isFinite(r.traffic.paidEtvMonthly) ? r.traffic.paidEtvMonthly.toLocaleString() : '?') + ' Google-paid visits/mo across ' + r.traffic.paidKeywords + ' paid keyword(s) — estimate, never said to him') : '',
       (r.traffic && Number(r.traffic.paidKeywords) === 0) ? 'The search index has never seen this domain buy a Google ad' : '',
       (r.opsBuckets && r.opsBuckets[0]) ? ('Complaints are mostly “' + p(r.opsBuckets[0].label) + '”' + (Number(r.opsBuckets[0].mentions) > 1 ? ' (' + r.opsBuckets[0].mentions + ' mentions)' : '')) : '',
-      Number.isFinite(Number(r.replyMedianDays)) ? ('When the owner replies to a review, the typical wait is ~' + r.replyMedianDays + ' day(s)') : '',
+      replyLatencySay(r.replyMedianDays) ? ('When the owner replies to a review, the typical wait is ' + replyLatencySay(r.replyMedianDays)) : '',
       (Array.isArray(r.paaQuestions) && r.paaQuestions.length) ? ('Customers on that search also ask: ' + r.paaQuestions.slice(0, 3).map(p).join(' · ')) : '',
       (Array.isArray(r.paidAdvertisers) && r.paidAdvertisers.length) ? ('Advertisers seen on that search: ' + p(r.paidAdvertisers.join(', '))) : '',
       (Array.isArray(r.afterBenchmarks) && r.afterBenchmarks.length) ? ('Industry, for the call: ' + r.afterBenchmarks.map(p).join(' · ')) : '',
@@ -3376,7 +3467,21 @@ const auditExportHtml = (records, meta) => {
           + ((r.websiteScore.graded || []).length ? ' — ' + r.websiteScore.graded.map(g2 => e(g2.what + ' ' + g2.got + '/' + g2.of)).join(' · ') : '') + '</p>'
         : '')
       + ul(r.readLimits, x => '<li>' + p(String(x)) + '</li>')
-      + (r.unlinkedCount ? '<p class="dim">' + r.unlinkedCount + ' page(s) their own navigation does not link to — a page built for an ad is not in the menu by design; their absence would prove nothing.</p>' + ul(r.unlinkedPages, x => '<li class="dim">' + e(x) + '</li>') : '')
+      // == TWO DIFFERENT FACTS, AND THE SHEET PRINTED ONE CAPTION ==========
+      // "a page built for an ad is not in the menu by design" is true of the
+      // campaign-SHAPED half only. The list under it was every unlinked page,
+      // so fifteen /greer-hvac and /project/hair-salon URLs read as fifteen ad
+      // landing pages. And the sentence said 15 while the list showed 8,
+      // because the server caps it - a caller who counts reads the sheet as
+      // broken. Both halves say what they are now, and the cap says so.
+      + ((Array.isArray(r.campaignUrls) && r.campaignUrls.length)
+        ? '<p class="dim">' + r.campaignUrls.length + ' page(s) shaped like a page built to receive ad clicks, and nothing on the site links to them — worth opening. Their ABSENCE would prove nothing: a campaign page is routinely kept out of the sitemap.</p>'
+          + ul(r.campaignUrls, x => '<li class="dim">' + e(x) + '</li>') : '')
+      + (r.unlinkedCount
+        ? '<p class="dim">' + r.unlinkedCount + ' page(s) in their sitemap their own navigation does not link to at all. Most are ordinary service or location pages; this is a fact about their sitemap, not about their money.'
+          + ((r.unlinkedPages || []).length && r.unlinkedCount > (r.unlinkedPages || []).length
+            ? ' The ' + (r.unlinkedPages || []).length + ' below are the ones we kept.' : '') + '</p>'
+          + ul((r.unlinkedPages || []).filter(x => !(r.campaignUrls || []).includes(x)), x => '<li class="dim">' + e(x) + '</li>') : '')
       + (r.adsVerified ? '<p class="dim">Listed as a verified advertiser in Google’s Ads Transparency Center.</p>' : '');
     const ownWords = r.originalFindings.map(f => '<div class="erow">' + p(f.finding || f.what || f)
       + (f.quote ? '<div class="tw">Their words: <q>' + p(f.quote) + '</q></div>' : '') + '</div>').join('');
@@ -3385,13 +3490,35 @@ const auditExportHtml = (records, meta) => {
     // exact repetition Vin flagged. The model's own groupings and the system's
     // one-change diagnosis move HERE, as reference rather than a second story.
     const t2 = (r.oneThing && typeof r.oneThing === 'object') ? r.oneThing : null;
+    const _norm2 = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '').slice(0, 120);
+    const _l1 = normalizedLeakRows(r.problemList).find(x => x[1] === 1);
+    const _leak1p = _l1 ? _norm2(_l1[0].problem) : '';
     const modelRows = (r.rows || []).length
       ? ul(r.rows, x => '<li class="dim"><b>' + e(x.label) + '</b> — ' + p(x.says) + '</li>') : '';
+    // == TWO QUESTIONS, AND THE PAGE NEVER SAID SO ==========================
+    // The layer diagnosis answers "what is holding this business back overall"
+    // and the numbered leaks answer "which measurable thing costs the most
+    // money". They are legitimately different questions with different
+    // answers - the file's own TWO LADDERS rule - and one live sheet led with
+    // seven lines of OFFER while leak 1 and the costliest line both named the
+    // door. Nothing captioned the difference, so it read as the sheet arguing
+    // with itself. The caption is the fix; the computation is right.
     const sysDiag = (t2 && t2.diagnosis
-      ? '<p class="dim"><b>System one-change diagnosis' + (t2.layer ? ' — ' + e(layerPlain(t2.layer)) : '') + ':</b> ' + p(t2.diagnosis) + (t2.why ? ' ' + p(t2.why) : '') + '</p>' : '')
+      ? '<p class="dim"><b>System one-change diagnosis' + (t2.layer ? ' — ' + e(layerPlain(t2.layer)) : '') + ':</b> ' + p(t2.diagnosis) + (t2.why ? ' ' + p(t2.why) : '')
+        + ' <span class="tw">(what holds the business back overall — a different question from which leak costs most, which the numbered leaks above answer)</span></p>' : '')
       + (r.bindingLayer && !(t2 && t2.layer) ? '<p class="dim">Biggest blocker: ' + e(layerPlain(r.bindingLayer)) + '</p>' : '')
+      // "Scored as costing them most" is leak 1 BY CONSTRUCTION - worstAnchorFrom
+      // and the leak numbering share their predicates - so on a numbered sheet
+      // it printed the same finding a second time under a heading that also
+      // described an ordering the code stopped using (it was written when the
+      // sort was by harm; it has been funnel-depth-first since round 100).
+      // It still renders - an export that silently drops a field the lead
+      // carries is the worse failure - but when it IS leak 1 it says so, so a
+      // reader meets one finding rather than two.
       + (t2 && t2.costliest && t2.costliest.problem
-        ? '<p class="dim"><b>Scored as costing them most:</b> ' + p(t2.costliest.problem) + (t2.costliest.costs ? ' — ' + p(t2.costliest.costs) : '') + '</p>' : '');
+        ? '<p class="dim"><b>Costliest measured leak:</b> '
+          + ((_leak1p && _norm2(t2.costliest.problem) === _leak1p) ? 'the same finding as leak 1 above — ' : '')
+          + p(t2.costliest.problem) + (t2.costliest.costs ? ' — ' + p(t2.costliest.costs) : '') + '</p>' : '');
     const changesBlock = sayableChanges.length
       ? sayableChanges.map(c => '<div class="erow"><b>Changed since we last looked:</b> ' + p(c.say) + ' <span class="tw">(a dated fact — everything else on this sheet is how the business looks today)</span></div>').join('')
       : '';
@@ -3475,7 +3602,7 @@ const downloadAudits = (leads, title) => {
       background: _broken.map(b => b.name + ': ' + b.why).join(' | '),
       rows: [], problems: [], originalFindings: [], signals: [], claimRisks: [], criticalFactCheck: [],
       ladderFailed: null, heldBack: null, corpusWarning: '', readLimits: [],
-      renders: [], unlinkedPages: [], read: '', whatHeNeeds: '', whatHeCaresAbout: '', askOnTheCall: '',
+      renders: [], unlinkedPages: [], campaignUrls: [], read: '', whatHeNeeds: '', whatHeCaresAbout: '', askOnTheCall: '',
       callWindow: '', expectObjection: '', researchedAt: '', ageDays: null, adsVerified: false,
       unlinkedCount: 0, pitch: '', subject: '',
     });
@@ -6482,7 +6609,7 @@ function buildAuditRows(lead) {
         val: g.gapCount ? (g.gapCount + ' profile gap' + (g.gapCount>1?'s':'') + ' — costing free map-pack traffic') : 'Profile looks complete',
         ok: g.gapCount === 0,
         proof: 'Read directly from their live Google Business Profile via the Places API: '
-          + g.photoCount + ' photo(s), hours ' + (g.hasHours?'listed':'MISSING') + ', description ' + (g.hasDescription?'present':'MISSING') + ', website link ' + (g.hasWebsiteLink?'present':'MISSING') + '. '
+          + (Number.isFinite(Number(g.photoCount)) ? g.photoCount + ' photo(s)' : (g.photosAtCap ? 'at least 10 photos (our API ceiling, so the real number is unknown)' : 'photo count not readable on this run')) + ', hours ' + (g.hasHours?'listed':'MISSING') + ', description ' + (g.hasDescription?'present':'MISSING') + ', website link ' + (g.hasWebsiteLink?'present':'MISSING') + '. '
           + (g.gapCount ? 'Observed gaps: ' + g.gaps.join('; ') + '. Each is measured, not inferred — the owner can confirm it by opening his own listing. An incomplete profile is the single most common reason a good local business loses map-pack visibility to a worse competitor.' : 'No profile gaps found — do not invent one.'),
         tags: g.gaps && g.gaps.length ? g.gaps.map(x => x.split(' on their')[0].slice(0,28)) : ['Complete'],
       };
@@ -6832,7 +6959,7 @@ function LeadBriefing({ lead }) {
       // Strip tracking parameters. Dr Rai's website rendered as three wrapped
       // lines of utm_source/utm_medium/utm_campaign — the reader wants the
       // domain, and the full URL is one click away in the confirmation banner.
-      L('Website', (lead.website || '').replace(/^https?:\/\/(www\.)?/, '').replace(/[?#].*$/, '').replace(/\/$/, ''), null, 'var(--g)')
+      L('Website', websiteForReading(lead), null, 'var(--g)')
     ),
 
 
@@ -6875,16 +7002,19 @@ function LeadBriefing({ lead }) {
       const badge = (n) => React.createElement('span', { style: { display: 'inline-block', fontSize: 12, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '1px 6px', marginRight: 6, verticalAlign: '1px' } }, 'LEAK ' + n);
       const walkT = walkTextsByStage(lead.funnelStory);
       const fbSearch = !!(lead.auditFacts && lead.auditFacts.searchSource === 'places');
+      const fThin = (lead.funnelStory && lead.funnelStory.thin) || {};
       const sigCtx = { af: lead.auditFacts || {}, rows: Array.isArray(lead.problemList) ? lead.problemList : [],
         rank: (lead.brainAudit && lead.brainAudit.localRank && lead.brainAudit.localRank.checked) ? lead.brainAudit.localRank : null,
         vis: lead.localVisibility || null,
         traffic: (lead.trafficEstimate && lead.trafficEstimate.checked && lead.trafficEstimate.inIndex) ? lead.trafficEstimate : null,
         pricesShown: (lead.sitePages && Array.isArray(lead.sitePages.prices)) ? lead.sitePages.prices.length : null,
         negUnanswered: Number(lead.reviewsNegativeUnanswered) > 0 ? Number(lead.reviewsNegativeUnanswered) : null,
-        opsBuckets: Array.isArray(lead.opsBuckets) ? lead.opsBuckets : null };
+        opsBuckets: Array.isArray(lead.opsBuckets) ? lead.opsBuckets : null,
+        reviewsRead: lead.reviewsRead };
       const stageBlocks = fg.stages.map((s3, si) => {
         const broken = s3.status === 'broken';
-        const partial = s3.id === 'found' && s3.status === 'clean' && fbSearch;
+        const partial = (s3.id === 'found' && s3.status === 'clean' && fbSearch)
+          || (s3.status === 'clean' && fThin[s3.id] === true);
         const stTxt = broken ? 'BROKEN' : s3.status === 'mixed' ? 'WORKS \u2014 WITH LEAKS' : s3.status === 'clean' ? (partial ? 'PARTLY MEASURED' : 'NO FAULT FOUND') : 'NOT MEASURED';
         const wt = ((walkT[s3.id] || []).join(' ')
           + (s3.id === 'found' && fbSearch ? ' The search was read on the fallback source this run, so no position could be measured.' : '')).trim();
@@ -6897,7 +7027,7 @@ function LeadBriefing({ lead }) {
             x.costs ? React.createElement('span', { style: { color: 'var(--t)', fontSize: 12.5 } }, ' \u2014 ' + x.costs) : null,
             x.rankNote ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 2 } }, x.rankNote) : null,
             ml ? React.createElement('div', { style: { fontSize: 13, fontWeight: 600, color: 'var(--t)', marginTop: 3 } }, ml) : null,
-            Number.isFinite(lr) && x.pillar && PILLAR_PRODUCT[x.pillar] ? React.createElement('div', { style: { fontSize: 12, color: 'var(--t)', marginTop: 2 } }, 'fix we sell: ' + PILLAR_PRODUCT[x.pillar]) : null);
+            Number.isFinite(lr) && !x.fromTheirPages && x.pillar && PILLAR_PRODUCT[x.pillar] ? React.createElement('div', { style: { fontSize: 12, color: 'var(--t)', marginTop: 2 } }, 'fix we sell: ' + PILLAR_PRODUCT[x.pillar]) : null);
         });
         const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
           ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginTop: 4 } }, t.friction.join(' \u00b7 ')) : null;
@@ -6945,8 +7075,15 @@ function LeadBriefing({ lead }) {
         fg.unstaged.map((x, i2) => React.createElement('div', { key: 'us' + i2, style: { marginTop: 3 } },
           React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
           (x.costs || x.area) ? ' \u2014 ' + [x.area, x.costs].filter(Boolean).join(' \u00b7 ') : ''))) : null;
+      // The layer answers "what holds the business back overall"; the numbered
+      // leaks answer "which measurable thing costs the most money". Different
+      // questions with different answers - the file's own TWO LADDERS rule -
+      // and nothing on the page said so, so a live sheet leading on OFFER over
+      // a door leak read as the sheet arguing with itself.
       const sysDiag = t && t.diagnosis ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginTop: 8 } },
-        React.createElement('b', null, 'System one-change diagnosis' + (t.layer ? ' \u2014 ' + layerPlain(t.layer) : '') + ': '), t.diagnosis + (t.why ? ' ' + t.why : '')) : null;
+        React.createElement('b', null, 'System one-change diagnosis' + (t.layer ? ' \u2014 ' + layerPlain(t.layer) : '') + ': '), t.diagnosis + (t.why ? ' ' + t.why : ''),
+        React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 3 } },
+          'What holds the business back overall \u2014 a different question from which leak costs most, which the numbered leaks answer.')) : null;
       return React.createElement('div', null,
         React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The funnel',
           React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, "a customer's path to hiring them \u2014 where it breaks, the money falls out")),
@@ -7035,8 +7172,8 @@ function LeadBriefing({ lead }) {
       if (Number.isFinite(Number(lead.reviewsNegativeUnanswered)) && Number(lead.reviewsNegativeUnanswered) > 0) {
         notes.push(lead.reviewsNegativeUnanswered + ' negative review' + (Number(lead.reviewsNegativeUnanswered) === 1 ? '' : 's') + ' with no owner reply \u2014 the cheapest fix a call can open with, internal only');
       }
-      if (Number.isFinite(Number(lead.ownerReplyMedianDays))) {
-        notes.push('When the owner replies to a review, the typical wait is ~' + lead.ownerReplyMedianDays + ' day(s) \u2014 the cheapest read on how fast the business answers anyone, internal only');
+      if (replyLatencySay(lead.ownerReplyMedianDays)) {
+        notes.push('When the owner replies to a review, the typical wait is ' + replyLatencySay(lead.ownerReplyMedianDays) + ' \u2014 the cheapest read on how fast the business answers anyone, internal only');
       }
       if (Array.isArray(lead.paaQuestions) && lead.paaQuestions.length) {
         notes.push('Customers on that search also ask: ' + lead.paaQuestions.slice(0, 3).map(function (q) { return '\u201c' + q + '\u201d'; }).join(' \u00b7 ') + ' \u2014 internal only');
@@ -12490,7 +12627,11 @@ function callDataFor(lead, result) {
         'He does not come up at all for services he publishes a page for \u2014 he paid to have those pages built and nobody looking for them finds him'],
       [/no business description|description missing/i, () =>
         'His Google listing has no description \u2014 the businesses above him filled theirs in'],
-      [/(\d+)\s*photos?/i, (m) => Number(m[1]) < 10
+      // Defence in depth, not a substitute for the upstream fix: a listing with
+      // literally zero photos is vanishingly rare and is exactly the shape a
+      // laundered null produces, so a matched 0 is refused here rather than
+      // read aloud to an owner who can open his listing and count.
+      [/(\d+)\s*photos?/i, (m) => (Number(m[1]) > 0 && Number(m[1]) < 10)
         ? `Only ${m[1]} photos on his Google listing \u2014 someone choosing between three looks at the pictures first` : ''],
       [/no (online )?booking|booking.*not found|phone[- ]only/i, () =>
         'There is no way to book him from the site \u2014 someone ready to hire him has to phone during business hours'],
