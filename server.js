@@ -48350,10 +48350,42 @@ app.post('/api/research-async', (req, res) => {
         console.log(`\u23f8 JOB ${id} [${job.company}]: HOLDING \u2014 the Firecrawl balance last read empty. Nothing is being spent while this waits. It will re-test every ${Math.round(FC_CREDIT_RETRY_MS / 1000)}s and start on its own the moment a call answers; if the balance is still empty in ${Math.round(FC_CREDIT_WAIT_MS / 60000)} minutes this lead is refused untouched so you can re-run it after topping up.`);
       }
       await new Promise(r => setTimeout(r, 5000));
-      // A door somewhere else may have probed and cleared it; if not, and the
-      // cooldown has expired, spend a probe here so a waiting batch is not
-      // dependent on some other lead happening to try.
-      if (FIRECRAWL_OUT_OF_CREDITS && !fcCreditsCoolingDown()) fcCreditsBlocked();
+      // ══ A PROBE THAT MAKES NO CALL IS NOT A PROBE ══════════════════════
+      // This line called fcCreditsBlocked() and threw the answer away.
+      // That function IS the half-open state: when the cooldown expires it
+      // stamps the token, returns "not blocked" and expects its CALLER to
+      // go and make a real Firecrawl request. Called from here it stamped
+      // the token and made no request at all - and the token is global, so
+      // it then refused every other door for another cooldown.
+      //
+      // The only thing that clears the latch is fcNote(true), which needs a
+      // paid call to answer, which needs a lead to be running, which needs
+      // this hold to release. So while a batch was held nothing could ever
+      // test the balance, and after FC_CREDIT_WAIT_MS every lead was refused
+      // "still empty" without one request having been sent.
+      //
+      // Live 2026-08-27: Vin swapped in a fresh key with 1,000 credits on it
+      // and every lead still came back out of credits. The latch is a fact
+      // about the PROCESS, not about the key, so a new key changes nothing
+      // until something actually calls with it - and only a Render restart
+      // could. That is section 43's deadlock one level up, inside the very
+      // mechanism written to end it.
+      //
+      // So the hold makes the call itself. One markdown-only scrape of a URL
+      // that always exists: it costs a single credit when the balance is
+      // back and nothing when it is not, and either answer is definitive.
+      // The query string is a cache-buster - our own scrape cache would
+      // otherwise return a HIT on the second probe, and a cache hit calls
+      // fcNote(false), which does not clear anything.
+      if (FIRECRAWL_OUT_OF_CREDITS && !fcCreditsCoolingDown()) {
+        const _pk = (req.body && req.body.keys && req.body.keys.firecrawlKey) || process.env.FIRECRAWL_KEY || '';
+        if (_pk) {
+          try { await firecrawlScrape(_pk, `https://example.com/?fcprobe=${Date.now()}`, 15000, 0); }
+          catch (e) { void e; }
+        } else {
+          console.log(`\u26a0 JOB ${id} [${job.company}]: the balance reads empty and this request carried NO Firecrawl key, so there is nothing to test it with. Check the key in Settings.`);
+        }
+      }
     }
     if (!FIRECRAWL_OUT_OF_CREDITS) {
       console.log(`\u25b6 JOB ${id} [${job.company}]: the balance answered after ${Math.round((Date.now() - _t0) / 1000)}s of holding \u2014 starting normally.`);
@@ -53524,6 +53556,36 @@ app.listen(PORT, () => {
       _fails.push('both predicates claim the same response, so the answer depends on call-site order');
     }
 
+    // ── AND THE HOLD MUST ACTUALLY TEST THE BALANCE ───────────────────────
+    // Live 2026-08-27. Vin swapped in a fresh Firecrawl key with 1,000 credits
+    // on it, re-ran, and every lead still came back out of credits. The queue
+    // hold called fcCreditsBlocked() and DISCARDED the answer - that function is
+    // the half-open state: it stamps the token, returns "not blocked" and
+    // expects its caller to go and make a real request. Called from a loop that
+    // makes no request, it burned the one probe per window and asked Firecrawl
+    // nothing. The latch is a fact about the PROCESS, so a new key could not
+    // clear it and only a Render restart ever did.
+    //
+    // Section 43's deadlock, one level up, inside the mechanism written to end
+    // it. The hold sends a real markdown-only scrape now.
+    {
+      const _hn = (...p) => p.join('');
+      const _hsrc = selfSourceNoComments();
+      if (!_hsrc.includes(_hn('await firecrawlScrape(_pk, ', '`https://example.com/?fcprobe='))) {
+        _fails.push('the queue hold no longer sends a real request to test the balance, so a held batch can never discover a topped-up account and only a restart clears it');
+      }
+      // The cache-buster is load-bearing: our own scrape cache would return a
+      // HIT on the second probe, and a cache hit calls fcNote(FALSE), which
+      // clears nothing. A probe that can be served from cache is not a probe.
+      if (!_hsrc.includes(_hn('?fcprobe=${Date.now()}', '`, 15000, 0)'))) {
+        _fails.push('the balance probe is cacheable or no longer bypasses the scrape cache - a cache hit answers with fcNote(false) and the latch survives');
+      }
+      // And the token-burning form must be gone. Assembled at runtime, because
+      // a literal needle finds its own source line.
+      if (_hsrc.includes(_hn('fcCreditsCoolingDown()) fcCredits', 'Blocked();'))) {
+        _fails.push('the hold still stamps the probe token without making a call, which refuses every other door for a further cooldown while asking Firecrawl nothing');
+      }
+    }
     // AND THE CALL SITES. A door that reads the raw latch instead of the breaker
     // is a door that can never reopen — which is what all five were.
     const _needle = (...parts) => parts.join('');
