@@ -26979,7 +26979,12 @@ THE TEST: if every sentence you write could be replaced by a row in a table, you
     if (restated) {
       console.log(`\u26a0 SITUATION READ [${company}]: came back thin \u2014 ${flat.length < 180 ? 'too short to be a synthesis' : !/\d/.test(flat) ? 'contains no measured numbers, so it is assertion rather than reasoning' : 'opens by restating a page-level finding'}. Using it, but this is the failure mode to watch: a read that could be replaced by a table row.`);
     }
-    if (!faults.length) console.log(`\u2726 SITUATION READ [${company}]: ${parsed.shape} \u2014 "${String(parsed.headline || '').slice(0, 80)}"`);
+    // The effort is named on every lead's own line, so a batch run at one setting
+    // can be read against a batch run at another. A dial nobody can see in the log
+    // is a dial nobody can judge: this is the priciest call on the lead and the
+    // only lever on the Anthropic bill, and until now the setting that wrote a
+    // given story was unrecoverable after the fact.
+    if (!faults.length) console.log(`\u2726 SITUATION READ [${company}]: ${parsed.shape} \u2014 "${String(parsed.headline || '').slice(0, 80)}" [thinking: ${THINKING_FOR(SITUATION_MODEL) ? SITUATION_EFFORT : 'off for this model'}]`);
     return { parsed, faults };
   } catch (e) {
     console.log(`SITUATION READ [${company}]: call failed \u2014 ${e && e.message}. The audit continues without it.`);
