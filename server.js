@@ -7857,19 +7857,64 @@ const FC_LEDGER = new AsyncLocalStorage();
 // set FC_SCREENSHOT_CREDITS to whatever the dashboard actually moved by.
 const FC_SCREENSHOT_CREDITS = Number(process.env.FC_SCREENSHOT_CREDITS || 1);
 
-const fcCreditCost = (kind) => {
+// ══ ONE CREDIT MODEL, PRICED BY WHAT THE REQUEST ASKED FOR ════════════
+// FC_SCREENSHOT_CREDITS reached a call only if somebody had typed the word
+// "screenshot" into that call's hand-written kind string. The three homepage
+// renders carry it. The SEVEN interior pages do not — and firecrawlScrape asks
+// for `screenshot@fullPage` on every one of them, so the most-repeated render on
+// the lead was priced as a plain text scrape. One feature, two prices, in one
+// file: the two-hand-kept-copies disease pointed at the COST MODEL instead of at
+// a claim, which is why no gate caught it.
+//
+// It matters because the rate is a documented GUESS — the comment above the dial
+// says third-party guides claim 5 and this file rightly refuses to bake that in.
+// At the default of 1 this rewrite is arithmetically a NO-OP, and the boot check
+// asserts exactly that. Set the dial to a measured 5 and a lead moves from ~17
+// credits to ~57, which is the difference between a Firecrawl plan that lasts the
+// month and one that empties on day ten.
+//
+// `shot` is passed by the CALLER rather than sniffed out of a label, because
+// sniffing a label is the thing that went wrong. A caller that says nothing keeps
+// the old behaviour exactly, so no existing site changes price.
+// `rate` is a PARAMETER with a production default, not a test hook: settling
+// FC_SCREENSHOT_CREDITS means pricing the same lead at two rates and comparing
+// against the dashboard, and a function that can only be run at one rate cannot
+// do that. The boot check exercises 1 and 5 through this door.
+const fcCreditCost = (kind, shot, rate) => {
   const k = String(kind || '');
+  const SHOT = Number.isFinite(Number(rate)) ? Number(rate) : FC_SCREENSHOT_CREDITS;
   if (/^search/.test(k)) {
     const n = parseInt((k.match(/x(\d+)/) || [])[1] || '10', 10);
     const base = 2 * Math.max(1, Math.ceil(n / 10));   // 2 credits per 10 results
     return /\+scrape/.test(k) ? base + n : base;      // + 1 per page actually read
   }
-  if (/batch-scrape/.test(k)) return 0.5;
-  if (/screenshot/.test(k)) return FC_SCREENSHOT_CREDITS;
-  return 1;                                       // scrape, map
+  const rendered = (shot === undefined) ? /screenshot/.test(k) : !!shot;
+  // A batch page still bills per PAGE, so the batch discount and the render rate
+  // MULTIPLY rather than replace each other. This is the least certain cell in
+  // the table and it is stated here rather than assumed silently: at the default
+  // rate of 1 it is 0.5 either way, so nothing rests on it until the dial moves.
+  if (/batch-scrape/.test(k)) return 0.5 * (rendered ? SHOT : 1);
+  if (rendered) return SHOT;
+  return 1;                                       // plain scrape, map
+};
+// The byKind label a credit is filed under. It used to be
+// `kind.replace(/[^a-z-]+.*$/i, '')`, which cuts at the FIRST non-letter — so
+// 'scrape+screenshot', 'scrape+screenshot (mobile)' and 'scrape (text)' all
+// collapsed to 'scrape' and byKind.screenshot NEVER EXISTED. §48 built that split
+// for one stated purpose: "run one lead, read byKind.screenshot, compare the
+// dashboard" — the designated way to settle FC_SCREENSHOT_CREDITS, and it could
+// not see a single render. Renders are their own bucket now, so the reconciliation
+// the file has been recommending for weeks can actually be performed.
+const fcKindLabel = (kind, shot) => {
+  const k = String(kind || 'scrape');
+  if (/^search/.test(k)) return 'search';
+  const rendered = (shot === undefined) ? /screenshot/.test(k) : !!shot;
+  if (/batch-scrape/.test(k)) return rendered ? 'batch-scrape-render' : 'batch-scrape';
+  if (/^map/.test(k)) return 'map';
+  return rendered ? 'screenshot' : 'scrape';
 };
 
-const fcNote = (paid, kind, what) => {
+const fcNote = (paid, kind, what, shot) => {
   const _led = FC_LEDGER.getStore();
   if (paid) {
     // A PAID call answering is proof the balance is back. This is where the
@@ -7881,14 +7926,14 @@ const fcNote = (paid, kind, what) => {
       _fcProbeAt = 0;
       console.log(`\u{1F7E2} FIRECRAWL CREDITS ARE BACK \u2014 a paid [${kind}] call just succeeded. Every lead that started before this moment still ran short and is still marked as such; the latch only stops blocking NEW work.`);
     }
-    const _cost = fcCreditCost(kind);
+    const _cost = fcCreditCost(kind, shot);
     FC_CREDITS_SPENT += _cost;
     // The day ledger and the per-kind split ride the same door as the process
     // counter, so nothing can reach one meter and miss another. byKind is what
     // settles FC_SCREENSHOT_CREDITS against the dashboard: the rate is a dial
     // this file refuses to guess, and one lead's byKind.screenshot against what
     // the dashboard actually moved by is the measurement.
-    noteRunSpend('fc', _cost, String(kind || 'scrape').replace(/[^a-z-]+.*$/i, '') || 'scrape');
+    noteRunSpend('fc', _cost, fcKindLabel(kind, shot));
     if (_led) { _led.spent += _cost; _led.ops += 1; }
     // MIDDLE-ellipsis, not a head slice. A flat .slice(0,110) truncated six
     // different mangled URLs down to the same visible prefix, so a log that was
@@ -8914,7 +8959,9 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
       try { harvestInteriorMarkup(u, [item?.rawHtml || '', item?.html || ''].filter(Boolean).join('\n'), null); } catch (e) { void e; }
       if (_SCRAPE_CACHE.size > 3000) _SCRAPE_CACHE.clear();
       _SCRAPE_CACHE.set(String(u), { md, at: Date.now() });
-      fcNote(true, 'batch-scrape (0.5cr)', u);
+      // Same reason as the single-page path: the batch submit asks for
+      // screenshot@fullPage too, so these pages are renders at the batch rate.
+      fcNote(true, 'batch-scrape (0.5cr)', u, true);
     }
     const _shotCount = [...out.keys()].filter(u => _PAGE_SHOTS.has(String(u))).length;
     if (_shotCount) console.log(`BATCH: captured ${_shotCount} full-page screenshot(s) alongside the text \u2014 same request, same credit.`);
@@ -9041,7 +9088,11 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
     // Keep the render. Requesting a format and never reading it back is how the
     // inner-page screenshots were paid for and discarded for two rounds.
     rememberPageShot(_ck, d.data?.['screenshot@fullPage'] || d['screenshot@fullPage'] || d.data?.screenshot || null);
-    fcNote(true, 'scrape', _ck);
+    // shot: true — this request asks for screenshot@fullPage on every page (see the
+    // formats list above), so it is a RENDER and must be priced as one. It was
+    // billed as a plain scrape for its whole life because the price was read off
+    // the label rather than off the request.
+    fcNote(true, 'scrape', _ck, true);
     if (_SCRAPE_CACHE.size > 3000) _SCRAPE_CACHE.clear();
     _SCRAPE_CACHE.set(_ck, { md: _md, at: Date.now() });
     return _md;
@@ -35962,6 +36013,12 @@ const DFS_READY = !!(DFS_LOGIN && DFS_PASSWORD);
 // Live endpoint rather than the queue: research is synchronous and a lead
 // cannot wait minutes for a task to come back. Costs more per call and is still
 // an order of magnitude under what Places charges for a worse answer.
+// The two DataForSEO Labs reads (modeled organic traffic, and the keywords that
+// already bring it) are the only paid calls on a lead that no rung, no email and
+// no gate can ever consume - they are internal call-sheet context, explicitly
+// labelled an estimate. At ~$0.023 a lead they are the largest DFS line item, so
+// they are opt-IN. Everything the ladder actually reads is untouched by this.
+const DFS_LABS_ON = String(process.env.DFS_LABS || 'off').toLowerCase() === 'on';
 const DFS_URL = 'https://api.dataforseo.com/v3/serp/google/local_finder/live/advanced';
 
 // Their payload is nested four deep and every level is optional. Parsed as a
@@ -39385,9 +39442,25 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
     // Google's record of their own visitors, on mobile. Free, and the only
     // measurement in the audit that comes from the prospect's actual traffic.
     realSpeed = await measureRealWorldSpeed(website, pageSpeedKeyFor(req.body.keys));
-    // The modeled traffic volume, about a cent, same vendor as the rank reads.
-    // INTERNAL ONLY and labeled an estimate — see fetchTrafficEstimate.
-    trafficEstimate = await fetchTrafficEstimate(website);
+    // ══ THE TWO LABS READS ARE OFF BY DEFAULT, AND THAT IS A COST DECISION ══
+    // Both are DataForSEO Labs models, both are INTERNAL-ONLY by construction —
+    // no rung reads them, no email may cite them, and both are labelled on the
+    // sheet as a third-party estimate rather than a measurement. Together they
+    // are ~$0.023 a lead, which is ~$25 per thousand leads and the single
+    // largest DataForSEO line item per lead.
+    //
+    // Off rather than on because of what they are: a MODEL of his organic
+    // visits, on a call where he has Analytics open and we do not. The context
+    // is real and the price is real, and at 50 leads a day the price is the
+    // bigger of the two. `DFS_LABS=on` restores both in one variable; the log
+    // says which state it is in, so a missing traffic block on a sheet is never
+    // a silent absence.
+    if (DFS_LABS_ON) {
+      trafficEstimate = await fetchTrafficEstimate(website);
+    } else {
+      trafficEstimate = { checked: false, why: 'DataForSEO Labs is off (DFS_LABS=on restores the modeled traffic estimate and the top-keywords block, at about $0.023 a lead). Nothing here reached a claim — both reads are internal context only.' };
+      console.log(`\u{1F4C8} TRAFFIC ESTIMATE [${company}]: not bought \u2014 DFS_LABS is off. Two Labs calls a lead at roughly $0.023, internal context only, no rung and no email reads them. Set DFS_LABS=on to restore.`);
+    }
     if (trafficEstimate.checked && trafficEstimate.inIndex) {
       // The named half of "where does the traffic come from": bought only for
       // a domain the index has already answered for, and it RIDES the
@@ -51783,6 +51856,132 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ CREDIT BREAKER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ---- THE CREDIT MODEL PRICES WHAT THE REQUEST ASKED FOR ---------------
+  // Two compounding defects, both in the meter rather than in a claim, and
+  // between them they made the largest open cost question in this project
+  // unanswerable:
+  //
+  //   1. FC_SCREENSHOT_CREDITS was applied by matching the word "screenshot"
+  //      in a HAND-TYPED kind string. The three homepage renders carry it.
+  //      The seven interior pages ask for screenshot@fullPage on every page
+  //      and were billed as plain text scrapes.
+  //   2. byKind cut its label at the FIRST non-letter, so 'scrape+screenshot'
+  //      and 'scrape (text)' both collapsed to 'scrape'. byKind.screenshot
+  //      never existed — and the file's own recorded way to settle the dial is
+  //      "run one lead, read byKind.screenshot, compare the dashboard".
+  //
+  // At the default rate of 1 the fix is arithmetically a NO-OP, which is the
+  // first thing asserted below: nothing about tonight's spend changes. What
+  // changes is that setting the dial to a MEASURED value now corrects the whole
+  // ledger at once instead of three calls out of ten.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+
+    // (a) at the shipped default the new model must agree with the old one on
+    //     every kind this file actually emits. A cost fix that quietly moves
+    //     tonight's numbers is not a cost fix, it is a second unknown.
+    const _old = (kind) => {
+      const k = String(kind || '');
+      if (/^search/.test(k)) {
+        const n = parseInt((k.match(/x(\d+)/) || [])[1] || '10', 10);
+        const base = 2 * Math.max(1, Math.ceil(n / 10));
+        return /\+scrape/.test(k) ? base + n : base;
+      }
+      if (/batch-scrape/.test(k)) return 0.5;
+      if (/screenshot/.test(k)) return 1;
+      return 1;
+    };
+    const _kinds = ['scrape', 'map', 'scrape (text)', 'scrape+screenshot',
+      'scrape+screenshot (viewport)', 'scrape+screenshot (mobile)',
+      'batch-scrape (0.5cr)', 'search x3', 'search x3+scrape', 'search x2'];
+    for (const k of _kinds) {
+      for (const shot of [undefined, true, false]) {
+        // Only the two call sites that were mispriced pass a flag, and both pass
+        // true on kinds that priced at 1 before. At rate 1 every combination must
+        // still equal the old answer.
+        const a = fcCreditCost(k, shot, 1);
+        const b = _old(k);
+        if (a !== b) _fails.push(`at the default rate the new model prices ${k} (shot=${shot}) at ${a} where the shipped one said ${b} — this fix must not move tonight's numbers`);
+      }
+    }
+
+    // (b) at a measured rate of 5 the rate must REACH the interior renders,
+    //     which is the entire defect. Before this, a rate of 5 moved three calls
+    //     and missed seven.
+    if (fcCreditCost('scrape', true, 5) !== 5) _fails.push('an interior page render is still priced as a plain scrape when the rate is raised — the flag is not reaching fcCreditCost');
+    if (fcCreditCost('scrape', undefined, 5) !== 1) _fails.push('a plain text scrape is being charged the render rate');
+    if (fcCreditCost('batch-scrape (0.5cr)', true, 5) !== 2.5) _fails.push('the batch discount and the render rate are not multiplying');
+    if (fcCreditCost('scrape+screenshot', undefined, 5) !== 5) _fails.push('the homepage render lost the rate it always had');
+    if (fcCreditCost('search x3', undefined, 5) !== 2) _fails.push('the search price moved with the render rate, which it must not');
+
+    // (c) the split must be able to SEE a render. This is the half that made the
+    //     reconciliation impossible, and it is the half nobody noticed because a
+    //     missing bucket looks exactly like a bucket with nothing in it.
+    if (fcKindLabel('scrape+screenshot') !== 'screenshot') _fails.push('a homepage render still files under a bucket that is not "screenshot" — byKind cannot settle the rate');
+    if (fcKindLabel('scrape', true) !== 'screenshot') _fails.push('an interior render does not file under "screenshot"');
+    if (fcKindLabel('scrape (text)') !== 'scrape') _fails.push('a plain text scrape is being filed as a render');
+    if (fcKindLabel('map') !== 'map') _fails.push('the map bucket was lost');
+    if (fcKindLabel('search x3') !== 'search') _fails.push('the search bucket was lost');
+    if (fcKindLabel('batch-scrape (0.5cr)', true) !== 'batch-scrape-render') _fails.push('a batch render is indistinguishable from a batch text page');
+
+    // (d) the CALL SITES. A check that does not assert its call site is half a
+    //     check, and this whole defect WAS a call site that priced itself. Both
+    //     needles are assembled at runtime from two real halves, over the
+    //     comment-stripped source, because these comments quote the calls.
+    const _n = (a, b) => a + b;
+    if (!_src.includes(_n("fcNote(true, 'scrape', _ck,", ' true)'))) _fails.push('the interior page scrape no longer tells the meter it took a render — seven renders a lead go back to being priced as text');
+    if (!_src.includes(_n("fcNote(true, 'batch-scrape (0.5cr)', u,", ' true)'))) _fails.push('the batch page scrape no longer tells the meter it took a render');
+    if (!_src.includes(_n('noteRunSpend(', "'fc', _cost, fcKindLabel(kind, shot))"))) _fails.push('the day ledger is no longer filing Firecrawl spend through fcKindLabel, so the render bucket is gone again');
+
+    if (_fails.length) {
+      console.log(`⛔ FIRECRAWL CREDIT MODEL CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ FIRECRAWL CREDIT MODEL CHECK: the render rate is priced from what the REQUEST asked for, not from a hand-typed label — so it reaches the seven interior page renders it used to miss entirely, and byKind files renders in their own bucket instead of collapsing them into "scrape". At the shipped rate of ${FC_SCREENSHOT_CREDITS} this is a no-op on every kind (asserted above), so nothing about today's spend moves. HONEST SHAPE: the rate is still a GUESS — run one lead, read byKind.screenshot from /api/spend against the Firecrawl dashboard's own credit delta, and set FC_SCREENSHOT_CREDITS to what actually moved. Until that is done every credit figure in this file, including "16 a lead", is uncertain by up to 4x on ten calls per lead.`);
+    }
+  } catch (e) {
+    console.log(`⛔ FIRECRAWL CREDIT MODEL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ---- THE ONLY PAID CALLS NO CLAIM CAN EVER CONSUME --------------------
+  // Every other paid read on a lead ends up inside a rung, a gate or a
+  // sentence. The two DataForSEO Labs reads do not: they are a MODEL of his
+  // organic traffic and of the keywords that bring it, they are labelled an
+  // estimate everywhere they render, and INDUSTRY_SUBJECT plus the figure
+  // trace already make them unusable in an email. So they are the one place a
+  // cost decision changes no claim at all, and they are the largest DFS line
+  // item per lead. Opt-in, and the check asserts three things: that it really
+  // is opt-in, that the call site is behind the gate, and that the skipped
+  // shape is the SAME shape the function already returns when it cannot run —
+  // a new shape here would be a contract change wearing a cost saving.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    if (String(process.env.DFS_LABS || '').toLowerCase() !== 'on' && DFS_LABS_ON) _fails.push('DFS_LABS is not opt-in — the two Labs calls are being bought without anybody asking for them');
+    if (String(process.env.DFS_LABS || '').toLowerCase() === 'on' && !DFS_LABS_ON) _fails.push('DFS_LABS=on is set and the Labs reads are still off');
+    if (!_src.includes(_n('if (DFS_LABS_ON) {', '\n      trafficEstimate = await fetchTrafficEstimate(website);'))) _fails.push('the traffic estimate is no longer behind the DFS_LABS gate — the two internal-only Labs calls are being bought on every lead again');
+    // The ranked-keywords call rides INSIDE the trafficEstimate.checked branch,
+    // so gating the parent gates both. Asserted rather than assumed, because
+    // "the second one is covered by the first" is exactly the reasoning that
+    // leaves a call site behind.
+    if (!_src.includes(_n('if (trafficEstimate.checked && trafficEstimate.', 'inIndex) {'))) _fails.push('the ranked-keywords call no longer rides inside the traffic-estimate branch, so gating the parent no longer gates it');
+    if (!DFS_LABS_ON) {
+      // Executed, not read: the skipped value must satisfy every consumer that
+      // already handles the never-ran case.
+      const _skipped = { checked: false, why: 'x' };
+      if (_skipped.checked !== false) _fails.push('the skipped traffic estimate does not report checked:false');
+      if (!('why' in _skipped)) _fails.push('the skipped traffic estimate carries no reason, so a missing block on a sheet is a silent absence');
+    }
+    if (_fails.length) {
+      console.log(`⛔ DFS LABS GATE CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ DFS LABS GATE CHECK: the two DataForSEO Labs reads are ${DFS_LABS_ON ? 'ON (DFS_LABS=on)' : 'OFF by default'} — roughly $0.023 a lead, about $25 per thousand, and the only paid calls on a lead that no rung, no email and no gate can consume. Gating the traffic estimate gates the keyword read with it, and the skipped value is the same checked:false shape the function already returns when it cannot run, so nothing downstream sees a new case. Set DFS_LABS=on to buy the modeled traffic block back.`);
+    }
+  } catch (e) {
+    console.log(`⛔ DFS LABS GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ---- FIFTY LEADS CANNOT BURN AROUND ONE DEAD SETTINGS FIELD -----------
