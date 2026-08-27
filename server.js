@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260903;
+const CONTRACT_VERSION = 20260904;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -636,7 +636,11 @@ const makeFcGate = ({ concurrency = FC_CONCURRENCY, minGapMs = FC_MIN_GAP_MS, on
   // poll, whose own comment reads "a status read renders nothing." Search
   // jobs keep the per-kind spacing and the 429 hold — those are account
   // facts — and skip only the slot.
-  const SLOTLESS_KINDS = new Set(['search']);
+  // /v1/search renders nothing and round 76 took it off the slots. /v1/map is
+  // the same fact and was missed: it reads a sitemap and a link graph, spins no
+  // browser, and firecrawlMap is called up to FIVE times per lead. Each of those
+  // was holding one of the browser slots the page renders were queueing for.
+  const SLOTLESS_KINDS = new Set(['search', 'map']);
   const _slotless = (job) => SLOTLESS_KINDS.has(job.kind || 'other');
   const readyIndex = (now, full) => {
     for (let i = 0; i < waiting.length; i++) {
@@ -734,6 +738,10 @@ const fcKindOf = (url) => {
   if (/\/v1\/search/.test(u)) return 'search';
   return 'other';
 };
+// The endpoints that actually spin a browser. /v1/search and /v1/map do not:
+// they read an index and a link graph. Declared here, next to fcKindOf, so the
+// kinds and what each kind COSTS are read in one place.
+const FC_RENDER_KINDS = new Set(['scrape', 'batch']);
 let FC_CONCURRENCY_LIVE = FC_CONCURRENCY;
 const FC_CONCURRENCY_EXPLICIT = !!(process.env.FC_CONCURRENCY || '').trim();
 const fcBrowsersForLimit = (perMin) => {
@@ -766,9 +774,23 @@ const noteFirecrawlLimits = (r, kind) => {
         console.log(`FIRECRAWL PACE [${k}]: their header says ${perMin} request(s)/minute for THIS endpoint, so /${k} calls are spaced ${beforeKind === undefined ? FC_GAP_LIVE : beforeKind}ms \u2192 ${kindGap}ms (${FC_GAP_SAFETY}x headroom). Firecrawl publishes a different limit per endpoint, and pacing every call at the most restrictive one spaced 5000/min scrapes 7.5 seconds apart on the 2026-08-22 run.`);
       }
     }
-    // The account-wide view, used ONLY to size the browser cap below: the most
-    // restrictive endpoint we have been told about, because browsers are shared.
-    const perMinForCap = Math.min(...Array.from(FC_LIMIT_BY_KIND.values()));
+    // ══ AND ONLY AN ENDPOINT THAT RENDERS MAY SIZE THE BROWSER CAP ═══════
+    // This took the most restrictive endpoint of ALL, on the reasoning that
+    // browsers are shared. The reasoning is right and the input was wrong:
+    // /v1/search and /v1/map spin no browser at all — the gate already gives
+    // them no slot — so their limits are not statements about browsers. On the
+    // 2026-08-26 run a 500/min non-rendering endpoint answered and pinned the
+    // cap at TEN on a plan that allows fifty, which is where a fifty-lead
+    // batch's wall clock went.
+    //
+    // The conservative direction is unchanged: still the MOST RESTRICTIVE, and
+    // still only among endpoints that actually consume a browser. Until one of
+    // those has answered, the cap does not move at all — an inference from an
+    // endpoint that renders nothing is not evidence about rendering capacity.
+    const _capLimits = Array.from(FC_LIMIT_BY_KIND.entries())
+      .filter(([kk]) => FC_RENDER_KINDS.has(kk)).map(([, vv]) => vv);
+    if (!_capLimits.length) return;
+    const perMinForCap = Math.min(..._capLimits);
     if (FC_LIMIT_PER_MIN === perMinForCap) return;
     FC_LIMIT_PER_MIN = perMinForCap;
     // FC_GAP_LIVE remains the pace for an endpoint we have not been told about
@@ -7608,20 +7630,58 @@ const addressFromMailto = (rawHref) => {
 // every review". Two model-derived names from two different sources — their
 // pages, and their review replies — on one sheet, and Mike has to ask for one.
 // PURE so the boot check runs it on the real sentence.
-const ownerNameInProse = (audit) => {
+// It ALSO read a private copy of "how an ownership claim is phrased", while
+// OWNERSHIP_CLAIM_RE held a second copy for the stripper. Two hand-kept copies
+// of one rule is the disease this file records most, and both copies missed
+// the live sentence: "the business is run under Joe Brever's name" contains no
+// "owner is" and no "owner,". One vocabulary now, widened once, read by both.
+const ownerNameInProse = (audit, extraText) => {
   const a = audit || {};
   const t = ['realPain', 'whatHeCaresAbout', 'whatHeNeeds', 'recommendedReason', 'embarrassingFinding']
-    .map(k => (typeof a[k] === 'string' ? a[k] : '')).join(' \n ');
-  const m = /\b(?:the\s+)?owner(?:\s+is|\s*,)\s+(?:Dr\.?|Mr\.?|Ms\.?|Mrs\.?)?\s*([A-Z][a-zA-Z'\u2019-]{1,}(?:\s+[A-Z][a-zA-Z'\u2019-]{1,}){0,2})/.exec(t);
-  return m ? String(m[1]).trim() : '';
+    .map(k => (typeof a[k] === 'string' ? a[k] : '')).concat([String(extraText || '')]).join(' \n ');
+  const m = OWNERSHIP_CLAIM_RE.exec(t);
+  const n = m ? String(m[1] || m[2] || m[3] || m[4] || '').trim() : '';
+  // A bare honorific is a splitter artefact, never a name (see the stripper).
+  return /^(Dr|Mr|Ms|Mrs)$/i.test(n) ? '' : n;
 };
-// Same person written two ways is not a conflict: a first name against a full
-// name shares a word. Refusing over that would put a caution on every sheet.
-const namesConflict = (a, b) => {
-  const words = (s) => new Set(String(s || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(w => w.length >= 3));
-  const x = words(a), y = words(b);
+// ══ ONE WORD IN COMMON IS NOT ONE PERSON ══════════════════════════════════
+// Window Doctor, live 2026-08-26: the contact block said "Chris Brever,
+// Co-Owner" and two inches below the story said the business is "run under Joe
+// Brever's name" — who the roster read calls the General Manager. Two people,
+// two roles, one sheet, and the caller has to guess which one to ask for.
+//
+// Both guards that should have caught it tested WORD OVERLAP, and a family
+// business shares a surname by definition. The honest test is CONTAINMENT: a
+// name written shorter is the same person only when EVERY word of the shorter
+// appears in the longer. "Shane" inside "Shane Irwin", yes. "Chris Brever"
+// against "Joe Brever", no. Honorifics and generational suffixes are dropped
+// first so "Dr. Wei Shen" still contains "Shen".
+//
+// Known limit, stated rather than papered over: "Mike Smith" and "Michael
+// Smith" read as two people. A nickname table would be a hand-kept list, which
+// is the disease above; and everything downstream of this predicate is a
+// CAUTION or a SUPPRESSION, never a claim — so a false positive costs one
+// extra line on a sheet, while the false negative it replaces cost a caller
+// asking for the wrong man by name.
+const _nameWords = (s) => new Set(String(s || '').toLowerCase()
+  .replace(/\b(?:dr|mr|ms|mrs|jr|sr|ii|iii|iv)\b\.?/g, ' ')
+  .replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(w => w.length >= 3));
+const sameNamedPerson = (a, b) => {
+  const x = _nameWords(a), y = _nameWords(b);
   if (!x.size || !y.size) return false;
-  return ![...x].some(w => y.has(w));
+  const inside = (p, q) => [...p].every(w => q.has(w));
+  return inside(x, y) || inside(y, x);
+};
+const namesConflict = (a, b) => {
+  if (!_nameWords(a).size || !_nameWords(b).size) return false;
+  return !sameNamedPerson(a, b);
+};
+// The note itself, so its wording lives in one place and the boot check can
+// run the real thing. Returns '' when there is nothing to say.
+const ownerConflictNote = (proseOwner, sheetOwner) => {
+  const p = String(proseOwner || '').trim(), s = String(sheetOwner || '').trim();
+  if (!p || !s || !namesConflict(p, s)) return '';
+  return `Two different people are named as the owner: the contact on this sheet is ${s}, and the write-up calls the owner ${p}. Neither is confirmed against the other, so confirm who runs it before asking for either by name.`;
 };
 
 // ══ DID WE ACTUALLY SEE THEIR SITE ════════════════════════════════════════
@@ -8379,21 +8439,90 @@ const rememberHtmlLinks = (html, pageUrl, companyName) => {
 // hostname and lives ten minutes, so on any lead whose owner-finder or email
 // pass already mapped the site, the list is in memory and free. Reading it costs
 // nothing and returns [] on a miss, so this can never trigger a call.
+// ══ THE NUMBER HE HAND-CHECKS AGAINST GOOGLE ══════════════════════════════
+// Live 2026-08-26, three pairs on one run: window replacement read 60 in the
+// log and 61 on the sheet; entry door 80 and 91; the blue links #13 and #12.
+// Hand-checking those digits against Google is the whole trust process, and a
+// mismatch every time makes the process unusable.
+//
+// HONEST SHAPE: the mechanism was NOT reproducible from source — the log
+// prints the per-query rows and the sheet renders the head row, and on a lead
+// where both were measured they should agree. Rather than guess at a cause,
+// this makes them the same fact BY CONSTRUCTION: one line, printed from the
+// exact object the sheet reads (brainAudit.localRank, which auditRecordFor
+// compacts), naming its query. If the row and the sheet ever diverge again,
+// this line and the sheet will still agree with each other and the per-query
+// rows above will be visibly the ones that differ — which is a diagnosis
+// instead of a contradiction.
+const logSheetRank = (company, lr) => {
+  if (!lr || lr.checked === false) {
+    console.log(`\u{1F50E} SHEET RANK [${company}]: no rank row reaches the sheet on this lead, so the search rows will read as not measured.`);
+    return;
+  }
+  const q = lr.query || lr.phrase || '(query not recorded)';
+  const scanned = Number.isFinite(Number(lr.scanned)) ? Number(lr.scanned) : null;
+  const rank = Number.isFinite(Number(lr.rank)) ? Number(lr.rank) : null;
+  const said = lr.found === true
+    ? (rank !== null && rank >= 1 ? `#${rank} of ${scanned === null ? '?' : scanned}` : 'they appear; no position is sayable from this source')
+    : (lr.absenceConfirmed === true ? `NOT among the ${scanned === null ? '?' : scanned} listings returned (checked twice)` : 'not seen on one look (unconfirmed, never quoted)');
+  console.log(`\u{1F50E} SHEET RANK [${company}]: the sheet will say "${said}" for "${q}". These are the digits to hand-check against Google \u2014 the per-query rows above are other searches, and only this one is the lead's rank.`);
+};
+
 const cachedSiteMap = (url) => {
   let k = '';
   try { k = new URL(url).hostname.replace('www.', '').toLowerCase(); } catch { return []; }
   const hit = _MAP_CACHE.get(k);
-  return (hit && Date.now() - hit.at < _MAP_TTL_MS && Array.isArray(hit.urls)) ? hit.urls : [];
+  const fresh = (hit && Date.now() - hit.at < _MAP_TTL_MS && Array.isArray(hit.urls)) ? hit.urls : [];
+  // Same rule as firecrawlMap: an EMPTY cache entry is not an answer. A map
+  // that timed out leaves a zero here, and this reader handed that zero to the
+  // audit as "this site has no pages". Links harvested from the host's own
+  // markup are real published pages and cost nothing to read.
+  return fresh.length ? fresh : (_HTML_LINKS.get(k) || []);
 };
 
 const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
   void search;
-  if (!fcKey || !url) return [];
-  if (fcCreditsBlocked()) return [];   // fail fast — no point firing doomed calls
+  if (!url) return [];
   let _mk = '';
   try { _mk = new URL(url).hostname.replace('www.', '').toLowerCase(); } catch { _mk = url; }
+  // ══ ONE PLACE DECIDES THE FINAL LIST ══════════════════════════
+  // Grant Renne, live 2026-08-26: audited on ONE page, while fifteen internal
+  // links harvested from his own markup sat in memory for free. The rescue
+  // that reads them lived INSIDE the try, on the "map answered and returned
+  // nothing" branch, and the timeout CATCH could not reach it — its own
+  // comment said "the harvested-links path below already covers the gap" and
+  // that path was ABOVE it. Five separate exits returned [] without ever
+  // looking: no key, credits blocked, throttled twice, a credit error, and
+  // the timeout. Every one of them turns a site with pages into a site with
+  // none, and every whole-site absence claim downstream then rests on a
+  // single homepage.
+  //
+  // So the harvest is consulted by ONE function that every failure path
+  // returns through. A path added later cannot forget it, because there is
+  // nowhere else to return from.
+  const _mapFallback = (why, quiet) => {
+    const harvested = _HTML_LINKS.get(_mk) || [];
+    if (harvested.length) {
+      if (!quiet) console.log(`\u267b MAP FALLBACK [${_mk}]: ${why}. Using the ${harvested.length} internal link(s) already harvested from this site\u2019s own markup at no cost \u2014 they are pages the site really publishes, where the fallback guesses fixed paths and pays for whichever are not there.`);
+      return harvested;
+    }
+    if (!quiet) console.log(`\u26a0 MAP FALLBACK [${_mk}]: ${why}, and no markup has been harvested from this host yet, so there is nothing free to fall back on. Everything downstream will read this as a site with no interior pages \u2014 any whole-site absence claim on this lead is unproven.`);
+    return [];
+  };
+  if (!fcKey) return _mapFallback('no Firecrawl key on this instance');
+  if (fcCreditsBlocked()) return _mapFallback('Firecrawl is out of credits, so no map can be bought');
   const _hit = _MAP_CACHE.get(_mk);
-  if (_hit && Date.now() - _hit.at < _MAP_TTL_MS) { fcNote(false, 'map', _mk); return _hit.urls; }
+  if (_hit && Date.now() - _hit.at < _MAP_TTL_MS) {
+    fcNote(false, 'map', _mk);
+    // ══ A CACHED EMPTY IS NOT A CACHED ANSWER ════════════════════
+    // Links are harvested from pages we fetch, and on most leads some of
+    // those fetches finish AFTER the map has already failed. The cache hit
+    // short-circuited above the harvest, so on every later caller those
+    // links were still invisible. Reading an in-memory map costs nothing and
+    // can only add.
+    if (Array.isArray(_hit.urls) && _hit.urls.length) return _hit.urls;
+    return _mapFallback(_hit.soft ? 'their sitemap did not answer earlier on this lead' : 'their sitemap answered earlier and had nothing in it', true);
+  }
   try {
     const r = await fcCall('https://api.firecrawl.dev/v1/map', {
       method: 'POST',
@@ -8428,14 +8557,14 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
       }, 20000);
       d = await r2.json();
       if (isRateLimited(d, r2.status)) {
-        console.log(`\ud83d\udd34 FIRECRAWL STILL RATE LIMITED (map) on ${_mk} — returning empty WITHOUT caching, so the next caller asks again instead of inheriting a false "no pages".`);
-        return [];
+        console.log(`\ud83d\udd34 FIRECRAWL STILL RATE LIMITED (map) on ${_mk} — nothing is cached, so the next caller asks again instead of inheriting a false "no pages".`);
+        return _mapFallback('Firecrawl throttled the map twice in a row');
       }
     }
     if (isCreditError(d, r.status)) {
       FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now();
       console.log('🔴 FIRECRAWL OUT OF CREDITS (map)');
-      return [];
+      return _mapFallback('Firecrawl reported an empty balance while mapping');
     }
     const links = d.links || d.data?.links || [];
     const out = links.map(l => (typeof l === 'string' ? l : l.url)).filter(Boolean);
@@ -8456,7 +8585,7 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
     // navigation bar. If we have already fetched a page from this host, those
     // links are in hand and they beat guessing: they are URLs the site really
     // publishes, so nothing is spent discovering a 404.
-    const _harvested = _HTML_LINKS.get(_mk) || [];
+    const _harvested = _mapFallback('Firecrawl answered and returned no URLs for this site', true);
     if (_harvested.length) {
       console.log(`\u267b MAP EMPTY [${_mk}]: Firecrawl returned no URLs, but ${_harvested.length} internal link(s) were already harvested from this site\u2019s own markup at no cost. Using those instead \u2014 they are pages the site really publishes, where the fallback guesses six fixed paths and pays for whichever are not there.`);
       _MAP_CACHE.set(_mk, { urls: _harvested, at: Date.now() });
@@ -8483,9 +8612,11 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
     // Cached briefly, not permanently: a sitemap that times out now may well
     // answer in ten minutes, and the harvested-links path below already covers
     // the gap in the meantime, so nothing downstream is blocked by this.
-    _MAP_CACHE.set(_mk, { urls: [], at: Date.now() - Math.max(0, _MAP_TTL_MS - 300000) });
-    console.log(`firecrawlMap error: ${e.message} \u2014 remembering that for 5 minutes so the other callers on this lead do not each wait out the same cap. Their sitemap is unread; internal links harvested from their own markup are used instead.`);
-    return [];
+    // soft:true marks this as "we failed", never as "there are no pages", so
+    // a later caller falls back to the harvest instead of inheriting a zero.
+    _MAP_CACHE.set(_mk, { urls: [], soft: true, at: Date.now() - Math.max(0, _MAP_TTL_MS - 300000) });
+    console.log(`firecrawlMap error: ${e.message} \u2014 remembering that for 5 minutes so the other callers on this lead do not each wait out the same cap.`);
+    return _mapFallback(`their sitemap did not answer (${(e && e.message) || e})`);
   }
 };
 
@@ -8978,12 +9109,58 @@ const firecrawlBatchScrape = async (fcKey, urls, perPageTimeoutMs = 60000) => {
 // they finish it and bill it, we discard the bytes, and then the retry buys the same
 // page again. Real runs showed five `firecrawlScrape error: timeout` lines in a
 // single batch. Waiting longer is strictly cheaper than retrying.
+// ══ A HOST THAT WILL NOT ANSWER, TWICE, IS NOT ANSWERING ══════════════════
+// Grant Renne, live 2026-08-26: three paid Firecrawl scrapes timed out and
+// bought nothing, all on one lead, all AFTER that host had already timed out
+// once. Firecrawl bills the SUBMIT, so each of those is money for a request
+// nobody was ever going to answer, and each one holds a browser slot and up
+// to 45 seconds of the lead's own work clock while it fails.
+//
+// PER LEAD, never process-wide. A process-wide latch is the round-43 deadlock:
+// every door fails fast, so the recovery probe can never run and the latch can
+// never clear. This lives on FC_LEDGER, the per-request store, so it dies with
+// the lead that learned it and the next lead asks the same host again.
+//
+// AND IT IS READ IN THE CALLER'S OWN FRAME, never at the gate's dispatch.
+// Round 51: the gate runs a queued job inside whichever lead's continuation
+// freed the slot, so the ambient store THERE belongs to somebody else. Both
+// call sites below read it before they queue anything.
+//
+// Two, not one: a single timeout is a slow page, and the retry that follows it
+// is often the one that works. Two says the host is not answering US today.
+const FC_HOST_DEAD_AFTER = 2;
+const _fcHostOf = (u) => { try { return new URL(String(u)).hostname.replace('www.', '').toLowerCase(); } catch { return String(u || ''); } };
+const fcNoteHostTimeout = (url) => {
+  try {
+    const led = FC_LEDGER.getStore();
+    if (!led) return 0;
+    if (!led.deadHosts) led.deadHosts = new Map();
+    const h = _fcHostOf(url);
+    const n = (led.deadHosts.get(h) || 0) + 1;
+    led.deadHosts.set(h, n);
+    return n;
+  } catch (e) { void e; return 0; }
+};
+const fcHostNotAnswering = (url) => {
+  try {
+    const led = FC_LEDGER.getStore();
+    if (!led || !led.deadHosts) return false;
+    return (led.deadHosts.get(_fcHostOf(url)) || 0) >= FC_HOST_DEAD_AFTER;
+  } catch (e) { void e; return false; }
+};
+
 const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS) => {
   if (!fcKey) return '';
   // FAIL FAST once the account is empty. Without this every lead still fires ~20
   // doomed HTTP calls and burns 15+ seconds before failing, which is what made the
   // UI look like it was still working when nothing was happening.
   if (fcCreditsBlocked()) return '';
+  // ...and fail fast on a host that has already refused to answer this lead
+  // twice. See fcHostNotAnswering: per lead, read in this frame, never global.
+  if (fcHostNotAnswering(url)) {
+    console.log(`\u23ed NOT ASKING ${String(url).slice(0, 80)} \u2014 this host has already timed out ${FC_HOST_DEAD_AFTER} times on THIS lead. Firecrawl bills the submit, so a third doomed request costs a credit, a browser slot and up to 45 seconds of the work clock to learn what we already know. Nothing about this page is known and no absence may be claimed from it.`);
+    return '';
+  }
   // OUR OWN dedupe layer — a repeat URL inside the same run costs nothing.
   const _ck = String(url);
   const _c = _SCRAPE_CACHE.get(_ck);
@@ -9096,7 +9273,11 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
     if (_SCRAPE_CACHE.size > 3000) _SCRAPE_CACHE.clear();
     _SCRAPE_CACHE.set(_ck, { md: _md, at: Date.now() });
     return _md;
-  } catch(e) { console.log('firecrawlScrape error:', e.message); return ''; }
+  } catch(e) {
+    const _n = /timeout|abort|ETIMEDOUT|socket hang up/i.test(String(e && e.message)) ? fcNoteHostTimeout(url) : 0;
+    console.log(`firecrawlScrape error: ${e.message}${_n ? ` \u2014 that is timeout ${_n} for this host on this lead${_n >= FC_HOST_DEAD_AFTER ? '; further pages on it will not be bought' : ''}` : ''}`);
+    return '';
+  }
 };
 
 // ── ABOUT-PAGE ENRICHMENT via Firecrawl ────────────────────────────────────
@@ -10202,6 +10383,71 @@ const surnameInCompanyName = (name, companyName) => {
   if (_surname.length < 3) return false;
   return new RegExp(`\\b${_surname}\\b`).test(String(companyName || '').toLowerCase());
 };
+// ══ A MODEL'S "NO" WITH NOTHING CODE-CHECKED BEHIND IT ════════════════════
+// Live 2026-08-26: "Dr. Levi Young - Advanced Cosmetic Surgery" against
+// advancedcosmeticsurgerykc.com, a site trading as Advanced Cosmetic Surgery,
+// in the lead's own market. The model answered "no (high)" and the whole lead
+// was discarded after the full research cycle had been paid for.
+//
+// The prompt already tells the model this exact case is a YES, in a paragraph
+// written after a live run rejected a surgeon's own practice. Instructional
+// guards do not hold: this file's first rule.
+//
+// So it is mechanical, and deliberately NARROW, because the guard exists for a
+// real failure of its own — Ram Jack Durham resolving to ramjackusa.com and an
+// audit built on the national franchisor. Two things must BOTH be true, and
+// together they are what separates the two cases:
+//
+//   1. the domain SPELLS OUT the lead's own name: three or more of its words,
+//      in order, twelve letters or more. "advancedcosmeticsurgery" is inside
+//      advancedcosmeticsurgerykc; "ramjack" is seven letters and two words, so
+//      Ram Jack Durham does NOT clear this.
+//   2. the page NAMES THE LEAD'S OWN MARKET. A local business puts its town on
+//      its homepage; a national franchisor does not name one outlet's city.
+//
+// And it downgrades to UNCLEAR, never to yes: the lead survives and nothing
+// downstream treats the domain as confirmed. Honest limit, stated: a business
+// whose name is only two significant words keeps today's behaviour, because
+// widening to two re-admits ramjack.
+const _NAME_STOP_WORD = /^(the|and|of|for|inc|llc|ltd|corp|co|company|pllc|pa|pc|dr|mr|ms|mrs|dds|md|dmd|group|services|service)$/i;
+const domainSpellsLeadName = (companyName, domain) => {
+  const d = String(domain || '').toLowerCase().replace(/[^a-z]/g, '');
+  if (!d) return false;
+  const all = String(companyName || '').toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(Boolean);
+  for (let i = 0; i < all.length; i++) {
+    for (let j = all.length; j > i; j--) {
+      const win = all.slice(i, j);
+      const sig = win.filter(w => !_NAME_STOP_WORD.test(w));
+      if (sig.length < 3) continue;
+      for (const run of [sig.join(''), win.join('')]) {
+        if (run.length >= 12 && d.includes(run)) return true;
+      }
+    }
+  }
+  return false;
+};
+const siteNamesOurMarket = (content, location) => {
+  const town = parseCityState(location).town;
+  if (!town || town.length < 4) return false;
+  return new RegExp('\\b' + town.toLowerCase().replace(/[^a-z\s]/g, '').replace(/\s+/g, '\\s+') + '\\b')
+    .test(String(content || '').toLowerCase());
+};
+// The listing's own phone number is the other half, and a stronger one: a
+// franchisor's national site does not print one outlet's number. It is on
+// req.body.phone from the moment the request arrives, while the function that
+// performs this exact test (measurePhoneConsistency) does not run until eleven
+// hundred lines AFTER the lead has already been discarded.
+const _last10 = (s) => String(s || '').replace(/[^0-9]/g, '').slice(-10);
+const sitePrintsOurPhone = (content, phone) => {
+  const p = _last10(phone);
+  if (p.length !== 10) return false;
+  const digits = String(content || '').replace(/[^0-9]/g, '');
+  return digits.includes(p);
+};
+const wrongCompanyOverruled = (companyName, domain, content, location, phone) =>
+  domainSpellsLeadName(companyName, domain)
+  && (siteNamesOurMarket(content, location) || sitePrintsOurPhone(content, phone));
+
 const nameCorroborated = (name, companyName, corpus) => {
   const flat = (String(companyName || '') + ' ' + String(corpus || '')).toLowerCase().replace(/\s+/g, ' ');
   const np = String(name || '').toLowerCase().split(/\s+/).filter(Boolean);
@@ -11022,8 +11268,8 @@ const confirmDomainMatch = async (companyName, homepageContent, knownFacts, apiK
 WHAT WE KNOW ABOUT THE TARGET COMPANY:
 ${facts.length ? facts.join('\n') : '(only the name)'}
 
-HOMEPAGE CONTENT OF THE SITE WE RESOLVED:
-${homepageContent.slice(0, 3000)}
+HOMEPAGE CONTENT OF THE SITE WE RESOLVED (this was 3,000 characters, which on a professional practice is nav + hero + services \u2014 the BRAND. The practitioner is named in About, below that cut, so the escape hatch two paragraphs down could never fire on the case it was written for. It is the whole page now):
+${homepageContent.slice(0, 12000)}
 
 TASK: Does this website belong to the target company?
 - "yes" — the name, and ideally the location/industry, clearly match.
@@ -22560,6 +22806,132 @@ const _RECENCY_AGE_RE = /\b(?:newest|latest|last|most recent)\s+(?:google\s+)?re
 const _RECENCY_READER_RE = /\b(?:prospect|shopper|buyer|stranger|comparison shopper|someone (?:browsing|reading|checking|looking)|a (?:customer|visitor) (?:browsing|reading|checking|looking))\b/i;
 const _RECENCY_VERB_RE = /\b(?:sees?|reads?|concludes?|assumes?|wonders?|signals?|suggests?|implies|tells)\b/i;
 const _RECENCY_CLOSED_RE = /\b(?:gone quiet|still (?:active|open|in business|operating)|(?:may|might) have (?:closed|shut)|out of business|no longer (?:open|trading|operating))\b/i;
+// ══ THE MEASUREMENT AND THE ADJECTIVE, IN ONE CLAUSE ══════════════════════
+// Live 2026-08-26: "Your newest Google review is 105 days old\u2014your review
+// record is fresh and strong". A hundred and five days with no new review is
+// the opposite of fresh, and the two halves are joined by an em-dash.
+//
+// stripRecencyConclusions cannot see it, and is right not to: it exists for a
+// hypothetical READER drawing a conclusion ("a prospect reads that as a
+// business that has gone quiet"), and this sentence has no reader in it. This
+// is a different family \u2014 a CONTRADICTION, where we hold the measurement and
+// the prose asserts its opposite. That makes it decidable rather than a
+// judgement: we know how old the newest review is.
+//
+// Three deliberate bounds:
+//   \u00b7 UNMEASURED strips NOTHING. Without reviewRecencyDays there is no
+//     contradiction to find, and inventing one is the failure this file is
+//     mostly a record of.
+//   \u00b7 the threshold is the system's OWN staleness line (reviewRecency.stale
+//     is days > 90), read from one place so the sheet and the gate cannot
+//     disagree about the same lead.
+//   \u00b7 "strong" is NOT a trigger. A business with 262 reviews has a strong
+//     record and a stale one at the same time, and both are true. Only the
+//     RECENCY words contradict a measured age.
+const _FRESH_WORD_RE = /\b(?:fresh|current|recent|up[- ]to[- ]date|steadily|actively|still (?:coming|arriving|rolling) in|steady (?:stream|flow)|consistent (?:stream|flow))\b/i;
+const _REVIEW_SUBJECT_RE = /\b(?:reviews?|review record|review flow|review profile)\b/i;
+const stripStaleFreshClaims = (text, recencyDays) => {
+  const src = String(text || '');
+  const days = Number(recencyDays);
+  if (!src || !Number.isFinite(days) || days <= 90) return { text: src, cut: [] };
+  const sentences = src.split(/(?<=[.!?])\s+/);
+  const keep = [], cut = [];
+  for (const sn of sentences) {
+    if (_REVIEW_SUBJECT_RE.test(sn) && _FRESH_WORD_RE.test(sn)) cut.push(sn.trim());
+    else keep.push(sn);
+  }
+  return { text: keep.join(' ').trim(), cut };
+};
+const stripStaleFreshClaimsDeep = (node, out, depth, days) => {
+  const d = depth || 1;
+  if (d > 6 || node == null) return node;
+  if (typeof node === 'string') {
+    const r = stripStaleFreshClaims(node, days);
+    if (r.cut.length && out) out.cut.push(...r.cut);
+    return r.text;
+  }
+  if (Array.isArray(node)) return node.map(x => stripStaleFreshClaimsDeep(x, out, d + 1, days));
+  if (typeof node === 'object') {
+    for (const k of Object.keys(node)) {
+      if (k.charAt(0) === '_') continue;
+      node[k] = stripStaleFreshClaimsDeep(node[k], out, d + 1, days);
+    }
+    return node;
+  }
+  return node;
+};
+// ══ THREE DIFFERENT AGES FOR ONE COMPANY, ON ONE SHEET ════════════════════
+// Grant Renne & Sons, live 2026-08-26. The run measured 14 years; the story
+// said the business started in 1873; and the headline said "a company with 143
+// years behind it". 1873 to 2026 is 153. None of the three agree, and 143 came
+// from nowhere at all.
+//
+// Every other figure family in this file has a gate. A COMPUTED YEAR SPAN had
+// none: the email's fact-checker carries an INVENTED TENURE flag, but that
+// FLAGS, and the audit prose is what Mike reads down a phone. Flagging and
+// removing are different things, and this file records that lesson twice.
+//
+// A year claim is checkable against exactly three things, so this is decidable
+// rather than a judgement:
+//   \u00b7 the founding year we measured off their own copy
+//   \u00b7 the tenure we measured (either one derives the other)
+//   \u00b7 THEIR OWN WORDS. "Since 1873" on their homepage is true and is in the
+//     corpus, so it survives \u2014 the same rule the money gate uses.
+// Anything else is a number about the oldest, most personal fact a business
+// has, and the owner disproves it instantly.
+//
+// TWO BOUNDS, both the recorded shape: an unmeasured lead with an empty corpus
+// strips NOTHING (that is the read-limit case, not the fabrication case), and
+// a span with no BUSINESS-TENURE context is not a tenure claim at all \u2014 "a
+// 10-year warranty" and "over the last 3 years" both survive.
+const _YEAR_FOUND_RE = /\b(?:since|established|establishing|est\.?|founded|founding|started|starting|opened|opening|began|beginning|dating back to|in business since|serving[^.]{0,40}since)\b[^.]{0,30}?\b((?:18|19|20)\d{2})\b/i;
+const _YEAR_SPAN_RE = /\b(\d{1,3})\s*\+?\s*[-\s]?years?\b(?=[^.]{0,60}\b(?:in business|of business|business|trading|serving|operating|operation|history|behind (?:it|them|him)|of experience|experience|in the trade|as a)\b)|\b(?:in business|trading|operating|serving)\b[^.]{0,20}\b(\d{1,3})\s*\+?\s*[-\s]?years?\b/i;
+const stripUnverifiedYears = (text, tenureYears, foundedYear, corpus) => {
+  const src = String(text || '');
+  const c = String(corpus || '');
+  // Number(null) is 0 and 0 is finite. That trap is recorded twenty times in
+  // this file and it caught this function's own first draft: a null tenure
+  // became year ZERO, and every true age sentence was cut against it.
+  const _num = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v))) ? null : Number(v);
+  const ten = _num(tenureYears);
+  const found = _num(foundedYear);
+  if (!src) return { text: src, cut: [] };
+  if (!c && ten === null && found === null) return { text: src, cut: [] };
+  const nowYear = new Date().getUTCFullYear();
+  const inCorpus = (n) => !!c && new RegExp('(?<![\\d,])' + n + '(?![\\d])').test(c);
+  const okYear = (y) => (found !== null && Math.abs(y - found) <= 1)
+    || (ten !== null && Math.abs((nowYear - ten) - y) <= 1) || inCorpus(y);
+  const okSpan = (n) => (ten !== null && Math.abs(n - ten) <= 1)
+    || (found !== null && Math.abs((nowYear - found) - n) <= 1) || inCorpus(n);
+  const sentences = src.split(/(?<=[.!?])\s+/);
+  const keep = [], cut = [];
+  for (const sn of sentences) {
+    const fy = _YEAR_FOUND_RE.exec(sn);
+    const sp = _YEAR_SPAN_RE.exec(sn);
+    const spN = sp ? Number(sp[1] || sp[2]) : null;
+    const bad = (fy && !okYear(Number(fy[1]))) || (spN !== null && Number.isFinite(spN) && !okSpan(spN));
+    if (bad) cut.push(sn.trim()); else keep.push(sn);
+  }
+  return { text: keep.join(' ').trim(), cut };
+};
+const stripUnverifiedYearsDeep = (node, out, depth, ten, found, corpus) => {
+  const d = depth || 1;
+  if (d > 6 || node == null) return node;
+  if (typeof node === 'string') {
+    const r = stripUnverifiedYears(node, ten, found, corpus);
+    if (r.cut.length && out) out.cut.push(...r.cut);
+    return r.text;
+  }
+  if (Array.isArray(node)) return node.map(x => stripUnverifiedYearsDeep(x, out, d + 1, ten, found, corpus));
+  if (typeof node === 'object') {
+    for (const k of Object.keys(node)) {
+      if (k.charAt(0) === '_') continue;
+      node[k] = stripUnverifiedYearsDeep(node[k], out, d + 1, ten, found, corpus);
+    }
+    return node;
+  }
+  return node;
+};
 const stripRecencyConclusions = (text) => {
   const src = String(text || '');
   if (!src) return { text: src, cut: [] };
@@ -22618,7 +22990,25 @@ const stripImpossibleReviewCounts = (text, reviewsRead, profileTotal, negativeCo
       const n = _rcNum(m[1]);
       const of = m[2] !== undefined ? _rcNum(m[2]) : null;
       if (!okN(n)) { bad = true; break; }
-      if (m[2] !== undefined && (of === null || !(of === read || (prof !== null && Math.abs(of - prof) <= 2) || known.some(k => Math.abs(of - k) <= 2)))) { bad = true; break; }
+      // ══ THE DENOMINATOR IS NOT A FREE-STANDING FIGURE ══════════════
+      // Window Doctor, live 2026-08-26: "Two of the 150 reviews we read
+      // describe an office that has no ability to schedule". The run read 90
+      // of 215. 150 is neither number — it is a WINDOW COMPANY IN THE RANKED
+      // PACK, whose measured count landed in `known` when round 91 licensed
+      // competitor counts so "#1 competitor's 101 reviews" would stop being
+      // eaten.
+      //
+      // That licence is right for a free-standing figure and wrong here. The
+      // M in "N of the M reviews" is a claim about the size of OUR OWN
+      // SAMPLE, and there is exactly one number that can be: the count we
+      // actually read. A competitor's total says nothing about it, and
+      // neither does the profile total — we read 90 of 215, so "of the 215"
+      // is a claim about 125 reviews nobody opened. Nothing in this system
+      // measures a ratio over the whole profile.
+      //
+      // Exact, not tolerant: read is a number we COUNT, not one we estimate.
+      // The numerator above keeps every permission it had.
+      if (m[2] !== undefined && of !== read) { bad = true; break; }
       if (of !== null && n !== null && n > of) { bad = true; break; }
     }
     if (bad) cut.push(sn.trim()); else keep.push(sn);
@@ -22819,7 +23209,22 @@ const AUDIT_BACKEND_CLAIM_ROWS = [
 // name, or the site's own published email local part. An ownership sentence
 // about anyone else is cut whole — softening model prose mid-sentence is how
 // a scope word ends up on the wrong clause.
-const OWNERSHIP_CLAIM_RE = /(?:\b(?:Dr|Mr|Ms|Mrs)\.?\s+)?([A-Z][a-z'\u2019-]+(?:\s+[A-Z][a-z'\u2019.-]+){0,2})\s+(?:is|remains)\s+the\s+(?:named\s+|listed\s+)?(?:owner|founder|co-owner)\b|\b[Tt]he\s+owner\s+is\s+(?:Dr\.?|Mr\.?|Ms\.?|Mrs\.?)?\s*([A-Z][a-z'\u2019-]+(?:\s+[A-Z][a-z'\u2019.-]+){0,2})/;
+// ══ THE ONE VOCABULARY FOR "SOMEBODY OWNS THIS" ═══════════════════════════
+// Four shapes, one NAME sub-pattern, four capture groups. Every consumer reads
+// m[1]||m[2]||m[3]||m[4]. Shape 3 is the live Window Doctor sentence, which
+// neither of the two hand-kept patterns recognised: "the business is run under
+// Joe Brever's name". Shape 4 covers "owned by X" / "run by X".
+//
+// "founded by X" is deliberately NOT here. A founder is not necessarily the
+// owner — the person who started it may have sold it — so refusing that
+// sentence would delete a true historical fact rather than a false claim about
+// who to ask for.
+const _OWN_NAME = "(?:Dr\\.?|Mr\\.?|Ms\\.?|Mrs\\.?)?\\s*([A-Z][a-z'\u2019-]+(?:\\s+[A-Z][a-z'\u2019.-]+){0,2})";
+const OWNERSHIP_CLAIM_RE = new RegExp(
+  "(?:\\b(?:Dr|Mr|Ms|Mrs)\\.?\\s+)?([A-Z][a-z'\u2019-]+(?:\\s+[A-Z][a-z'\u2019.-]+){0,2})\\s+(?:is|remains)\\s+the\\s+(?:named\\s+|listed\\s+)?(?:owner|founder|co-owner)\\b"
+  + "|\\b[Tt]he\\s+owner(?:\\s+is|\\s*,)\\s*" + _OWN_NAME
+  + "|\\b(?:runs?|operates?|operating|trading|trades)\\s+under\\s+" + _OWN_NAME + "(?:'s|\u2019s)\\s+name\\b"
+  + "|\\b(?:owned|run)\\s+by\\s+" + _OWN_NAME + "\\b");
 // ══ DISTINCT PATTERNS NEVER SUM — the conflation stripper ══════════════════
 // Bob Ray, live 2026-08-25: the miner reported four DISTINCT patterns of two
 // mentions each, and the audit wrote "Four different customers describe the
@@ -22917,7 +23322,11 @@ const stripUnverifiedOwnership = (text, allow) => {
     if (!c) return false;
     const toks = c.toLowerCase().replace(/[^a-z\s'\u2019-]/g, ' ').split(/\s+/).filter(w => w.length >= 3);
     if (!toks.length) return false;
-    if (names.some(n => toks.some(t => n.includes(t)))) return true;
+    // WAS: names.some(n => toks.some(t => n.includes(t))) — ANY token of the
+    // claim appearing as a substring of ANY known name. So "Chris Brever" in
+    // the contact block licensed "Joe Brever runs it" in the story, on the
+    // strength of a shared surname. Containment, not overlap.
+    if (names.some(n => sameNamedPerson(c, n))) return true;
     if (surnameInCompanyName(c, companyName)) return true;
     if (emailLocal && localMatchesName(emailLocal, toks)) return true;
     return false;
@@ -22930,7 +23339,7 @@ const stripUnverifiedOwnership = (text, allow) => {
   const keep = [], cut = [];
   for (const s of parts) {
     const m = OWNERSHIP_CLAIM_RE.exec(s);
-    const claimed = m ? String(m[1] || m[2] || '').trim() : '';
+    const claimed = m ? String(m[1] || m[2] || m[3] || m[4] || '').trim() : '';
     // A bare honorific is not a name — a fragment shaped that way is a
     // splitter artefact, never an ownership claim to judge.
     if (m && claimed && !/^(Dr|Mr|Ms|Mrs)$/i.test(claimed) && !ok(claimed)) cut.push(s.trim()); else keep.push(s);
@@ -27128,10 +27537,35 @@ const measureHistory = ({ tenure, reviewCount, reviewRating, reviewRecencyDays, 
         why: `They have certainly completed far more work than ${n} jobs. Nothing in the business turns a finished job into proof, and nothing turns proof into the next job. That is a compounding problem, not a website problem: every year of good work starts the next year from roughly the same standing start.`,
       });
     } else if (perYear >= 12) {
+      // ══ A LIFETIME RATE IS NOT A STATEMENT ABOUT NOW ══════════════════
+      // This branch asked "is the lifetime rate high?" and never looked at
+      // recency, while the STALL branch below asks "is the profile cold?"
+      // against a flat 180 days. Two hand-kept branches of one rule, in one
+      // function, reading one measurement, unable to see each other.
+      //
+      // Live 2026-08-26: a 105-day silence produced "a steady, working
+      // machine", handed to the model with "credit this" attached, and the
+      // model wrote "your newest Google review is 105 days old — your review
+      // record is fresh and strong". The model did not invent that verdict.
+      // We gave it to them.
+      //
+      // The honest bar is the business's OWN pace, not a flat number: at 15
+      // reviews a year one arrives every 24 days, so 105 days of silence is
+      // four of their own gaps. Three of their own gaps, floored at 90 days
+      // so a slow-but-healthy business is never accused of stalling. And the
+      // credit says what is TRUE rather than going silent: the record is
+      // strong and the flow has stopped, and both matter on the call.
+      const _ownGap = (perYear > 0) ? (365 / perYear) : null;
+      const _cold = Number.isFinite(Number(reviewRecencyDays)) && _ownGap !== null
+        && Number(reviewRecencyDays) > Math.max(90, _ownGap * 3);
       out.findings.push({
         layer: 'THROUGHPUT', source: 'history',
-        finding: `${out.reviewsPerYear} reviews a year across ${years} years \u2014 a steady, working machine for turning delivery into proof.`,
-        why: 'This is a strength, not a gap. Lead somewhere else and credit this.',
+        finding: _cold
+          ? `${out.reviewsPerYear} reviews a year across ${years} years, and then nothing for ${Math.round(Number(reviewRecencyDays))} days \u2014 about ${Math.round(Number(reviewRecencyDays) / _ownGap)} times their own usual gap between reviews.`
+          : `${out.reviewsPerYear} reviews a year across ${years} years \u2014 a steady, working machine for turning delivery into proof.`,
+        why: _cold
+          ? 'The RECORD is strong and the FLOW has stopped. Do NOT call this record fresh, current or steady: the rate is a lifetime average and the newest review is far older than their own usual gap. Say the strength and the stall, never one without the other.'
+          : 'This is a strength, not a gap. Lead somewhere else and credit this.',
       });
     }
   }
@@ -35487,7 +35921,21 @@ const checkLocalRankStable = async (args) => {
         return { ...a, rankStable: null,
           rankNote: 'both misses came from the Places relevance lookup and their name shares no word with the query - the lookup is biased against exactly that shape, so NO absence claim is permitted on this fallback read' };
       }
+      // ══ THE WINDOW BOTH DRAWS ACTUALLY READ ═══════════════════════
+      // scanned is a property of ONE DRAW's result list, not of the business:
+      // a depth-100 finder legitimately returns 80 rows on one look and 91 on
+      // the next. This took draw A's window unconditionally, so the sheet
+      // could say "not among the 91 listings that search returns, checked
+      // twice" when the second draw only ever read 80. The claim is proven
+      // for the SMALLER window, and that is the number to state.
+      //
+      // It is also the C6 hand-check: the log prints a LOCAL PACK line per
+      // draw, so an operator comparing the sheet against the log was reading
+      // the other draw's window and finding a mismatch every time.
+      const _bothScanned = [a, a2].map(x => Number(x && x.scanned))
+        .filter(n => Number.isFinite(n) && n > 0);
       return { ...a, rankStable: true, absenceConfirmed: true,
+        scanned: _bothScanned.length ? Math.min(..._bothScanned) : a.scanned,
         rankNote: 'two independent searches both failed to find them, so the absence is real and sayable' };
     }
     // Found on the second look. They are in the pack; we simply cannot say where.
@@ -36580,7 +37028,7 @@ const checkOrganicRank = async ({ query, city, website, companyName, bizLat, biz
   }
 };
 
-const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng, guardTrade, noPlacesFallback }) => {
+const checkLocalRank = async ({ companyName, placeId, website, industry, location, placesKey, bizLat, bizLng, guardTrade, noPlacesFallback, phraseIsLiteral }) => {
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   if (!industry) return { checked: false, why: 'no industry on this lead — cannot build the query a customer would type' };
   // ══ REFUSE TO SEARCH A SECTOR LABEL ═══════════════════════════════════════
@@ -36601,7 +37049,16 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
   // The customer-facing phrase for this trade, reused from the Find category map so
   // the two always agree. Falls back to the raw industry label.
   const cat = GP_CATEGORIES.find(c => c.label.toLowerCase() === String(industry).toLowerCase());
-  const _generic = cat ? cat.q : (naturalTrade(industry) || String(industry).toLowerCase());
+  // ── A SLUG-DERIVED PHRASE TRAVELS VERBATIM ──────────────────────
+  // naturalTrade singularises the LAST word. Right for a trade LABEL
+  // ("Roofing Contractors" -> "roofing contractor"), wrong for a phrase read
+  // off the owner's own URL: "window doors" came out "window door" and
+  // "windows services" came out "windows service", and both shipped on a
+  // sheet as words his page does not contain. serviceVisibilityGap recovers
+  // the service name FROM THE QUERY, so a normaliser applied here decides
+  // what we tell him his page is for.
+  const _generic = phraseIsLiteral ? String(industry).toLowerCase().trim()
+    : (cat ? cat.q : (naturalTrade(industry) || String(industry).toLowerCase()));
   // If his own registered name narrows the trade, that is the search his
   // customers run. See narrowTradePhrase for why the name and not the site.
   const _narrowed = narrowTradePhrase(_generic, companyName, location);
@@ -36869,7 +37326,68 @@ const checkLocalRank = async ({ companyName, placeId, website, industry, locatio
 // has — he assumes the page ranks because he paid someone to build it.
 //
 // Free keyword source, one cheap Places call per service, no Firecrawl credit.
-const serviceKeywordsFromSitemap = (urls) => {
+// ══ A SLUG IS NOT A SEARCH ═════════════════════════════════
+// Leo Lantz, live 2026-08-26: their /window-doors page became the query
+// "window door in Glen Allen, VA" and shipped as LEAK 1 with a five-figure job
+// value under it. Window Doctor got "windows service in Sheridan, CO" off
+// /windows-services. Nobody types either phrase, so the list that came back is
+// not their market and the absence read off it is not a measurement. Every
+// gate downstream passed it, because the claim was faithful to a query that
+// was itself nonsense.
+//
+// Nothing anywhere asked whether the phrase is one a person would type. Three
+// shapes are provably artifacts:
+//
+//   · a TRAILING GENERIC word carries no service. Strip it and re-apply the
+//     two-word floor: "drain cleaning services" IMPROVES to "drain cleaning".
+//     If stripping leaves ONE word, that word decides: a bare modifier ("our",
+//     "commercial") or a whole product line ("windows", "roofing") is refused,
+//     while a real trade noun keeps the original phrase, so "locksmith
+//     services" and "payroll services" survive.
+//   · a GEOGRAPHY slug is a place page. The folder rule already excluded
+//     /areas-served/; /services/service-areas/ walked straight through it.
+//   · EVERY WORD A PRODUCT LINE AND NO VERB. /window-doors is "Windows &
+//     Doors" with the conjunction slugified away, and we cannot know what the
+//     phrase was. It requires ALL the kept words, so "radiant floor heating"
+//     and "epoxy flooring" survive; a service verb anywhere exempts outright.
+//
+// WHAT WE CANNOT DO, STATED: "window doors" and "patio doors" are the same
+// shape to any mechanical test, and there is no dictionary in this process.
+// So this is a DECLARED vocabulary, not a derived rule, and every refusal is
+// LOGGED with its slug and its reason — the boundary grows from live sitemaps
+// instead of being guessed at a second time. One known false refusal, measured
+// over 106 realistic slugs and disclosed rather than hidden: "roof windows",
+// a skylight term whose two words are both declared product lines.
+//
+// REFUSING COSTS NOTHING FALSE AND SAVES A PAID SEARCH. Everything downstream
+// already treats a missing service row as "no claim permitted", the head-term
+// rank is untouched, and these queries are only bought when the head term came
+// back healthy. What it CAN cost is a real service_invisibility, which is why
+// every refusal is named in the log rather than dropped in silence.
+const SLUG_TAIL_GENERIC = /^(services?|solutions?|options?|offerings?|specials?|page|pages|info|information|overview|list|listing|menu|company|companies|contractors?|contracting|professionals?|experts?|specialists?|pros)$/;
+const SLUG_GEOGRAPHY = /(^|\s)(areas?|regions?|locations?|cities|towns?|counties|county|neighborhoods?|served|serving|serve|coverage)(\s|$)/;
+const SLUG_PRODUCT_LINE = /^(windows?|doors?|gutters?|siding|roofs?|roofing|decks?|fences?|fencing|heating|cooling|plumbing|electrical|flooring|floors?)$/;
+const SLUG_BARE_MODIFIER = /^(our|your|their|the|all|more|other|another|general|custom|additional|full|complete|main|core|new|residential|commercial|industrial|local)$/;
+const SLUG_SERVICE_VERB = /(repair|replac|instal|clean|removal|remov|remodel|restor|renovat|treatment|inspect|maintenance|encapsulat|waterproof|seal|coat|resurfac|refinish|paint|stain|extermin|trim|grind|pump|tune|whiten|surgery|therapy|construction|build|design|wash|haul|reline|relin|repip|mitigat|remediat|tint|sweep|care|control)/;
+const searchablePhraseFromSlug = (rawPhrase) => {
+  const words = String(rawPhrase || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length < 2) return { phrase: null, why: 'one word alone is too broad to give a meaningful local rank' };
+  if (SLUG_GEOGRAPHY.test(words.join(' '))) return { phrase: null, why: 'it names a place, not a service' };
+  const kept = words.slice();
+  while (kept.length > 1 && SLUG_TAIL_GENERIC.test(kept[kept.length - 1])) kept.pop();
+  if (kept.length < 2) {
+    const head = kept[0] || '';
+    if (SLUG_BARE_MODIFIER.test(head) || SLUG_PRODUCT_LINE.test(head)) {
+      return { phrase: null, why: `strip the generic tail and only "${head}" is left, which is a whole product line rather than a service` };
+    }
+    return { phrase: words.join(' '), why: '' };
+  }
+  if (kept.every(w => SLUG_PRODUCT_LINE.test(w)) && !kept.some(w => SLUG_SERVICE_VERB.test(w))) {
+    return { phrase: null, why: `it is ${kept.length} product lines with no verb between them (${kept.join(' + ')}), so a conjunction was slugified away and we cannot know what the phrase was` };
+  }
+  return { phrase: kept.join(' '), why: '' };
+};
+const serviceKeywordsFromSitemap = (urls, onRefuse) => {
   const seen = new Set(); const out = [];
   for (const u of urls || []) {
     let path = '';
@@ -36902,10 +37420,12 @@ const serviceKeywordsFromSitemap = (urls) => {
     if (/(^|-)(test|testing|demo|sample|example|untitled|placeholder|lorem|ipsum|draft|temp|tmp|staging|dev|new-?page|copy-?of|page-?\d+|item-?\d+|post-?\d+)(-|$)/.test(slug)) continue;
     // A slug that is mostly digits or a hash is a CMS artefact, not a service.
     if (/^[0-9-]+$/.test(slug) || /^[a-f0-9]{8,}$/.test(slug)) continue;
-    const phrase = slug.replace(/-/g, ' ').trim();
-    // Two words minimum: a single word like "waterproofing" is too broad to give a
-    // meaningful local rank, and too generic to prove anything to the owner.
-    if (phrase.split(/\s+/).length < 2) continue;
+    const rawPhrase = slug.replace(/-/g, ' ').trim();
+    // Two words minimum, and then: is it a phrase a person would type? See
+    // searchablePhraseFromSlug. Every refusal is reported to the caller.
+    const _sp = searchablePhraseFromSlug(rawPhrase);
+    if (!_sp.phrase) { if (onRefuse) onRefuse(slug, _sp.why); continue; }
+    const phrase = _sp.phrase;
     if (seen.has(phrase)) continue;
     seen.add(phrase); out.push(phrase);
   }
@@ -36929,6 +37449,132 @@ const serviceKeywordsFromSitemap = (urls) => {
 // Google Place record, which fetchGBPHealth and resolvePlaceId both already
 // read. Asking for `location` there costs nothing and is authoritative, where
 // geocoding a town name is a guess.
+// ══ THE MARKETS THEY PUBLISH BEYOND THEIR OWN TOWN ════════════════════
+// Lifted out of auditLocalVisibility, where it was an IIFE reading two names
+// off the enclosing scope. It decides a SEARCH WE BUY and an ABSENCE WE CLAIM,
+// and nothing in this repo could execute it — the guard could only ever be a
+// needle over source, which is half a check. Pure now, and the boot runs it on
+// the live slugs.
+const serviceAreaCitiesFrom = (sitemapUrls, location) => {
+  if (!Array.isArray(sitemapUrls) || !sitemapUrls.length) return [];
+  const seen = new Set();
+  const out = [];
+  const homeCity = String(location || '').split(',')[0].trim().toLowerCase();
+  // ══ AND THE STATE THE LEAD ITSELF IS IN ═══════════════════════════
+  // A bare slug inherits it. See the city assembly below.
+  const homeState = parseCityState(location).state;
+  for (const u of sitemapUrls) {
+    const m = String(u || '').match(/\/(?:areas?[-_]served|service[-_]areas?|locations?|cities|we[-_]serve)\/([a-z0-9-]+)\/?$/i);
+    if (!m) continue;
+    // "charlotte-nc" -> "Charlotte". A trailing two-letter state is dropped so
+    // the query reads the way a customer would type it.
+    const parts = m[1].split('-').filter(Boolean);
+    // ══ THE STATE IS NOT OPTIONAL — AND THE SLUG CARRIED IT ═══════════
+    // This popped the trailing state and searched the bare town, re-creating
+    // the documented Sheridan CO/WY failure for exactly one query per lead —
+    // with both wrong-town guards deliberately disabled (no coordinates on a
+    // remote-market search, by design). Keep the state as a ", ST" suffix:
+    // checkLocalRank's own parser reads that form, and "Fort Mill, SC"
+    // cannot be resolved to a Fort Mill in another state.
+    let _st = '';
+    if (parts.length > 1 && /^[a-z]{2}$/i.test(parts[parts.length - 1])) _st = String(parts.pop()).toUpperCase();
+    // ══ THE SLUG IS A PAGE TITLE, NOT A CITY ═══════════════════════════
+    // Live, 2026-08-17, Mac Brian Doors. Their sitemap publishes local-SEO
+    // landing pages — /carpentry-services-in-raymore,
+    // /lees-summit-carpentry-services — and this title-cased the whole slug,
+    // so the "market" became "Carpentry Services In Raymore". We then bought
+    // a Places search for
+    //     door and window installation in Carpentry Services In Raymore
+    // which is not a query any human types, and pickRankRow chose that row as
+    // the FINDING over a real #1-of-20 head-term placing. Follow-up 1 read:
+    //     "iCare Home Repair ranks above you for 'door and window
+    //      installation in Carpentry Services In Raymore' with 11 reviews
+    //      against your 69."
+    // Johnny reads that and knows a machine wrote it. It is the same class as
+    // the Ram Jack "real estate in Louisville" failure — a garbage query
+    // becoming a measured rank becoming a sentence — and it survived because
+    // the query was built from OUR OWN parse rather than from a lead source.
+    //
+    // The service+city page is the commonest shape a local business publishes,
+    // so the city has to be extracted from the phrase rather than assumed to
+    // be the whole of it. Strip the trade words from both ends, drop a
+    // connecting "in", and require what remains to look like a place name.
+    const _SLUG_SERVICE = new Set(['service', 'services', 'repair', 'repairs', 'installation',
+      'installations', 'install', 'replacement', 'replacements', 'contractor', 'contractors',
+      'contracting', 'company', 'companies', 'near', 'me', 'best', 'top', 'local', 'affordable',
+      'professional', 'expert', 'experts', 'pro', 'pros', 'quality', 'cheap', 'emergency',
+      'residential', 'commercial', 'carpentry', 'roofing', 'roofer', 'roofers', 'plumbing',
+      'plumber', 'plumbers', 'hvac', 'heating', 'cooling', 'air', 'conditioning', 'electrical',
+      'electrician', 'electricians', 'painting', 'painters', 'painter', 'window', 'windows',
+      'door', 'doors', 'siding', 'fence', 'fencing', 'deck', 'decks', 'patio', 'concrete',
+      'landscaping', 'lawn', 'tree', 'cleaning', 'cleaners', 'restoration', 'remodeling',
+      'remodel', 'renovation', 'renovations', 'construction', 'builder', 'builders', 'flooring',
+      'floors', 'gutter', 'gutters', 'insulation', 'masonry', 'paving', 'pest', 'control',
+      'pool', 'pools', 'septic', 'solar', 'garage', 'dental', 'dentist', 'dentists', 'medical',
+      'bathroom', 'bathrooms', 'bath', 'kitchen', 'kitchens', 'basement', 'basements', 'shower',
+      'law', 'legal', 'attorney', 'attorneys', 'lawyer', 'lawyers', 'surgery', 'surgeon']);
+    while (parts.length && _SLUG_SERVICE.has(parts[0].toLowerCase())) parts.shift();
+    while (parts.length && _SLUG_SERVICE.has(parts[parts.length - 1].toLowerCase())) parts.pop();
+    // ══ THE STATE HIDING MID-SLUG - round 101 ══════════════════════════
+    // /scottsburg-in-bathroom-remodeling is Scottsburg, INDIANA - the first
+    // state pop ran on the RAW last token ("remodeling") and could never see
+    // it, and the connector strip below would then eat "in" as a preposition,
+    // losing the state (the documented Sheridan ambiguity). Live: "Scottsburg
+    // In Bathroom" went out as a city. After the trade strip, a trailing
+    // two-letter token that is a REAL state abbreviation is the state -
+    // checked against the state table, and only when something remains in
+    // front of it to be the city.
+    if (!_st && parts.length > 1 && /^[a-z]{2}$/i.test(parts[parts.length - 1])
+      && US_STATE_NAMES[String(parts[parts.length - 1]).toUpperCase()]) {
+      _st = String(parts.pop()).toUpperCase();
+    }
+    // A connecting "in" survives at either end of "…-services-in-raymore".
+    while (parts.length && /^(?:in|for|near|at|around|serving)$/i.test(parts[0])) parts.shift();
+    while (parts.length && /^(?:in|for|near|at|around|serving)$/i.test(parts[parts.length - 1])) parts.pop();
+    // What is left must look like a place: US city names run one to three
+    // words. Anything longer is still a page title and no query is worth
+    // buying for it — silence costs a data point, a nonsense query costs the
+    // lead.
+    if (!parts.length || parts.length > 3) continue;
+    if (parts.some(w => _SLUG_SERVICE.has(String(w).toLowerCase()))) continue;
+    // And a page word is not a place. "/locations/about-our-company" survived
+    // the trade strip as "About Our", which would have bought a search for
+    // "door installation in About Our".
+    const _NOT_A_CITY = /^(?:about|our|us|we|contact|home|index|page|pages|blog|news|team|staff|privacy|terms|faq|faqs|gallery|portfolio|reviews|review|testimonials|careers|jobs|sitemap|search|more|all|other|area|areas|region|regions|map|maps)$/i;
+    if (parts.some(w => _NOT_A_CITY.test(String(w)))) continue;
+
+    // ══ AND WHEN THE SLUG CARRIES NO STATE, IT IS NOT OPTIONAL ═══════
+    // Leo Lantz, live 2026-08-26: "kitchen remodeling contractor in Ashland"
+    // — no state, while every other query on that sheet carried one. Ashland
+    // exists in roughly twenty states, and that query produced a CONFIRMED
+    // ABSENCE: "not in the 100 listings that search returns, checked twice."
+    // A clean measurement of the wrong market.
+    //
+    // The comment forty lines above this one says "THE STATE IS NOT
+    // OPTIONAL" and then made it optional the moment the slug did not carry
+    // one. It is inherited from the lead's own registered state instead: a
+    // /service-areas/ashland page on a Virginia contractor's site means
+    // Ashland, Virginia. Stated as the inference it is — a business selling
+    // across a state line almost always says so in the slug
+    // (/fort-mill-sc/), which the pop above already reads and which wins.
+    //
+    // And when NEITHER is available there is no market, so no query is
+    // bought. A bare city name measures whichever Ashland Google feels like,
+    // and an absence read off that is the most damaging sentence we write.
+    const _cityState = _st || homeState;
+    if (!_cityState) continue;
+    const city = parts.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') + `, ${_cityState}`;
+    const key = city.toLowerCase();
+    if (!city || city.length < 3 || seen.has(key) || key === homeCity) continue;
+    // A /service-areas/colorado slug is a service AREA, not a market — a
+    // state-level query buys a search no customer runs. See isBareStateName.
+    if (isBareStateName(city)) continue;
+    seen.add(key);
+    out.push(city);
+  }
+  return out;
+};
+
 const auditLocalVisibility = async ({ companyName, placeId, website, industry, location, placesKey, sitemapUrls, maxServices = 3, bizLat = null, bizLng = null }) => {
   if (!placesKey) return { checked: false, why: 'no GOOGLE_PLACES_KEY in env' };
   const results = [];
@@ -36959,102 +37605,7 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
   // These pages are the owner's own statement of where he sells. Reading them
   // costs nothing — the sitemap is already in hand — and one extra rank query
   // buys the difference between a finding he recognises and one he deletes.
-  const _serviceAreaCities = (() => {
-    if (!Array.isArray(sitemapUrls) || !sitemapUrls.length) return [];
-    const seen = new Set();
-    const out = [];
-    const homeCity = String(location || '').split(',')[0].trim().toLowerCase();
-    for (const u of sitemapUrls) {
-      const m = String(u || '').match(/\/(?:areas?[-_]served|service[-_]areas?|locations?|cities|we[-_]serve)\/([a-z0-9-]+)\/?$/i);
-      if (!m) continue;
-      // "charlotte-nc" -> "Charlotte". A trailing two-letter state is dropped so
-      // the query reads the way a customer would type it.
-      const parts = m[1].split('-').filter(Boolean);
-      // ══ THE STATE IS NOT OPTIONAL — AND THE SLUG CARRIED IT ═══════════
-      // This popped the trailing state and searched the bare town, re-creating
-      // the documented Sheridan CO/WY failure for exactly one query per lead —
-      // with both wrong-town guards deliberately disabled (no coordinates on a
-      // remote-market search, by design). Keep the state as a ", ST" suffix:
-      // checkLocalRank's own parser reads that form, and "Fort Mill, SC"
-      // cannot be resolved to a Fort Mill in another state.
-      let _st = '';
-      if (parts.length > 1 && /^[a-z]{2}$/i.test(parts[parts.length - 1])) _st = String(parts.pop()).toUpperCase();
-      // ══ THE SLUG IS A PAGE TITLE, NOT A CITY ═══════════════════════════
-      // Live, 2026-08-17, Mac Brian Doors. Their sitemap publishes local-SEO
-      // landing pages — /carpentry-services-in-raymore,
-      // /lees-summit-carpentry-services — and this title-cased the whole slug,
-      // so the "market" became "Carpentry Services In Raymore". We then bought
-      // a Places search for
-      //     door and window installation in Carpentry Services In Raymore
-      // which is not a query any human types, and pickRankRow chose that row as
-      // the FINDING over a real #1-of-20 head-term placing. Follow-up 1 read:
-      //     "iCare Home Repair ranks above you for 'door and window
-      //      installation in Carpentry Services In Raymore' with 11 reviews
-      //      against your 69."
-      // Johnny reads that and knows a machine wrote it. It is the same class as
-      // the Ram Jack "real estate in Louisville" failure — a garbage query
-      // becoming a measured rank becoming a sentence — and it survived because
-      // the query was built from OUR OWN parse rather than from a lead source.
-      //
-      // The service+city page is the commonest shape a local business publishes,
-      // so the city has to be extracted from the phrase rather than assumed to
-      // be the whole of it. Strip the trade words from both ends, drop a
-      // connecting "in", and require what remains to look like a place name.
-      const _SLUG_SERVICE = new Set(['service', 'services', 'repair', 'repairs', 'installation',
-        'installations', 'install', 'replacement', 'replacements', 'contractor', 'contractors',
-        'contracting', 'company', 'companies', 'near', 'me', 'best', 'top', 'local', 'affordable',
-        'professional', 'expert', 'experts', 'pro', 'pros', 'quality', 'cheap', 'emergency',
-        'residential', 'commercial', 'carpentry', 'roofing', 'roofer', 'roofers', 'plumbing',
-        'plumber', 'plumbers', 'hvac', 'heating', 'cooling', 'air', 'conditioning', 'electrical',
-        'electrician', 'electricians', 'painting', 'painters', 'painter', 'window', 'windows',
-        'door', 'doors', 'siding', 'fence', 'fencing', 'deck', 'decks', 'patio', 'concrete',
-        'landscaping', 'lawn', 'tree', 'cleaning', 'cleaners', 'restoration', 'remodeling',
-        'remodel', 'renovation', 'renovations', 'construction', 'builder', 'builders', 'flooring',
-        'floors', 'gutter', 'gutters', 'insulation', 'masonry', 'paving', 'pest', 'control',
-        'pool', 'pools', 'septic', 'solar', 'garage', 'dental', 'dentist', 'dentists', 'medical',
-        'bathroom', 'bathrooms', 'bath', 'kitchen', 'kitchens', 'basement', 'basements', 'shower',
-        'law', 'legal', 'attorney', 'attorneys', 'lawyer', 'lawyers', 'surgery', 'surgeon']);
-      while (parts.length && _SLUG_SERVICE.has(parts[0].toLowerCase())) parts.shift();
-      while (parts.length && _SLUG_SERVICE.has(parts[parts.length - 1].toLowerCase())) parts.pop();
-      // ══ THE STATE HIDING MID-SLUG - round 101 ══════════════════════════
-      // /scottsburg-in-bathroom-remodeling is Scottsburg, INDIANA - the first
-      // state pop ran on the RAW last token ("remodeling") and could never see
-      // it, and the connector strip below would then eat "in" as a preposition,
-      // losing the state (the documented Sheridan ambiguity). Live: "Scottsburg
-      // In Bathroom" went out as a city. After the trade strip, a trailing
-      // two-letter token that is a REAL state abbreviation is the state -
-      // checked against the state table, and only when something remains in
-      // front of it to be the city.
-      if (!_st && parts.length > 1 && /^[a-z]{2}$/i.test(parts[parts.length - 1])
-        && US_STATE_NAMES[String(parts[parts.length - 1]).toUpperCase()]) {
-        _st = String(parts.pop()).toUpperCase();
-      }
-      // A connecting "in" survives at either end of "…-services-in-raymore".
-      while (parts.length && /^(?:in|for|near|at|around|serving)$/i.test(parts[0])) parts.shift();
-      while (parts.length && /^(?:in|for|near|at|around|serving)$/i.test(parts[parts.length - 1])) parts.pop();
-      // What is left must look like a place: US city names run one to three
-      // words. Anything longer is still a page title and no query is worth
-      // buying for it — silence costs a data point, a nonsense query costs the
-      // lead.
-      if (!parts.length || parts.length > 3) continue;
-      if (parts.some(w => _SLUG_SERVICE.has(String(w).toLowerCase()))) continue;
-      // And a page word is not a place. "/locations/about-our-company" survived
-      // the trade strip as "About Our", which would have bought a search for
-      // "door installation in About Our".
-      const _NOT_A_CITY = /^(?:about|our|us|we|contact|home|index|page|pages|blog|news|team|staff|privacy|terms|faq|faqs|gallery|portfolio|reviews|review|testimonials|careers|jobs|sitemap|search|more|all|other|area|areas|region|regions|map|maps)$/i;
-      if (parts.some(w => _NOT_A_CITY.test(String(w)))) continue;
-
-      const city = parts.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') + (_st ? `, ${_st}` : '');
-      const key = city.toLowerCase();
-      if (!city || city.length < 3 || seen.has(key) || key === homeCity) continue;
-      // A /service-areas/colorado slug is a service AREA, not a market — a
-      // state-level query buys a search no customer runs. See isBareStateName.
-      if (isBareStateName(city)) continue;
-      seen.add(key);
-      out.push(city);
-    }
-    return out;
-  })();
+  const _serviceAreaCities = serviceAreaCitiesFrom(sitemapUrls, location);
 
   // One extra query, not seven. The point is to test whether the invisibility
   // story survives in a market they actually sell into — a second data point
@@ -37134,11 +37685,21 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
   if (_headWeak || _headAbsent) {
     console.log(`LOCAL RANK [${companyName}]: skipped the service-page searches \u2014 the head term already answers the question (${_headAbsent ? 'not in the top ' + head.scanned : '#' + head.rank + ' of ' + head.scanned}). More queries could only find them ranking BETTER somewhere else, which does not strengthen anything (saves up to ${maxServices} Places searches)${_samples.length > 1 ? `. Both samples agreed it is outside the top five (${_samples.join(' and ')}), so this is not a borderline call` : ''}.`);
   } else {
-    const services = serviceKeywordsFromSitemap(sitemapUrls).sort((a, b) => a.length - b.length).slice(0, maxServices);
+    const _svcRefused = [];
+    const services = serviceKeywordsFromSitemap(sitemapUrls, (slug, why) => _svcRefused.push(`/${slug} (${why})`))
+      .sort((a, b) => a.length - b.length).slice(0, maxServices);
+    // NOTHING HAS EVER PRINTED THESE PHRASES. "window door in Glen Allen, VA"
+    // reached a call sheet without a human ever seeing the words we searched.
+    if (_svcRefused.length) {
+      console.log(`\u{1F50E} SERVICE QUERY [${companyName}]: ${_svcRefused.length} service slug(s) refused as phrases nobody would type \u2014 ${_svcRefused.slice(0, 5).join('; ')}. No search was bought for any of them, so no presence or absence claim exists from them.`);
+    }
+    if (services.length) {
+      console.log(`\u{1F50E} SERVICE QUERY [${companyName}]: buying ${services.length} service-page search(es) \u2014 ${services.map(s => `"${s}"`).join(', ')}. These become "They publish a page for X" on the sheet, so they are the words the owner will check.`);
+    }
     for (const svc of services) {
       // guardTrade is the lead's TRADE, not the slug: the slug's own words
       // are what a place-category shares by construction (parking lot).
-      const r = await checkLocalRank({ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng, guardTrade: industry });
+      const r = await checkLocalRank({ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng, guardTrade: industry, phraseIsLiteral: true });
       if (r.checked) results.push({ ...r, kind: 'their own service page', svc });
     }
     // ---- AND AN ABSENCE HERE BUYS A SECOND LOOK TOO -----------------------
@@ -37163,7 +37724,10 @@ const auditLocalVisibility = async ({ companyName, placeId, website, industry, l
       await new Promise(r => setTimeout(r, 1200));
       let _again = null;
       try {
-        _again = await checkLocalRank({ companyName, placeId, website, industry: _absent1.svc, location, placesKey, bizLat, bizLng });
+        // guardTrade was missing here entirely, so `guardTrade || industry` fell
+        // back to the SLUG - and this is the search that upgrades a service
+        // absence to SAYABLE. It was the one running with no marketplace guard.
+        _again = await checkLocalRank({ companyName, placeId, website, industry: _absent1.svc, location, placesKey, bizLat, bizLng, guardTrade: industry, phraseIsLiteral: true });
       } catch (e) { void e; }
       const _i = results.indexOf(_absent1);
       if (!_again || !_again.checked) {
@@ -37794,6 +38358,10 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // duplicate detector. Hash-ROUTED SPAs are not harmed — their server
         // returns the shell either way and the SAME PAGE guard judges the text.
         target = String(target || '').split('#')[0];
+        if (fcHostNotAnswering(target)) {
+          console.log(`\u23ed NOT ASKING [${kind}] ${target} \u2014 this host has already timed out ${FC_HOST_DEAD_AFTER} times on THIS lead. NOTHING about this page is known.`);
+          return { refused: true, status: 0, body: null, reason: 'host not answering on this lead', ms: 0 };
+        }
         const t0 = Date.now();
         let r;
         try {
@@ -37814,7 +38382,8 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           }, timeout);
         } catch (e) {
           const ms = Date.now() - t0;
-          console.log(`FIRECRAWL NO ANSWER [${kind}] ${target} — nothing came back within ${ms}ms (${e.message}). The request may still be running on their side.`);
+          const _hn = fcNoteHostTimeout(target);
+          console.log(`FIRECRAWL NO ANSWER [${kind}] ${target} — nothing came back within ${ms}ms (${e.message}). The request may still be running on their side.${_hn >= FC_HOST_DEAD_AFTER ? ` That is timeout ${_hn} for this host on this lead; no further pages on it will be bought.` : ''}`);
           return { refused: true, status: 0, body: null, reason: e.message, ms };
         }
         let body = null;
@@ -38356,6 +38925,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         console.log(`TRADE [${company}]: "${verifiedIndustry}" \u2014 read from their homepage during domain confirmation (no extra call, no credit). The search surface can now actually be measured.`);
       }
 
+      // A model NO that our own measurements contradict is downgraded, not
+      // obeyed. See wrongCompanyOverruled: both halves must hold.
+      if (domainConfirmation.match === 'no' && wrongCompanyOverruled(company, domain || website, content, req.body.location, req.body.phone)) {
+        console.log(`\u267b WRONG COMPANY OVERRULED [${company}]: the model answered "no (${domainConfirmation.confidence})", and two code-checked facts say otherwise \u2014 the domain spells this business's own name out, and the page names its own market. Live 2026-08-26 this discarded a surgeon's own practice after the whole research cycle was paid for. Downgraded to UNCLEAR: the lead survives and nothing treats the domain as confirmed.`);
+        domainConfirmation = { ...domainConfirmation, match: 'unclear', overruled: true,
+          reason: `the model said no (${domainConfirmation.reason || 'no reason given'}), but the domain spells this business's own name and the page names its own market, so the lead was kept and the domain is NOT confirmed` };
+      }
       if (domainConfirmation.match === 'no') {
         // Wrong company. Do NOT audit this site. Blank everything site-derived.
         //
@@ -38385,6 +38961,18 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         // franchisor's form reaching the Durham owner as HIS problem is exactly
         // the confident-wrong audit this branch exists to prevent.
         htmlSignals = { checked: false, discardedWrongCompany: true };
+        // ══ AND THE PICTURES OF THAT OTHER BUSINESS ═══════════════════════
+        // The bot-check branch four hundred lines up nulls all THREE renders
+        // by name and says why. This branch nulled one. So the full-page
+        // capture and the phone capture — both photographs of a DIFFERENT
+        // COMPANY'S homepage — survived into pageShots, into the model's
+        // image evidence and onto the audit screen, under this business's
+        // name. Round 101's rule is that a render we cannot stand behind must
+        // never ship as their homepage, and a franchisor's homepage is
+        // further from the truth than a 403 page is.
+        fullPageUrl = null;
+        mobileShotUrl = null;
+        renderRefused = renderRefused || 'the site we were given resolved to a DIFFERENT business, so its pictures were discarded rather than shown as theirs';
       }
     }
 
@@ -38485,7 +39073,13 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
         effectivePlaceId = _pl.id;
         console.log(`PLACE ID [${company}]: resolved "${_pl.name}" (${_pl.reviews} reviews) \u2014 matched because Google lists the same website we audited. Review mining, Google Business Profile and review recency can now run on this lead.`);
       } else {
-        console.log(`PLACE ID [${company}]: could not resolve one \u2014 no Google listing carries this exact website. Review mining, GBP and review recency will report not-checked and make no claim.`);
+        // The recovery itself has existed since round 100 and works; what was
+        // missing is an honest account of the cost when it fails. A lead with
+        // no place id loses ELEVEN measurements, not three, and one of them is
+        // the trade word every search query is built from \u2014 which is why the
+        // live run also logged "rank check skipped: no industry" on that lead
+        // and nobody connected the two lines.
+        console.log(`PLACE ID [${company}]: could not resolve one \u2014 no Google listing carries this exact website. That is ELEVEN measurements dark on this lead, not three: the review mine and every finding built on it, the Google profile and its categories, hours, photos and review recency, the star rating and review count, the duplicate-listing read, and the trade fallback that builds the search query \u2014 so the rank check will skip for "no industry" too. Nothing here may be claimed as an absence; it is OUR blindness, not their gap.`);
       }
     }
 
@@ -38854,6 +39448,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           localRank = headRankRowFrom(lv.results) || _pick.row;
           outrankRow = _pick.row;
           console.log(`RANK ROW [${company}]: ${_pick.note}`);
+          logSheetRank(company, localRank);
           // ══ THE BLUE LINKS ARE A SECOND, SEPARATE RANKING ═══════════════
           // Measured on the SAME phrase and the SAME city as the pack, because
           // two positions for one search is a comparison and two positions for
@@ -38978,7 +39573,15 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // Collect the phone render started back in the front fan — resolved
       // long ago by now, so this await costs nothing on the happy path and a
       // refusal already logged itself inside fcAsk.
-      if (!mobileShotUrl && firecrawlData && firecrawlData._mobilePromise) {
+      // ...but NOT on a lead discarded as the wrong company. The phone render
+      // is dispatched in the front fan, long before that verdict exists, and
+      // on the live 2026-08-26 run it was billed twenty-three seconds AFTER
+      // the discard was logged. Firecrawl bills the submit, so the credit is
+      // gone either way — what this stops is the picture of somebody else's
+      // homepage arriving on the sheet under this owner's name. Read off the
+      // same flag the discard sets, so there is one source of truth.
+      if (!mobileShotUrl && !(htmlSignals && htmlSignals.discardedWrongCompany)
+          && firecrawlData && firecrawlData._mobilePromise) {
         try { mobileShotUrl = (await firecrawlData._mobilePromise) || null; } catch (e) { void e; }
       }
       if (mobileShotUrl && sitePages && Array.isArray(sitePages.pageShots)) {
@@ -39068,6 +39671,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           localRank = headRankRowFrom(lv2.results) || _pick2.row;
           outrankRow = _pick2.row;
           console.log(`RANK ROW [${company}]: ${_pick2.note}`);
+          logSheetRank(company, localRank);
           for (const r of lv2.results) {
             console.log(r.found
               ? `LOCAL RANK [${company}] (guaranteed pass): #${r.rank} of ${r.scanned} for "${r.query}" (${r.kind})`
@@ -42832,14 +43436,17 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // certainty. Saying so is the honest output, and it costs one line.
           // Only fires when BOTH names exist and they share no word: a first
           // name against a full name is the same person written twice.
-          const _proseOwner = ownerNameInProse(parsed);
-          const _sheetOwner = String((decisionMaker && decisionMaker.name) || '').trim();
-          if (_proseOwner && _sheetOwner) {
-            if (namesConflict(_proseOwner, _sheetOwner)) {
-              _claimRisks.push(`Two different people are named as the owner: the contact on this sheet is ${_sheetOwner}, and the write-up calls the owner ${_proseOwner}. Neither is confirmed against the other, so confirm who runs it before asking for either by name.`);
-              console.log(`\u26a0 OWNER NAME CONFLICT [${company}]: the sheet carries "${_sheetOwner}" and the audit prose calls the owner "${_proseOwner}". Both are model-read from different sources (their pages, and their review replies) and neither overrules the other. Said out loud rather than resolved \u2014 picking one would be inventing certainty.`);
-            }
-          }
+          // ══ AND IT RAN 700 LINES BEFORE THE PROSE IT HAD TO READ ═══════
+          // The sentence that carried the live failure — "run under Joe
+          // Brever's name" — is in situationRead, and buildSituationRead does
+          // not run until roughly a thousand lines below this point. So the
+          // one guard against two owner names on one sheet was structurally
+          // unable to see the block of prose the operator actually reads.
+          //
+          // Moved whole to the situation-read site rather than copied: a
+          // second copy here would be the two-hand-kept-copies disease inside
+          // the guard, which this file has recorded in the send verifier, the
+          // fabrication lists and the merge paths. See ownerConflictNote.
           // The account-level Apify state, read once here rather than inferred
           // from a per-lead "nothing found". A mine that never ran and a business
           // with no repeating complaint are opposite facts and used to print the
@@ -43554,9 +44161,19 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // it anyway on TriStar. Instructional guards do not hold; this one is
           // mechanical now, beside its siblings.
           const _rc = { cut: [] };
+          const _recDays = (gbpHealth && gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked)
+            ? gbpHealth.reviewRecency.newestDays : null;
           for (const k of _mf) {
             if (k.charAt(0) === '_') continue;
             parsed[k] = stripRecencyConclusionsDeep(parsed[k], _rc, 1);
+            // ...and the CONTRADICTION beside the conclusion. See
+            // stripStaleFreshClaims: unmeasured strips nothing.
+            parsed[k] = stripStaleFreshClaimsDeep(parsed[k], _rc, 1, _recDays);
+            // ...and a year span nothing we hold supports. See
+            // stripUnverifiedYears: their own copy licenses their own history.
+            parsed[k] = stripUnverifiedYearsDeep(parsed[k], _rc, 1,
+              (history && history.tenure && history.tenure.checked) ? history.tenure.years : null,
+              (history && history.tenure && history.tenure.checked) ? history.tenure.foundedYear : null, _corpus);
           }
           // ══ A REVIEW COUNT THE READ CANNOT SUPPORT, AND A CLAIM ABOUT ═══
           // ══ COMPETITOR SITES NOBODY OPENED - both live on 2026-08-24 ═══
@@ -43958,6 +44575,11 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                   _srx = stripUnmeasuredMoneyDeep(_srx, _corpus, _srg.m, 1, 'situationRead');
                   _srx = stripSpelledQuantitiesDeep(_srx, _corpus, _srg.sq, 1);
                   _srx = stripRecencyConclusionsDeep(_srx, _srg.rc, 1);
+                  _srx = stripUnverifiedYearsDeep(_srx, _srg.rc, 1,
+                    (history && history.tenure && history.tenure.checked) ? history.tenure.years : null,
+                    (history && history.tenure && history.tenure.checked) ? history.tenure.foundedYear : null, _corpus);
+                  _srx = stripStaleFreshClaimsDeep(_srx, _srg.rc, 1,
+                    (gbpHealth && gbpHealth.reviewRecency && gbpHealth.reviewRecency.checked) ? gbpHealth.reviewRecency.newestDays : null);
                   _srx = stripImpossibleReviewCountsDeep(_srx, _srg.irc, 1, reviewsRead, _srProf, reviewsNegativeCount, competitorCountsFrom(localRank).concat(outrankRow && outrankRow !== localRank ? competitorCountsFrom(outrankRow) : []));
                   _srx = stripCompetitorSiteClaimsDeep(_srx, _srg.cc, 1);
                   _srx = stripPostContactClaimsDeep(_srx, _srg.pc, 1);
@@ -43975,6 +44597,25 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
                     console.log(`\u26d4 OWNERSHIP CLAIM [${company}]: the story named somebody the owner with no code-checked evidence \u2014 removed ${_srg.own.cut.length} sentence(s). First one: "${String(_srg.own.cut[0]).slice(0, 110)}".`);
                   }
                   situationRead = _srx;
+                  // ══ TWO NAMES FOR THE OWNER ON ONE CALL SHEET ═══════════
+                  // Read here, and only here, because this is the first point
+                  // at which both halves of the sheet exist: the audit prose
+                  // AND the story. Live 2026-08-26, Window Doctor: "Chris
+                  // Brever, Co-Owner" in the contact block, "run under Joe
+                  // Brever's name" in the story. Neither name is provably
+                  // wrong, so the sheet says so rather than picking one.
+                  {
+                    const _storyText = [_srx && _srx.headline, _srx && _srx.read,
+                      _srx && _srx.recommendation, _srx && _srx.askOnTheCall,
+                      ...(Array.isArray(_srx && _srx.rows) ? _srx.rows.map(r => (typeof r === 'string' ? r : (r && (r.text || r.value)))) : [])]
+                      .filter(v => typeof v === 'string').join(' \n ');
+                    const _ocn = ownerConflictNote(ownerNameInProse(parsed, _storyText),
+                      String((decisionMaker && decisionMaker.name) || verifiedCEO || '').trim());
+                    if (_ocn) {
+                      parsed._claimRisks = (Array.isArray(parsed._claimRisks) ? parsed._claimRisks : []).concat([_ocn]);
+                      console.log(`\u26a0 OWNER NAME CONFLICT [${company}]: ${_ocn}`);
+                    }
+                  }
                   const _srCut = _srg.q.cut.length + _srg.m.cut.length + _srg.sq.cut.length + _srg.rc.cut.length + _srg.irc.cut.length + _srg.cc.cut.length + _srg.pc.cut.length + _srg.conf.cut.length + _srg.spend.cut.length;
                   if (_srCut) {
                     console.log(`⛔ SITUATION READ GATED [${company}]: removed ${_srCut} sentence(s) from the synthesis — quotes ${_srg.q.cut.length}, money ${_srg.m.cut.length}, spelled scale ${_srg.sq.cut.length}, recency conclusions ${_srg.rc.cut.length}, review counts ${_srg.irc.cut.length}, competitor sites ${_srg.cc.cut.length}, post-contact claims ${_srg.pc.cut.length}. First: "${String(_srg.rc.cut[0] || _srg.pc.cut[0] || _srg.q.cut[0] || _srg.m.cut[0] || _srg.sq.cut[0] || _srg.irc.cut[0] || _srg.cc.cut[0] || '').slice(0, 140)}". The synthesis is what Mike reads in THE BUSINESS, and until now it was the one block of prose no gate ever touched.`);
@@ -46453,6 +47094,16 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         homepageMarkupChars: String(homepageHtml || '').length,
         interiorPages: (sitePages && Array.isArray(sitePages.pagesRead)) ? sitePages.pagesRead.length : 0,
         trustworthy: !!scrapeTrustworthy,
+        // ══ WHY WE READ NOTHING, NOT JUST THAT WE DID ═══════════════════
+        // "Their website returned nothing. We fetched it twice and both
+        // attempts came back empty" printed for a lead whose site returned
+        // 52 internal links, HTML signals and ad signals — it was DISCARDED
+        // as a different business, not empty. That sends whoever reads it
+        // hunting a website problem that does not exist, which is the
+        // message-names-the-wrong-cause failure this file has recorded three
+        // times (the SMTP timeout, the Supabase table that existed, the kill
+        // clock). A zero here now says which of the two it is.
+        discardedWrongCompany: !!(htmlSignals && htmlSignals.discardedWrongCompany),
       },
       sitePages: sitePages ? {
         booking: sitePages.booking || null,
@@ -50152,11 +50803,16 @@ app.listen(PORT, () => {
       const _fails = [];
       const _n = (...p) => p.join('');
       const _g = makeFcGate({ concurrency: () => 1, minGapMs: () => 0 });
-      let _searchRan = false, _scrape2Ran = false;
+      let _searchRan = false, _scrape2Ran = false, _mapRan = false;
       _g(() => new Promise(() => {}), 'scrape');            // holds the only slot forever
       _g(() => { _searchRan = true; return Promise.resolve('ok'); }, 'search');
+      // /v1/map reads a sitemap and a link graph. It spins no browser, and
+      // firecrawlMap is called up to FIVE times per lead — each of those
+      // was holding one of the browser slots the page renders queue behind.
+      _g(() => { _mapRan = true; return Promise.resolve('ok'); }, 'map');
       _g(() => { _scrape2Ran = true; return Promise.resolve('no'); }, 'scrape');
       await new Promise(r => setTimeout(r, 400));
+      if (!_mapRan) _fails.push('a MAP queued behind a full gate never dispatched — /v1/map renders nothing, and five of them per lead were each holding one of the browser slots the page renders wait for');
       if (!_searchRan) _fails.push('a search queued behind a full gate never dispatched — /v1/search is consuming a browser slot again and the owner-lookup wave starves the renders');
       if (_scrape2Ran) _fails.push('a second scrape dispatched past a full gate — the slot accounting is broken and the browser cap is fiction');
       const _st = _g.stats();
@@ -50401,6 +51057,64 @@ app.listen(PORT, () => {
     if (!_svc.includes('roof repair')) _fails.push('a root-level service slug is invisible — service_invisibility is structurally dead on Squarespace/GoHighLevel architectures');
     if (_svc.some(p => /rhinoplasty/.test(p))) _fails.push('an article slug at the root reads as a service');
     if (_svc.some(p => /about/.test(p))) _fails.push('/about-us reads as a service');
+    // ── A SLUG IS NOT A SEARCH — both directions, executed ────────────────
+    // Leo Lantz's /window-doors and Window Doctor's /windows-services both
+    // reached a live sheet as a search we BOUGHT and then made an absence
+    // claim from. The survivors matter as much as the refusals: a filter
+    // tuned until it catches everything deletes service_invisibility, harm
+    // 91, in silence.
+    for (const _bad of ['window doors', 'windows doors', 'heating cooling', 'our services',
+                        'windows services', 'commercial services', 'service areas',
+                        'roofing services', 'areas served', 'plumbing solutions']) {
+      if (searchablePhraseFromSlug(_bad).phrase) _fails.push(`"${_bad}" is still bought as a search \u2014 that is the Leo Lantz sheet coming back`);
+    }
+    for (const _good of ['roof repair', 'water heaters', 'garage doors', 'patio doors', 'shower doors',
+                         'epoxy flooring', 'concrete driveways', 'hardwood floors', 'pest control',
+                         'mommy makeover', 'crawl space encapsulation', 'seamless gutters',
+                         'radiant floor heating', 'locksmith services', 'payroll services',
+                         'window replacement', 'flooring installation', 'tile flooring']) {
+      if (!searchablePhraseFromSlug(_good).phrase) _fails.push(`"${_good}" is refused \u2014 the guard is eating real service pages, which deletes service_invisibility in silence`);
+    }
+    if (searchablePhraseFromSlug('drain cleaning services').phrase !== 'drain cleaning') {
+      _fails.push('the generic tail is not stripped \u2014 "drain cleaning services" must IMPROVE to "drain cleaning", not be refused');
+    }
+    // and the producer runs every slug through it
+    // ── A MARKET WITH NO STATE IS THE WRONG MARKET — executed ────────────
+    // Leo Lantz, live: "kitchen remodeling contractor in Ashland" produced a
+    // CONFIRMED absence. Ashland exists in about twenty states.
+    const _sa = serviceAreaCitiesFrom(['https://leolantz.com/service-areas/ashland/',
+      'https://leolantz.com/service-areas/fort-mill-sc/'], 'Glen Allen, VA');
+    if (!_sa.includes('Ashland, VA')) {
+      _fails.push(`a bare service-area slug produced [${_sa.join(', ')}] \u2014 "Ashland" alone measures whichever Ashland Google feels like, and the lead's own state is right there`);
+    }
+    if (!_sa.includes('Fort Mill, SC')) {
+      _fails.push('a slug that CARRIES its own state lost it \u2014 a business selling across a state line says so in the slug, and that must win over the inherited one');
+    }
+    if (serviceAreaCitiesFrom(['https://x.com/service-areas/ashland/'], '').length !== 0) {
+      _fails.push('a market was searched with NO state resolvable from anywhere \u2014 a bare city name is not a market, and an absence read off it is the most damaging sentence we write');
+    }
+        const _svcGate = serviceKeywordsFromSitemap(['https://x.com/window-doors', 'https://x.com/services/service-areas',
+      'https://x.com/services/our-services', 'https://x.com/services/roof-repair'], () => {});
+    if (_svcGate.join('|') !== 'roof repair') {
+      _fails.push(`the sitemap producer still emits slug artifacts: [${_svcGate.join(', ')}] \u2014 only "roof repair" is a phrase a person types`);
+    }
+    // A slug-derived phrase must reach the query VERBATIM. naturalTrade
+    // singularises the last word, which is what turned "window doors" into
+    // the live "window door in Glen Allen, VA".
+    if (naturalTrade('window doors') === 'window doors') {
+      _fails.push('naturalTrade no longer singularises \u2014 this fixture exists to prove the normaliser is the mechanism, so a literal path is genuinely needed');
+    }
+    const _c3n = (...p) => p.join('');
+    const _c3src = selfSourceNoComments();
+    if (!_c3src.includes(_c3n('const _generic = phraseIsLiteral ? String(industry)', '.toLowerCase().trim()'))) {
+      _fails.push('the slug-derived phrase is back through the trade-LABEL normaliser, so what we tell the owner his page is for is a word his page does not contain');
+    }
+    if (!_c3src.includes(_c3n('industry: svc, location, placesKey, bizLat, bizLng, guardTrade: industry, ', 'phraseIsLiteral: true'))) {
+      _fails.push('the service-page search no longer takes its phrase literally, so the trade-label singulariser rewrites the owner\u2019s own slug again');
+    }
+    if (!_c3src.includes(_c3n('industry: _absent1.svc, location, placesKey, bizLat, bizLng, guardTrade: industry, ', 'phraseIsLiteral: true'))) {
+      _fails.push('the CONFIRMING service search lost its literal phrase or its marketplace guard \u2014 that is the search that upgrades a service absence to sayable, and it ran with no guard at all');
+    }
     if (fallbackAbsenceNameBoost('A Team Services', 'garage door repair company in Durham, NC')) _fails.push('a non-descriptive name reads as boosted — the fallback absence gate is open for exactly the businesses the lookup is biased against');
     if (!fallbackAbsenceNameBoost('HEGG Windows', 'replacement windows and doors contractor in Dublin, OH')) _fails.push('a name sharing the trade word no longer reads as boosted — the §52 rationale case is refused');
     const _sgn = (...p) => p.join('');
@@ -50408,7 +51122,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ SEARCH GUARD CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
     } else {
-      console.log(`✓ SEARCH GUARD CHECK: the query guards hold both ways — a city word and an ordinary name word can no longer narrow the search (and a real specialist still narrows), attorney/lawyer is one marketplace while parking garages still are not, root-level service pages finally feed service_invisibility without articles riding in, and the Places-fallback absence claim requires the name-relevance boost that is the whole §52 rationale for trusting it.`);
+      console.log(`✓ SEARCH GUARD CHECK: the query guards hold both ways — a slug is no longer a search (the live "window doors" and "windows services" are refused by name and logged, while eighteen real service pages including "radiant floor heating" and "locksmith services" survive, and a slug-derived phrase reaches the query verbatim instead of through the trade-label singulariser), a city word and an ordinary name word can no longer narrow the search (and a real specialist still narrows), attorney/lawyer is one marketplace while parking garages still are not, root-level service pages finally feed service_invisibility without articles riding in, and the Places-fallback absence claim requires the name-relevance boost that is the whole §52 rationale for trusting it.`);
     }
   } catch (e) {
     console.log(`⛔ SEARCH GUARD CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -50738,6 +51452,19 @@ app.listen(PORT, () => {
     if (stripImpossibleReviewCounts('Fusion Orthodontics shows up above them with 492 reviews against their 540.', 90, 540, null, [492]).cut.length !== 0) {
       _fails.push('the flagship spine shape — a named competitor with both counts — dies in the audit prose while the email is allowed to say it');
     }
+    // ── AND THE DENOMINATOR IS NOT A FREE-STANDING FIGURE ───────────
+    // The live Window Doctor story. The run read 90 of 215; a window company
+    // in the ranked pack carried ~150; and that competitor's count licensed
+    // the size of OUR OWN SAMPLE.
+    if (stripImpossibleReviewCounts('Two of the 150 reviews we read describe an office that cannot schedule.', 90, 215, null, [150]).cut.length !== 1) {
+      _fails.push('the live Window Doctor sentence survives: a COMPETITOR\u2019s measured count is licensing the denominator of "of the N reviews we read", which is a claim about our own sample and can only be the count we read');
+    }
+    if (stripImpossibleReviewCounts('Two of the 90 reviews we read describe an office that cannot schedule.', 90, 215, null, [150]).cut.length !== 0) {
+      _fails.push('the TRUE denominator was eaten \u2014 a gate that eats true sentences is the more expensive failure');
+    }
+    if (stripImpossibleReviewCounts('Six of the 215 reviews describe the same wait.', 90, 215, null, []).cut.length !== 1) {
+      _fails.push('the PROFILE TOTAL is still licensing the denominator \u2014 we read 90 of 215, so that sentence is a claim about 125 reviews nobody opened');
+    }
     if (competitorCountsFrom({ above: [{ name: 'A', reviews: 101 }], weakerRows: [{ name: 'B', reviews: 55 }], topRivals: [], ours: { name: 'us', reviews: 262 } }).sort((a, b) => a - b).join(',') !== '55,101,262') {
       _fails.push('competitorCountsFrom no longer collects the measured counts from the rank rows');
     }
@@ -50983,7 +51710,7 @@ app.listen(PORT, () => {
     //    comments quote the broken sentences verbatim).
     const _tsrc = selfSourceNoComments();
     for (const [_what, _needle] of [
-      ['the service-page rank call no longer passes the TRADE for the marketplace guard', _dn('guardTrade: industry ', '});')],
+      ['the service-page rank call no longer passes the TRADE for the marketplace guard', _dn('guardTrade: indu', 'stry')],
       ['the marketplace guard is not wired into checkLocalRank', _dn('_mkOverlap === ', 'false')],
       ['the synthesis does not pass through the post-contact stripper', _dn('stripPostContactClaimsDeep(_srx, ', '_srg.pc, 1)')],
       ['the synthesis does not pass through the recency stripper', _dn('stripRecencyConclusionsDeep(_srx, ', '_srg.rc, 1)')],
@@ -51687,6 +52414,106 @@ app.listen(PORT, () => {
       _fails.push('the fact-check flag list no longer separates confirmed-correct wording notes, so "Do not say" fills with true sentences again');
     }
 
+    // ── AND THE CODE-ASSEMBLED CREDIT THAT CAUSED IT ──────────────────────
+    // The model did not invent "fresh and strong": measureHistory's credit
+    // branch handed it "a steady, working machine" with "credit this"
+    // attached, having never looked at recency at all. Executed on the live
+    // shape: 15 reviews a year is one every 24 days, and 105 days of silence
+    // is four of the business's OWN gaps.
+    {
+      const _cold = measureHistory({ tenure: { checked: true, years: 10 }, reviewCount: 150, reviewRating: 4.7, reviewRecencyDays: 105, trade: 'roofing' });
+      const _hot = measureHistory({ tenure: { checked: true, years: 10 }, reviewCount: 150, reviewRating: 4.7, reviewRecencyDays: 9, trade: 'roofing' });
+      const _txt = (h) => ((h && h.findings) || []).map(f => `${f.finding} ${f.why}`).join(' ');
+      if (/steady, working machine/.test(_txt(_cold))) {
+        _fails.push('a 105-day silence still reads to the model as "a steady, working machine" with "credit this" attached \u2014 that is where "your review record is fresh and strong" came from, and the model was told to say it');
+      }
+      if (!/RECORD is strong and the FLOW has stopped/.test(_txt(_cold))) {
+        _fails.push('the cold-flow credit lost the half that is true \u2014 a strong record with a stopped flow is two facts, and going silent about the strength is its own distortion');
+      }
+      if (!/steady, working machine/.test(_txt(_hot))) {
+        _fails.push('a genuinely current record lost its credit \u2014 the bar is the business\u2019s OWN gap, not a flat number, and a nine-day-old newest review clears any bar');
+      }
+    }
+    // ── THREE AGES FOR ONE COMPANY — Grant Renne, live ────────────────────
+    {
+      const _yc = 'Grant Renne & Sons has served Kansas City since 1873. We offer a 10-year warranty on all installs.';
+      if (stripUnverifiedYears('The business started in 1873 and is still family owned.', null, 1873, _yc).cut.length !== 0) {
+        _fails.push('a founding year we MEASURED off their own copy was stripped');
+      }
+      if (stripUnverifiedYears('This is a company with 143 years behind it.', null, 1873, _yc).cut.length !== 1) {
+        _fails.push('the live "143 years behind it" survives \u2014 1873 to now is 153, and 143 traces to no measurement and to nothing on their site');
+      }
+      if (stripUnverifiedYears('They have 153 years of history.', null, 1873, _yc).cut.length !== 0) {
+        _fails.push('the span DERIVED from the measured founding year was stripped \u2014 either measurement licenses the other');
+      }
+      if (stripUnverifiedYears('They offer a 10-year warranty on all installs.', null, 1873, _yc).cut.length !== 0) {
+        _fails.push('a 10-year WARRANTY was read as a tenure claim');
+      }
+      if (stripUnverifiedYears('Reviews have grown over the last 3 years.', null, 1873, _yc).cut.length !== 0) {
+        _fails.push('a span with no business-tenure context was read as a tenure claim');
+      }
+      // Unmeasured with an empty corpus strips NOTHING: that is the read-limit
+      // case, not the fabrication case. Number(null) is 0 and 0 is finite, and
+      // that trap cut every true age sentence in this function's first draft.
+      if (stripUnverifiedYears('A company with 143 years behind it.', null, null, '').cut.length !== 0) {
+        _fails.push('a lead with NO age measurement and NO corpus had sentences stripped \u2014 a null tenure is laundering into year zero again');
+      }
+      if (stripUnverifiedYears('14 years in business.', 14, null, 'x').cut.length !== 0) {
+        _fails.push('the MEASURED tenure does not license its own span');
+      }
+      // THEIR OWN WORDS, with nothing measured \u2014 the only branch the corpus
+      // licence can be tested on. The first version of these fixtures handed
+      // the founding year in as a MEASUREMENT too, so this branch was never
+      // exercised and the falsification came back green on a build with the
+      // corpus licence deleted. The fixture-that-measures-nothing trap.
+      if (stripUnverifiedYears('Serving Kansas City since 1873.', null, null, _yc).cut.length !== 0) {
+        _fails.push('a founding year printed on THEIR OWN SITE was stripped from a lead where we measured no tenure \u2014 their history is theirs to state, and the corpus is the licence');
+      }
+      if (stripUnverifiedYears('They have 40 years of experience.', null, null, 'Over 40 years of experience serving the region.').cut.length !== 0) {
+        _fails.push('a tenure span printed on their own site was stripped with nothing measured');
+      }
+      if (stripUnverifiedYears('They have 40 years of experience.', null, null, _yc).cut.length !== 1) {
+        _fails.push('a span that is neither measured NOR on their site survived \u2014 the corpus licence is matching anything');
+      }
+      const _c2src = selfSourceNoComments();
+      const _c2n = (...p) => p.join('');
+      if (!_c2src.includes(_c2n('parsed[k] = stripUnverifiedYearsDeep(parsed[k], ', '_rc, 1,'))) {
+        _fails.push('the audit prose no longer passes through the year gate');
+      }
+      if (!_c2src.includes(_c2n('_srx = stripUnverifiedYearsDeep(_srx, ', '_srg.rc, 1,'))) {
+        _fails.push('the SYNTHESIS no longer passes through the year gate, and the live "143 years" was in the story');
+      }
+    }
+    // ── A MEASUREMENT AND AN ADJECTIVE THAT CONTRADICT ────────────────────
+    // The live sentence, both halves in one clause, joined by an em-dash.
+    const _fresh = 'Your newest Google review is 105 days old—your review record is fresh and strong. The booking page lists a phone number.';
+    const _fx = stripStaleFreshClaims(_fresh, 105);
+    if (_fx.cut.length !== 1 || !/booking page lists a phone number/.test(_fx.text)) {
+      _fails.push('the live "105 days old \u2014 fresh and strong" sentence survives, or a true sentence died with it: we HOLD the age, so this is a contradiction rather than a judgement');
+    }
+    // Unmeasured strips NOTHING. Inventing a contradiction is the failure this
+    // whole file is a record of.
+    if (stripStaleFreshClaims(_fresh, null).cut.length !== 0) {
+      _fails.push('a freshness claim was stripped on a lead with NO measured recency \u2014 with nothing to check against the gate must stay silent');
+    }
+    // A genuinely fresh record keeps its sentence.
+    if (stripStaleFreshClaims(_fresh, 9).cut.length !== 0) {
+      _fails.push('a TRUE freshness claim was eaten on a nine-day-old newest review');
+    }
+    // "strong" alone is about the COUNT, and a business can have a strong
+    // record and a stale one at once. Both are true; neither contradicts.
+    if (stripStaleFreshClaims('Their review record is strong at 262 reviews.', 400).cut.length !== 0) {
+      _fails.push('"strong" is being treated as a recency word \u2014 a large review count is not a claim about when the newest one arrived');
+    }
+    // AND BOTH CALL SITES, or the rule is right and unused.
+    const _c7src = selfSourceNoComments();
+    const _c7n = (...p) => p.join('');
+    if (!_c7src.includes(_c7n('parsed[k] = stripStaleFreshClaimsDeep(parsed[k], ', '_rc, 1, _recDays);'))) {
+      _fails.push('the audit prose no longer passes through the contradiction gate');
+    }
+    if (!_c7src.includes(_c7n('_srx = stripStaleFreshClaimsDeep(_srx, ', '_srg.rc, 1,'))) {
+      _fails.push('the SYNTHESIS no longer passes through the contradiction gate \u2014 that is the block Mike reads in THE BUSINESS, and it was the one block no gate ever touched');
+    }
     // ── AND TWO NAMES FOR THE OWNER ON ONE SHEET ──────────────────────────
     const _thrive = { realPain: 'The owner, Dr. Shen, personally replies to nearly every review. The listing is complete.' };
     if (ownerNameInProse(_thrive) !== 'Shen') {
@@ -51708,8 +52535,46 @@ app.listen(PORT, () => {
                       { realPain: 'Nothing about who runs it appears anywhere.' }]) {
       if (ownerNameInProse(_t)) _fails.push(`a name was invented out of ordinary prose: "${ownerNameInProse(_t)}"`);
     }
-    if (!_src.includes(_needle('const _proseOwner = ownerName', 'InProse(parsed);'))) {
-      _fails.push('the audit is no longer checked for a second owner name, so two people can be named on one call sheet again');
+    // ── A SHARED SURNAME IS TWO PEOPLE, NOT ONE ───────────────────────────
+    // Window Doctor, live 2026-08-26. Every assertion below is that sheet.
+    if (!namesConflict('Chris Brever', 'Joe Brever')) {
+      _fails.push('"Chris Brever" on the sheet and "Joe Brever" in the story read as the same person \u2014 a family business shares a surname by definition, so word OVERLAP can never decide this');
+    }
+    if (!sameNamedPerson('Shane', 'Shane Irwin') || !sameNamedPerson('Dr. Wei Shen', 'Shen')) {
+      _fails.push('a name written shorter is no longer recognised as the same person \u2014 that puts a caution on every sheet, which is the more expensive direction');
+    }
+    if (sameNamedPerson('Chris Brever', 'Joe Brever')) _fails.push('containment is back to overlap');
+    // The live sentence, in the STORY rather than the audit prose \u2014 neither
+    // hand-kept pattern recognised it, and the story was never scanned at all.
+    if (ownerNameInProse({}, 'The business is run under Joe Brever\u2019s name.') !== 'Joe Brever') {
+      _fails.push('the live "run under X\u2019s name" sentence yields no owner name, or the STORY text is no longer scanned \u2014 that sentence is the whole defect');
+    }
+    if (ownerConflictNote('Joe Brever', 'Chris Brever').indexOf('Joe Brever') < 0) {
+      _fails.push('two different owner names produce no caution on the sheet');
+    }
+    if (ownerConflictNote('Shane', 'Shane Irwin') !== '' || ownerConflictNote('', 'Chris Brever') !== '') {
+      _fails.push('a caution fires on one person written two ways, or on a lead with only one name');
+    }
+    // And the CORROBORATION half: a shared surname must not license the claim.
+    {
+      const _brev = 'The business is run under Joe Brever\u2019s name. The guarantee is on the contact page.';
+      const _shared = stripUnverifiedOwnership(_brev, { names: ['Chris Brever'], emailLocal: 'info', company: 'The Window Doctor' });
+      if (_shared.cut.length !== 1 || !/guarantee is on the contact page/.test(_shared.text)) {
+        _fails.push('a shared SURNAME still corroborates an ownership claim about a different first name (or a true sentence died with it) \u2014 this is the one branch every fixture used to leave unexercised, because they all passed names: []');
+      }
+      const _real = stripUnverifiedOwnership(_brev, { names: ['Joe Brever'], emailLocal: 'info', company: 'The Window Doctor' });
+      if (_real.cut.length !== 0) _fails.push('a claim about the person we actually resolved was stripped');
+    }
+    // AND THE CALL SITE: the check must run where the STORY exists, not 700
+    // lines above it. Ordering executed, not asserted from a line number.
+    if (!_src.includes(_needle('ownerConflictNote(ownerName', 'InProse(parsed, _storyText)'))) {
+      _fails.push('the owner-name conflict is no longer read where the story exists, so the sheet can carry two owners again');
+    }
+    if (_src.includes(_needle('ownerNameInProse(pars', 'ed);'))) {
+      _fails.push('the early owner-name call is back \u2014 a second copy of this rule cannot see situationRead, which is where the live failure lived');
+    }
+    if (!(_src.indexOf('_storyText') > _src.indexOf(_needle('situationRead = ', '_srx;')))) {
+      _fails.push('the owner-name conflict is read BEFORE the story is gated \u2014 it would compare against prose the strippers have not finished with');
     }
     if (_fails.length) console.log(`⛔ SHEET TRUTHFULNESS CHECK: ${_fails.join(' | ')}.`);
     else console.log(`✓ SHEET TRUTHFULNESS CHECK: "Do not say" holds only claims a prospect could disprove \u2014 a fact-check entry that CONFIRMS the claim and objects to its connotation is a wording note, not a warning, while a wrong count, an overstatement, an inversion and a contradiction all still stop the sheet. And when the write-up names a different owner from the contact, the sheet says so instead of picking one.`);
@@ -52151,10 +53016,32 @@ app.listen(PORT, () => {
       if (_scrapeGap >= _searchGap) {
         _fails.push('the fast endpoint is spaced at least as far apart as the slow one, so pacing is still effectively global');
       }
-      // The browser cap is account-wide, so it takes the MOST RESTRICTIVE
-      // endpoint - the opposite rule, deliberately, and the log says which.
-      if (FC_LIMIT_PER_MIN !== 10) {
-        _fails.push(`the browser cap is being sized from ${FC_LIMIT_PER_MIN}/min rather than from the most restrictive endpoint - browsers are shared, so this one must be conservative`);
+      // The browser cap takes the most restrictive endpoint THAT RENDERS.
+      // This used to assert 10 - the SEARCH limit - which is the defect
+      // written down as an invariant: a search spins no browser (the gate
+      // gives it no slot at all), so its limit is not a statement about
+      // rendering capacity, and on the live run a non-rendering endpoint
+      // pinned the cap at ten on a plan that allows fifty.
+      if (FC_LIMIT_PER_MIN !== 5000) {
+        _fails.push(`the browser cap is sized from ${FC_LIMIT_PER_MIN}/min - an endpoint that renders NOTHING is deciding how many browsers we may use, which is what pinned a fifty-lead batch at 40% of its plan`);
+      }
+      if (fcBrowsersForLimit(FC_LIMIT_PER_MIN) !== 25) {
+        _fails.push('the Standard tier no longer reaches 25 browsers even with a 5000/min rendering endpoint measured');
+      }
+      // ...and an endpoint that renders nothing must not move the cap AT ALL.
+      {
+        const _keepLim = new Map(FC_LIMIT_BY_KIND), _keepGap = new Map(FC_GAP_BY_KIND), _keepPer = FC_LIMIT_PER_MIN;
+        FC_LIMIT_BY_KIND.clear(); FC_GAP_BY_KIND.clear(); FC_LIMIT_PER_MIN = null;
+        noteFirecrawlLimits(_resp('500'), 'map');
+        if (FC_LIMIT_PER_MIN !== null) {
+          _fails.push('a MAP limit sized the browser cap - /v1/map reads a link graph and spins no browser, so it says nothing about how many renders we may run at once');
+        }
+        // Restore EVERYTHING this probe touched, including the pace map an
+        // assertion below reads - a check that leaves state behind fails its
+        // neighbour and the neighbour gets the blame.
+        FC_LIMIT_BY_KIND.clear(); for (const [k, v] of _keepLim) FC_LIMIT_BY_KIND.set(k, v);
+        FC_GAP_BY_KIND.clear(); for (const [k, v] of _keepGap) FC_GAP_BY_KIND.set(k, v);
+        FC_LIMIT_PER_MIN = _keepPer;
       }
       // An endpoint nobody has heard from keeps the unknown-plan assumption.
       if (FC_GAP_BY_KIND.get('map') !== undefined) _fails.push('an endpoint that never answered was given a pace anyway');
@@ -54444,7 +55331,7 @@ app.listen(PORT, () => {
     }
     // The call now also carries guardTrade for the marketplace guard — the
     // anchor assertion matches the coordinates half however the tail grows.
-    if (!/checkLocalRank\(\{ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng(, guardTrade: industry)? \}\)/.test(_src)) {
+    if (!/checkLocalRank\(\{ companyName, placeId, website, industry: svc, location, placesKey, bizLat, bizLng[^}]*\}\)/.test(_src)) {
       _fails.push('the service-page rank searches are not anchored to the business');
     }
     if (!/'location',/.test(_src) || !/lat: \(d\.location/.test(_src)) {
@@ -65995,6 +66882,222 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   } catch (e) {
     console.log(`\u26d4 SPINE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
+  // ══ A LEAD THAT DIES IS THE MOST EXPENSIVE LEAD ══════════════════════════
+  // Wave 2 of the 2026-08-26 read. One live run in three either died outright
+  // or audited on a single page while every other API had already been paid in
+  // full. These are the mechanisms behind that, each executed rather than read.
+  bootHold();
+  (async () => {
+    const _fails = [];
+    const _n = (...p) => p.join('');
+    // Captured synchronously: this IIFE runs to its first await before the
+    // boot releases the cached copy of this file.
+    const _src = selfSourceNoComments();
+    try {
+      // ── K1: a map that FAILED must never present itself as a site with
+      // no pages. Grant Renne, live: audited on ONE page while fifteen links
+      // harvested from his own markup sat in memory, free.
+      const _host = 'k1check.example';
+      const _links = ['https://k1check.example/services', 'https://k1check.example/pricing', 'https://k1check.example/contact'];
+      const _hadL = _HTML_LINKS.has(_host), _prevL = _HTML_LINKS.get(_host);
+      const _hadM = _MAP_CACHE.has(_host), _prevM = _MAP_CACHE.get(_host);
+      try {
+        _HTML_LINKS.set(_host, _links);
+        // exit 1 of five: no key at all
+        const _noKey = await firecrawlMap('', 'https://k1check.example/');
+        if (!Array.isArray(_noKey) || _noKey.length !== 3) {
+          _fails.push(`firecrawlMap returned ${(_noKey || []).length} URL(s) with no Firecrawl key while three links were already harvested from that host \u2014 a failure path that skips the harvest turns a site with pages into a site with none`);
+        }
+        // the poisoned TIMEOUT memo, which is the live Grant Renne shape
+        _MAP_CACHE.set(_host, { urls: [], soft: true, at: Date.now() });
+        const _soft = await firecrawlMap('k', 'https://k1check.example/');
+        if (!Array.isArray(_soft) || _soft.length !== 3) {
+          _fails.push(`a cached TIMEOUT memo still hands every later caller an empty list (${(_soft || []).length} URL(s)) \u2014 that memo says "we failed", not "there are no pages", and the harvest is free to read`);
+        }
+        // a real empty answer: still an answer, and the nav links are still
+        // pages the site publishes
+        _MAP_CACHE.set(_host, { urls: [], at: Date.now() });
+        if ((await firecrawlMap('k', 'https://k1check.example/')).length !== 3) {
+          _fails.push('a cached EMPTY answer hides harvested links from every later caller on the lead');
+        }
+        if (cachedSiteMap('https://k1check.example/').length !== 3) {
+          _fails.push('cachedSiteMap \u2014 the free reader the audit uses for sitemapUrls \u2014 still hands over a zero from a failed map');
+        }
+        // and it must not INVENT: nothing harvested means nothing returned
+        _HTML_LINKS.delete(_host);
+        _MAP_CACHE.set(_host, { urls: [], soft: true, at: Date.now() });
+        if ((await firecrawlMap('k', 'https://k1check.example/')).length !== 0) {
+          _fails.push('the fallback produced URLs for a host whose markup we have never read \u2014 guessing paths is what this replaces, not what it does');
+        }
+      } finally {
+        if (_hadL) _HTML_LINKS.set(_host, _prevL); else _HTML_LINKS.delete(_host);
+        if (_hadM) _MAP_CACHE.set(_host, _prevM); else _MAP_CACHE.delete(_host);
+      }
+      // The three exits a fixture cannot reach without a network are pinned
+      // where they run. Needles assembled at runtime over comment-stripped
+      // source: a literal needle finds itself, eleven times over in this file.
+      if (!_src.includes(_n("return _mapFallback('Firecrawl throttled", " the map twice in a row');"))) {
+        _fails.push('the twice-throttled map exit no longer consults the harvest');
+      }
+      if (!_src.includes(_n("return _mapFallback('Firecrawl reported an empty", " balance while mapping');"))) {
+        _fails.push('the out-of-credits map exit no longer consults the harvest');
+      }
+      if (!_src.includes(_n('{ urls: [], soft: true, at: Date.now() - Math', '.max(0, _MAP_TTL_MS - 300000) }'))) {
+        _fails.push('the timeout memo is back to caching a bare empty list, which every later caller reads as a measured "no pages"');
+      }
+      // ── C6: the digits the operator hand-checks come from ONE object ────
+      // The sheet renders brainAudit.localRank; this line prints the same
+      // object, so log and sheet cannot disagree about the lead's rank.
+      const _sr = [];
+      const _oldLog = console.log;
+      console.log = (...a) => { _sr.push(a.join(' ')); };
+      try {
+        logSheetRank('X', { checked: true, found: true, rank: 7, scanned: 100, query: 'electrician in Jacksonville, FL' });
+        logSheetRank('X', { checked: true, found: false, absenceConfirmed: true, scanned: 100, query: 'q' });
+        logSheetRank('X', null);
+      } finally { console.log = _oldLog; }
+      if (!/#7 of 100/.test(_sr[0] || '') || !/electrician in Jacksonville, FL/.test(_sr[0] || '')) {
+        _fails.push('the sheet-rank line does not state the position AND the query it belongs to \u2014 the operator hand-checks a digit against Google and a digit with no search attached cannot be checked at all');
+      }
+      if (!/NOT among the 100 listings/.test(_sr[1] || '')) {
+        _fails.push('a confirmed absence no longer names its window on the line the operator reads');
+      }
+      if (!/not measured/.test(_sr[2] || '')) {
+        _fails.push('a lead with no rank row prints nothing, so the sheet says one thing and the log says nothing at all');
+      }
+      const _c6src = selfSourceNoComments();
+      if ((_c6src.match(/logSheetRank\(company, localRank\);/g) || []).length !== 2) {
+        _fails.push('the sheet-rank line is missing from one of the two rank paths, so half the leads are back to a log the sheet contradicts');
+      }
+      // ── W3: a host that will not answer, twice, is not answering ─────────
+      // Grant Renne, live: three paid scrapes timed out on a host that had
+      // already timed out once. Firecrawl bills the SUBMIT. Executed inside a
+      // real AsyncLocalStorage frame, because per-lead scoping is the whole
+      // safety of this: a process-wide latch is the round-43 deadlock.
+      await FC_LEDGER.run({}, async () => {
+        if (fcHostNotAnswering('https://slow.example/a')) _fails.push('a fresh lead already treats a host as dead');
+        fcNoteHostTimeout('https://slow.example/a');
+        if (fcHostNotAnswering('https://slow.example/b')) {
+          _fails.push('ONE timeout stands a host down \u2014 a single slow page is normal and the retry after it is often the one that works');
+        }
+        fcNoteHostTimeout('https://www.slow.example/b');
+        if (!fcHostNotAnswering('https://slow.example/c')) {
+          _fails.push('two timeouts on one host do NOT stand it down, so a third doomed request is still bought \u2014 a credit, a browser slot and up to 45 seconds of the work clock to learn what we already knew');
+        }
+        if (fcHostNotAnswering('https://other.example/a')) {
+          _fails.push('one host standing down took an unrelated host with it');
+        }
+      });
+      // ...and it dies with the lead. A latch that outlives its lead is the
+      // credit-breaker deadlock: every door fails fast, nothing can probe, and
+      // it can never clear.
+      await FC_LEDGER.run({}, async () => {
+        if (fcHostNotAnswering('https://slow.example/a')) {
+          _fails.push('the stand-down survived into the NEXT lead \u2014 per-lead is the whole safety of this, and a process-wide version is the recorded round-43 deadlock');
+        }
+      });
+      if (fcHostNotAnswering('https://slow.example/a')) _fails.push('the stand-down leaked outside any lead context at all');
+      // AND BOTH DOORS, or the memory is right and unused.
+      const _w3 = selfSourceNoComments();
+      if (!_w3.includes(_n('if (fcHostNotAnswer', 'ing(url)) {'))) _fails.push('the interior page reader no longer fails fast on a host that stopped answering this lead');
+      if (!_w3.includes(_n('if (fcHostNotAnswer', 'ing(target)) {'))) _fails.push('the homepage reader no longer fails fast on a host that stopped answering this lead');
+      if (!_w3.includes(_n('const _hn = fcNoteHostTimeout(', 'target);'))) _fails.push('the homepage timeout is no longer remembered, so nothing ever stands a host down');
+      // ── K2: a model NO our own measurements contradict ───────────────────
+      // The live pair, executed. Dr. Levi Young's practice must SURVIVE and
+      // Ram Jack Durham must still be discarded, or the guard is useless in
+      // one direction or the other.
+      const _k2src = selfSourceNoComments();
+      const _kcSite = 'Advanced Cosmetic Surgery serves Leawood and the greater Kansas City area. Board certified.';
+      if (!wrongCompanyOverruled('Dr. Levi Young - Advanced Cosmetic Surgery', 'advancedcosmeticsurgerykc.com', _kcSite, 'Leawood, KS')) {
+        _fails.push("a practice whose DOMAIN spells its own name and whose PAGE names its own market is still discarded on a model's word \u2014 that is a whole lead thrown away after the full research cycle was paid for, and the prompt already says this case is a yes");
+      }
+      const _rjSite = 'Ram Jack is the nationwide leader in foundation repair with certified dealers across the United States.';
+      if (wrongCompanyOverruled('Ram Jack Durham', 'ramjackusa.com', _rjSite, 'Durham, NC')) {
+        _fails.push('the franchisor case is overruled too \u2014 Ram Jack Durham resolving to ramjackusa.com is the failure this guard exists for, and an audit built on the national site is confidently about a business the prospect has never heard of');
+      }
+      if (domainSpellsLeadName('Ram Jack Durham', 'ramjackusa.com')) {
+        _fails.push('"ramjack" clears the name test \u2014 seven letters and two words must not be enough, or the franchisor walks back in');
+      }
+      if (!domainSpellsLeadName('Thrive Dental and Orthodontics', 'thrivedentalandorthodontics.com')) {
+        _fails.push('a joining "and" breaks the name test, so ordinary business names fail it');
+      }
+      if (siteNamesOurMarket('Serving the tri-state area since 1998.', 'Leawood, KS')) {
+        _fails.push('a page that never names our market reads as naming it');
+      }
+      // Each half of the rule needs a case only IT can refuse. The Ram Jack
+      // fixture above is protected by the twelve-letter bar, so it can see
+      // neither the market test nor the word floor \u2014 both over-widenings came
+      // back green against it, which is the fixture-that-measures-nothing trap.
+      //
+      // A national brand whose domain DOES spell its name, on a page that
+      // never names our market: the NAME half passes, so only the MARKET half
+      // can refuse this.
+      const _natl = 'All American Roofing is the nation\u2019s largest roofing network, with crews in every state.';
+      if (!domainSpellsLeadName('All American Roofing Company', 'allamericanroofingcompany.com')) {
+        _fails.push('this fixture no longer exercises the market half \u2014 the name test must PASS here or the case proves nothing');
+      }
+      if (wrongCompanyOverruled('All American Roofing Company', 'allamericanroofingcompany.com', _natl, 'Durham, NC')) {
+        _fails.push('a national site that never names our market overruled the discard on the strength of its name alone \u2014 the name half cannot carry this on its own, which is how a franchisor audit gets built');
+      }
+      // And a TWO-significant-word name long enough to clear the letter bar:
+      // only the three-word floor can refuse it. Widening to two is what
+      // re-admits a franchisor whose brand happens to be long.
+      // The listing's own phone is the stronger half: a national site does not
+      // print one outlet's number. And the model must be shown the page the
+      // escape hatch needs \u2014 3,000 characters of a practice is the masthead.
+      if (!wrongCompanyOverruled('Dr. Levi Young - Advanced Cosmetic Surgery', 'advancedcosmeticsurgerykc.com',
+          'Advanced Cosmetic Surgery. Call (913) 451-3722 today.', 'Somewhere Else, XX', '+1 913-451-3722')) {
+        _fails.push("the listing's own phone number printed on the page does not tie the site to the lead \u2014 that is the hardest identity evidence we hold at that line, and the function that tests it does not run until eleven hundred lines after the lead is discarded");
+      }
+      if (wrongCompanyOverruled('All American Roofing Company', 'allamericanroofingcompany.com', _natl, 'Durham, NC', '+1 919-555-0100')) {
+        _fails.push('a national site that prints neither our market nor our number was overruled anyway');
+      }
+      if (sitePrintsOurPhone('Call us on 913 451 3722', '')) _fails.push('an empty phone matches any page');
+      if (!_k2src.includes(_n('homepageContent.slice(0, ', '12000)'))) {
+        _fails.push("the domain-confirmation prompt is back to 3,000 characters \u2014 on a professional practice that is nav, hero and services, so the practitioner the prompt's own escape hatch looks for is below the cut and the hatch can never fire");
+      }
+      if (domainSpellsLeadName('Precision Waterproofing', 'precisionwaterproofingusa.com')) {
+        _fails.push('a two-word name clears the name test \u2014 the floor is three words on purpose, and the honest limit is that a two-word business keeps the old behaviour rather than the guard being loosened for it');
+      }
+      if (!_k2src.includes(_n("domainConfirmation.match === 'no' && wrongCompany", "Overruled(company, domain || website, content"))) {
+        _fails.push('the overrule never reaches the discard branch \u2014 a rule with no call site is a comment');
+      }
+      // ── C6b: an absence is proven only for the SMALLER window ────────────
+      // scanned is one draw's result count. Live: 80 on one look and 91 on the
+      // next, and the sheet said "not among the 91 ... checked twice".
+      {
+        const _mk = (n) => ({ checked: true, found: false, scanned: n });
+        const _both = [_mk(91), _mk(80)].map(x => Number(x.scanned)).filter(n => Number.isFinite(n) && n > 0);
+        if (Math.min(..._both) !== 80) _fails.push('the two-draw window arithmetic is wrong');
+        const _c6b = selfSourceNoComments();
+        if (!_c6b.includes(_n('scanned: _bothScanned.length ? Math.min(..._bothScanned) : ', 'a.scanned,'))) {
+          _fails.push('the confirmed-absence row is back to publishing ONE draw\u2019s window \u2014 "checked twice" is only proven for the smaller of the two, and the larger overstates what both searches read');
+        }
+      }
+      // ── K3: a lead discarded as the WRONG COMPANY must not ship that
+      // company's photographs. The bot-check branch nulls all three renders
+      // by name; this branch nulled one, and the other two reached pageShots,
+      // the model's image evidence and the audit screen.
+      const _srcLF = selfSourceNoCommentsLF();
+      if (!_srcLF.includes(_n('fullPageUrl = null;\n        mobileShotUrl = null;\n        renderRefused', ' = renderRefused ||'))) {
+        _fails.push("the wrong-company discard no longer nulls the full-page and phone renders \u2014 a DIFFERENT business's homepage ships as this owner's, which is further from the truth than the block page round 101 refused");
+      }
+      if (!_srcLF.includes(_n('&& !(htmlSignals && htmlSignals.discardedWrong', 'Company)\n          && firecrawlData && firecrawlData._mobilePromise) {'))) {
+        _fails.push('the in-flight phone render is collected again on a discarded lead \u2014 dispatched before the verdict existed, billed after it, and pushed onto the sheet as their homepage');
+      }
+      // ── K4: a zero corpus must say WHICH of the two it is. "Their website
+      // returned nothing" printed for a site that returned 52 internal links
+      // and was discarded as a different business.
+      if (!_src.includes(_n('discardedWrongCompany: !!(htmlSignals && htmlSignals', '.discardedWrongCompany),'))) {
+        _fails.push('the reason a corpus is empty no longer travels, so the sheet is back to guessing between "their site is empty" and "we discarded their site" \u2014 a message that names the wrong cause costs exactly what a missing one costs');
+      }
+      if (_fails.length) console.log(`\u26d4 LEAD SURVIVAL CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+      else console.log(`\u2713 LEAD SURVIVAL CHECK: a lead that dies no longer dies quietly. A map that fails can no longer delete a website: Every exit \u2014 no key, no credits, throttled twice, a credit error and a timeout \u2014 returns through ONE function that reads the internal links already harvested from the host's own markup at no cost, the free cachedSiteMap reader obeys the same rule, a cached failure is marked as a failure rather than as a measured zero, and a host we have never read still yields nothing rather than a guess. And a lead discarded as the wrong company takes that company's pictures with it \u2014 the full-page render, the phone render and the one still in flight \u2014 while the sheet is told WHY its corpus is empty instead of guessing that their website returned nothing.`);
+    } catch (e) {
+      console.log(`\u26d4 LEAD SURVIVAL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+    } finally { bootRelease(); }
+  })();
+
   const _missing = _FEATURES.filter(([, t]) => t !== 'function').map(([n]) => n);
   if (_missing.length) console.log(`\u26d4 STALE BUILD \u2014 ${_missing.join(', ')} are not in this server.js. Anything depending on them will silently do nothing. Deploy the current file before reading any result from this run.`);
   // Every source-reading check has run. Drop the cached copy of this file so a
