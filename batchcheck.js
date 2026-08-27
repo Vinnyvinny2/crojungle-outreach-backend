@@ -188,7 +188,7 @@ const runBatch = async (opts) => {
   const panelDrift = [];
   let sawRoster = 0;
   const out = await api.runBatchAudit({
-    leads: opts.leads, settings: { apiKey: 'k' }, withEmail: !!opts.withEmail,
+    leads: opts.leads, settings: { apiKey: 'k' }, withEmail: !!opts.withEmail, callOnly: !!opts.callOnly,
     concurrency: opts.concurrency, shouldStop: opts.shouldStop,
     onProgress: (ev) => {
       panel = api.batchProgressReduce(panel, ev);
@@ -309,6 +309,26 @@ const runBatch = async (opts) => {
     for (const k of ['company', 'founderName', 'brainAudit']) {
       if (!(k in cb)) fails.push(`the batch's compose request has no "${k}" — it is not going through buildComposeBody`);
     }
+  }
+
+  // 3b — CALLING MODE reaches the wire, and is absent by default.
+  //
+  // The server decides whether to buy the paid owner lookups from ONE field in
+  // the research body. A tick box that sets state and never reaches the body is
+  // the computed-but-not-passed failure this repo records more than any other,
+  // and it would be invisible: the batch would run normally and quietly keep
+  // spending. Both directions, because a flag stuck ON is the worse half - it
+  // would stop buying owner names on an EMAILING batch, where the name and the
+  // title are what the email is addressed to.
+  {
+    const leads = seed(4);
+    const { W } = await runBatch({ leads, callOnly: true });
+    const off = W.bodies.filter(b => b.callOnly !== true);
+    if (off.length) fails.push(`calling mode was ticked and ${off.length} of ${W.bodies.length} research request(s) did not carry callOnly, so the server bought the paid owner lookups anyway`);
+
+    const plain = await runBatch({ leads: seed(4) });
+    const on = plain.W.bodies.filter(b => b.callOnly !== false);
+    if (on.length) fails.push(`callOnly was not ticked and ${on.length} request(s) still carried it - an emailing batch would stop resolving the owner name the email is addressed to`);
   }
 
   // 4 — the fact-checker refuses.

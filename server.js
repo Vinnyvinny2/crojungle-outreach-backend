@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260904;
+const CONTRACT_VERSION = 20260905;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -10205,6 +10205,15 @@ const NICKNAMES = {
   vin:['vincent','vinny'], vincent:['vin','vinny'],
 };
 // True if the email local-part contains an owner name token OR a nickname form of it.
+// == ONE RULE FOR "IS THIS THE SAME FIRST NAME" ==============================
+// sameName kept this inline and the cluster merge below needs the identical
+// question, which is how this file's most-recorded disease starts: two hand-kept
+// copies of one rule, and the second one rots because it only runs in the case
+// nobody tests. NICKNAMES is why it cannot be ===: the owner engine says "Mike
+// Bacevich" and Hunter's verified address says "Michael Bacevich".
+const firstNamesEqual = (x, y) => x === y
+  || (NICKNAMES[x] || []).includes(y)
+  || (NICKNAMES[y] || []).includes(x);
 const sameName = (a, b) => {
   // Canonical parse first, so "MAHAFFEY, JAY" ≡ "Mr. Jay Mahaffey" — registry,
   // Hunter and site each hand us the same human in a different costume.
@@ -10216,8 +10225,7 @@ const sameName = (a, b) => {
   // exact match called them different people and threw away a REAL, indexed
   // address in favour of building mike@ — which then failed SMTP. The NICKNAMES
   // table existed for exactly this and was never consulted here.
-  const firstEq = (x, y) => x === y || (NICKNAMES[x] || []).includes(y) || (NICKNAMES[y] || []).includes(x);
-  return firstEq(A[0], B[0]) && A[A.length - 1] === B[B.length - 1];
+  return firstNamesEqual(A[0], B[0]) && A[A.length - 1] === B[B.length - 1];
 };
 
 // Does this mailbox belong to this person? A false YES is the worst answer this
@@ -23480,6 +23488,32 @@ const auditFilledness = (a) => {
   return { prose, lists, named, usable: named && (prose + lists) > 0 };
 };
 
+// == ONE REFUSAL, ASKED TWICE ================================================
+// The BRAIN GATE lives ~2,000 lines below the audit call, and both of the
+// inputs it decides on -- the parsed audit and the API error -- exist the
+// moment that call returns. So a husk still bought the STORY WRITER (the most
+// expensive call on the lead) and the FACT-CHECK before being refused, on a
+// lead that was always going to 422. Four of five leads died that way in one
+// live batch, and at fifty a day that is the money Vin means.
+//
+// This is the CONDITION only. The late gate keeps its own logging and keeps
+// producing the 422 exactly where it always has -- nothing about the response,
+// the reason text or the status code moves. What changes is that two calls are
+// not made first.
+//
+// ASKED OF `parsed` EARLY AND `brainAudit` LATE, and that is safe in ONE
+// direction only, so it is worth writing down. brainAudit is built field by
+// field FROM parsed, and the two fields that can differ both lose content on
+// the way: situationRead becomes the synthesis OBJECT (a non-string scores no
+// prose) and whatNeeds never reaches the literal at all. So the early answer is
+// always at least as PERMISSIVE as the late one -- an early refusal implies a
+// late refusal, never the other way round. A lead can still be refused only by
+// the gate that always refused it. AUDIT REFUSAL CHECK executes that.
+const auditRefusalKind = (audit, brainError) => {
+  if (!audit) return 'missing';
+  if (brainError) return 'error';
+  return auditFilledness(audit).usable ? '' : 'husk';
+};
 const tradeJobValue = (tradeWord) => {
   const t = String(tradeWord || '').trim();
   if (!t) return null;
@@ -29165,6 +29199,37 @@ const ARTICLE_SLUG = new RegExp(
   + '|\\/[a-z0-9-]*(?:-in-|-for-|-vs-|-to-)[a-z0-9-]*\\/?$',
   'i');
 
+// == /index.html IS THE HOMEPAGE, AND WE PAID TO LEARN THAT ==================
+// Miller's Fancy Bath, live 2026-08-27: the backfill took /index.html out of
+// their sitemap, bought it as an interior page, and the duplicate-page
+// fingerprint then threw it away -- "1 of the 5 page(s) we read came back with
+// text identical to the HOMEPAGE". That lead fetched the homepage FOUR times
+// (corpus text, full-page render, phone render, and this) and the fourth was
+// pure waste: a paid credit and ~14 seconds buying a page the very next check
+// deletes.
+//
+// The old guard excluded only an EMPTY path, so "/" was caught and every server
+// default document walked straight past it. Those names are not a guess:
+// index.* and default.* are what a web server returns for "/", and /home is the
+// slug a site builder gives the same page. The dedupe still runs behind this --
+// what changes is that we stop PAYING for the page it deletes, and the picker
+// gets that read back for a page nobody has seen.
+//
+// Exact SEGMENT match, deliberately. A homebuilder's /homes, a services page at
+// /home-improvement and a settings page at /default-settings are real pages on
+// exactly the trades we target, and a filter that ate them would cost a page
+// read to save one. A nested /a/index.html is a folder's index, not the front
+// door, so it is kept too.
+const HOMEPAGE_ALIAS_SEGMENT = /^(?:index|default|home)(?:\.(?:html?|php|aspx?|jsp|cfm|shtml))?$/i;
+const isHomepageAliasUrl = (u) => {
+  let p = String(u || '');
+  try { p = new URL(p).pathname; } catch (e) { void e; }
+  const segs = p.split('/').filter(Boolean);
+  if (!segs.length) return true;            // "/" -- the homepage itself
+  if (segs.length > 1) return false;        // /a/index.html is a page inside a folder
+  return HOMEPAGE_ALIAS_SEGMENT.test(segs[0]);
+};
+
 const PAGE_INTENT = [
   // Round 101: singular 'price' and the financing family join, and the picker
   // matches these ANYWHERE in the last segment (hintAnywhere) - the unread
@@ -29220,6 +29285,11 @@ const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd, h
       return null;
     }
     const clean = urls.filter(u => !/\.(pdf|jpg|jpeg|png|gif|svg|zip|mp4|webp)$/i.test(u));
+    // The list the picker may SPEND on. `clean` keeps every URL because
+    // findUnlinkedPages reads it and its denominator is a statement about their
+    // sitemap; this one drops the homepage under any of its server-default names,
+    // because we have already fetched that page three times. See isHomepageAliasUrl.
+    const buyable = clean.filter(u => !isHomepageAliasUrl(u));
 
     // ── PICK THE RIGHT PAGE, NOT THE FIRST ONE THAT MATCHES ──────────────────
     // This used to be `clean.find(...)` against the FULL url, which worked only
@@ -29253,7 +29323,7 @@ const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd, h
     for (const intent of PAGE_INTENT) {
       // The proof category is the one that WANTS reviews and testimonials pages;
       // every other category still treats them as content noise.
-      const ranked = rankUrlsByIntent(clean, intent.re, 6, { wantProof: intent.key === 'proof', hintAnywhere: intent.key === 'pricing' })
+      const ranked = rankUrlsByIntent(buyable, intent.re, 6, { wantProof: intent.key === 'proof', hintAnywhere: intent.key === 'pricing' })
         .filter(u => !picked.some(p => p.url === u));
       ranked.slice(0, 2).forEach(u => picked.push({ key: intent.key, url: u }));
     }
@@ -29309,7 +29379,7 @@ const auditSitePages = async (website, fcKey, apiKey, companyName, homepageMd, h
       const _order = (a, b) => (_navRank(a) - _navRank(b))
                      || (a.split('/').length - b.split('/').length)
                      || (a.length - b.length);
-      const _eligible = clean
+      const _eligible = buyable
         .filter(u => !picked.some(p => p.url === u) && !NOISE.test(u) && !LOW_VALUE.test(u))
         // Never the homepage \u2014 it is already scraped and would be bought twice.
         .filter(u => { try { return new URL(u).pathname.replace(/\/$/, '') !== ''; } catch (e) { void e; return true; } });
@@ -30347,6 +30417,54 @@ ${content}` }]
 // Cluster the same human across sources and rank them. Used BOTH by the stage gate
 // (to decide whether we still need to buy more lookups) and by the final result, so
 // the "have we got it?" test and the answer we ship can never disagree.
+// == A FIRST NAME IS A SOURCE, NOT A STRANGER ================================
+// Miller's Fancy Bath, live 2026-08-27. Their own site named "Rick Miller" at
+// high confidence and the Google review replies were signed "Rick" -- which is
+// all a review signature ever gives you. sameName refuses any name under two
+// tokens outright (a bare first name cannot identify a mailbox, and that
+// function routes email), so the two never clustered: instead of corroborating
+// each other they COMPETED, stage 1 did not settle, and the run bought the
+// paid web-search and licence wave to rediscover a name it already had.
+//
+// findOwnerViaReviewReplies' own prompt says "A first name alone is fine and
+// useful", and the source is weighted 35 because at an owner-run shop whoever
+// answers the reviews IS the owner. It was structurally unable to be useful.
+//
+// Three properties make this safe, and they are the whole design:
+//   1. the FULLER name always survives -- the bare first name is absorbed and
+//      removed, so this can never turn "Rick Miller" into "Rick" on a sheet;
+//   2. it only ADDS a source, so it can strengthen corroboration and can never
+//      invent, rename or retitle anybody;
+//   3. AMBIGUITY REFUSES. If two different full names share that first name,
+//      the review signature does not tell us which, so nothing is merged. A
+//      guess here would attach a real source to the wrong person.
+// sameName itself is deliberately untouched: a false yes there sends an email
+// addressed to the owner by name into a stranger's mailbox.
+const foldFirstNameClusters = (clusters) => {
+  for (let i = clusters.length - 1; i >= 0; i--) {
+    const c = clusters[i];
+    const cp = cleanPersonForEmail(c && c.name);
+    if (!cp || cp.length !== 1) continue;               // only a bare first name
+    const hosts = [];
+    for (let j = 0; j < clusters.length; j++) {
+      if (j === i) continue;
+      const hp = cleanPersonForEmail(clusters[j] && clusters[j].name);
+      if (hp && hp.length > 1 && firstNamesEqual(hp[0], cp[0])) hosts.push(clusters[j]);
+    }
+    if (hosts.length !== 1) continue;                   // ambiguous, or nobody
+    const host = hosts[0];
+    for (const s of (c.sources || [])) {
+      if (!host.sources.includes(s)) {
+        host.sources.push(s);
+        host.score += DM_SOURCE_WEIGHT[s] || 10;
+      }
+    }
+    if (c.title && authorityScore(c.title) > authorityScore(host.title)) host.title = c.title;
+    if (c.evidence && !host.evidence) host.evidence = c.evidence;
+    clusters.splice(i, 1);
+  }
+  return clusters;
+};
 const rankOwnerCandidates = (found) => {
   if (!found || !found.length) return null;
   const clusters = [];
@@ -30368,6 +30486,10 @@ const rankOwnerCandidates = (found) => {
     }
   }
   if (!clusters.length) return null;
+  // Before ANY scoring: a bare first name that belongs to exactly one of these
+  // full names is that person's source, not a rival candidate. See
+  // foldFirstNameClusters -- the fuller name always survives.
+  foldFirstNameClusters(clusters);
   clusters.forEach(c => {
     const independent = independentSourceCount(c.sources);
     c.corroborated = independent >= 2;
@@ -30381,7 +30503,7 @@ const rankOwnerCandidates = (found) => {
   return clusters[0];
 };
 
-const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '', industry = '', apifyToken = '' }) => {
+const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '', industry = '', apifyToken = '', callOnly = false }) => {
   // ═══ STAGED WATERFALL — STOP PAYING ONCE WE HAVE THE ANSWER ═══════════════
   // This used to fire all seven sources in parallel on EVERY lead, so a company
   // that names its owner on its own About page still paid for two web searches,
@@ -30419,9 +30541,17 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // boot check runs the real thing; this alias keeps every call site here.
   const _isEponymousOwner = isEponymousOwnerRule;
 
+  // == THE ONLY RECORD OF WHY THE PAID WAVE WAS BOUGHT =======================
+  // Miller's Fancy Bath, live 2026-08-27: the business is named Miller's, their
+  // own site named Rick Miller at high confidence, and isEponymousOwnerRule
+  // returns true on exactly those two strings -- so all three conditions of the
+  // eponymous settle computed true on the values in that lead's own log, and the
+  // run bought stage 2 anyway. Nothing printed which one was false, so the
+  // question could not be answered from the log at all. It can now.
+  let _settleWhy = 'settled() was never called';
   const settled = () => {
     const ranked = rankOwnerCandidates(found);
-    if (!ranked) return null;
+    if (!ranked) { _settleWhy = 'no candidate survived ranking at all'; return null; }
     const independent = independentSourceCount(ranked.sources);
     const corroborated = independent >= 2 && ranked.authority >= 75;
     const ownSiteConfident = ranked.sources.includes('own_website_brain')
@@ -30461,6 +30591,9 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     if (eponymousConfident && !(corroborated || ownSiteConfident || rosterConfident)) {
       console.log(`DM [${companyName}]: EPONYMOUS \u2014 the business is named after ${ranked.name}, confirmed high-confidence by their own site, and the business name itself is the corroboration. Evidence floor met without paid lookups (~8 Firecrawl credits saved).`);
     }
+    _settleWhy = `${ranked.name || 'nobody'} (${ranked.sources.join('+')}) authority=${ranked.authority} independent=${independent}`
+      + ` | corroborated=${corroborated} ownSite=${ownSiteConfident} eponymous=${eponymousConfident} roster=${rosterConfident}`
+      + ` | brainConfidence=${(brainHit && brainHit.confidence) || 'none'} eponymousRule=${_isEponymousOwner(ranked.name, companyName, website)}`;
     return (corroborated || ownSiteConfident || eponymousConfident || rosterConfident) ? ranked : null;
   };
 
@@ -30525,7 +30658,25 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   }
   if (settled()) {
     console.log(`DM [${companyName}]: settled at stage 1 — skipped web search, licence and registry lookups (~10 Firecrawl credits saved)`);
+  } else if (callOnly) {
+    // == A COLD CALL ASKS THE RECEPTIONIST ===================================
+    // Stage 2 and 3 buy a NAME. On a calling batch the rep gets that name in
+    // four seconds by asking whoever answers the phone, so the wave is ~10
+    // Firecrawl credits and two model calls spent on a question the call itself
+    // answers for nothing. Stage 1 is untouched and still runs on every lead:
+    // their own site, Google News, the business name and the review-reply
+    // signature are all free or already paid for, and they are the sources that
+    // actually find owner-operators.
+    //
+    // What this costs, stated: no TITLE. The authority floor is what decides
+    // whether a name may be shown as the buyer, so an uncorroborated stage-1
+    // name is still held back exactly as it is today -- the sheet says "(no
+    // title found)" rather than inventing one. That is a fair trade for a call
+    // and a bad one for an email, which is why this is a per-request flag and
+    // not a new default.
+    console.log(`DM [${companyName}]: CALL MODE — stage 1 did not settle (${_settleWhy}), and the paid web/licence/registry lookups are SKIPPED because this batch is for calling: the rep asks whoever answers the phone. ~10 Firecrawl credits and 2 model calls saved. Everything free was still measured.`);
   } else {
+    console.log(`DM [${companyName}]: stage 1 did not settle — ${_settleWhy}. Buying the paid lookups.`);
     // ── STAGE 2 — paid search. The heavy hitters for owner-operated SMBs. ────
     stagesRun = 2;
     const [websearch, license] = await Promise.all([
@@ -39149,6 +39300,11 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
           // no rank finding exists rather than a wrong one.
           industry: customerTrade || verifiedIndustry || '',
           apifyToken,
+          // A batch that exists to be CALLED does not buy an owner name. Absent
+          // means today's behaviour exactly, so a client that never sends it
+          // behaves as it always has. Strict === true: a truthy string from a
+          // hand-built body must not silently stop buying owner lookups.
+          callOnly: req.body.callOnly === true,
         });
         // ══ "OWNER" WAS A DEFAULT, NOT SOMETHING ANYBODY READ ══════════════
         // This line was `decisionMaker.title || verifiedCEOTitle || 'Owner'`.
@@ -44543,7 +44699,10 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
               opsRoles: (careers && Array.isArray(careers.opsRoles)) ? careers.opsRoles.slice(0, 3) : [],
             });
             try {
-              if (Array.isArray(measuredFacts) && measuredFacts.length >= 6 && !situationRead) {
+              // A lead the BRAIN GATE will refuse must not buy the story first:
+              // it is the most expensive call on the lead and its output is
+              // discarded with the 422. See auditRefusalKind.
+              if (Array.isArray(measuredFacts) && measuredFacts.length >= 6 && !situationRead && !auditRefusalKind(parsed, brainError)) {
                 const _extra = [];
                 if (trustedContent && trustedContent.length > 200) {
                   _extra.push(`THEIR OWN HOMEPAGE COPY, so you are reading the business and not a summary of it:\n<<<${String(trustedContent).slice(0, 6000)}>>>`);
@@ -45756,6 +45915,12 @@ The CROJungle product list and the FULL OUTPUT SCHEMA you must return are given 
           // a claim is genuinely unsupported. A skipped fact-check is not a feature.
           if (req.body.skipFactCheck === true) {
             console.log(`Fact-check skipped (explicitly disabled) on ${company}`);
+          } else if (auditRefusalKind(parsed, brainError)) {
+            // Same reason as the story above: this lead is already destined for
+            // the 422 and the critique's answer dies with it. Named out loud,
+            // because "FACT CHECK DID NOT RUN" on a lead that SHIPS is a real
+            // alarm and this is not that lead.
+            console.log(`BRAIN GATE (early) [${company}]: the audit came back ${auditRefusalKind(parsed, brainError)}, so this lead will be refused. Skipping the strategic read and the fact-check rather than buying two calls whose answers are discarded with it. The refusal itself is unchanged and still happens at the gate below.`);
           } else
           try {
             // ══ THE CHECKER WAS BLIND TO OUR OWN MEASUREMENTS ═══════════════════════════
@@ -46658,12 +46823,16 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // refused.
     const _auditFilled = auditFilledness(brainAudit);
     const _auditUnusable = !!brainAudit && !_auditFilled.usable;
+    // The decision itself now comes from the ONE rule the early gate also asks,
+    // so the two can never drift into refusing different leads. The branches
+    // below keep their own wording because each names a different cause.
+    const _refusal = auditRefusalKind(brainAudit, brainError);
     if (brainError && brainAudit) {
       console.log(`\u26d4 BRAIN GATE [${company}]: an audit object survived the parse, but the API ALSO reported an error ("${String(brainError).slice(0, 90)}"). Nothing recovered from a failed response is trustworthy. Blocking rather than shipping a lead that would look researched.`);
     } else if (_auditUnusable) {
       console.log(`\u26d4 BRAIN GATE [${company}]: the audit parsed but is EMPTY \u2014 named=${_auditFilled.named ? (brainAudit.recommendedProduct || brainAudit.leadSignal) : 'nothing'}, ${_auditFilled.prose} prose field(s) with anything in them, ${_auditFilled.lists} finding/product row(s). An object with nothing in it is still truthy, which is how this used to pass. Blocking.`);
     }
-    if (!brainAudit || brainError || _auditUnusable) {
+    if (_refusal) {
       const reason = FIRECRAWL_OUT_OF_CREDITS
         ? 'FIRECRAWL IS OUT OF CREDITS — every scrape, search and map is failing, so there was nothing to audit. This is a billing problem at firecrawl.dev, not a bug and not your Anthropic key. Top up and re-run; no research done while empty is trustworthy.'
         : brainError
@@ -52053,6 +52222,115 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ BRAIN GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+  // == THE GATE THAT REFUSED A LEAD AFTER BUYING TWO MORE CALLS ==============
+  // A husk audit still bought the strategic read and the fact-check before the
+  // BRAIN GATE refused it, ~2,000 lines later, on inputs that existed the moment
+  // the audit call returned. Four of five leads died that way in one live batch.
+  //
+  // The whole safety of moving it earlier rests on ONE claim, so this executes
+  // that claim rather than arguing it: the early answer is asked of `parsed` and
+  // the late answer of `brainAudit`, and brainAudit is built field by field FROM
+  // parsed, so an EARLY refusal must imply a LATE refusal. If that ever inverts,
+  // this fix starts refusing leads the old gate would have shipped, which is the
+  // one outcome it must never produce.
+  try {
+    const _fails = [];
+
+    // 1. The four states, executed.
+    if (auditRefusalKind(null, '') !== 'missing') _fails.push('a missing audit is no longer refused');
+    if (auditRefusalKind({ recommendedProduct: 'x', pitchAngle: 'a'.repeat(40) }, 'Anthropic credit balance is low') !== 'error') {
+      _fails.push('an audit salvaged from a FAILED response is no longer refused - nothing recovered from a failed call is trustworthy');
+    }
+    if (auditRefusalKind({ pitchAngle: null, realPain: null, recommendedProduct: null, originalFindings: [] }, '') !== 'husk') {
+      _fails.push('the 31 Jul husk - every field null - is no longer refused');
+    }
+    if (auditRefusalKind({ recommendedProduct: 'Website Rebuild', candidateFindings: [{ finding: 'x' }] }, '') !== '') {
+      _fails.push('a real audit is being refused, which would destroy a paid research cycle on a lead that was fine');
+    }
+    // The Jones Kahan shape: pitchAngle emptied by a stripper, everything else
+    // intact. It must SHIP - that lead was destroyed for one blank field.
+    if (auditRefusalKind({ pitchAngle: '', recommendedProduct: 'Revenue Growth', candidateFindings: [{ finding: 'a' }, { finding: 'b' }, { finding: 'c' }] }, '') !== '') {
+      _fails.push('a blank pitchAngle again refuses an audit that has a product and three findings - the live 422 that cost 310 seconds of paid research');
+    }
+
+    // 2. THE IMPLICATION, EXECUTED. The two fields that differ between parsed
+    //    and brainAudit both LOSE content on the way, so an audit carried by
+    //    either of them alone must still be refused late - and therefore must
+    //    NOT be refused early, or the early gate would be the stricter one.
+    const _proj = (p) => {
+      // exactly what the brainAudit literal does to the two divergent fields:
+      // situationRead becomes the synthesis OBJECT, whatHeNeeds never lands.
+      const o = Object.assign({}, p);
+      if (typeof o.situationRead === 'string') o.situationRead = { headline: o.situationRead };
+      delete o.whatHeNeeds;
+      return o;
+    };
+    const _shapes = [
+      { pitchAngle: null, situationRead: 'a'.repeat(60), recommendedProduct: null, candidateFindings: [] },
+      { pitchAngle: null, whatHeNeeds: 'a'.repeat(60), recommendedProduct: null, candidateFindings: [] },
+      { recommendedProduct: 'Website Rebuild', pitchAngle: 'a'.repeat(40) },
+      { leadSignal: 'x', originalFindings: [{ finding: 'y' }] },
+      {}, { candidateFindings: [{ finding: 'z' }] },
+    ];
+    for (const s of _shapes) {
+      for (const err of ['', 'boom']) {
+        const early = auditRefusalKind(s, err);
+        const late = auditRefusalKind(_proj(s), err);
+        if (early && !late) {
+          _fails.push(`the early gate refuses a shape the late gate would have shipped (${JSON.stringify(s).slice(0, 80)}) - it has become the stricter of the two, and would destroy paid research on leads that were fine`);
+        }
+      }
+    }
+
+    // 3. THE FIELD SOURCING, which is what makes 2 hold for every field rather
+    //    than for the two we happen to know about. Every prose and list field
+    //    the rule reads must come from the SAME-NAMED parsed field in the
+    //    brainAudit literal, or be absent from it entirely.
+    const _src = selfSourceNoComments();
+    const _n = (a, b) => a + b;
+    const _litAt = _src.indexOf(_n('          brainAudit = ', '{'));
+    if (_litAt < 0) _fails.push('the brainAudit literal could not be found, so the field sourcing above is unchecked');
+    else {
+      const _lit = _src.slice(_litAt, _litAt + 20000);
+      let _seen = 0;
+      for (const f of AUDIT_PROSE_FIELDS.concat(['candidateFindings', 'topThreeProducts', 'originalFindings', 'recommendedProduct', 'leadSignal'])) {
+        const _i = _lit.indexOf(String.fromCharCode(10) + '            ' + f + ':');
+        if (_i < 0) continue;                      // absent is fine: it scores nothing on either side
+        _seen++;
+        const _rhs = _lit.slice(_i, _i + 220);
+        if (_rhs.indexOf('parsed.' + f) < 0) {
+          _fails.push(`brainAudit.${f} is no longer taken from parsed.${f}, so the early and late answers can now disagree in either direction`);
+        }
+      }
+      // A scan that matched nothing reports a clean pass while looking at
+      // nothing, which is the vacuous-check trap this file records by name. The
+      // literal carries at least the product, the two finding lists and three
+      // prose fields, so anything under six means the shape moved and this
+      // assertion has stopped being one.
+      if (_seen < 6) _fails.push(`only ${_seen} of the fields the refusal rule reads could be found in the brainAudit literal, so the sourcing above is not being checked at all`);
+    }
+
+    // 4. THE CALL SITES. The fixtures build their own arguments and cannot see a
+    //    build where the rule is defined and nothing consults it.
+    if (!_src.includes(_n('    if (_refu', 'sal) {'))) {
+      _fails.push('the late BRAIN GATE no longer decides through the shared rule - two hand-kept copies of one refusal, with the copies inside the guard');
+    }
+    if (!_src.includes(_n('!situationRead && !auditRefusalKind(pars', 'ed, brainError))'))) {
+      _fails.push('a lead already destined for the 422 buys the strategic read again - the most expensive call on the lead, discarded with the refusal');
+    }
+    if (!_src.includes(_n('} else if (auditRefusalKind(pars', 'ed, brainError)) {'))) {
+      _fails.push('a lead already destined for the 422 buys the fact-check again');
+    }
+
+    if (_fails.length) {
+      console.log(`\u26d4 AUDIT REFUSAL CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`\u2713 AUDIT REFUSAL CHECK: one rule decides whether an audit is refused, and it is asked as soon as the audit parses instead of only ~2,000 lines later. A husk stops buying the strategic read and the fact-check, whose answers were discarded with the 422 anyway. The refusal itself is unchanged: same place, same wording, same status. The safety is executed rather than argued - the early answer is asked of the parsed audit and the late one of brainAudit, and across ${_shapes.length} shapes in both error states the early answer is never the stricter, so no lead can be refused that the old gate would have shipped. Jones Kahan's blank pitchAngle still ships and the 31 Jul husk still does not.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 AUDIT REFUSAL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
 
   // ══ THE ROW WE MATCHED IN THE SEARCH MIGHT NOT BE US ══════════════════════
   // Live on BVA, 2026-08-21: "⛔ MEASUREMENT LOOKS WRONG: we read 150 reviews of
@@ -63799,6 +64077,63 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   } catch (e) {
     console.log(`⛔ PAGE SELECTION CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+  // == WE PAID FOR THE HOMEPAGE A FOURTH TIME, THEN DELETED IT ===============
+  // Miller's Fancy Bath, live: /index.html came out of their own sitemap, the
+  // backfill bought it as an interior page, and the duplicate-page fingerprint
+  // threw it away one step later. The old guard excluded an EMPTY path only, so
+  // "/" was caught and every server default document walked past it.
+  //
+  // Both directions are fixtured on purpose. A filter that ate /homes or
+  // /home-improvement would cost a real page read on a homebuilder and a
+  // remodeler -- exactly the trades we target -- to save the one it was written
+  // for, which is the guard-too-tight failure this file records at the size gate.
+  try {
+    const _fails = [];
+    const _drop = ['https://x.com/', 'https://x.com', 'https://x.com/index.html', 'https://x.com/index.php',
+                   'https://x.com/index.htm', 'https://x.com/default.aspx', 'https://x.com/home',
+                   'https://x.com/Home.html', 'https://x.com/INDEX.HTML', '/index.html',
+                   'https://x.com/home.php', 'https://x.com/default.asp'];
+    const _keep = ['https://x.com/homes', 'https://x.com/home-improvement', 'https://x.com/default-settings',
+                   'https://x.com/indexing-services', 'https://x.com/about', 'https://x.com/a/index.html',
+                   'https://x.com/services/index.html', 'https://x.com/homeowners', 'https://x.com/kitchens.html',
+                   'https://x.com/master-baths.html', 'https://x.com/our-designers.html',
+                   'https://x.com/homepage-redesign', 'https://x.com/index-cards'];
+    for (const u of _drop) if (!isHomepageAliasUrl(u)) _fails.push(`"${u}" is the homepage under another name and would still be bought as an interior page`);
+    for (const u of _keep) if (isHomepageAliasUrl(u)) _fails.push(`"${u}" is a real page and this filter would refuse to read it`);
+
+    // == THE CALL SITE, NOT THE PREDICATE =====================================
+    // A check that does not assert its call site is half a check: the fixtures
+    // above supply their own arguments and can never see a picker that stopped
+    // consulting them. Needles in two REAL halves, assembled at runtime, over
+    // comment-stripped source -- a literal needle finds itself, and the comments
+    // right here quote the very call they guard.
+    const _src = selfSourceNoComments();
+    const _n = (a, b) => a + b;
+    if (!_src.includes(_n('const buyable = clean.filter(u => !isHomepage', 'AliasUrl(u));'))) {
+      _fails.push('the buyable list is no longer derived by filtering the homepage aliases out of clean');
+    }
+    if (!_src.includes(_n('rankUrlsByIntent(buy', 'able, intent.re, 6,'))) {
+      _fails.push('the intent picker reads a list that still contains the homepage, so an intent match on /index.html would buy it');
+    }
+    if (!_src.includes(_n('const _eligible = buy', 'able' + String.fromCharCode(13)))) {
+      _fails.push('the sitemap backfill reads a list that still contains the homepage - the exact path that bought /index.html on a live lead');
+    }
+    // And the thing this fix deliberately did NOT touch. findUnlinkedPages
+    // reports how many pages the sitemap holds, which is a statement about their
+    // sitemap rather than about what we choose to buy, so it keeps the full list.
+    if (!_src.includes(_n('findUnlinkedPages({ sitemap: cle', 'an,'))) {
+      _fails.push('the unlinked-page read no longer sees the whole sitemap, so its denominator moved - that count is a fact about their site, not about our page budget');
+    }
+
+    if (_fails.length) {
+      console.log(`\u26d4 HOMEPAGE ALIAS CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`\u2713 HOMEPAGE ALIAS CHECK: the homepage under any of its server-default names (/index.html, /default.aspx, /home) is dropped BEFORE the picker can spend on it, and ${_keep.length} real pages that merely look like one - /homes, /home-improvement, a folder's own /a/index.html - are untouched. Miller's Fancy Bath fetched its homepage four times on one lead and the fourth was bought only for the duplicate check to delete it. The unlinked-page read still sees the whole sitemap, because its count is a fact about their site rather than about our page budget.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 HOMEPAGE ALIAS CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
 
   // ══ TWO SENDING DOMAINS, ONE LEAD IN EXACTLY ONE OF THEM ══════════════════
   // Deliverability has one mailbox, 2 hard bounces in ~12 sends, and a hard
@@ -65363,6 +65698,94 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   } catch (e) {
     console.log(`⛔ DM SPEND CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+  // == THE FREE SOURCE THAT COULD NEVER CORROBORATE ==========================
+  // Miller's Fancy Bath, live 2026-08-27: their own site named "Rick Miller"
+  // [high] and the review replies were signed "Rick". sameName refuses anything
+  // under two tokens, so the two never clustered -- they competed -- stage 1 did
+  // not settle, and the run bought the paid websearch + licence wave to
+  // rediscover the name it was already holding.
+  //
+  // Executed, not read: the real rankOwnerCandidates over the real shapes. The
+  // ambiguous case is the one that matters most, because a wrong merge attaches
+  // a genuine source to the wrong person.
+  try {
+    const _fails = [];
+    const _mk = (name, source, title) => ({ name, source, title: title || null });
+
+    // 1. THE LIVE SHAPE. One person, two sources, and the fuller name survives.
+    const _millers = rankOwnerCandidates([
+      _mk('Rick Miller', 'own_website_brain'),
+      _mk('Rick', 'google_review_replies'),
+    ]);
+    if (!_millers) _fails.push('the live Miller shape produced no candidate at all');
+    else {
+      if (_millers.name !== 'Rick Miller') _fails.push(`the bare first name won the ranking - the sheet would read "${_millers.name}" instead of the full name their own site published`);
+      if (!_millers.sources.includes('own_website_brain')) _fails.push('the winning cluster lost own_website_brain, which is the source the eponymous settle reads');
+      if (!_millers.sources.includes('google_review_replies')) _fails.push('the review signature still fails to reach the cluster, so the free source cannot corroborate and the paid wave is bought anyway');
+    }
+
+    // 2. AMBIGUITY REFUSES. Two different people share the first name, so the
+    //    signature does not say which - and a guess would credit the wrong one.
+    const _amb = rankOwnerCandidates([
+      _mk('Rick Miller', 'own_website_brain'),
+      _mk('Rick Jones', 'web_search'),
+      _mk('Rick', 'google_review_replies'),
+    ]);
+    if (_amb && _amb.sources.includes('google_review_replies')) {
+      _fails.push('a bare first name shared by two different people was credited to one of them anyway - that is a guess wearing a corroboration');
+    }
+
+    // 3. A NICKNAME IS THE SAME FIRST NAME, through the one shared rule.
+    const _nick = rankOwnerCandidates([
+      _mk('Michael Bacevich', 'own_website_brain'),
+      _mk('Mike', 'google_review_replies'),
+    ]);
+    if (!_nick || !_nick.sources.includes('google_review_replies') || _nick.name !== 'Michael Bacevich') {
+      _fails.push('a nickname signature no longer folds into the full name, so NICKNAMES is doing nothing here');
+    }
+
+    // 4. A DIFFERENT PERSON IS STILL A DIFFERENT PERSON.
+    const _other = rankOwnerCandidates([
+      _mk('Rick Miller', 'own_website_brain'),
+      _mk('Dave', 'google_review_replies'),
+    ]);
+    if (_other && _other.sources.includes('google_review_replies')) {
+      _fails.push('an unrelated first name was folded into the owner - this merge has stopped checking the name at all');
+    }
+
+    // 5. THE EMAIL RULE IS UNTOUCHED. sameName routes mail; a false yes there
+    //    addresses the owner by name in a stranger's mailbox, so it must still
+    //    refuse a bare first name outright.
+    if (sameName('Rick Miller', 'Rick') !== false) {
+      _fails.push('sameName now accepts a bare first name - that function decides which mailbox an email addressed to the owner is sent to');
+    }
+    if (sameName('Michael Bacevich', 'Mike Bacevich') !== true) {
+      _fails.push('sameName lost its nickname equivalence when the rule moved to module scope');
+    }
+
+    // == THE CALL SITE ========================================================
+    // The fixtures above call rankOwnerCandidates directly, so they cannot see a
+    // build where the fold is defined and never invoked, nor one where sameName
+    // grew a second private copy of the first-name rule. Needles in two real
+    // halves, over comment-stripped source - the comments here quote both.
+    const _src = selfSourceNoComments();
+    const _n = (a, b) => a + b;
+    if (!_src.includes(_n('  foldFirstNameCluster', 's(clusters);'))) {
+      _fails.push('foldFirstNameClusters is defined but never called, so every fixture above proves nothing about a live lead');
+    }
+    if (!_src.includes(_n('return firstNamesEqual(A[0], B[0])', ' && A[A.length - 1] === B[B.length - 1];'))) {
+      _fails.push('sameName no longer uses the shared first-name rule - two hand-kept copies of one question is the disease this file records most often');
+    }
+
+    if (_fails.length) {
+      console.log(`\u26d4 OWNER CORROBORATION CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`\u2713 OWNER CORROBORATION CHECK: a review signature that gives only a first name now counts as the source it is. "Rick" folds into "Rick Miller" and the FULLER name survives; a nickname folds through the one shared rule; an unrelated first name does not; and when two different people share the first name nothing is merged at all, because the signature does not say which. sameName is deliberately untouched and still refuses a bare first name, since a false yes there sends an email addressed to the owner into a stranger's mailbox. Live on Miller's Fancy Bath this source was weighted 35 and structurally unable to corroborate, so the run bought the paid websearch and licence wave to rediscover a name it already had.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 OWNER CORROBORATION CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
 
   // ══ A LEAD WAS KILLED FOR TIME IT SPENT STANDING IN LINE ════════════════
   // Doc Tony, live, 2026-08-17: third lead of three, queued behind two working
