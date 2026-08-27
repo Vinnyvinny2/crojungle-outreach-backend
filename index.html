@@ -1154,7 +1154,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260909;
+const CLIENT_CONTRACT = 20260910;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -3148,11 +3148,17 @@ const scoreboardFor = (ctx) => {
   const ranked = new Map(normalizedLeakRows(rows).map(([r, n]) => [r, n]));
   const dep = { after: 0, door: 1, found: 2 };
   const stageOf = (r) => r.funnelStage || PILLAR_TO_STAGE[r.pillar] || null;
-  const leaking = rows.filter(r => !r.internalOnly && !r.ambient && !ranked.has(r) && String(r.problem || '').trim())
+  // A 'work' row is the workmanship context strip under the funnel — it is
+  // deliberately NOT a money leak, and listing it here would put a reputation
+  // note in a column headed "leaking".
+  const leaking = rows.filter(r => !r.internalOnly && !r.ambient && !ranked.has(r)
+      && stageOf(r) !== 'work' && String(r.problem || '').trim())
     .sort((a, b) => ((dep[stageOf(a)] === undefined ? 9 : dep[stageOf(a)]) - (dep[stageOf(b)] === undefined ? 9 : dep[stageOf(b)]))
       || ((b.harm || 0) - (a.harm || 0)))
     .slice(0, 8)
-    .map(r => ({ text: String(r.problem), so: String(r.costs || ''), leak: null }));
+    // The area label rode the under-the-funnel block, and that block was the
+    // reprint. This is its one home now.
+    .map(r => ({ text: String(r.problem), so: String(r.costs || ''), area: String(r.area || ''), leak: null }));
 
   return { won: won.slice(0, 6), leaking, ranked: ranked.size };
 };
@@ -3572,13 +3578,6 @@ const auditExportHtml = (records, meta) => {
       + '</div>'
       + (r.phone ? '<div class="cphone">' + e(r.phone) + '</div>' : '')
       + '</section>'
-      // ══ TWO TIERS, NOTHING DELETED ════════════════════════════════════
-      // Vin's junior rep "has no clue what these audits mean", and the fix he
-      // approved is not a shorter sheet — it is a sheet with a top. Everything
-      // needed to make the call is above the second rule; every measurement we
-      // took is below it, unabridged. "i feel we do need all of this detial."
-      + '<div class="tier"><span class="tierl">For the call</span>'
-      + '<span class="tiers">Everything a rep needs. If you read nothing else on this sheet, you can make the call.</span></div>'
       // ═══ THE STORY — one thinking voice, the only prose on the page ═══
       + cat('The story', 'what is going on here, in one read — every number in it is measured',
           (r.background ? '<p>' + p(r.background) + '</p>' : '')
@@ -3632,20 +3631,13 @@ const auditExportHtml = (records, meta) => {
                   + '<span class="tw">' + p(String(x.problem).slice(0, 52).replace(/[\s,;:.-]+\S*$/, '')) + '\u2026'
                   + ' written out in full above.</span></div>';
               }
-              const ml = null;
-              return '<div class="ferow">'
-                + '<b>' + p(x.problem) + '</b>'
-                + (x.costs ? ' <span class="tw">— ' + p(x.costs) + '</span>' : '')
-                + (x.rankNote ? '<div class="tw">' + p(x.rankNote) + '</div>' : '')
-                + (ml ? '<div class="mline">' + p(ml) + '</div>' : '')
-                // A copy observation carries pillar TAXED purely as a SORT
-                // position, and TAXED maps to "reputation operations" - so a
-                // finding about identical wording on two service pages came
-                // with a retainer pitch under it. One field doing two jobs.
-                // The neighbouring "products that fit" list already excludes
-                // fromTheirPages; this is the same rule, second copy.
-                + (Number.isFinite(lr) && !x.fromTheirPages && x.pillar && PILLAR_PRODUCT[x.pillar] ? '<div class="tw">fix we sell: ' + e(PILLAR_PRODUCT[x.pillar]) + '</div>' : '')
-                + '</div>';
+              // A finding that is NOT one of the numbered three is already in
+              // the index above, once, with its own cost line. Printing it
+              // again at its stage is what made the record a reprint of the
+              // fold: "the full record has the saem info as the section
+              // above." Its rankNote, which the index has no room for, is the
+              // one thing that still earns a line here.
+              return x.rankNote ? '<div class="ferow tw">' + p(x.rankNote) + '</div>' : '';
             }).join('');
             const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
               ? '<div class="ferow tw">' + t.friction.map(x => p(x)).join(' · ') + '</div>' : '';
@@ -3680,10 +3672,10 @@ const auditExportHtml = (records, meta) => {
           const wr = ((r.funnelStory && r.funnelStory.stages) || []).find(s4 => s4 && s4.id === 'what_repeats');
           const workHtml = (fg.work.length || wr)
             ? '<div class="fwork"><b>Under the funnel — the work itself (context, not a leak):</b> ' + (fg.work.length ? fg.work.map(x => p(x.problem)).join(' · ') : p(wr.text)) + '</div>' : '';
-          const unstagedHtml = fg.unstaged.length
-            ? '<div style="margin-top:8px">' + fg.unstaged.map(x => '<div class="ferow"><b>' + p(x.problem) + '</b>'
-              + (x.costs || x.area ? ' <span class="tw">— ' + [x.area ? e(x.area) : '', x.costs ? p(x.costs) : ''].filter(Boolean).join(' · ') + '</span>' : '') + '</div>').join('') + '</div>' : '';
-          return cat('The funnel', "a customer's path to hiring them, top to bottom — where it breaks, the money falls out",
+          // Rows with no funnel stage render in the index above, once. They
+          // used to print again here, which is the same reprint one row down.
+          const unstagedHtml = '';
+          return cat('The funnel', "their path to hiring them, and what we measured at each step — the leaks above are marked where they sit",
             '<div class="fwrap">' + stagesHtml
             + '<div class="fspoutrow"><div class="fspoutbar"></div><div class="fspoutlbl">booked jobs</div></div><div></div>'
             + '<div class="ffull">' + ffHtml + workHtml + unstagedHtml + '</div></div>');
@@ -3726,7 +3718,7 @@ const auditExportHtml = (records, meta) => {
             + ' written out below</div>'
             + (_sb.leaking.length
               ? '<ul class="pl b">' + _sb.leaking.map(x => '<li>' + p(x.text)
-                  + (x.so ? '<span class="sw">' + p(x.so) + '</span>' : '') + '</li>').join('') + '</ul>'
+                  + (x.so || x.area ? '<span class="sw">' + [x.area ? e(x.area) : '', x.so ? p(x.so) : ''].filter(Boolean).join(' \u00b7 ') + '</span>' : '') + '</li>').join('') + '</ul>'
               : '<div class="tw">' + (_sb.ranked
                   ? 'Nothing else measured as a leak. The ' + _sb.ranked + ' below are all of them.'
                   : 'No measured finding cleared the bar on this lead.') + '</div>')
@@ -3779,16 +3771,8 @@ const auditExportHtml = (records, meta) => {
       // they exist for.
       const _dnsHtml = doNotSay
         ? '<section class="dns"><h3>Do not say on this call</h3>' + doNotSay + '</section>' : '';
-      // ══ PAGE ONE IS THE CALL SHEET ═══════════════════════════════════
-      // The two tiers doubled the page count (7 audits, 7 pages to 14), and
-      // shrinking the type again would undo the density fix rather than
-      // answer the complaint. The honest answer is a page BREAK: the call tier
-      // ends the page, so a rep can print or hand over page one per lead and
-      // the record follows behind it. Same paper, a usable first page.
-      const _tier2 = '<div class="tier tier2"><span class="tierl">The full record</span>'
-        + '<span class="tiers">Nothing deleted. Every measurement we took, for call two, an objection, or the email.</span></div>';
 
-      return _partA + _sbHtml + _leakHtml + _sellHtml + _callHtml + _dnsHtml + _tier2 + _funnelHtml; };
+      return _partA + _sbHtml + _leakHtml + _sellHtml + _callHtml + _dnsHtml + _funnelHtml; };
 
   // ══ THE SEGMENT BRIEF, ONCE PER TRADE INSTEAD OF ONCE PER LEAD ══════════
   // On a 50-lead export the crew-trades brief printed fifty times — a page of
@@ -7380,14 +7364,6 @@ function LeadBriefing({ lead }) {
     // app had nothing equivalent — it went straight from contact details to a
     // verdict, so a reader who had never heard of the business met a conclusion
     // about a company they could not picture.
-    // ══ TWO TIERS ON THE SCREEN TOO ═══════════════════════════════════════
-    // The same shape as the exported sheet, so a rep and the person who built
-    // the audit are reading one document in two places. Above the first rule:
-    // everything needed to make the call. Below the second: every measurement
-    // we took, unabridged — "i feel we do need all of this detial."
-    React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', borderTop: '2px solid var(--t)', paddingTop: 8, marginTop: 4 } },
-      React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--t)' } }, 'For the call'),
-      React.createElement('span', { style: { fontSize: 12.5, color: 'var(--t)' } }, 'Everything a rep needs. If you read nothing else, you can make the call.')),
     // ── THE STORY — the one narrator. Background, headline and read in one
     // card; the walk prose is gone from here because the funnel section below
     // renders the same facts as staged evidence — nothing said twice.
@@ -7426,7 +7402,8 @@ function LeadBriefing({ lead }) {
           React.createElement('span', { style: { position: 'absolute', left: 0, color: accent, fontWeight: 700 } }, mark),
           x.leak ? React.createElement('span', { style: { display: 'inline-block', fontSize: 11, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '0 5px', marginRight: 6, verticalAlign: '1px' } }, 'LEAK ' + x.leak) : null,
           x.text,
-          x.so ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 3, lineHeight: 1.45 } }, x.so) : null))
+          (x.so || x.area) ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 3, lineHeight: 1.45 } },
+            [x.area, x.so].filter(Boolean).join(' \u00b7 ')) : null))
           : React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)' } },
               mark === '\u2715' && sb.ranked
                 ? 'Nothing else measured as a leak. The ' + sb.ranked + ' below are all of them.'
@@ -7630,11 +7607,6 @@ function LeadBriefing({ lead }) {
       )
     ) : null,
 
-    // ══ TIER 2 — THE RECORD ═══════════════════════════════════════════════
-    React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap', borderTop: '2px solid var(--t)', paddingTop: 8, marginTop: 8 } },
-      React.createElement('span', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--t)' } }, 'The full record'),
-      React.createElement('span', { style: { fontSize: 12.5, color: 'var(--t)' } }, 'Nothing deleted. Every measurement we took, for call two, an objection, or the email.')),
-
     // ── THE FUNNEL — the skeleton. Every finding at its stage, exactly once;
     // the top three leaks numbered where they sit; red only where it breaks.
     (() => {
@@ -7677,10 +7649,14 @@ function LeadBriefing({ lead }) {
               React.createElement('span', { style: { color: 'var(--t)', fontSize: 12.5 } },
                 _short + '\u2026 written out in full above.'));
           }
-          return React.createElement('div', { key: 'fr' + ri, style: { fontSize: 13, lineHeight: 1.6, marginTop: 4 } },
-            React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
-            x.costs ? React.createElement('span', { style: { color: 'var(--t)', fontSize: 12.5 } }, ' \u2014 ' + x.costs) : null,
-            x.rankNote ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 2 } }, x.rankNote) : null);
+          // A finding that is NOT one of the numbered three is already in the
+          // index above, once, with its own cost line. Printing it again here
+          // is what made the record a reprint of the fold. Its rankNote, which
+          // the index has no room for, is the one thing that still earns a
+          // line at the stage.
+          return x.rankNote
+            ? React.createElement('div', { key: 'fr' + ri, style: { fontSize: 12.5, lineHeight: 1.6, marginTop: 4, color: 'var(--t)' } }, x.rankNote)
+            : null;
         });
         const legacyFriction = (s3.id === 'door' && !s3.rows.length && t && Array.isArray(t.friction) && t.friction.length)
           ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginTop: 4 } }, t.friction.join(' \u00b7 ')) : null;
@@ -7697,7 +7673,7 @@ function LeadBriefing({ lead }) {
             g.label + ': ' + g.value,
             g.internal ? React.createElement('span', { style: { display: 'inline-block', fontSize: 10, fontWeight: 700, letterSpacing: '.05em', color: '#92400e', background: '#fef3c7', borderRadius: 4, padding: '0 5px', marginLeft: 6, verticalAlign: '1px' } }, 'INTERNAL') : null,
             // The takeaway, written in the same branch that produced the value.
-            g.so ? React.createElement('div', { style: { fontSize: 12, fontWeight: 400, color: 'var(--t)', lineHeight: 1.45, paddingLeft: 10, borderLeft: '2px solid var(--b)', margin: '2px 0 5px' } }, g.so) : null)),
+            g.so ? React.createElement('span', { style: { fontWeight: 400, color: 'var(--t)' } }, ' \u2014 ' + g.so) : null)),
           sg.unmeasured.length ? React.createElement('div', { key: 'sgu', style: { fontSize: 12, color: 'var(--t)' } }, 'Not measured: ' + sg.unmeasured.join(', ')) : null) : null;
         // Segment + card as ONE grid row with ONE stTxt, so the funnel is
         // exactly as tall as the text beside it and the two can never disagree.
@@ -7726,10 +7702,8 @@ function LeadBriefing({ lead }) {
       const workEl = (fg.work.length || wr) ? React.createElement('div', { style: { background: 'rgba(255,255,255,.02)', border: '1px solid var(--b)', borderRadius: 8, padding: '8px 12px', fontSize: 13, color: 'var(--t)', lineHeight: 1.6, marginBottom: 8 } },
         React.createElement('b', { style: { color: 'var(--t)' } }, 'Under the funnel \u2014 the work itself (context, not a leak): '),
         fg.work.length ? fg.work.map(x => x.problem).join(' \u00b7 ') : String(wr.text)) : null;
-      const unstagedEl = fg.unstaged.length ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.6 } },
-        fg.unstaged.map((x, i2) => React.createElement('div', { key: 'us' + i2, style: { marginTop: 3 } },
-          React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
-          (x.costs || x.area) ? ' \u2014 ' + [x.area, x.costs].filter(Boolean).join(' \u00b7 ') : ''))) : null;
+      // Rows with no funnel stage render in the index above, once.
+      const unstagedEl = null;
       // The layer answers "what holds the business back overall"; the numbered
       // leaks answer "which measurable thing costs the most money". Different
       // questions with different answers - the file's own TWO LADDERS rule -
@@ -7741,7 +7715,7 @@ function LeadBriefing({ lead }) {
           'What holds the business back overall \u2014 a different question from which leak costs most, which the numbered leaks answer.')) : null;
       return React.createElement('div', null,
         React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The funnel',
-          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, "a customer's path to hiring them \u2014 where it breaks, the money falls out")),
+          React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, "their path to hiring them, and what we measured at each step \u2014 the leaks above are marked where they sit")),
         React.createElement('div', { style: { display: 'grid', gridTemplateColumns: '164px 1fr', gap: '14px 20px', alignItems: 'stretch' } },
           stageBlocks,
           React.createElement('div', { key: 'fspout', style: { position: 'relative', height: 30 } },

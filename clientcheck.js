@@ -25,8 +25,12 @@ const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
 // section added to one and not the other fails the build. The apostrophe in
 // the scoreboard heading is HTML-escaped on the sheet, so it is matched on the
 // half of it that survives escaping.
-const SHEET_ORDER = ['For the call', 'The story', 's working, what', 'The biggest leaks',
-  'The sell', 'The conversation', 'Do not say on this call', 'The full record', 'The funnel'];
+// Round 110: the two tiers are gone. Vin, after reading a live pair: "theres
+// no need to have al that extra detail on my screen lets just incoprate the
+// missing stuff ... into the teir 1." With the reprint removed there was not
+// enough left below the rule to be a second document.
+const SHEET_ORDER = ['The story', 's working, what', 'The biggest leaks',
+  'The sell', 'The conversation', 'Do not say on this call', 'The funnel'];
 const src = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]).join('\n;\n');
 const ast = acorn.parse(src, { ecmaVersion: 2022, sourceType: 'script', locations: true });
 
@@ -1237,15 +1241,22 @@ const mergeStat = runMergeCheck();
           const _at = (needle) => page.indexOf(needle);
           // The apostrophe is HTML-escaped on the sheet, so the heading is
           // matched on the half of it that survives escaping.
-          const _call = _at('For the call'), _sb = _at('s working, what');
-          const _lk = _at('The biggest leaks'), _dns = _at('Do not say on this call');
-          const _rec = _at('The full record'), _fun = _at('The funnel');
-          if (_call < 0 || _rec < 0) fails.push('the sheet lost its two tiers — a rep is back to reading the whole record to find the call');
+          const _sb = _at('s working, what'), _lk = _at('The biggest leaks');
+          const _dns = _at('Do not say on this call'), _fun = _at('The funnel');
+          // Round 110: one document. The order that matters is that the
+          // scoreboard comes before the leaks, the leaks before the
+          // measurements, and Do-not-say before the measurements — a rep who
+          // stops reading at the funnel must already have met the guardrails.
+          if (_sb < 0 || _lk < 0 || _fun < 0) fails.push('the sheet lost one of the scoreboard, the numbered leaks or the funnel');
           else {
-            if (!(_call < _sb && _sb < _lk)) fails.push('the call tier is out of order: the scoreboard and the numbered leaks must follow the "For the call" rule, in that order');
-            if (!(_lk < _rec)) fails.push('the numbered leaks fell below the record rule — the three things the call is built on are in the half a rep never scrolls to');
-            if (!(_dns > 0 && _dns < _rec)) fails.push('Do not say is no longer inside the call tier — a rep who reads only the top never meets the guardrails, which is exactly the reader they exist for');
-            if (!(_rec < _fun)) fails.push('the funnel is back above the record rule — the long half of the sheet is in the ten-second half again');
+            if (!(_sb < _lk)) fails.push('the ten-second scoreboard renders after the leaks it is meant to introduce');
+            if (!(_lk < _fun)) fails.push('the numbered leaks fell below the measurements — the three things the call is built on are no longer the first thing a rep meets');
+            if (!(_dns > 0 && _dns < _fun)) fails.push('Do not say now renders after the measurements — a rep who stops reading at the funnel never meets the guardrails, which is exactly the reader they exist for');
+          }
+          // The tier rules are gone. A second document is what made the record
+          // a reprint of the fold above it.
+          if (page.indexOf('The full record') >= 0 || page.indexOf('class="tierl"') >= 0) {
+            fails.push('the sheet is back to two tiers — the record was mostly a reprint of the fold above it, which is what "the full record has the saem info as the section above" was about');
           }
           // A numbered leak is written out in ONE place. At its funnel stage
           // it is a POSITION MARKER: the first version of this assertion
@@ -1258,6 +1269,16 @@ const mergeStat = runMergeCheck();
               problem: 'DUPCHECK the only way in is a form', costs: 'DUPCOST a customer who is ready has to wait',
               moneyLine: 'DUPMONEY every one of those is a job', harm: 80, moneyRank: 1, leakRank: 1,
               pillar: 'LEAKING', funnelStage: 'door', id: 'form_only_no_booking', callOpener: 'DUPOPEN?' }] })], { title: 'T', at: 'now' });
+            // A finding that is NOT numbered renders in the index above and
+            // NOWHERE else. Reprinting it at its funnel stage is what made the
+            // record "the saem info as the section above".
+            const _rpPage = mod.html([mod.rec({ ...LEAD, problemList: [
+              { problem: 'RANKEDROW the only way in is a form', harm: 80, moneyRank: 1, leakRank: 1, pillar: 'LEAKING', funnelStage: 'door', id: 'form_only_no_booking' },
+              { problem: 'PLAINROW their pages repeat one promise', costs: 'a buyer sees no reason to pick them', harm: 50, pillar: 'LEAKING', funnelStage: 'door', id: 'undifferentiated' }] })], { title: 'T', at: 'now' });
+            const _plain = (_rpPage.match(/PLAINROW/g) || []).length;
+            if (_plain !== 1) {
+              fails.push('a finding that is not one of the numbered three renders ' + _plain + ' times on one sheet, not once — the funnel is reprinting the index above it, which is exactly "the full record has the saem info as the section above"');
+            }
             if (_dupPage.indexOf('written out in full above') < 0) {
               fails.push('a numbered leak prints in full at its funnel stage as well as on its card — the same finding twice on one sheet, the repetition the two-tier layout exists to remove');
             }
@@ -1292,6 +1313,21 @@ const mergeStat = runMergeCheck();
               { id: 'long_form', problem: 'UNNUMBERED an eleven-field form', costs: 'people start and stop', pillar: 'LEAKING', funnelStage: 'door', harm: 60 }] });
             if (_idx.leaking.some(x => /NUMBERED a service page/.test(x.text))) {
               fails.push('the leaking column reprints a numbered leak that is written out in full a few centimetres below — the repetition Vin rejected on the first live sheet');
+            }
+            // The workmanship strip under the funnel owns the 'work' rows —
+            // they are context, deliberately NOT a money leak, and listing one
+            // in a column headed "leaking" is a reputation note sold as lost
+            // revenue.
+            const _wk = mod.board({ af: {}, rows: [
+              { id: 'review_pain_pattern', problem: 'WORKROW quality complaints repeat', funnelStage: 'work', pillar: 'TAXED', harm: 50 },
+              { id: 'long_form', problem: 'DOORROW an eleven-field form', funnelStage: 'door', pillar: 'LEAKING', harm: 60 }] });
+            if (_wk.leaking.some(x => /WORKROW/.test(x.text))) {
+              fails.push('the workmanship context row is listed as a money leak — the strip under the funnel owns it, and one home each is the rule');
+            }
+            if (!_wk.leaking.some(x => /DOORROW/.test(x.text))) fails.push('the work exclusion swallowed an ordinary staged finding');
+            const _ar = mod.board({ af: {}, rows: [{ area: 'AREA_MARK', problem: 'a finding with no funnel stage at all', costs: 'its cost', harm: 40 }] });
+            if (!_ar.leaking.some(x => /AREA_MARK/.test(String(x.area || '')))) {
+              fails.push('a finding with no funnel stage loses its area label — it used to render under the funnel and that block was the reprint, so the index is its only home now');
             }
             if (!_idx.leaking.some(x => /UNNUMBERED an eleven-field form/.test(x.text))) {
               fails.push('a finding that is NOT one of the numbered leaks fell out of the index — that is a revenue signal with no home at all, which is the thing the owner said must never happen');
@@ -1438,10 +1474,10 @@ const mergeStat = runMergeCheck();
         if (joined.indexOf('RANKNOTE_MARKER') < 0) fails.push('the rank-causation note never reaches the audit screen \u2014 the sheet prints two review counts with nothing stopping the reviews-decide-rank misreading');
         for (const label of ['Not sendable as written', 'Who to talk to', 'The story', 'The funnel', 'The conversation',
           'The email led with', 'He will likely say', 'Also worth asking', 'Do not say',
-          'The sell', "What's working, what's leaking", 'The biggest leaks', 'For the call', 'The full record']) {
+          'The sell', "What's working, what's leaking", 'The biggest leaks']) {
           if (joined.indexOf(label) < 0) fails.push('the audit screen no longer renders "' + label + '" — a category of the approved funnel layout is dark');
         }
-        for (const gone of ['The money', 'The one thing', 'The smaller leaks']) {
+        for (const gone of ['The money', 'The one thing', 'The smaller leaks', 'For the call', 'The full record']) {
           if (joined.indexOf(gone) >= 0) fails.push('"' + gone + '" is back on the audit screen — its content lives at the funnel stages now, and a second copy is the exact repetition Vin flagged');
         }
         if (joined.indexOf('Jason Hicks') < 0) fails.push('the resolved contact name does not render under Who to talk to — the screen is back on the phantom lead.ownerName field, which exists nowhere and printed an em-dash beside shane.irwin@ on a live sheet');
