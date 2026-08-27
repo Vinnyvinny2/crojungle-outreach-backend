@@ -20,6 +20,13 @@ const acorn = require('acorn'), fs = require('fs'), path = require('path');
 const root = path.dirname(require.main.filename);
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
 const server = fs.readFileSync(path.join(root, 'server.js'), 'utf8');
+// The sections BOTH render surfaces must carry, in this order. One list,
+// checked against the exported sheet and against the audit screen, so a
+// section added to one and not the other fails the build. The apostrophe in
+// the scoreboard heading is HTML-escaped on the sheet, so it is matched on the
+// half of it that survives escaping.
+const SHEET_ORDER = ['For the call', 'The story', 's working, what', 'The biggest leaks',
+  'The sell', 'The conversation', 'Do not say on this call', 'The full record', 'The funnel'];
 const src = [...html.matchAll(/<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]).join('\n;\n');
 const ast = acorn.parse(src, { ecmaVersion: 2022, sourceType: 'script', locations: true });
 
@@ -495,7 +502,7 @@ const mergeStat = runMergeCheck();
   // function without its dependencies is how a harness starts lying: it would
   // throw here rather than silently pass, which is the good failure mode, but
   // only if the name is actually required.
-  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'replyLatencySay', 'websiteForReading', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor', 'leakWhereFor', 'scoreboardFor'];
+  const NEED = ['auditRecordFor', 'auditExportHtml', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'trimRepeatedLead', 'RISK_REASONS', 'replyLatencySay', 'websiteForReading', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor', 'leakWhereFor', 'scoreboardFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -511,9 +518,9 @@ const mergeStat = runMergeCheck();
   } else {
     let mod = null;
     try {
-      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.leakWhereFor + '\n' + found.scoreboardFor + '\n' + found.RISK_REASONS + '\n' + found.replyLatencySay + '\n' + found.websiteForReading + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n'
+      mod = new Function(found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.leakWhereFor + '\n' + found.scoreboardFor + '\n' + found.RISK_REASONS + '\n' + found.replyLatencySay + '\n' + found.websiteForReading + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.trimRepeatedLead + '\n'
         + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.auditRecordFor + '\n' + found.auditExportHtml
-        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, norm: normalizedLeakRows, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, plain: plainRisk, replyLatency: replyLatencySay, web: websiteForReading, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, taper: FUNNEL_TAPER, segClip: funnelSegClip, segFill: funnelSegFill, walkStage: walkTextsByStage, scoreLine: scoreSentence, sig: signalRowsFor, board: scoreboardFor, leakWhere: leakWhereFor };')();
+        + '\nreturn { rec: auditRecordFor, html: auditExportHtml, norm: normalizedLeakRows, adsLabel: adsFactsLabel, dedupe: dedupeOwnWords, trim: trimRepeatedJobValue, trimLead: trimRepeatedLead, plain: plainRisk, replyLatency: replyLatencySay, web: websiteForReading, layer: layerPlain, group: groupAuditFindings, groupStage: groupByFunnelStage, taper: FUNNEL_TAPER, segClip: funnelSegClip, segFill: funnelSegFill, walkStage: walkTextsByStage, scoreLine: scoreSentence, sig: signalRowsFor, board: scoreboardFor, leakWhere: leakWhereFor };')();
     } catch (e) {
       fails.push('the audit export no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -1207,6 +1214,19 @@ const mergeStat = runMergeCheck();
         if (LOADS.test(page)) {
           fails.push('the export is no longer self-contained — it loads a script, stylesheet, image or font over the network, so it cannot be relied on to open on a machine that has none of them');
         }
+        // ══ THE TWO SURFACES ARE ONE DOCUMENT ════════════════════════════
+        // Vin, on the first live pair: "for the actualy audit screen its even
+        // mroe detial then before i wnat it to macth the export sheet." Three
+        // sections differed (the sell, the conversation heading, where the
+        // score and its internal notes sat). ONE ordered list is asserted
+        // against both renderers here and against the screen below, so a
+        // section added to one surface and not the other fails the build.
+        for (let _si = 1; _si < SHEET_ORDER.length; _si++) {
+          const a2 = page.indexOf(SHEET_ORDER[_si - 1]), b2 = page.indexOf(SHEET_ORDER[_si]);
+          if (a2 < 0) { fails.push('the exported sheet no longer renders "' + SHEET_ORDER[_si - 1] + '"'); break; }
+          if (b2 < 0) { fails.push('the exported sheet no longer renders "' + SHEET_ORDER[_si] + '"'); break; }
+          if (b2 < a2) { fails.push('the exported sheet renders "' + SHEET_ORDER[_si] + '" before "' + SHEET_ORDER[_si - 1] + '" — the screen and the sheet are no longer one document'); break; }
+        }
         // ══ ROUND 108: TWO TIERS, AND A TAKEAWAY ON EVERY POINT ═══════════
         // Vin's junior rep "has no clue what these audits mean" and the sheet
         // reads "like speaking in code". The approved answer is a sheet with a
@@ -1262,9 +1282,21 @@ const mergeStat = runMergeCheck();
             if (!_rk.won.some(w => /#1 of 100/.test(w.text))) {
               fails.push('a top-three position is suppressed by a finding about a DIFFERENT search — the sheet loses the one strength that decides how the call opens');
             }
-            if (!_rk.leaking.some(x => x.leak === 1 && /service page nobody finds/.test(x.text))) {
-              fails.push('the leaking column is not an index of the findings — a revenue signal can be buried again');
+            // Round 109, Vin on the first live sheet: "this is cleaalry
+            // reprtitive." The index printed the three numbered leaks VERBATIM
+            // and the cards printed the identical sentences below it. The
+            // column is now what is NOT already on a card — and nothing is
+            // lost, because a finding is either on a card or in this list.
+            const _idx = mod.board({ af: {}, rows: [
+              { id: 'service_invisibility', problem: 'NUMBERED a service page nobody finds', leakRank: 1, pillar: 'INVISIBLE', funnelStage: 'found', harm: 90 },
+              { id: 'long_form', problem: 'UNNUMBERED an eleven-field form', costs: 'people start and stop', pillar: 'LEAKING', funnelStage: 'door', harm: 60 }] });
+            if (_idx.leaking.some(x => /NUMBERED a service page/.test(x.text))) {
+              fails.push('the leaking column reprints a numbered leak that is written out in full a few centimetres below — the repetition Vin rejected on the first live sheet');
             }
+            if (!_idx.leaking.some(x => /UNNUMBERED an eleven-field form/.test(x.text))) {
+              fails.push('a finding that is NOT one of the numbered leaks fell out of the index — that is a revenue signal with no home at all, which is the thing the owner said must never happen');
+            }
+            if (_idx.ranked !== 1) fails.push('the scoreboard does not report how many leaks are written out below, so its own column heading cannot say so');
             const _abs = mod.board({ af: {}, rank: { found: false }, rows: [{ id: 'absent_from_search', problem: 'not in the results' }] });
             if (_abs.won.some(w => /#/.test(w.text))) fails.push('a position renders as a win on a lead with no position');
             // Every won item must carry its takeaway: the whole point of the
@@ -1287,6 +1319,32 @@ const mergeStat = runMergeCheck();
           const _n108 = (...p) => p.join('');
           if (!src.includes(_n108('scoreboardFor({ af: af ', '|| {}'))) fails.push('the exported sheet no longer builds its scoreboard through scoreboardFor');
           if (!src.includes(_n108('scoreboardFor({ af: lead.', 'auditFacts'))) fails.push('the audit screen no longer builds its scoreboard through scoreboardFor');
+          // ══ ROUND 109: NOTHING THE READER JUST READ IS PRINTED AGAIN ═════
+          // Vin on the first live pair: "this is cleaalry reprtitive." Two
+          // BURNING rungs are priced by one template, so leak 1 and leak 2
+          // carried a word-for-word identical So-what and eight identical
+          // opening words. Both are executed here, both directions.
+          // Two sentences on purpose: with one, the head-trim that already
+          // existed also returns '' and the fixture proves nothing — which is
+          // what the falsification run reported.
+          const _ML = 'A remodel runs $15k. Every click they pay for lands somewhere nothing happens.';
+          if (mod.trim(_ML, _ML, 1, [_ML]) !== '') fails.push('two leaks priced by the same template print the identical So-what twice — a takeaway the reader has just read is not a takeaway');
+          if (mod.trim('A different money line entirely.', _ML, 1, [_ML]) !== 'A different money line entirely.') fails.push('a leak with its own money line was eaten by the repeat check');
+          const _L1 = "Google's ad code is on their homepage, and nothing on their homepage books a time";
+          const _L2 = "Google's ad code is on their homepage, and nothing on any page we read counts whether a click ever became a call or a booked job";
+          const _t2 = mod.trimLead(_L2, [_L1]);
+          if (/^Google's ad code is on their homepage, and nothing on any page/.test(_t2)) fails.push('a leak card repeats the opening clause the card above it just stated — the eight identical words that made the pair read as padding');
+          if (!/^Nothing on any page we read counts/.test(_t2)) fails.push('the repeated-clause trim did not leave a readable sentence behind');
+          if (mod.trimLead(_L1, []) !== _L1) fails.push('the FIRST leak card lost its opening clause — there is nothing above it to repeat');
+          if (mod.trimLead('A wholly different finding about their form, at some length.', [_L1]) !== 'A wholly different finding about their form, at some length.') fails.push('a leak with its own opening clause was trimmed against an unrelated one');
+          // A trim that leaves a fragment is worse than the repetition. The
+          // first version of this fixture had a 52-character remainder and so
+          // exercised nothing — it went red on a correct build, which is how
+          // it was caught.
+          const _short = "Google's ad code is on their homepage, and nothing works";
+          if (mod.trimLead(_short, [_L1]) !== _short) fails.push('the trim left a fragment shorter than a sentence instead of leaving the headline alone');
+          const _ln = (src.match(new RegExp(_n108('trimRepeatedLead\\(x.', 'problem'), 'g')) || []).length;
+          if (_ln !== 2) fails.push('trimRepeatedLead is called at ' + _ln + ' place(s), not both — one surface still repeats the clause the card above it stated');
           const _wn = (src.match(new RegExp(_n108('leakWhereFor\\(x, ', 'n\\)'), 'g')) || []).length;
           if (_wn !== 2) fails.push('leakWhereFor is called at ' + _wn + ' place(s), not both — one of the two surfaces has a leak card that no longer names where on the funnel it sits');
         }
@@ -1321,7 +1379,7 @@ const mergeStat = runMergeCheck();
 // block into The conversation — two homes is the drift this file records), and
 // a null lead must return null rather than throw.
 {
-  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'RISK_REASONS', 'replyLatencySay', 'websiteForReading', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor', 'leakWhereFor', 'scoreboardFor'];
+  const NEED = ['LeadBriefing', 'buildAuditRows', 'claimRisksOf', 'corpusWarningFor', 'leadHasAudit', 'adsFactsLabel', 'PILLAR_LABEL', 'PILLAR_PRODUCT', 'dedupeOwnWords', 'trimRepeatedJobValue', 'trimRepeatedLead', 'RISK_REASONS', 'replyLatencySay', 'websiteForReading', 'plainRisk', 'LAYER_PLAIN', 'layerPlain', 'groupAuditFindings', 'FUNNEL_STAGE_DEFS', 'PILLAR_TO_STAGE', 'normalizedLeakRows', 'groupByFunnelStage', 'FUNNEL_TAPER', 'funnelSegClip', 'funnelSegFill', 'WALK_TO_STAGE', 'walkTextsByStage', 'scoreSentence', 'SIGNAL_RUNGS', 'signalRowsFor', 'leakWhereFor', 'scoreboardFor'];
   const found = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED.includes(n.id.name) && n.init) {
@@ -1343,7 +1401,7 @@ const mergeStat = runMergeCheck();
     } };
     let briefing = null;
     try {
-      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.leakWhereFor + '\n' + found.scoreboardFor + '\n' + found.RISK_REASONS + '\n' + found.replyLatencySay + '\n' + found.websiteForReading + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
+      briefing = new Function('React', found.groupAuditFindings + '\n' + found.FUNNEL_STAGE_DEFS + '\n' + found.PILLAR_TO_STAGE + '\n' + found.normalizedLeakRows + '\n' + found.groupByFunnelStage + '\n' + found.FUNNEL_TAPER + '\n' + found.funnelSegClip + '\n' + found.funnelSegFill + '\n' + found.WALK_TO_STAGE + '\n' + found.walkTextsByStage + '\n' + found.scoreSentence + '\n' + found.SIGNAL_RUNGS + '\n' + found.signalRowsFor + '\n' + found.leakWhereFor + '\n' + found.scoreboardFor + '\n' + found.RISK_REASONS + '\n' + found.replyLatencySay + '\n' + found.websiteForReading + '\n' + found.plainRisk + '\n' + found.LAYER_PLAIN + '\n' + found.layerPlain + '\n' + found.adsFactsLabel + '\n' + found.PILLAR_LABEL + '\n' + found.PILLAR_PRODUCT + '\n' + found.dedupeOwnWords + '\n' + found.trimRepeatedJobValue + '\n' + found.trimRepeatedLead + '\n' + found.corpusWarningFor + '\n' + found.claimRisksOf + '\n' + found.leadHasAudit + '\n' + found.buildAuditRows + '\n' + found.LeadBriefing + '\nreturn LeadBriefing;')(ReactStub);
     } catch (e) { fails.push('the audit screen cannot be lifted: ' + e.message); }
     if (briefing) {
       const LEAD = {
@@ -1402,11 +1460,16 @@ const mergeStat = runMergeCheck();
         // createElement order, which is source order for children — so the
         // order of these labels IS the order of the page.
         {
-          const _ix = (t) => texts.findIndex(x => String(x).indexOf(t) === 0 || String(x) === t);
-          const o = ['For the call', "What's working, what's leaking", 'The biggest leaks', 'Do not say', 'The full record', 'The funnel'].map(_ix);
-          if (o.some(x => x < 0)) fails.push('the audit screen is missing one of the two-tier landmarks, so its order cannot be checked');
-          else for (let k = 1; k < o.length; k++) {
-            if (o[k] <= o[k - 1]) { fails.push('the audit screen renders its sections out of order — the call tier and the record tier are interleaved, which is the layout a rep cannot read'); break; }
+          // EXACT, not substring: a renamed section ("The conversationX")
+          // still contains the old label, and the substring form stayed green
+          // through exactly that revert.
+          const _ix = (t) => texts.findIndex(x => String(x).trim() === t);
+          // THE SAME list the sheet is checked against, with the escaped
+          // fragment expanded — the screen's text is not HTML.
+          const o = SHEET_ORDER.map(t => _ix(t === 's working, what' ? "What's working, what's leaking" : t));
+          for (let k = 0; k < o.length; k++) {
+            if (o[k] < 0) { fails.push('the audit screen no longer renders "' + SHEET_ORDER[k] + '" — the sheet has it and the screen does not, so the two are no longer one document'); break; }
+            if (k && o[k] <= o[k - 1]) { fails.push('the audit screen renders "' + SHEET_ORDER[k] + '" before "' + SHEET_ORDER[k - 1] + '" — it no longer matches the order of the exported sheet'); break; }
           }
           if (joined.indexOf('So what') < 0) fails.push("a leak card on the screen carries no So-what line — the takeaway Vin asked for is missing from the surface he reads");
           if (joined.indexOf('ML') < 0) fails.push('the leak money line never reaches the screen leak card');

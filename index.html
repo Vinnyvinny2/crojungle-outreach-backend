@@ -1154,7 +1154,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260908;
+const CLIENT_CONTRACT = 20260909;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -2656,9 +2656,45 @@ const dedupeOwnWords = (problems, originals) => {
 // Leak money lines all open with the trade table's one job-value sentence, so
 // three leaks read as one template. The first keeps it; later ones that start
 // with the same first sentence render only their specific half.
-const trimRepeatedJobValue = (moneyLine, firstMoneyLine, idx) => {
+//
+// And two leaks in one PILLAR are priced by the same template, so on a live
+// sheet leak 1 and leak 2 carried a word-for-word identical So-what. A
+// takeaway a reader has just read is not a takeaway. `seen` is what the
+// earlier cards already said; an exact repeat renders nothing rather than
+// saying it twice.
+// ══ A CLAUSE THE READER JUST READ IS NOT A HEADLINE ════════════════════════
+// Big Ben's, live: leak 1 opened "Google's ad code is on their homepage, and
+// nothing on their homepage books a time..." and leak 2 opened "Google's ad
+// code is on their homepage, and nothing on any page we read counts...". The
+// two rungs are correctly separate — they read one measurement and make two
+// different claims about it, which is exactly what RUNG_CLAIM_FAMILY's own
+// rule says must stay separate — but eight identical opening words bury the
+// difference and the pair reads as padding.
+//
+// DISPLAY ONLY, and bounded: it trims a leading clause a card directly above
+// has already stated, never a whole sentence, only when what remains is a
+// substantial sentence in its own right, and never in an email (the rung
+// sentences themselves are untouched, because they ship without this
+// neighbour to lean on).
+const trimRepeatedLead = (problem, seenLeads) => {
+  const t = String(problem || '');
+  if (!Array.isArray(seenLeads) || !seenLeads.length) return t;
+  // The clause is what runs up to the first ", and " / ", so " / ", but " —
+  // a headline's scene-setting half.
+  const m = t.match(/^(.{25,90}?,\s+(?:and|so|but|yet)\s+)/i);
+  if (!m) return t;
+  const lead = m[1];
+  const key = (x) => String(x).slice(0, lead.length).toLowerCase().replace(/[^a-z0-9]+/g, '');
+  if (!seenLeads.some(x => key(x) === key(lead))) return t;
+  const rest = t.slice(lead.length).trim();
+  if (rest.length < 40) return t;
+  return rest.charAt(0).toUpperCase() + rest.slice(1);
+};
+const trimRepeatedJobValue = (moneyLine, firstMoneyLine, idx, seen) => {
   const s = String(moneyLine || '');
   if (!idx || !s || !firstMoneyLine) return s;
+  const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+  if (Array.isArray(seen) && seen.some(x => norm(x) && norm(x) === norm(s))) return '';
   const head = String(firstMoneyLine).split(/(?<=\.)\s+/)[0];
   if (head && s.startsWith(head)) return s.slice(head.length).trim();
   return s;
@@ -3101,20 +3137,24 @@ const scoreboardFor = (ctx) => {
   // The leaking column is an INDEX, not a second copy of the leak cards: every
   // sayable finding in one clause, the numbered ones marked, so a revenue
   // signal can never be buried below the fold — the owner's own rule.
+  // ══ THE INDEX IS WHAT IS *NOT* ALREADY ON A CARD ══════════════════════
+  // Vin, on the first live sheet: "this is cleaalry reprtitive." He was right
+  // and it was mine: the leaking column printed the three numbered leaks
+  // VERBATIM and the cards printed the identical sentences ten centimetres
+  // below. The three biggest leaks are not buried — they are the next thing on
+  // the page — so this column exists to say what ELSE is leaking. Nothing is
+  // lost: the owner's rule is that a revenue signal is never buried, and a
+  // finding is either on a card or in this list.
   const ranked = new Map(normalizedLeakRows(rows).map(([r, n]) => [r, n]));
   const dep = { after: 0, door: 1, found: 2 };
   const stageOf = (r) => r.funnelStage || PILLAR_TO_STAGE[r.pillar] || null;
-  const leaking = rows.filter(r => !r.internalOnly && !r.ambient && String(r.problem || '').trim())
-    .sort((a, b) => (ranked.has(a) ? ranked.get(a) : 90) - (ranked.has(b) ? ranked.get(b) : 90)
-      || ((dep[stageOf(a)] === undefined ? 9 : dep[stageOf(a)]) - (dep[stageOf(b)] === undefined ? 9 : dep[stageOf(b)]))
+  const leaking = rows.filter(r => !r.internalOnly && !r.ambient && !ranked.has(r) && String(r.problem || '').trim())
+    .sort((a, b) => ((dep[stageOf(a)] === undefined ? 9 : dep[stageOf(a)]) - (dep[stageOf(b)] === undefined ? 9 : dep[stageOf(b)]))
       || ((b.harm || 0) - (a.harm || 0)))
     .slice(0, 8)
-    // A NUMBERED leak is spelled out in full a few centimetres below, so the
-    // index carries only its clause and its number. Repeating the cost line
-    // here is exactly the "same fact five times" the owner rejected.
-    .map(r => ({ text: String(r.problem), so: ranked.has(r) ? '' : String(r.costs || r.moneyLine || ''), leak: ranked.get(r) || null }));
+    .map(r => ({ text: String(r.problem), so: String(r.costs || ''), leak: null }));
 
-  return { won: won.slice(0, 6), leaking };
+  return { won: won.slice(0, 6), leaking, ranked: ranked.size };
 };
 
 const groupByFunnelStage = (pl, fs) => {
@@ -3548,7 +3588,6 @@ const auditExportHtml = (records, meta) => {
           // refused): the code walk is the honest fallback story.
           + (!r.read && r.funnelStory && Array.isArray(r.funnelStory.stages) && r.funnelStory.stages.length
             ? r.funnelStory.stages.map(s2 => '<p>' + p(s2.text) + '</p>').join('') : '')
-          + (r.whatHeNeeds ? '<p><b>The sell:</b> ' + p(r.whatHeNeeds) + '</p>' : '')
           + (r.whatHeCaresAbout ? '<p class="dim"><b>He clearly cares about:</b> ' + p(r.whatHeCaresAbout) + '</p>' : ''))
       ;
       // ═══ THE FUNNEL — the skeleton. Every measured signal at its stage, and
@@ -3590,8 +3629,8 @@ const auditExportHtml = (records, meta) => {
               // product a second time is the "info everywhere" complaint.
               if (Number.isFinite(lr)) {
                 return '<div class="ferow"><span class="lkb">LEAK ' + lr + '</span>'
-                  + '<span class="tw">' + p(String(x.problem).slice(0, 90)) + (String(x.problem).length > 90 ? '\u2026' : '')
-                  + ' — written out in full above.</span></div>';
+                  + '<span class="tw">' + p(String(x.problem).slice(0, 52).replace(/[\s,;:.-]+\S*$/, '')) + '\u2026'
+                  + ' written out in full above.</span></div>';
               }
               const ml = null;
               return '<div class="ferow">'
@@ -3664,7 +3703,7 @@ const auditExportHtml = (records, meta) => {
             (r.subject ? '<div class="dim">Subject: ' + p(r.subject) + '</div>' : '') + '<pre>' + p(r.pitch) + '</pre>'
             + '<div class="tw">Already in front of him — the call does not have to open the same way.</div>', '']);
           if (!rows.length) return '';
-          return cat('The call', 'what we know about how it will go — the opening is your call',
+          return cat('The conversation', 'what we know about how it will go — the opening is your call',
             '<div class="grid">' + rows.map(x => '<div class="gl">' + e(x[0]) + '</div><div>' + x[1] + '</div>').join('') + '</div>');
         })();
 
@@ -3682,12 +3721,15 @@ const auditExportHtml = (records, meta) => {
                   + (x.so ? '<span class="sw">' + p(x.so) + '</span>' : '') + '</li>').join('') + '</ul>'
               : '<div class="tw">Nothing measured came back clean on this lead.</div>')
             + '</div>'
-            + '<div class="pan b"><div class="ph">Where the money falls out</div>'
+            + '<div class="pan b"><div class="ph">Also leaking \u2014 the '
+            + (_sb.ranked === 1 ? 'biggest one is' : _sb.ranked ? 'biggest ' + _sb.ranked + ' are' : 'biggest are')
+            + ' written out below</div>'
             + (_sb.leaking.length
-              ? '<ul class="pl b">' + _sb.leaking.map(x => '<li>'
-                  + (x.leak ? '<span class="lkb">LEAK ' + x.leak + '</span>' : '') + p(x.text)
+              ? '<ul class="pl b">' + _sb.leaking.map(x => '<li>' + p(x.text)
                   + (x.so ? '<span class="sw">' + p(x.so) + '</span>' : '') + '</li>').join('') + '</ul>'
-              : '<div class="tw">No measured finding cleared the bar on this lead.</div>')
+              : '<div class="tw">' + (_sb.ranked
+                  ? 'Nothing else measured as a leak. The ' + _sb.ranked + ' below are all of them.'
+                  : 'No measured finding cleared the bar on this lead.') + '</div>')
             + '</div></div>')
         : '';
 
@@ -3695,14 +3737,19 @@ const auditExportHtml = (records, meta) => {
       // OPENING QUESTION — the one place a leak is written out in full ═══
       const _leakRows = normalizedLeakRows(r.problemList);
       const _leak1Money = (_leakRows[0] || [])[0] ? (_leakRows[0][0].moneyLine || '') : '';
+      const _leakSeen = [];
+      const _leadSeen = [];
       const _leakHtml = _leakRows.length
         ? cat('The biggest leaks', "the system's ranking — every finding is in the record below; the pick is yours",
             _leakRows.map(([x, n]) => {
-              const ml = trimRepeatedJobValue(x.moneyLine, _leak1Money, n - 1);
+              const ml = trimRepeatedJobValue(x.moneyLine, _leak1Money, n - 1, _leakSeen);
+              if (ml) _leakSeen.push(ml);
+              const _head = trimRepeatedLead(x.problem, _leadSeen);
+              _leadSeen.push(String(x.problem));
               const prod = (!x.fromTheirPages && x.pillar && PILLAR_PRODUCT[x.pillar]) ? PILLAR_PRODUCT[x.pillar] : '';
               return '<div class="lk"><div class="lkt"><span class="lkb">LEAK ' + n + '</span>'
                 + '<span class="lkw">' + e(leakWhereFor(x, n)) + '</span></div>'
-                + '<div class="lkh">' + p(x.problem) + '</div>'
+                + '<div class="lkh">' + p(_head) + '</div>'
                 + (x.costs ? '<p>' + p(x.costs) + '</p>' : '')
                 + (x.rankNote ? '<p class="tw">' + p(x.rankNote) + '</p>' : '')
                 + (ml ? '<div class="lkc"><span>So what</span>' + p(ml) + '</div>' : '')
@@ -3713,6 +3760,17 @@ const auditExportHtml = (records, meta) => {
                     + '</div>' : '')
                 + '</div>';
             }).join(''))
+        : '';
+
+      // THE SELL — its own section on the sheet as well as the screen, and the
+      // catalogue names derived from the leaks' pillars, so the recommendation
+      // always lands on something CROJungle sells without a model being asked
+      // to name a product.
+      const _prods = [...new Set(_leakRows.map(([x]) => (!x.fromTheirPages && x.pillar) ? PILLAR_PRODUCT[x.pillar] : '').filter(Boolean))];
+      const _sellHtml = (r.whatHeNeeds || _prods.length)
+        ? cat('The sell', 'what is worth selling them, and the catalogue name for it',
+            (r.whatHeNeeds ? '<p>' + p(r.whatHeNeeds) + '</p>' : '')
+            + (_prods.length ? '<p class="tw">Products that fit what is measured: ' + e(_prods.join(' \u00b7 ')) + '</p>' : ''))
         : '';
 
       // Do-not-say closes the CALL tier rather than the whole sheet. A rep who
@@ -3730,7 +3788,7 @@ const auditExportHtml = (records, meta) => {
       const _tier2 = '<div class="tier tier2"><span class="tierl">The full record</span>'
         + '<span class="tiers">Nothing deleted. Every measurement we took, for call two, an objection, or the email.</span></div>';
 
-      return _partA + _sbHtml + _leakHtml + _callHtml + _dnsHtml + _tier2 + _funnelHtml; };
+      return _partA + _sbHtml + _leakHtml + _sellHtml + _callHtml + _dnsHtml + _tier2 + _funnelHtml; };
 
   // ══ THE SEGMENT BRIEF, ONCE PER TRADE INSTEAD OF ONCE PER LEAD ══════════
   // On a 50-lead export the crew-trades brief printed fifty times — a page of
@@ -7301,7 +7359,19 @@ function LeadBriefing({ lead }) {
       // Strip tracking parameters. Dr Rai's website rendered as three wrapped
       // lines of utm_source/utm_medium/utm_campaign — the reader wants the
       // domain, and the full URL is one click away in the confirmation banner.
-      L('Website', websiteForReading(lead), null, 'var(--g)')
+      L('Website', websiteForReading(lead), null, 'var(--g)'),
+      // The sheet prints the score in its header beside the company name; the
+      // screen used to bury it in a card halfway down, under the leaks it is
+      // supposed to frame.
+      (() => {
+        const ws = lead.websiteScore;
+        if (!ws || !(ws.checked || ws.thin === true)) return null;
+        const anyBroken3 = groupByFunnelStage(Array.isArray(lead.problemList) ? lead.problemList : [], lead.funnelStory)
+          .stages.some(s6 => s6.status === 'broken' || s6.status === 'mixed');
+        return ws.checked
+          ? L('Site build', ws.score + '/10', { text: scoreSentence(ws, anyBroken3) || 'graded from the pages we read' })
+          : L('Site build', 'not graded', { text: (ws.basedOn || 'too little of the site could be measured') + '. No honest /10 on that little.', warn: true });
+      })()
     ),
 
 
@@ -7357,13 +7427,17 @@ function LeadBriefing({ lead }) {
           x.leak ? React.createElement('span', { style: { display: 'inline-block', fontSize: 11, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '0 5px', marginRight: 6, verticalAlign: '1px' } }, 'LEAK ' + x.leak) : null,
           x.text,
           x.so ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', marginTop: 3, lineHeight: 1.45 } }, x.so) : null))
-          : React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)' } }, 'Nothing measured on this lead.'));
+          : React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)' } },
+              mark === '\u2715' && sb.ranked
+                ? 'Nothing else measured as a leak. The ' + sb.ranked + ' below are all of them.'
+                : 'Nothing measured on this lead.'));
       return React.createElement('div', null,
         React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, "What's working, what's leaking",
           React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, 'the ten-second read before you dial')),
         React.createElement('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(280px,1fr))', gap: 12 } },
           col('Already won \u2014 do not sell against this', sb.won, 'var(--g)', '\u2713'),
-          col('Where the money falls out', sb.leaking, 'var(--r)', '\u2715')));
+          col('Also leaking \u2014 the ' + (sb.ranked === 1 ? 'biggest one is' : sb.ranked ? 'biggest ' + sb.ranked + ' are' : 'biggest are') + ' written out below',
+            sb.leaking, 'var(--r)', '\u2715')));
     })(),
 
     // ── THE NUMBERED LEAKS — the one place each is written out in full ──────
@@ -7371,11 +7445,16 @@ function LeadBriefing({ lead }) {
       const lrows = normalizedLeakRows(lead.problemList);
       if (!lrows.length) return null;
       const m1 = (lrows[0][0] && lrows[0][0].moneyLine) || '';
+      const seenML = [];
+      const seenLead = [];
       return React.createElement('div', null,
         React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 6, borderBottom: '1px solid var(--b)' } }, 'The biggest leaks',
           React.createElement('span', { style: { fontWeight: 400, textTransform: 'none', letterSpacing: 0, marginLeft: 8 } }, "the system's ranking \u2014 every finding is in the record below; the pick is yours")),
         lrows.map(([x, n]) => {
-          const ml = trimRepeatedJobValue(x.moneyLine, m1, n - 1);
+          const ml = trimRepeatedJobValue(x.moneyLine, m1, n - 1, seenML);
+          if (ml) seenML.push(ml);
+          const headline = trimRepeatedLead(x.problem, seenLead);
+          seenLead.push(String(x.problem));
           const prod = (!x.fromTheirPages && x.pillar && PILLAR_PRODUCT[x.pillar]) ? PILLAR_PRODUCT[x.pillar] : '';
           const boxed = (label, body) => React.createElement('div', { style: { flex: 1, minWidth: 210, fontSize: 13, lineHeight: 1.45, padding: '8px 10px', borderRadius: 7, border: '1px solid var(--b)' } },
             React.createElement('div', { style: { fontSize: 10, fontWeight: 700, letterSpacing: '.11em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 2 } }, label),
@@ -7384,7 +7463,7 @@ function LeadBriefing({ lead }) {
             React.createElement('div', { style: { display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 6 } },
               React.createElement('span', { style: { display: 'inline-block', fontSize: 11, fontWeight: 700, letterSpacing: '.05em', color: '#fff', background: '#b91c1c', borderRadius: 4, padding: '1px 6px' } }, 'LEAK ' + n),
               React.createElement('span', { style: { fontSize: 10.5, fontWeight: 700, letterSpacing: '.1em', textTransform: 'uppercase', color: 'var(--t)' } }, leakWhereFor(x, n))),
-            React.createElement('div', { style: { fontSize: 15.5, fontWeight: 700, lineHeight: 1.3, color: 'var(--t)', marginBottom: 5 } }, x.problem),
+            React.createElement('div', { style: { fontSize: 15.5, fontWeight: 700, lineHeight: 1.3, color: 'var(--t)', marginBottom: 5 } }, headline),
             x.costs ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.5 } }, x.costs) : null,
             x.rankNote ? React.createElement('div', { style: { fontSize: 12.5, color: 'var(--t)', lineHeight: 1.5, marginTop: 3 } }, x.rankNote) : null,
             ml ? React.createElement('div', { style: { marginTop: 8, padding: '9px 11px', borderRadius: 7, background: 'rgba(239,68,68,.10)', border: '1px solid rgba(239,68,68,.35)' } },
@@ -7397,33 +7476,7 @@ function LeadBriefing({ lead }) {
     })(),
 
 
-    // (The one-thing card is gone from the screen: its fix-first and friction
-    // render inside THE FUNNEL above, and its diagnosis is the funnel's dim
-    // system line — the same fact was appearing in three places.)
-
-    // ── WHAT IS WORTH SELLING HIM ───────────────────────────────────────────
-    // Missing entirely from the first build. It is the section that turns a
-    // briefing into a decision — and the "ask before pitching" line is what stops
-    // a caller pitching growth to a business that is already at capacity.
-    sr && sr.whatHeNeeds ? React.createElement('div', null,
-      React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } }, 'The sell'),
-      sr.whatHeNeeds ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.6 } }, sr.whatHeNeeds) : null,
-      // The catalogue names, derived from the top money leaks' pillars — so the
-      // recommendation always lands on something CROJungle sells, without the
-      // model being asked to name a product (which is how feature-pitches ship).
-      (() => {
-        const MAPP = PILLAR_PRODUCT;
-        const pl = Array.isArray(lead.problemList) ? lead.problemList : [];
-        const prods = [...new Set(pl.filter(r => r && Number.isFinite(r.moneyRank) && r.moneyRank <= 5 && !r.fromTheirPages)
-          .slice(0, 3).map(r => MAPP[r.pillar]).filter(Boolean))];
-        return prods.length ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginTop: 7 } },
-          'Products that fit what is measured: ' + prods.join(' \u00b7 ')) : null;
-      })(),
-      // askOnTheCall renders in The conversation above \u2014 one home each.
-      null
-    ) : null,
-
-    // ── SCORE, FACTS, AND THE TOP THREE MONEY LEAKS ─────────────────────────
+    // ── THE INTERNAL NOTES — record tier, exactly as on the sheet ──────────
     // Vin, reading the TriStar sheet: "theres info everywhere... i dont cealry
     // know what 1 2 and 3 of the biggest revenue leaks are." One card answers
     // the three questions an operator asks before anything else: how bad is the
@@ -7485,15 +7538,12 @@ function LeadBriefing({ lead }) {
       if (Array.isArray(lead.afterBenchmarks) && lead.afterBenchmarks.length) {
         notes.push('Industry, for the call: ' + lead.afterBenchmarks.join(' \u00b7 ') + ' \u2014 segment facts with sources, never said as facts about him');
       }
-      if (!(ws && (ws.checked || ws.thin === true)) && !notes.length) return null;
+      void ws; void anyBroken2;
+      if (!notes.length) return null;
       return React.createElement('div', {
         style: { padding: '12px 16px', background: 'var(--p2, rgba(255,255,255,.02))', border: '1px solid var(--b)', borderRadius: 8, display: 'flex', flexDirection: 'column', gap: 8 }
       },
-        ws && ws.checked ? React.createElement('div', { style: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' } },
-          React.createElement('span', { style: { fontSize: 24, fontWeight: 700, color: ws.score <= 4 ? '#f87171' : 'var(--t)' } }, ws.score + '/10'),
-          React.createElement('span', { style: { fontSize: 13, color: 'var(--t)' } }, 'site build \u2014 ' + (scoreSentence(ws, anyBroken2) || 'graded from the pages we read'))
-        ) : (ws && ws.thin === true ? React.createElement('span', { style: { fontSize: 13, color: 'var(--t)' } },
-          'site build not graded \u2014 ' + (ws.basedOn || 'too little of the site could be measured') + '. No honest /10 on that little.') : null),
+        React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.07em', textTransform: 'uppercase', color: 'var(--t)' } }, 'Internal \u2014 never say to him'),
         notes.length ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', lineHeight: 1.7 } },
           notes.map((n2, ni) => React.createElement('div', { key: 'nt' + ni }, n2))) : null
       );
@@ -7501,6 +7551,36 @@ function LeadBriefing({ lead }) {
 
     // (The smaller-leaks section is gone: every remaining money row renders at
     // its funnel stage, and rows with no stage render under the funnel.)
+
+    // (The one-thing card is gone from the screen: its fix-first and friction
+    // render inside THE FUNNEL above, and its diagnosis is the funnel's dim
+    // system line — the same fact was appearing in three places.)
+
+    // ── WHAT IS WORTH SELLING HIM ───────────────────────────────────────────
+    // Missing entirely from the first build. It is the section that turns a
+    // briefing into a decision — and the "ask before pitching" line is what stops
+    // a caller pitching growth to a business that is already at capacity.
+    sr && sr.whatHeNeeds ? React.createElement('div', null,
+      React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--t)', marginBottom: 10, paddingBottom: 7, borderBottom: '1px solid var(--b)' } }, 'The sell'),
+      sr.whatHeNeeds ? React.createElement('div', { style: { fontSize: 13.5, color: 'var(--t)', lineHeight: 1.6 } }, sr.whatHeNeeds) : null,
+      // The catalogue names, derived from the top money leaks' pillars — so the
+      // recommendation always lands on something CROJungle sells, without the
+      // model being asked to name a product (which is how feature-pitches ship).
+      (() => {
+        const MAPP = PILLAR_PRODUCT;
+        const pl = Array.isArray(lead.problemList) ? lead.problemList : [];
+        const prods = [...new Set(pl.filter(r => r && Number.isFinite(r.moneyRank) && r.moneyRank <= 5 && !r.fromTheirPages)
+          .slice(0, 3).map(r => MAPP[r.pillar]).filter(Boolean))];
+        return prods.length ? React.createElement('div', { style: { fontSize: 13, color: 'var(--t)', marginTop: 7 } },
+          'Products that fit what is measured: ' + prods.join(' \u00b7 ')) : null;
+      })(),
+      // askOnTheCall renders in The conversation above \u2014 one home each.
+      null
+    ) : null,
+
+    // (The score now renders with the contact details at the top, and its
+    // internal notes render in the record tier — the split the exported sheet
+    // has always had. One document in two places.)
 
     // ── THE CONVERSATION ────────────────────────────────────────────────────
     // Mirrors the export sheet, and per Vin 2026-08-24 it INFORMS rather than
@@ -7544,7 +7624,7 @@ function LeadBriefing({ lead }) {
     // bottom at the owner's direction: the caller reads the business first and
     // the guardrails last.
     risks.length ? React.createElement('div', { style: { borderTop: '1px solid var(--b)', paddingTop: 14 } },
-      React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 6 } }, 'Do not say'),
+      React.createElement('div', { style: { fontSize: 12, fontWeight: 700, letterSpacing: '.06em', textTransform: 'uppercase', color: 'var(--r)', marginBottom: 6 } }, 'Do not say on this call'),
       React.createElement('ul', { style: { margin: 0, paddingLeft: 16, listStyle: 'disc' } },
         risks.slice(0, 8).map((x, i) => React.createElement('li', { key: i, style: { marginBottom: 5, lineHeight: 1.5, fontSize: 13, color: 'var(--t)' } }, plainRisk(x)))
       )
@@ -7591,11 +7671,11 @@ function LeadBriefing({ lead }) {
           // sentence, its cost line and its product again is the repetition
           // the two-tier layout exists to remove.
           if (Number.isFinite(lr)) {
-            const _short = String(x.problem || '');
+            const _short = String(x.problem || '').slice(0, 52).replace(/[\s,;:.-]+\S*$/, '');
             return React.createElement('div', { key: 'fr' + ri, style: { fontSize: 13, lineHeight: 1.6, marginTop: 4 } },
               badge(lr),
               React.createElement('span', { style: { color: 'var(--t)', fontSize: 12.5 } },
-                (_short.length > 90 ? _short.slice(0, 90) + '\u2026' : _short) + ' \u2014 written out in full above.'));
+                _short + '\u2026 written out in full above.'));
           }
           return React.createElement('div', { key: 'fr' + ri, style: { fontSize: 13, lineHeight: 1.6, marginTop: 4 } },
             React.createElement('span', { style: { fontWeight: 600, color: 'var(--t)' } }, x.problem),
