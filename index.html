@@ -645,6 +645,15 @@ const corpusWarningFor = (lead) => {
   const thin = c ? (!blind && (Number(c.interiorPages) || 0) === 0) : false;
   if (!c && !l.firecrawlOutOfCredits) return null;
   if (blind) {
+    // ══ AND WHY IT IS EMPTY IS NOT ALWAYS "THEIR SITE" ═════════════════════
+    // Live 2026-08-26: "We never read a single page of their website" printed
+    // for a lead whose site returned 52 internal links, HTML signals and ad
+    // signals. It was DISCARDED as a different business, not empty. Sending a
+    // caller hunting a website problem that does not exist is the
+    // message-names-the-wrong-cause failure CLAUDE.md records three times.
+    if (c && c.discardedWrongCompany) {
+      return 'The website we were given resolved to a DIFFERENT business, so every page, picture and measurement taken from it was discarded. Their real site has NOT been read \u2014 nothing below about it is a measurement. Find the right URL before saying any of this out loud.';
+    }
     // ══ TWO READS, AND SAYING "NONE" WHEN WE HOLD ONE IS ITS OWN FALSEHOOD ══
     // CTR, live 2026-08-22: this banner said we had read nothing, and the
     // section beneath it described the site's conversion path in detail. Both
@@ -1145,7 +1154,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260903;
+const CLIENT_CONTRACT = 20260904;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
