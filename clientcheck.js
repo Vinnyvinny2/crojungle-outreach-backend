@@ -570,6 +570,24 @@ const mergeStat = runMergeCheck();
       let page = '';
       try { page = mod.html([mod.rec(LEAD)], { title: 'T', at: 'now' }); }
       catch (e) { fails.push('the audit export threw on a normal lead: ' + e.message); }
+      // == THE SHEET IS READ AS A PDF, AND A PDF DROPS BACKGROUNDS =========
+      // The funnel's tapered segments are a clip-path over a background
+      // FILL, and so are the red leak badges, the drips and the stop
+      // banners. Browsers print no background colour unless the page asks,
+      // so the whole funnel came out of Save-as-PDF blank while its text
+      // survived - which reads as "the image did not transfer" and is
+      // really a two-word stylesheet omission. Every sheet that reaches the
+      // rep goes through this print path, so it is not a cosmetic rule.
+      if (page.indexOf('print-color-adjust:exact') < 0) {
+        fails.push('the export prints no background colours — the funnel segments, the leak badges and the stop banners all come out of Save-as-PDF blank, with only their text left');
+      }
+      // And a break through the middle of a funnel stage or a Do-not-say box
+      // reads as a printing accident. Deliberately NOT `section`: one taller
+      // than a page would be pushed whole and then split anyway, buying a
+      // blank page for nothing.
+      if (page.indexOf('break-inside:avoid') < 0 || page.indexOf('break-after:avoid') < 0) {
+        fails.push('the export lost its page-break rules — a page break can land mid funnel stage again, or strand a heading at the foot of a page');
+      }
       // The three-openers section and the signals-at-their-stage grid (Vin,
       // 2026-08-25: "3 options for this section at all times based on the top
       // revenue leaks" and "matching [the signals] up with the funnel is ideal").
