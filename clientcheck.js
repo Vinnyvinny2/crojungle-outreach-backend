@@ -581,6 +581,17 @@ const mergeStat = runMergeCheck();
       if (page.indexOf('print-color-adjust:exact') < 0) {
         fails.push('the export prints no background colours — the funnel segments, the leak badges and the stop banners all come out of Save-as-PDF blank, with only their text left');
       }
+      // Seven audits printed at 37 pages, and sizing `body` alone did almost
+      // nothing about it: nearly every block on this sheet sets its OWN pixel
+      // size, which overrides the body rule. Measured on a real export, one
+      // audit is 1,567px tall and the funnel is 798 of them - all of it in
+      // classes body cannot reach. So the count of components typeset for
+      // paper is the thing to hold: sizing a handful of them is the state
+      // this was in when it printed at five pages an audit.
+      const _ptRules = (page.match(/font-size:[0-9.]+pt/g) || []).length;
+      if (_ptRules < 25) {
+        fails.push(`only ${_ptRules} component(s) are typeset for paper — the sheet is printing at screen sizes again, which is what made seven audits 37 pages`);
+      }
       // And a break through the middle of a funnel stage or a Do-not-say box
       // reads as a printing accident. Deliberately NOT `section`: one taller
       // than a page would be pushed whole and then split anyway, buying a
