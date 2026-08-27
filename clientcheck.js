@@ -680,6 +680,23 @@ const mergeStat = runMergeCheck();
         fails.push('a CACHED address up to 60 days old still reports as confirmed live, with nothing on the row saying when it was checked');
       }
       if (/cache/i.test(_t1.say)) fails.push('a fresh address is being labelled as cached');
+      // THREE-AND-A-HALF - AN AUDITED LEAD IS ALREADY A CONTACT ROW.
+      // contactRank is written by the contact-run path, so on the day this
+      // shipped it existed on nothing: a 189-lead pipeline with 128 audited
+      // leads, every one carrying a resolved owner, an address and a phone, and
+      // the export matched ZERO of them. The button never rendered and there
+      // was no way to tell why. The ranking is a formula over reachability and
+      // every audited lead has reachability - only the leads that happened to
+      // take one code path were allowed to use it.
+      const _audited = mod.contactListRows([
+        { name: 'Audited Co', reachability: 74, email: 'a@b.com', phone: '5125550100' },
+      ])[0];
+      if (!_audited || _audited.rank !== 74) {
+        fails.push(`a lead audited before the contact ranking existed does not rank at its reachability (got ${_audited && _audited.rank}) — the export would show nothing for a pipeline full of resolved owners and addresses`);
+      }
+      if (!/reachability alone/i.test(_audited.whyThisRank || '')) {
+        fails.push('a fallback rank does not say it is a fallback, so it reads as the full contact ranking');
+      }
       // FOUR - a free page builder is not a domain the business owns, so an
       // address built at it can be well-formed and undeliverable to them.
       const _wix = mod.contactListRows([{ name: 'Z', website: 'https://z.wixsite.com/z' }])[0];

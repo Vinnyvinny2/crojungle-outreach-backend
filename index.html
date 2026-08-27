@@ -4095,7 +4095,8 @@ const contactListRows = (leads) => {
     const host = String(l.website || '').replace(/^https?:\/\//i, '').replace(/^www\./i, '').split('/')[0].toLowerCase();
     const builder = /(^|\.)(wixsite\.com|business\.site|godaddysites\.com|weebly\.com|squarespace\.com|myshopify\.com|square\.site)$/.test(host);
     rows.push({
-      rank: (typeof l.contactRank === 'number') ? l.contactRank : null,
+      rank: (typeof l.contactRank === 'number') ? l.contactRank
+            : ((typeof l.reachability === 'number') ? l.reachability : null),
       company: l.name || l.company || '',
       owner: (dm && dm.name) || l.verifiedCEO || l.founderName || '',
       title: (dm && dm.title) || l.verifiedCEOTitle || l.founderTitle || '(no title found)',
@@ -4113,7 +4114,10 @@ const contactListRows = (leads) => {
       rating: (typeof l.rating === 'number') ? l.rating : '',
       reviews: (typeof l.reviewCount === 'number') ? l.reviewCount : '',
       icpNote: [l.outsideBand ? 'outside the star band' : '', l.aboveSizeCeiling ? 'above the review ceiling' : ''].filter(Boolean).join('; '),
-      whyThisRank: l.contactRankWhy || '',
+      whyThisRank: l.contactRankWhy
+        || ((typeof l.reachability === 'number')
+            ? ('reachability ' + Math.round(l.reachability) + ' - this lead was audited before the contact ranking existed, so it is ranked on reachability alone')
+            : ''),
     });
   }
   // Highest first. An unranked lead sorts LAST rather than as a zero: it was
@@ -9044,14 +9048,36 @@ function ResearchView({
         // is safe to send, and why it was refused as their OWN columns rather
         // than one guessed caption.
         (() => {
-          const listed = allLeads.filter(x => x && (typeof x.contactRank === 'number' || x.contactOnly === true));
+          // Anything we could actually put in front of a person: an address,
+          // a dialable number, or a named owner. NOT "went through a contact
+          // run" - that made the file about which code path a lead took rather
+          // than about what we know, and on a 189-lead pipeline it matched
+          // nothing at all while 128 audited leads sat there with resolved
+          // owners, addresses and phones.
+          const listed = allLeads.filter(x => x && (
+            String(x.email || '').trim()
+            || String(x.phone || x.phoneDisplay || '').replace(/\D/g, '')
+            || (x.decisionMaker && x.decisionMaker.name) || x.verifiedCEO));
           if (batchRunning || !listed.length) return null;
-          return React.createElement('button', {
-            className: 'btn btn-sm btn-g',
-            style: { marginTop: 6, width: '100%' },
-            title: 'Every lead that has been through a contact run, ranked, as a CSV.',
-            onClick: () => { const n = downloadContactList(listed); if (!n) setResearchError('No contact rows to export yet.'); },
-          }, 'Download contact list (' + listed.length + ')');
+          const _withEmail = listed.filter(x => String(x.email || '').trim()).length;
+          return React.createElement(React.Fragment, null,
+            React.createElement('button', {
+              className: 'btn btn-sm btn-g',
+              style: { marginTop: 6, width: '100%' },
+              title: 'Every lead with an address, a phone number or a named owner - ranked, as a CSV.',
+              onClick: () => { const n = downloadContactList(listed); if (!n) setResearchError('No contact rows to export yet.'); },
+            }, 'Download contact list (' + listed.length + ')'),
+            // The count on the button is what is IN the file. This line is what
+            // is in the file that you can actually email, which is a different
+            // number and the one that decides whether a contact run is worth
+            // pressing. Saying only the first would let a file of phone-only
+            // rows read as fifty addresses.
+            React.createElement('div', {
+              style: { fontSize: 11, color: 'var(--m2)', marginTop: 4, lineHeight: 1.45 },
+            }, _withEmail + ' of them have an email address'
+               + (_withEmail < listed.length
+                   ? '. The rest are phone and company only \u2014 a contact run resolves their owner and address.'
+                   : '.')));
         })(),
         // ── GETTING FIFTY AUDITS OUT ──────────────────────────────────────
         // Fifty audits on screen and no way to hand them to anybody. Exports
