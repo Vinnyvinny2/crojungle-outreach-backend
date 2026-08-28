@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260912;
+const CONTRACT_VERSION = 20260913;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -10662,7 +10662,17 @@ const _ownerFromCorpus = async (corpus, companyName, website, apiKey) => {
     // is copied out of the page verbatim or not returned at all.
     try {
       const _roster = parseTeamRoster(corpus, companyName);
-      const _owners = _roster.filter(r => r.isOwner);
+      // ══ THE OWNER IS THE MOST SENIOR ONE, NOT THE FIRST ONE ════════════
+      // This took _owners[0] - document order. On a page listing fourteen
+      // people that is whoever the layout puts first, and on Alliance Animal
+      // Health it was a nav label while the Co-Founder & CEO sat six rows
+      // below. Ranked by the same authorityScore the rest of the resolver
+      // uses, so one rule decides who outranks whom everywhere. The tiebreak is
+      // the SHORTER title, because a real title is "Founder & CEO" and prose
+      // that happens to carry an ownership word is always longer.
+      const _owners = _roster.filter(r => r.isOwner)
+        .sort((a, b) => (authorityScore(b.title) - authorityScore(a.title))
+                     || (String(a.title).length - String(b.title).length));
       if (_owners.length) {
         const _pick = _owners[0];
         const _others = _roster.filter(r => r.name !== _pick.name);
@@ -10898,6 +10908,34 @@ const rememberDmSearchFailed = (domain) => {
 // The rule this implements: what a company publishes about who runs it is the
 // best evidence that exists. No web search outranks the company's own page.
 const OWNER_TITLE_RE = /\b(?:co[- ]?)?(?:owner|founder|co[- ]?founder|proprietor|principal|president|chief\s+executive(?:\s+officer)?|ceo|managing\s+(?:director|partner|member)|partner)\b/i;
+// ══ AN OWNERSHIP WORD MUST BE THE HEAD OF THE TITLE, NOT A MODIFIER ═══════
+// Live, 2026-08-28, four leads in one run. The pattern above matched, and the
+// matches were:
+//   "Partner Track"                  (Alliance Animal Health's nav)
+//   "CEO Roundtable"                 (the American Heart Association's nav)
+//   "Why Partner Our Support"        (a nav label)
+//   "Our Founder Dr. David Kay"      (a sentence about the founder)
+// Every one of them became the DECISION-MAKER on a sheet, and "Donate Monthly
+// (CEO Roundtable)" went on to seed the address donate.monthly@heart.org.
+//
+// What separates them from a real title is grammatical, not a word list: in
+// "Founder & CEO" the ownership word is the HEAD of the phrase, and in
+// "Partner Track" it MODIFIES the noun after it. So look at what follows the
+// match. End of string, a separator, or another title word is a title. A plain
+// following word means the ownership word was an adjective.
+//
+// A word list of banned phrases would have caught none of these four and would
+// need a new entry for every site; this needs none.
+const TITLE_HEAD_FOLLOWERS = /^(?:officer|officers|and|of|the|at|emeritus|elect|partner|partners|owner|founder|president|ceo|coo|cfo|director|manager|member|principal|operator|broker|agent|attorney|dds|dmd|md|do|esq|pe|cpa)\b/i;
+const ownershipIsHead = (title) => {
+  const s = String(title || '').trim();
+  const m = OWNER_TITLE_RE.exec(s);
+  if (!m) return false;
+  const after = s.slice(m.index + m[0].length);
+  // Nothing after it, or punctuation/a separator: the ownership word is the head.
+  if (!/^\s*[A-Za-z]/.test(after)) return true;
+  return TITLE_HEAD_FOLLOWERS.test(after.trim());
+};
 // Titles that are senior but are NOT the owner. Getting this list wrong is how
 // a COO becomes the decision-maker, so it is checked BEFORE the owner pattern.
 const NON_OWNER_TITLE_RE = /\b(?:c[ofti]o|chief\s+(?:operating|financial|technology|information|marketing|revenue)\s+officer|vice[- ]president|vp\b|director\s+of|head\s+of|manager|coordinator|superintendent|estimator|foreman|designer|assistant|administrator|controller|bookkeeper|receptionist|sales\s+(?:rep|representative|associate))\b/i;
@@ -11060,7 +11098,7 @@ const personFromRun = (raw, companyName = '') => {
 };
 
 const parseTeamRoster = (html, companyName = '') => {
-  const out = [];
+  let out = [];
   if (!html) return out;
   // Strip scripts and styles; keep tags so the name/title pairing survives.
   const cleaned = String(html)
@@ -11115,7 +11153,11 @@ const parseTeamRoster = (html, companyName = '') => {
     // pattern, never after.
     const deputy = /\b(?:vice|deputy|interim|acting|assoc(?:iate)?|junior|jr)[\s.-]*(?:president|partner|principal|director)\b|\bvp\b/i.test(t);
     if (deputy) return 'staff';
-    if (OWNER_TITLE_RE.test(t) && !junior) return 'owner';
+    // ownershipIsHead, not the bare pattern: "Partner Track" and "CEO
+    // Roundtable" both match OWNER_TITLE_RE and both became a live
+    // decision-maker on 2026-08-28. The ownership word has to be the HEAD of
+    // the title, not an adjective in front of a different noun.
+    if (ownershipIsHead(t) && !junior) return 'owner';
     if (NON_OWNER_TITLE_RE.test(t) || junior) return 'staff';
     return null;
   };
@@ -11163,6 +11205,34 @@ const parseTeamRoster = (html, companyName = '') => {
       }
     }
   }
+  // ══ A MARKETING PHRASE IS NOT A JOB TITLE ═══════════════════════════════
+  // The cause here is the INPUT, not the parser. The Find tab's free read hands
+  // this function a WHOLE PAGE - navigation, hero, footer - where the audit
+  // path hands it a leadership page. So a nav label sits exactly where a name
+  // sits, and the marketing line under it sits exactly where a title sits.
+  // Live: "Medical Autonomy (Gain a partner, keep your practice.)",
+  // "How We Work (250+ partner practices)", "In February (Jeff D'Onofrio
+  // assumes the role of acting publisher and CEO.)", "Online Chat Available
+  // (Connect with a representative right away to get help with your case.)".
+  //
+  // Shape only, no phrase list: a job title is not a sentence, is short, and
+  // is not a statistic.
+  const _NAV_PHRASE = /\b(toggle navigation|read more|learn more|contact us|get in touch|click here|our services|how we work|open roles|view all|skip to|log ?in)\b/i;
+  const looksLikeJobTitle = (t) => {
+    const s = String(t || '').trim();
+    if (!s || s.length > 70) return false;
+    if (/[.!?;]/.test(s)) return false;                  // a sentence, not a title
+    if (s.split(/\s+/).length > 6) return false;         // a line of copy
+    if (/\d\s*\+|\d{2,}/.test(s)) return false;          // "250+ partner practices"
+    if (_NAV_PHRASE.test(s)) return false;
+    return true;
+  };
+  // Removing EVERYTHING is the honest answer on a page we cannot read this way:
+  // it is the same state as a page with no roster, and it sends the resolver on
+  // to the model. Keeping the rejects would be the guard-too-tight failure
+  // pointed the other way.
+  out = out.filter(r => looksLikeJobTitle(r.title));
+
   // Deduplicate by name, preferring the entry we read as an owner.
   const byName = new Map();
   out.forEach(r => {
@@ -30686,6 +30756,15 @@ const findOwnerViaRegistry = async (companyName, fcKey) => {
   }
 };
 
+// ══ A HEADLINE VERB IS NOT PART OF SOMEBODY'S NAME ═════════════════════════
+// Live: "Art Vallely Named (President)" reached the sheet, and the email engine
+// then built art.vallely.named@pensketruckleasing.com and blocked it. The name
+// came out of "Art Vallely Named President of Penske" - a headline, where the
+// verb sits exactly where a surname would. Declared, because these are the
+// words a personnel headline uses and there is no other way to tell.
+const HEADLINE_VERB = /\s+(?:named|appointed|promoted|elected|hired|joins|joined|announces|announced|takes|steps|retires|retired|launches|launched|becomes|became|assumes|assumed|to\s+lead|will\s+lead)\b.*$/i;
+const stripHeadlineVerb = (name) => String(name || '').replace(HEADLINE_VERB, '').trim();
+
 const findOwnerViaNews = async (companyName) => {
   if (!companyName) return null;
   try {
@@ -30707,7 +30786,7 @@ const findOwnerViaNews = async (companyName) => {
         const title = /owner|founder|ceo|president|chief/i.test(m[1] || '') ? m[1] : m[2];
         if (cand) {
           console.log(`DM/news [${companyName}]: ✓ ${cand} (${title})`);
-          return { name: cand.trim(), title, confidence: 'medium', source: 'news' };
+          return { name: stripHeadlineVerb(cand), title, confidence: 'medium', source: 'news' };
         }
       }
     }
@@ -54817,6 +54896,93 @@ app.listen(PORT, () => {
     console.log(`⛔ FIRECRAWL CREDIT MODEL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ---- THE FOUR FALSE OWNERS OF 2026-08-28 -----------------------------
+  // One live run put a NAV LABEL in the decision-maker column on four leads,
+  // and on one of them the fabricated name went on to seed an email address:
+  //   Alliance Animal Health   -> "Alliance Academy"  ("Partner Track")
+  //   West Coast Wound         -> "Care Experience"   ("Our Founder Dr. David Kay")
+  //   American Heart Assoc.    -> "Donate Monthly"    ("CEO Roundtable")
+  //                               -> donate.monthly@heart.org
+  //   Penske Truck Leasing     -> "Art Vallely Named" (a headline verb)
+  // Every fixture below is one of those live strings, and every rule is
+  // asserted in BOTH directions, because a filter tuned until it refuses
+  // everything stops resolving the owners this whole system exists to find.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+
+    // ONE - an ownership word must be the HEAD of the title, not an adjective
+    // in front of a different noun. This is grammatical, not a word list: a
+    // list of banned phrases would have caught none of these four.
+    for (const bad of ['Partner Track', 'CEO Roundtable', 'Why Partner Our Support', 'Our Founder Dr. David Kay', 'Partner with Herc Plus']) {
+      if (ownershipIsHead(bad)) _fails.push(`"${bad}" still reads as an ownership title, and every one of these reached a live decision-maker column`);
+    }
+    for (const good of ['Founder & CEO', 'Co-Founder & CEO', 'President & CEO', 'Acting Publisher & CEO', 'Managing Partner', 'Owner', 'Owner/Operator', 'Chief Executive Officer', 'Partner, Litigation', 'Founder and CEO', 'Co-Owner/CFO', 'President']) {
+      if (!ownershipIsHead(good)) _fails.push(`"${good}" no longer reads as an ownership title - the guard has tightened onto the owners this system exists to find`);
+    }
+    if (!_src.includes(_n('if (ownershipIsHead(t) && !junior) return', " 'owner';"))) {
+      _fails.push('titleKind is back on the bare pattern, so "Partner Track" is an owner again');
+    }
+
+    // TWO - a nav label with a marketing line under it is not a person. The
+    // free read hands the roster parser a WHOLE PAGE, so a nav item sits where
+    // a name sits. Run through the real parser on the live markup shape.
+    const _navPage = '<div><h3>Medical Autonomy</h3><p>Gain a partner, keep your practice.</p></div>'
+      + '<div><h3>How We Work</h3><p>250+ partner practices</p></div>'
+      + '<div><h3>Check Open Roles</h3><p>Toggle Navigation Why Partner Our Support</p></div>'
+      + '<div><h3>Matt Sussman</h3><p>Co-Founder &amp; CEO</p></div>'
+      + '<div><h3>Kelly Harbert</h3><p>Chief Operating Officer</p></div>';
+    const _r1 = parseTeamRoster(_navPage, 'Alliance Animal Health');
+    const _own1 = _r1.filter(r => r.isOwner);
+    if (!_own1.length || !/Matt Sussman/.test(_own1[0].name)) {
+      _fails.push(`the roster's owner on the live Alliance shape is ${JSON.stringify((_own1[0] || {}).name || null)}, not Matt Sussman - a nav label is still outranking the Co-Founder & CEO`);
+    }
+    if (_r1.some(r => /Gain a partner|250\+|Toggle Navigation/.test(r.title))) {
+      _fails.push('a marketing line is still being read as a job title');
+    }
+
+    // THREE - the owner is the most senior one, not the first one on the page.
+    // Ordered so the WRONG answer is first in the document.
+    const _order = '<div><h3>Zed Nav</h3><p>Partner, Marketing</p></div>'
+      + '<div><h3>Ann Real</h3><p>Founder &amp; CEO</p></div>';
+    const _own3 = parseTeamRoster(_order, 'X Co').filter(r => r.isOwner)
+      .sort((a, b) => (authorityScore(b.title) - authorityScore(a.title)) || (a.title.length - b.title.length));
+    if (!_own3.length || !/Ann Real/.test(_own3[0].name)) {
+      _fails.push('the roster still picks the FIRST owner-ish row rather than the most senior one');
+    }
+    if (!_src.includes(_n('.sort((a, b) => (authorityScore(b.title) - authorityScore(a.title))', '\n                     || (String(a.title).length - String(b.title).length'))) {
+      _fails.push('the roster owner pick is back on document order, which is what put a nav label above a Co-Founder & CEO');
+    }
+
+    // FOUR - a headline verb is not part of a name.
+    if (stripHeadlineVerb('Art Vallely Named') !== 'Art Vallely') _fails.push('a personnel headline still leaves its verb inside the name, and the email engine then builds an address from it');
+    if (stripHeadlineVerb('Mike Taft') !== 'Mike Taft') _fails.push('stripHeadlineVerb is eating part of an ordinary name');
+    if (!_src.includes(_n('return { name: stripHeadlineVerb(cand), title,', " confidence: 'medium', source: 'news' };"))) {
+      _fails.push('the news source is not stripping the headline verb, so the fix is dead at the one call site that needs it');
+    }
+
+    // FIVE - a leadership page is not a headcount. Alliance scored 75/100, the
+    // HIGHEST in that run, because fourteen names read as a fourteen-person
+    // business; the fourteen were a CFO, a COO and three SVPs.
+    const _big = findIcpScore({ teamCount: 14, execTitles: ['CFO & Chief Development Officer', 'Chief Operating Officer', 'Senior Vice President, Strategy'], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: null, rating: null });
+    const _small = findIcpScore({ teamCount: 14, execTitles: [], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: null, rating: null });
+    if (!(_big.score < _small.score)) {
+      _fails.push(`a fourteen-name leadership page carrying a CFO, a COO and an SVP scores ${_big.score} against ${_small.score} for a fourteen-person crew - a deep org chart is still reading as an ICP-sized business`);
+    }
+    // One VP at a fifty-person contractor is ordinary. The bar is two.
+    const _oneVp = findIcpScore({ teamCount: 12, execTitles: ['Vice President, Operations'], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: null, rating: null });
+    if (_oneVp.score !== _small.score) _fails.push('a single VP is being treated as a corporate org chart, which would demote ordinary contractors');
+
+    if (_fails.length) {
+      console.log(`⛔ OWNER TRUTH CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ OWNER TRUTH CHECK: the four nav labels that became a live decision-maker on 2026-08-28 are all refused, and the twelve real ownership titles beside them all survive. An ownership word must be the HEAD of its title rather than an adjective in front of another noun, a marketing line is not a title, the owner is the most SENIOR person on the page rather than the first, a personnel headline no longer leaves its verb inside a name, and a leadership page carrying two or more corporate titles is scored as the bigger business it is rather than as a crew of that size. HONEST SHAPE: the enterprise-name filter now also runs on this route, and on the six national brands that cost real money that night it catches NONE of them — it is an institution and scale-word filter, and "Penske Truck Leasing" reads exactly like a local business by name. Keeping enterprises out of this queue is a Find-side job, not a name test.`);
+    }
+  } catch (e) {
+    console.log(`⛔ OWNER TRUTH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ---- THE FIND-TAB CONTACT READ ---------------------------------------
   // The standing goal is fifty leads a day with an owner, an address, a number
   // and a score, and this is the one place it is decided. Every predicate is
@@ -54956,6 +55122,15 @@ app.listen(PORT, () => {
     // SEVEN - the route's own gates. Same admission machinery as research: the
     // ceiling refuses BEFORE anything is spent, and a website that cannot be a
     // URL is refused rather than discovered after the money moved.
+    // A fixture supplies its own arguments and therefore cannot see a caller,
+    // so the name filter is asserted where it RUNS. It is falsified against
+    // seventeen real owner-operated names in ICP FILTER CHECK; what is new is
+    // that this route reads it at all, and that it reads it BEFORE the ceiling
+    // - a refusal that happens after the money moved is not a refusal.
+    const _entI = _src.indexOf(_n('if (looksLikeEnterpriseByName(', 'company.name)) {'));
+    const _ceilI = _src.indexOf(_n("const ceiling = budgetRefusal(['fc',", " 'anthropicUsd']);"));
+    if (_entI < 0) _fails.push('the find-contact route no longer refuses an obvious institution by name, so a university or a national brand is read in full before anybody notices');
+    else if (_ceilI >= 0 && _entI > _ceilI) _fails.push('the enterprise refusal now sits below the ceiling check, which is the wrong end of the route to notice a lead is not a lead');
     if (!_src.includes(_n("const ceiling = budgetRefusal(['fc',", " 'anthropicUsd']);"))) _fails.push('the find-contact route no longer checks the day ceiling, so a runaway day has one door with no lock on it');
     if (!_src.includes(_n('if (_findInFlight >=', ' FIND_CONTACT_CONCURRENCY) {'))) _fails.push('the find-contact route has no concurrency ceiling, so a second tab doubles the spend rate');
     if (!bootGateRefuses('POST', '/api/find-contact', 'checking')) _fails.push('the find-contact route is not held during the boot window, so a lead worked before the checks settle can flip the build verdict');
@@ -70187,10 +70362,31 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
   let teamCount = null;
   let teamNames = [];
   let teamPageUrl = '';
+  let execTitles = [];
   for (const p of read) {
     if (p.intent !== 'team') continue;
     const roster = parseTeamRoster(p.html || p.text, '');
-    if (roster.length >= 1) { teamCount = roster.length; teamNames = roster.map(r => r.name); teamPageUrl = p.url; break; }
+    if (roster.length >= 1) {
+      teamCount = roster.length;
+      teamNames = roster.map(r => r.name);
+      teamPageUrl = p.url;
+      // ══ A LEADERSHIP PAGE IS NOT A HEADCOUNT ═════════════════════════
+      // Live, 2026-08-28: Alliance Animal Health scored 75/100 - the HIGHEST
+      // in the run - because its team page lists fourteen people, and fourteen
+      // reads as "squarely the size we sell to". The fourteen were a CFO, a
+      // COO, three Senior Vice Presidents and four Vice Presidents, and the
+      // same page says "250+ partner practices". A two-person wound-care
+      // practice in the same run scored 26. The score was upside down.
+      //
+      // What a leadership page states is not how many people work there; it is
+      // how DEEP the org chart is. A business with three SVPs is not a
+      // business with three SVPs and nobody else. So the titles are read as
+      // evidence of SCALE, and a company carrying them is scored as what it
+      // is: bigger than the ones we sell to.
+      execTitles = roster.map(r => r.title).filter(t =>
+        /\b(?:senior\s+vice\s+president|executive\s+vice\s+president|evp|svp|vice[- ]president|\bvp\b|chief\s+\w+\s+officer|\bc[foti]o\b|general\s+counsel|chief\s+of\s+staff)\b/i.test(String(t || '')));
+      break;
+    }
   }
 
   // HIRING. Structured data first - a datePosted the owner published himself,
@@ -70221,7 +70417,7 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
     pagesRead: read.length,
     markupRead: anyMarkup,
     adsCode, adPlatforms, tagManager, adsWhy,
-    teamCount, teamNames, teamPageUrl,
+    teamCount, teamNames, teamPageUrl, execTitles,
     hiringAny, hiringMarketing, hiringTitles,
     hiringMarketingTitles: lanes.marketing,
     hiringSource,
@@ -70247,6 +70443,14 @@ const FIND_ICP_TERMS = [
     score: (s) => {
       const n = s.teamCount;
       if (typeof n !== 'number' || !Number.isFinite(n) || n < 1) return null;
+      // Two or more corporate titles is a deep org chart, whatever the page
+      // shows: a business with a CFO, a COO and three SVPs is not a fourteen
+      // person company. One VP at a fifty-person contractor is ordinary, so
+      // the bar is two.
+      const _exec = Array.isArray(s.execTitles) ? s.execTitles : [];
+      if (_exec.length >= 2) {
+        return { points: 5, say: `their leadership page carries ${_exec.length} corporate titles (${_exec.slice(0, 3).join(', ')}) - an org chart that deep is a bigger business than the ones we sell to, whatever the page shows` };
+      }
       if (n >= 121) return { points: 5,  say: `${n}+ people on their team page - larger than the businesses we sell to` };
       if (n >= 41)  return { points: 25, say: `${n}+ people on their team page - upper end of the range` };
       if (n >= 10)  return { points: 35, say: `${n}+ people on their team page - squarely the size we sell to` };
@@ -70521,6 +70725,24 @@ app.post('/api/find-contact', async (req, res) => {
   if (company.website) {
     try { new URL(String(company.website)); }
     catch { return res.status(422).json({ error: `"${String(company.website).slice(0, 60)}" is not a usable website address, so nothing about their site can be read.`, preflightStopped: true }); }
+  }
+  // ══ AN ENTERPRISE IS NOT A LEAD, AND FINDING OUT AFTER IS THE WASTE ══════
+  // Live, 2026-08-28: The Washington Post cost 2 Firecrawl credits and 109
+  // seconds, Herc Rentals 3 and 101, Lodging Dynamics 4 and 155, plus Penske
+  // Truck Leasing, Highmark Health and the American Heart Association. None of
+  // them is an owner-operated business in the $800k-$15M range this exists to
+  // find, and none of them was ever going to be.
+  //
+  // The filter that knows this already exists and is already falsified against
+  // seventeen real owner-operated names that must survive it - it simply ran
+  // only inside /api/discover. Reading it here is free and happens before a
+  // single byte moves.
+  if (looksLikeEnterpriseByName(company.name)) {
+    console.log(`\u{1F6D1} FIND CONTACT [${who}]: REFUSED - the name reads as an institution or a national brand, not an owner-operated business in our range. Nothing was spent. Use Skip on this lead, or rename it if the filter has it wrong.`);
+    return res.status(422).json({
+      error: `"${String(company.name).slice(0, 60)}" reads as an institution or a national brand rather than an owner-operated business, so nothing was read and nothing was spent.`,
+      preflightStopped: true, notIcp: true,
+    });
   }
   const ceiling = budgetRefusal(['fc', 'anthropicUsd']);
   if (ceiling) {
