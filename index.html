@@ -1166,7 +1166,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260911;
+const CLIENT_CONTRACT = 20260912;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5310,11 +5310,180 @@ function FindLoader({ count }) {
 // the disease this file records more than any other — "the second copy is
 // always the one that rots, because it only runs in the case nobody tests".
 // Extracted verbatim; both paths call it.
+// === THE CONTACT LIST - THE FIND TAB'S OWN ARTEFACT =========================
+// The standing goal is fifty leads a day with an owner, an address, a number and
+// a score, and it is deliberately NOT the audit. The Research tab audits; the
+// Find tab lists. So everything below shares nothing with ResearchView's batch
+// runner: its own request, its own pool, its own state, its own file.
+//
+// The result lives ON THE FIND COMPANY, in the Find queue, so it survives a
+// reload through saveDiscovered exactly as every other Find-time measurement
+// does - and a lead later moved into the pipeline carries it along.
+
+const contactRequestBody = (company, settings) => {
+  const C = company || {}, S = settings || {};
+  return {
+    company: {
+      name: C.name || '', website: C.website || '', phone: C.phone || '',
+      location: C.location || '', industry: C.industry || C.category || '',
+      reviewCount: (typeof C.reviewCount === 'number') ? C.reviewCount : null,
+      rating: (typeof C.rating === 'number') ? C.rating : null,
+    },
+    keys: {
+      anthropicKey: S.apiKey, firecrawlKey: S.firecrawlKey, verifierKey: S.verifierKey,
+    },
+  };
+};
+
+// What the server sent, flattened onto the company. ONE place, so the panel,
+// the card and the CSV cannot disagree about what a lead knows.
+const contactFieldsFrom = (data) => {
+  const d = data || {};
+  const icp = d.icp || {};
+  const sig = d.signals || {};
+  const own = d.owner || {};
+  const em = d.email || {};
+  return {
+    contactAt: new Date().toISOString(),
+    contactIcp: (typeof icp.score === 'number') ? icp.score : null,
+    contactIcpWhy: icp.why || '',
+    contactIcpTerms: Array.isArray(icp.terms) ? icp.terms : [],
+    contactOwner: own.name || '',
+    contactOwnerTitle: own.title || '',
+    contactOwnerCanBuy: own.canBuy === true,
+    contactOwnerSources: Array.isArray(own.sources) ? own.sources : [],
+    contactEmail: em.address || '',
+    contactEmailTier: (typeof em.tier === 'number') ? em.tier : null,
+    contactEmailSendable: em.sendable === true,
+    contactEmailLabel: em.label || '',
+    contactPhone: d.phone || '',
+    contactAdsCode: (sig.adsCode === true || sig.adsCode === false) ? sig.adsCode : null,
+    contactAdsWhy: sig.adsWhy || '',
+    contactTeamCount: (typeof sig.teamCount === 'number') ? sig.teamCount : null,
+    contactHiring: (sig.hiringAny === true || sig.hiringAny === false) ? sig.hiringAny : null,
+    contactHiringMarketing: (sig.hiringMarketing === true || sig.hiringMarketing === false) ? sig.hiringMarketing : null,
+    contactHiringTitles: Array.isArray(sig.hiringTitles) ? sig.hiringTitles : [],
+    contactReadVia: d.readVia || '',
+    contactNotes: Array.isArray(d.notes) ? d.notes : [],
+    contactSpendFc: (d.spend && typeof d.spend.firecrawl === 'number') ? d.spend.firecrawl : 0,
+    contactSpendUsd: (d.spend && typeof d.spend.anthropicUsd === 'number') ? d.spend.anthropicUsd : 0,
+  };
+};
+
+// Three states, said in words, because "yes/no" about a thing we never looked at
+// is the unmeasured-as-zero failure wearing a tick box.
+const contactYesNo = (v, yes, no) => (v === true ? yes : v === false ? no : 'not checked');
+
+// A contact row is worth exporting when a contact READ produced something. The
+// bare Places phone is deliberately NOT enough on its own: every lead in the
+// Find queue has one, so counting it would have put "Download CSV (167)" on
+// screen before a single lead was read, and handed a rep 167 rows with nothing
+// in them but a number he already had. contactPhone is set BY the read, so a
+// lead that was read always qualifies even when the owner and the address both
+// came back empty - that is a real row, and its notes say what went wrong.
+const hasContactData = (c) => !!(c && (c.contactEmail || c.contactOwner || String(c.contactPhone || '').replace(/\D/g, '')));
+
+// -- THE FILE ---------------------------------------------------------------
+// A CSV on purpose: a contact list IS a table, and a spreadsheet is what a rep
+// sorts and dials from.
+const FIND_CSV_CTRL = new RegExp('[' + String.fromCharCode(0) + '-' + String.fromCharCode(8)
+  + String.fromCharCode(11) + String.fromCharCode(12)
+  + String.fromCharCode(14) + '-' + String.fromCharCode(31) + String.fromCharCode(127) + ']', 'g');
+const findCsvCell = (v) => {
+  let s = (v === null || v === undefined) ? '' : String(v);
+  // A cell beginning =, +, - or @ EXECUTES when the file opens in Excel or
+  // Sheets, and every value here is scraped off an arbitrary web page and
+  // opened by a junior rep. The apostrophe is the documented neutraliser.
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  s = s.replace(FIND_CSV_CTRL, '');
+  return '"' + s.replace(/"/g, '""') + '"';
+};
+const FIND_CSV_COLUMNS = [
+  ['icp', 'ICP score out of 100 (our fit score, not a Google position)'],
+  ['icpWhy', 'What that score was measured on'],
+  ['company', 'Company'],
+  ['owner', 'Decision-maker'],
+  ['ownerTitle', 'Their title'],
+  ['ownerCanBuy', 'Can they authorise a purchase'],
+  ['email', 'Email'],
+  ['emailConfidence', 'How confident we are in that address'],
+  ['emailSafeToSend', 'Safe to send'],
+  ['phone', 'Phone'],
+  ['payingForAds', 'Already paying for ads'],
+  ['teamSize', 'People on their team page (a floor, not a headcount)'],
+  ['hiringMarketing', 'Hiring for marketing'],
+  ['hiringRoles', 'Roles they are hiring for'],
+  ['website', 'Website'],
+  ['location', 'Location'],
+  ['reviews', 'Google reviews'],
+  ['rating', 'Google rating'],
+  ['readVia', 'How their site was read'],
+  ['notes', 'What we could not do'],
+];
+const findContactRows = (companies) => {
+  const list = (Array.isArray(companies) ? companies : []).filter(hasContactData);
+  const rows = list.map(c => ({
+    icp: (typeof c.contactIcp === 'number') ? c.contactIcp : null,
+    icpWhy: c.contactIcpWhy || '',
+    company: c.name || '',
+    owner: c.contactOwner || '',
+    ownerTitle: c.contactOwnerTitle || (c.contactOwner ? 'no title found' : ''),
+    ownerCanBuy: c.contactOwner ? (c.contactOwnerCanBuy ? 'yes' : 'not established') : '',
+    email: c.contactEmail || '',
+    // The tier IS the confidence. Deriving it by regex over a human-readable
+    // label is how four materially different states collapse into one sentence.
+    emailConfidence: !c.contactEmail ? ''
+      : c.contactEmailTier === 1 ? 'published on their own site'
+      : c.contactEmailTier === 2 ? 'the mail server confirmed the mailbox exists'
+      : c.contactEmailTier === 3 ? 'built from a pattern seen at this company, not confirmed'
+      : c.contactEmailTier === 4 ? 'a guess from a common pattern, nothing confirmed it'
+      : (c.contactEmailLabel || 'unknown'),
+    emailSafeToSend: !c.contactEmail ? '' : (c.contactEmailSendable ? 'yes' : 'NO - do not send'),
+    phone: c.contactPhone || c.phone || '',
+    payingForAds: contactYesNo(c.contactAdsCode, 'yes', 'none found'),
+    teamSize: (typeof c.contactTeamCount === 'number') ? String(c.contactTeamCount) : 'not published',
+    hiringMarketing: contactYesNo(c.contactHiringMarketing, 'yes', 'no'),
+    hiringRoles: (c.contactHiringTitles || []).join('; '),
+    website: c.website || '',
+    location: c.location || '',
+    reviews: (typeof c.reviewCount === 'number') ? String(c.reviewCount) : '',
+    rating: (typeof c.rating === 'number') ? String(c.rating) : '',
+    readVia: c.contactReadVia || '',
+    notes: (c.contactNotes || []).join('; '),
+  }));
+  // Highest score first, and an UNSCORED lead sorts LAST rather than as a zero:
+  // it was never scored, and a confident 0 reads as "we checked and it is bad".
+  return rows.sort((a, b) => {
+    const A = (typeof a.icp === 'number') ? a.icp : -1;
+    const B = (typeof b.icp === 'number') ? b.icp : -1;
+    return B - A || String(a.company).localeCompare(String(b.company));
+  });
+};
+const findContactCsv = (companies) => {
+  const rows = findContactRows(companies);
+  const head = FIND_CSV_COLUMNS.map(c => findCsvCell(c[1])).join(',');
+  const body = rows.map(r => FIND_CSV_COLUMNS.map(c => findCsvCell(r[c[0]])).join(','));
+  // The byte-order mark is not decoration: without it Excel reads the file as
+  // Latin-1 and mangles every accented name in it.
+  return '﻿' + [head].concat(body).join('\r\n') + '\r\n';
+};
+const downloadFindContacts = (companies) => {
+  const rows = findContactRows(companies);
+  if (!rows.length) return 0;
+  const blob = new Blob([findContactCsv(companies)], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'crojungle-contacts-' + new Date().toISOString().slice(0, 10) + '.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+  return rows.length;
+};
+
 const leadFromCompany = (company) => {
   const id = uid();
   return {
       id, createdAt: today(), name: company.name,
-      website: company.website || '', email: company.email || '',
+      website: company.website || '', email: company.email || company.contactEmail || '',
       founderName: company.founderName || '', location: company.location || '',
       jobTitle: company.jobTitle || '', jobSnippet: company.jobSnippet || '',
       source: company.source || 'find', flaws: [], richData: {},
@@ -5349,7 +5518,20 @@ const leadFromCompany = (company) => {
       builderSite: company.builderSite || false,
       leadChannel: company.leadChannel || '',
       buyingLane: company.buyingLane || '',
-      verifiedCEO: company.verifiedCEO || '',
+      verifiedCEO: company.verifiedCEO || company.contactOwner || '',
+      verifiedCEOTitle: company.verifiedCEOTitle || company.contactOwnerTitle || '',
+      // The contact read in full, so a lead listed today and audited next week
+      // does not pay twice for the same owner and the same address.
+      contactAt: company.contactAt || null,
+      contactIcp: (typeof company.contactIcp === 'number') ? company.contactIcp : null,
+      contactOwner: company.contactOwner || '',
+      contactOwnerTitle: company.contactOwnerTitle || '',
+      contactEmail: company.contactEmail || '',
+      contactEmailTier: (typeof company.contactEmailTier === 'number') ? company.contactEmailTier : null,
+      contactPhone: company.contactPhone || '',
+      contactAdsCode: (company.contactAdsCode === true || company.contactAdsCode === false) ? company.contactAdsCode : null,
+      contactTeamCount: (typeof company.contactTeamCount === 'number') ? company.contactTeamCount : null,
+      contactHiringMarketing: (company.contactHiringMarketing === true || company.contactHiringMarketing === false) ? company.contactHiringMarketing : null,
       verifiedEmployees: company.verifiedEmployees ?? null,
       reachPredict: company.reachPredict ?? null,
       reachPredictWhy: company.reachPredictWhy || '',
@@ -5403,6 +5585,25 @@ function FindView({
     minReviews: '', websiteShape: 'any',   // any | none | builder | real
   });
   const [showFilters, setShowFilters] = React.useState(false);
+  // == THE CONTACT RUN ======================================================
+  // Its own state, in the Find tab, sharing nothing with the Research batch.
+  // The two produce different artefacts, cost different money and are pressed
+  // by different people, and a shared runner is how one becomes the other.
+  const [contactRun, setContactRun] = React.useState(null);
+  const [contactErr, setContactErr] = React.useState('');
+  const [contactSort, setContactSort] = React.useState(false);
+  const contactStop = React.useRef(false);
+  // The elapsed clock only advances when state changes, and state changes once
+  // per lead. On a fifty-lead run that is a timer that sits still for a minute
+  // at a time, which reads as a hung run rather than a slow one - and "i had to
+  // chekc the logs to know" is the complaint this whole panel exists to answer.
+  // One tick a second, alive ONLY while a run is, so an idle tab costs nothing.
+  const [, setContactTick] = React.useState(0);
+  React.useEffect(() => {
+    if (!contactRun || contactRun.finishedAt || contactRun.done >= contactRun.total) return undefined;
+    const t = setInterval(() => setContactTick(n => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [contactRun && contactRun.startedAt, contactRun && contactRun.finishedAt, contactRun && contactRun.done, contactRun && contactRun.total]);
   // ══ ONE LIST OF MARKETS, AND IT LIVES ON THE SERVER ══════════════════════
   // The picker used to hold its own hardcoded copy of the twenty cities. A market
   // added on the server would not appear here, and a city picked here that the
@@ -5881,6 +6082,72 @@ function FindView({
   // Same builder as the single-add path, same name-dedupe, same removal from
   // the queue. One write to storage rather than N, because saveLeads re-reads
   // and re-serialises every time.
+  // == THE CONTACT RUN, END TO END ==========================================
+  // A small pool against a route that reads one lead per request. Six at once
+  // matches the server's own FIND_CONTACT_CONCURRENCY headroom and leaves it
+  // room to refuse a second tab rather than silently doubling the spend rate.
+  const CONTACT_POOL = 6;
+  const runContactBatch = async (companies) => {
+    const list = (Array.isArray(companies) ? companies : []).filter(c => c && c.name);
+    if (!list.length) return;
+    if (!settings.apiKey) { setContactErr('No Anthropic key in Settings, so nobody can be identified.'); return; }
+    setContactErr('');
+    contactStop.current = false;
+    const started = Date.now();
+    setContactRun({ total: list.length, done: 0, withEmail: 0, withOwner: 0, running: [], fc: 0, usd: 0, startedAt: started, failed: 0 });
+    let next = 0;
+    const results = new Map();
+    const one = async (co) => {
+      setContactRun(s => s ? { ...s, running: s.running.concat([co.name]) } : s);
+      let fields = null;
+      try {
+        const r = await fetch(BACKEND + '/api/find-contact', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(contactRequestBody(co, settings)),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          // A refusal is a fact worth keeping on the lead. Reporting it only in
+          // a toast means the next press repeats it with no record of why.
+          fields = { contactAt: new Date().toISOString(), contactNotes: [d.error || ('the server answered ' + r.status)] };
+          if (d.budgetStopped || d.busy || d.booting) contactStop.current = true;
+          if (d.error) setContactErr(d.error);
+        } else {
+          fields = contactFieldsFrom(d);
+        }
+      } catch (e) {
+        fields = { contactAt: new Date().toISOString(), contactNotes: [(e && e.message) || 'the request failed'] };
+      }
+      results.set(co.name, fields);
+      setContactRun(s => s ? {
+        ...s,
+        done: s.done + 1,
+        withEmail: s.withEmail + (fields.contactEmail ? 1 : 0),
+        withOwner: s.withOwner + (fields.contactOwner ? 1 : 0),
+        failed: s.failed + (fields.contactIcp === undefined && (fields.contactNotes || []).length ? 1 : 0),
+        fc: s.fc + (fields.contactSpendFc || 0),
+        usd: s.usd + (fields.contactSpendUsd || 0),
+        running: s.running.filter(n => n !== co.name),
+      } : s);
+      // Write through on EVERY lead, not at the end. A closed tab or a Stop
+      // half way must not throw away reads that were already paid for.
+      const live = loadDiscovered();
+      const merged = live.map(x => (x && results.has(x.name)) ? Object.assign({}, x, results.get(x.name)) : x);
+      saveDiscovered(merged);
+      setDiscovered(merged);
+    };
+    const worker = async () => {
+      for (;;) {
+        if (contactStop.current) return;
+        const i = next++;
+        if (i >= list.length) return;
+        await one(list[i]);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONTACT_POOL, list.length) }, worker));
+    setContactRun(s => s ? { ...s, running: [], finishedAt: Date.now() } : s);
+  };
+
   const addManyToPipeline = (companies) => {
     const existing = getLeads();
     const have = new Set(existing.map(l => String(l.name || '').toLowerCase()));
@@ -6318,7 +6585,7 @@ function FindView({
     className: 'tt'
   }, 'Find leads'), React.createElement('div', {
     className: 'ts'
-  }, '4 signal sources · auto-scans weekly')), React.createElement('div', {
+  }, 'Google Places and three trigger sources · every scan is manual, so nothing spends on its own')), React.createElement('div', {
     style: {
       display: 'flex',
       gap: 8,
@@ -6591,7 +6858,19 @@ function FindView({
             )
           )
         );
-      const cards = filtered.map((co, i) => {
+      // Sorting by the contact score is its own control rather than a change to
+      // "Strong first": that one orders by how likely we are to FIND an owner,
+      // this one by how well the business FITS. They are different questions and
+      // folding them into one toggle makes both unreadable. An unscored lead
+      // sorts last, never as a zero.
+      const _shown = contactSort
+        ? filtered.slice().sort((a, b) => {
+            const A = (typeof a.contactIcp === 'number') ? a.contactIcp : -1;
+            const B = (typeof b.contactIcp === 'number') ? b.contactIcp : -1;
+            return B - A;
+          })
+        : filtered;
+      const cards = _shown.map((co, i) => {
     const added = alreadyAdded(co.name);
     const isExpanded = expandedLead === co.name;
     const daysLeft = co.signalAgeDays != null
@@ -6693,6 +6972,58 @@ function FindView({
           : null;
         return tok ? React.createElement('span', { style:{ fontSize:10, padding:'2px 8px', borderRadius:20, fontWeight:600, background:tok.bg, border:'1px solid '+tok.border, color:tok.color }, title:tok.title }, tok.label) : null;
       })()),  React.createElement('div', { style:{ fontSize:13.5, color:'var(--m2)', marginTop:8, lineHeight:1.45 } }, whyFlagged(co)),
+    // == WHAT THE CONTACT READ FOUND ====================================
+    // One strip, three lines, in the order a rep uses them: who, how to reach
+    // them, and why this business is worth the call. It renders only once the
+    // lead has actually been read, so an untouched queue is unchanged.
+    //
+    // Colour marks a STOP and nothing else, which is the rule the whole screen
+    // was repainted to. The one red thing here is an address the send gate
+    // refused: everything else is ordinary text, because a coloured box
+    // confirming the ordinary case is exactly what drowns the one that matters.
+    (() => {
+      if (!co.contactAt) return null;
+      const _line = { fontSize:12.5, color:'var(--t)', lineHeight:1.55 };
+      const _dot = React.createElement('span', { style:{ opacity:.4, margin:'0 7px' } }, '·');
+      const _emailBad = !!co.contactEmail && co.contactEmailSendable !== true;
+      const _fit = (typeof co.contactIcp === 'number') ? co.contactIcp : null;
+      const _bits = [];
+      if (co.contactAdsCode === true) _bits.push('Paying for ads');
+      else if (co.contactAdsCode === false) _bits.push('No ad code found');
+      if (typeof co.contactTeamCount === 'number') _bits.push(co.contactTeamCount + ' on their team page');
+      if (co.contactHiringMarketing === true) _bits.push('Hiring for marketing' + (co.contactHiringTitles.length ? ': ' + co.contactHiringTitles.slice(0, 2).join(', ') : ''));
+      else if (co.contactHiring === true) _bits.push('Hiring: ' + co.contactHiringTitles.slice(0, 2).join(', '));
+      return React.createElement('div', {
+        style:{ marginTop:10, paddingTop:10, borderTop:'1px solid var(--b2)', display:'flex', gap:12, alignItems:'flex-start' },
+      },
+        // The fit score, big enough to scan a column of them.
+        React.createElement('div', { style:{ textAlign:'center', minWidth:44, flexShrink:0 },
+          title: co.contactIcpWhy || '' },
+          React.createElement('div', { style:{ fontFamily:'Syne', fontWeight:700, fontSize:19, lineHeight:1,
+            color: _fit === null ? 'var(--m)' : _fit >= 70 ? 'var(--a)' : 'var(--t)' } },
+            _fit === null ? '—' : String(_fit)),
+          React.createElement('div', { style:{ fontSize:9.5, color:'var(--m2)', marginTop:3, letterSpacing:'.04em' } }, 'FIT')),
+        React.createElement('div', { style:{ flex:1, minWidth:0 } },
+          React.createElement('div', { style:_line },
+            co.contactOwner
+              ? React.createElement('span', { style:{ fontWeight:600 } }, co.contactOwner)
+              : React.createElement('span', { style:{ color:'var(--m2)' } }, 'No owner named on their site'),
+            co.contactOwner && co.contactOwnerTitle ? React.createElement('span', { style:{ color:'var(--m2)' } }, ', ' + co.contactOwnerTitle) : null,
+            co.contactOwner && !co.contactOwnerTitle ? React.createElement('span', { style:{ color:'var(--m2)' } }, ' (no title found)') : null),
+          React.createElement('div', { style:Object.assign({}, _line, { marginTop:2 }) },
+            co.contactEmail
+              ? React.createElement('span', { title: co.contactEmailLabel || '' },
+                  co.contactEmail,
+                  _emailBad ? React.createElement('span', { style:{ color:'#fca5a5', marginLeft:7, fontSize:11.5 } }, 'do not send') : null)
+              : React.createElement('span', { style:{ color:'var(--m2)' } }, 'No email found'),
+            (co.contactPhone || co.phone) ? React.createElement(React.Fragment, null, _dot, (co.contactPhone || co.phone)) : null),
+          _bits.length ? React.createElement('div', { style:{ fontSize:12, color:'var(--m2)', marginTop:3 } }, _bits.join('  ·  ')) : null,
+          // What we could NOT do. On a lead whose site refused us, every signal
+          // above is "not checked" and the reason is the useful thing on the row.
+          (co.contactNotes && co.contactNotes.length && !co.contactOwner && !co.contactEmail)
+            ? React.createElement('div', { style:{ fontSize:11.5, color:'var(--m2)', marginTop:3 } }, co.contactNotes[0])
+            : null));
+    })(),
     (() => {
       const SAFE_SRC = new Set(['theirstack','for_sale','sba_loan','founder_venting','bizbuysell']);
       const isSafeSrc = SAFE_SRC.has(co.source);
@@ -6743,7 +7074,7 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       co.location && co.icpScore != null && React.createElement('span', { style:{ opacity:.5 } }, '·'),
       co.icpScore != null && React.createElement('span', {
         title: co.reachPredictWhy || ''
-      }, 'Score ' + co.icpScore + '/100' + (co.reachPredict != null
+      }, 'Find score ' + co.icpScore + '/100' + (co.reachPredict != null
           ? ' · Owner findable ' + co.reachPredict + '/40' + (co.reachPredict >= 30 ? ' ⭐' : co.reachPredict >= 22 ? ' ✓' : '')
           : (co.reachability != null ? ' · Reach ' + co.reachability + '/30' : '')))
     ),
@@ -6880,6 +7211,101 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
             'These narrow the list on screen only. Trade and market live above, next to Find, because they decide what the next run buys.')
         ) : null);
 
+      // == THE CONTACT PANEL ==============================================
+      // The one control that turns a queue of company names into the list the
+      // rep actually works: an owner, an address, a number, and a score out of
+      // 100 for how well the business fits what we sell. It sits ABOVE the
+      // results because it decides what the next press spends, which is the
+      // same rule that moved the trade and market pickers up here.
+      const _cShown = _shown;
+      const _cRead = _cShown.filter(c => c && c.contactAt);
+      const _cWithEmail = _cShown.filter(c => c && c.contactEmail).length;
+      const _cUnread = _cShown.filter(c => c && !c.contactAt && c.name);
+      const _cExportable = discovered.filter(hasContactData);
+      const _running = !!(contactRun && !contactRun.finishedAt && contactRun.done < contactRun.total);
+      const _pct = contactRun && contactRun.total ? Math.round((contactRun.done / contactRun.total) * 100) : 0;
+      const _elapsed = contactRun ? Math.max(0, Math.round((Date.now() - contactRun.startedAt) / 1000)) : 0;
+      // The only derived figure here, and it says so: an estimate, from THIS
+      // run's own wall clock, and only once two leads have finished so it is
+      // not extrapolating from a single sample.
+      const _eta = (contactRun && contactRun.done >= 2 && _running)
+        ? Math.round(((Date.now() - contactRun.startedAt) / contactRun.done) * (contactRun.total - contactRun.done) / 1000)
+        : null;
+      const _stat = (n, label, tone) => React.createElement('div', { style:{ minWidth: 74 } },
+        React.createElement('div', { style:{ fontFamily:'Syne', fontWeight:700, fontSize:22, lineHeight:1.1, color: tone || 'var(--t)' } }, String(n)),
+        React.createElement('div', { style:{ fontSize:11, color:'var(--m2)', marginTop:2 } }, label));
+
+      const contactPanel = React.createElement('div', {
+        style: { border:'1px solid var(--b)', borderRadius:14, padding:'16px 18px', marginBottom:14,
+                 background:'var(--s2)' },
+      },
+        React.createElement('div', { style:{ display:'flex', alignItems:'flex-start', gap:16, flexWrap:'wrap' } },
+          React.createElement('div', { style:{ flex:'1 1 260px', minWidth:240 } },
+            React.createElement('div', { style:{ fontFamily:'Syne', fontWeight:700, fontSize:15, letterSpacing:'-.01em' } }, 'Contact list'),
+            React.createElement('div', { style:{ fontSize:12.5, color:'var(--m2)', marginTop:4, lineHeight:1.5 } },
+              _running
+                ? 'Reading their site for the decision-maker, an address and the three fit signals. Nothing is being audited.'
+                : 'Gets the decision-maker, an email and a phone number, then scores the business out of 100 on whether they already pay for ads, how many people they publish, and whether they are hiring for marketing.')),
+          // The numbers. On a fresh queue these are all zero and the panel is
+          // still worth reading, because the first one says what a press covers.
+          React.createElement('div', { style:{ display:'flex', gap:22, alignItems:'flex-start' } },
+            _stat(_cShown.length, 'on screen'),
+            _stat(_cRead.length, 'read', _cRead.length ? 'var(--a)' : null),
+            _stat(_cWithEmail, 'with an email', _cWithEmail ? 'var(--g)' : null))),
+
+        // -- RUNNING ------------------------------------------------------
+        _running ? React.createElement('div', { style:{ marginTop:14 } },
+          React.createElement('div', { style:{ height:6, borderRadius:99, background:'var(--b2)', overflow:'hidden' } },
+            React.createElement('div', { style:{ height:'100%', width:_pct + '%', background:'var(--a)', borderRadius:99, transition:'width .3s ease' } })),
+          React.createElement('div', { style:{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', marginTop:10, fontSize:12.5, color:'var(--t)' } },
+            React.createElement('span', { style:{ fontWeight:600 } }, contactRun.done + ' of ' + contactRun.total + ' done'),
+            React.createElement('span', { style:{ color:'var(--m2)' } }, contactRun.withOwner + ' with an owner, ' + contactRun.withEmail + ' with an email'),
+            React.createElement('span', { style:{ color:'var(--m2)', marginLeft:'auto' } },
+              Math.floor(_elapsed / 60) + 'm ' + (_elapsed % 60) + 's'
+              + (_eta !== null ? ' · about ' + Math.max(1, Math.round(_eta / 60)) + ' min left (an estimate from this run)' : '')),
+            React.createElement('button', {
+              className:'btn btn-sm', style:{ background:'transparent', border:'1px solid var(--b)', color:'var(--m2)' },
+              onClick: () => { contactStop.current = true; },
+            }, 'Stop')),
+          contactRun.running.length ? React.createElement('div', { style:{ fontSize:12, color:'var(--m2)', marginTop:6 } },
+            'Now: ' + contactRun.running.slice(0, 4).join(', ')
+            + (contactRun.running.length > 4 ? ' and ' + (contactRun.running.length - 4) + ' more' : '')) : null,
+          React.createElement('div', { style:{ fontSize:11.5, color:'var(--m2)', marginTop:6 } },
+            'This run so far: ' + Math.round(contactRun.fc) + ' Firecrawl credit' + (Math.round(contactRun.fc) === 1 ? '' : 's')
+            + ' and $' + contactRun.usd.toFixed(3) + ' of model. Stop keeps everything already read.'))
+        // -- IDLE ---------------------------------------------------------
+        : React.createElement('div', { style:{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginTop:14 } },
+          React.createElement('button', {
+            className:'btn btn-sm',
+            style:{ background:'var(--a)', color:'#0b0d10', border:'none', fontWeight:600 },
+            disabled: _cUnread.length === 0,
+            title: 'Reads their homepage and up to three pages their own navigation links to. Buys no audit.',
+            onClick: () => runContactBatch(_cUnread.slice(0, 50)),
+          }, _cUnread.length === 0
+              ? 'Every lead on screen has been read'
+              : ('Get contacts for ' + Math.min(50, _cUnread.length) + ' lead' + (Math.min(50, _cUnread.length) === 1 ? '' : 's'))),
+          _cUnread.length > 50 ? React.createElement('button', {
+            className:'btn btn-g btn-sm',
+            onClick: () => runContactBatch(_cUnread),
+          }, 'All ' + _cUnread.length) : null,
+          _cExportable.length ? React.createElement('button', {
+            className:'btn btn-g btn-sm',
+            onClick: () => { const n = downloadFindContacts(_cExportable); if (!n) setContactErr('Nothing to export yet.'); },
+          }, 'Download CSV (' + _cExportable.length + ')') : null,
+          _cRead.length ? React.createElement('button', {
+            className:'btn btn-sm',
+            style:{ background: contactSort ? 'var(--p)' : 'transparent', color: contactSort ? '#fff' : 'var(--m2)', border:'1px solid var(--b)' },
+            onClick: () => setContactSort(v => !v),
+          }, contactSort ? 'Sorted by fit score' : 'Sort by fit score') : null,
+          React.createElement('div', { style:{ fontSize:11.5, color:'var(--m2)', flexBasis:'100%', lineHeight:1.5 } },
+            _cUnread.length === 0 && _cRead.length === 0
+              ? 'Find some leads first, or widen the filters above.'
+              : 'About one to two Firecrawl credits and a cent of model per lead: it reads their site with a plain fetch and only falls back to Firecrawl when a site refuses one. No reviews, no search, no audit.')),
+
+        contactErr ? React.createElement('div', {
+          style:{ marginTop:10, fontSize:12, color:'#fca5a5', border:'1px solid rgba(239,68,68,.25)', borderRadius:9, padding:'8px 11px' },
+        }, contactErr) : null);
+
       // ══ MOVE WHAT YOU ARE LOOKING AT INTO THE PIPELINE ═══════════════════
       // Acts on `filtered` — the list actually on screen — so the scope bar and
       // the panel filters decide what moves. Fifty is the batch size, and the
@@ -6909,7 +7335,7 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
           },
         }, 'Move all ' + _movable.length) : null) : null;
 
-      return React.createElement(React.Fragment, null, filterBar, _bulkBar, verifiedToggle, tabBar, emptyState, ...cards);
+      return React.createElement(React.Fragment, null, contactPanel, filterBar, _bulkBar, verifiedToggle, tabBar, emptyState, ...cards);
     })()))))  , mode === 'manual' && React.createElement('div', {
     style: {
       maxWidth: 640

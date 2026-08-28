@@ -35,6 +35,14 @@
 //   E  Firecrawl out of credits — the latch, the bounded hold, the refusal
 //   F  (second boot) the day ceiling — lead one finishes OVER budget
 //      (never mid-lead), lead two is refused naming the setting
+//   G  calling mode — the paid owner wave is not bought
+//   H  the Find-tab contact read — a plainly readable site costs ZERO
+//      Firecrawl credits, all three ICP signals are measured, the owner and
+//      the address come off pages nobody paid for
+//   H2 the same read on a site that refuses a plain fetch — and ONLY then
+//      does a credit move
+//   H3 no website at all — every site-derived signal is null, never false
+//   H4 the contact route refuses before it spends
 // ═══════════════════════════════════════════════════════════════════════════
 'use strict';
 const http = require('http');
@@ -192,6 +200,34 @@ const anthropicAnswer = (bodyText, b) => {
   return wrap({});
 };
 
+// ── THE FIND-TAB CONTACT SITE ───────────────────────────────────────────────
+// A site carrying all three free ICP signals, so the read can be asserted in
+// the POSITIVE direction as well as the negative one. A fixture that only ever
+// exercises the "nothing found" shape proves nothing about the finding half.
+const FIND_HOME_HTML = (b) => `<!doctype html><html><head><title>${b.company}</title>`
+  + `<script async src="https://www.googleadservices.com/pagead/conversion_async.js"></script>`
+  + `<meta name="viewport" content="width=device-width"></head><body>`
+  + `<nav><a href="https://${b.host}/our-team">Our Team</a> <a href="https://${b.host}/contact">Contact</a>`
+  + ` <a href="https://${b.host}/careers">Careers</a> <a href="https://facebook.com/x">Facebook</a></nav>`
+  + `<h1>${b.company}</h1><p>Roof repair and replacement for Dallas homeowners, since 1998.</p>`
+  + `<p>${'We answer the phone ourselves and we stand behind our work. '.repeat(12)}</p>`
+  + `<footer>&copy; 2026 ${b.company}</footer></body></html>`;
+const FIND_TEAM_HTML = (b) => `<!doctype html><html><body><h1>Our Team</h1>`
+  + `<div><h3>Pete Barnes</h3><p>Owner</p></div>`
+  + `<div><h3>Dana Willis</h3><p>Operations Manager</p></div>`
+  + `<div><h3>Ray Alonzo</h3><p>Lead Estimator</p></div>`
+  + `<p>${'The crew has worked together for years and it shows on every roof. '.repeat(10)}</p>`
+  + `</body></html>`;
+const FIND_CONTACT_HTML = (b) => `<!doctype html><html><body><h1>Contact</h1>`
+  + `<p>Call (214) 555-0188 or email <a href="mailto:pete@${b.host}">pete@${b.host}</a>.</p>`
+  + `<p>${'We answer every message the same day, and we mean it. '.repeat(12)}</p>`
+  + `</body></html>`;
+const FIND_CAREERS_HTML = (b) => `<!doctype html><html><body><h1>Careers</h1><p>We are hiring.</p>`
+  + `<script type="application/ld+json">{"@context":"https://schema.org","@type":"JobPosting",`
+  + `"title":"Marketing Manager","datePosted":"${new Date(Date.now() - 21 * 864e5).toISOString().slice(0, 10)}"}</script>`
+  + `<p>${'Join a crew that turns up on time and finishes what it starts. '.repeat(12)}</p>`
+  + `</body></html>`;
+
 const fake = http.createServer(async (req, res) => {
   const seg = req.url.split('/').filter(Boolean);
   const host = seg[0] || '';
@@ -238,7 +274,18 @@ const fake = http.createServer(async (req, res) => {
 
   if (host === 'api.hunter.io') return send(res, 200, { data: { emails: [], pattern: null } });
 
-  if (host === b.host || /\.example$/.test(host)) return send(res, 200, HOMEPAGE_HTML(b));
+  if (host === b.host || /\.example$/.test(host)) {
+    // findblocked: the site refuses a plain fetch outright, which is the ONLY
+    // case in which the contact read is allowed to spend a Firecrawl credit.
+    if (state.mode === 'findblocked') return send(res, 403, '<html><body>Access Denied. You have been blocked.</body></html>');
+    if (state.mode === 'findrich') {
+      if (/our-team/.test(path)) return send(res, 200, FIND_TEAM_HTML(b));
+      if (/contact/.test(path)) return send(res, 200, FIND_CONTACT_HTML(b));
+      if (/careers/.test(path)) return send(res, 200, FIND_CAREERS_HTML(b));
+      return send(res, 200, FIND_HOME_HTML(b));
+    }
+    return send(res, 200, HOMEPAGE_HTML(b));
+  }
 
   state.unknown.push(host + path);
   return send(res, 404, { error: 'servercheck fake knows nothing about ' + host + path });
@@ -473,6 +520,105 @@ const runLead = async (b, over, capMs) => {
     // must hold is that BOTH read the whole page.
     ok(_chars(Gcall) > 200 && Math.abs(_chars(Gcall) - _chars(Gctl)) < 20,
       `calling mode read ${_chars(Gcall)} characters of their homepage against the control's ${_chars(Gctl)} - it has reached the evidence, not just the owner lookups`);
+
+    // ── H: THE FIND-TAB CONTACT READ, DRIVEN ────────────────────────────
+    // The standing goal is fifty leads a day with an owner, an address, a
+    // number and a score, and this route is where that is decided. Every
+    // assertion below is about the SEAM, which is where every recorded
+    // computed-but-not-passed has lived: the fixtures already prove the
+    // predicates at boot, and a route that never delivers them would still
+    // boot green.
+    console.log('── scenario H: the Find contact read — free pages, three signals, a score');
+    const fcCalls = () => state.requests.filter(q => q.host === 'api.firecrawl.dev').length;
+    state.mode = 'findrich'; state.biz = biz('H');
+    const hBiz = state.biz;
+    const h0 = fcCalls();
+    const H1 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+      company: { name: hBiz.company, website: `https://${hBiz.host}`, phone: '(214) 555-0188',
+                 location: 'Dallas, TX', industry: 'roofer', reviewCount: 180, rating: 4.6 },
+      keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test', verifierKey: '' },
+    });
+    const hFc = fcCalls() - h0;
+    const HJ = H1.json || {};
+    ok(H1.code === 200, `the contact read answered ${H1.code}: ${String(HJ.error || '').slice(0, 160)}`);
+    // THE HEADLINE. The whole cost case rests on this one number: a site that
+    // answers a plain HTTP GET must cost NOTHING. If this ever goes above zero
+    // the read has quietly gone back to buying pages it could have had free,
+    // and the "under $100 a month" arithmetic goes with it.
+    ok(hFc === 0, `the contact read made ${hFc} Firecrawl call(s) on a site that answers a plain fetch — the free read is not the door any more`);
+    ok((HJ.spend || {}).firecrawl === 0, `the contact read reports ${(HJ.spend || {}).firecrawl} Firecrawl credit(s) on a plainly readable site`);
+    ok(/plain fetch/.test(String(HJ.readVia || '')), `readVia says "${HJ.readVia}" rather than naming the free read`);
+    // Their own navigation, not a paid sitemap: the team, contact and careers
+    // pages must all have been found from the homepage's own links.
+    const hPaths = (HJ.pagesRead || []).map(p => String(p.url).split('/').pop()).join(',');
+    ok((HJ.pagesRead || []).length >= 3, `only ${(HJ.pagesRead || []).length} page(s) were read (${hPaths}) — the navigation harvest is not reaching the picker`);
+    // THE THREE SIGNALS, in the positive direction.
+    const HS = HJ.signals || {};
+    ok(HS.adsCode === true, `the Google ad tag on their homepage did not read as ad spend (adsCode=${JSON.stringify(HS.adsCode)})`);
+    ok(HS.teamCount === 3, `the three-person team page read as ${JSON.stringify(HS.teamCount)} — the headcount is the closest free thing to the revenue band the ICP is defined by`);
+    ok(HS.hiringMarketing === true, `the dated Marketing Manager posting did not read as hiring for marketing (${JSON.stringify(HS.hiringTitles)})`);
+    // THE SCORE, delivered and complete.
+    ok(HJ.icp && typeof HJ.icp.score === 'number', `no ICP score arrived: ${JSON.stringify(HJ.icp)}`);
+    ok(HJ.icp && HJ.icp.measured === 5, `the score was measured on ${HJ.icp && HJ.icp.measured} of 5 signals on a lead carrying all five`);
+    ok(HJ.icp && HJ.icp.score >= 80, `a business with ad spend, a crew, a marketing hire, 180 reviews and 4.6 stars scored ${HJ.icp && HJ.icp.score}/100`);
+    // THE OWNER, from the shared resolver, off pages nobody paid for.
+    ok(HJ.owner && /Pete Barnes/.test(String(HJ.owner.name || '')), `the owner named on their own team page was not resolved: ${JSON.stringify(HJ.owner)}`);
+    // THE ADDRESS, off the free contact page.
+    ok(HJ.email && /pete@/.test(String(HJ.email.address || '')), `the address published on their contact page was not found: ${JSON.stringify(HJ.email)}`);
+    ok(HJ.phone === '(214) 555-0188', `the phone from the listing did not survive: ${JSON.stringify(HJ.phone)}`);
+
+    // ── H2: THE SITE REFUSES A PLAIN FETCH ──────────────────────────────
+    // The ONLY case a credit may be spent, and the case in which every absence
+    // must go silent rather than become a claim about their business.
+    console.log('── scenario H2: a site that refuses a plain fetch falls back, and only then');
+    state.mode = 'findblocked'; state.biz = biz('H2');
+    const h2 = fcCalls();
+    const H2 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+      company: { name: state.biz.company, website: `https://${state.biz.host}`, phone: '', reviewCount: 40, rating: 4.4 },
+      keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test' },
+    });
+    const h2Fc = fcCalls() - h2;
+    const H2J = H2.json || {};
+    ok(H2.code === 200, `the blocked-site contact read answered ${H2.code}: ${String(H2J.error || '').slice(0, 140)}`);
+    ok(h2Fc > 0, 'a site that refused a plain fetch did NOT fall back to Firecrawl, so the lead is lost rather than costing a credit');
+    ok(/Firecrawl/.test(String(H2J.readVia || '')), `readVia says "${H2J.readVia}" on a lead that fell back`);
+    // Two of the five terms still measure (reviews, rating), so the score is
+    // out of what could be read and SAYS so - it is not a low score.
+    ok(H2J.icp && H2J.icp.measured >= 2, `a lead read only through the fallback measured ${H2J.icp && H2J.icp.measured} signal(s)`);
+
+    // ── H3: NOTHING READ IS NOT A BAD BUSINESS ──────────────────────────
+    // No website at all. Every site-derived signal must be null, the score must
+    // rest only on what Find already knew, and nothing may report a definite no.
+    console.log('── scenario H3: no website — every site signal is null, never false');
+    state.mode = 'findrich'; state.biz = biz('H3');
+    const h3 = fcCalls();
+    const H3 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+      company: { name: state.biz.company, website: '', phone: '(214) 555-0199', reviewCount: 90, rating: 4.5 },
+      keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test' },
+    });
+    const H3J = H3.json || {};
+    ok(H3.code === 200, `a lead with no website answered ${H3.code} instead of a phone-only row`);
+    ok(fcCalls() - h3 === 0, 'a lead with no website still spent Firecrawl credits');
+    const S3 = H3J.signals || {};
+    ok(S3.adsCode === null && S3.teamCount === null && S3.hiringAny === null,
+      `a business whose site we never opened reports definite answers: ${JSON.stringify({ ads: S3.adsCode, team: S3.teamCount, hiring: S3.hiringAny })} — that is the unmeasured-as-zero failure aimed at a claim about their money`);
+    ok(H3J.icp && H3J.icp.measured === 2, `the no-website lead scored on ${H3J.icp && H3J.icp.measured} signals; only the review count and the rating were measurable`);
+    ok(H3J.phone === '(214) 555-0199', 'the phone from the listing was lost on a lead with no website, which is the only field that lead has');
+
+    // ── H4: THE ADMISSION GATES ─────────────────────────────────────────
+    console.log('── scenario H4: the contact route refuses before it spends');
+    const h4 = state.requests.length;
+    const H4a = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+      company: { name: 'No Key Co', website: 'https://x.example' }, keys: {},
+    });
+    ok(H4a.code === 422 && /Anthropic/.test(String((H4a.json || {}).error || '')),
+      `a contact read with no Anthropic key was not refused by name (got ${H4a.code})`);
+    const H4b = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+      company: { name: 'Bad URL Co', website: 'not a url at all' }, keys: { anthropicKey: 'k-test' },
+    });
+    ok(H4b.code === 422 && /usable website/.test(String((H4b.json || {}).error || '')),
+      `a website that cannot be a URL was not refused before spending (got ${H4b.code}: ${String((H4b.json || {}).error || '').slice(0, 120)})`);
+    ok(state.requests.length === h4, `the two refusals still made ${state.requests.length - h4} network call(s) — "nothing was spent" is false`);
 
     // ── E: FIRECRAWL OUT OF CREDITS ─────────────────────
     // LAST on this boot: the 402 latch is process state by design, so every

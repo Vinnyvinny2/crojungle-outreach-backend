@@ -2322,6 +2322,168 @@ const PENDING = [];
   }
 }
 
+// ══ THE FIND-TAB CONTACT LIST, EXECUTED ═════════════════════════════════════
+// This is the standing goal made into a file: fifty leads a day with an owner,
+// an email, a phone number and a score. Every rule below is RUN, because the
+// one CSV writer that existed before this had no formula-injection guard and
+// the confidence caption it derives by regex is exactly the shape that
+// collapses four different states into one sentence.
+let contactStat = null;
+{
+  const NEED2 = ['findCsvCell', 'FIND_CSV_CTRL', 'FIND_CSV_COLUMNS', 'findContactRows', 'findContactCsv',
+                 'contactFieldsFrom', 'contactRequestBody', 'contactYesNo', 'hasContactData'];
+  const got2 = {};
+  walk(ast, (n) => {
+    if (n.type === 'VariableDeclarator' && n.id && NEED2.includes(n.id.name) && n.init) {
+      got2[n.id.name] = 'const ' + n.id.name + ' = ' + src.slice(n.init.start, n.init.end) + ';';
+    }
+  });
+  const miss2 = NEED2.filter(k => !got2[k]);
+  if (miss2.length) {
+    fails.push(`the contact list cannot be verified: ${miss2.join(', ')} not found at module scope — the whole 50-a-day goal is this file and it has to be runnable`);
+  } else {
+    let M = null;
+    try {
+      M = new Function(NEED2.map(k => got2[k]).join('\n')
+        + '\nreturn { cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv,'
+        + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData };')();
+    } catch (e) {
+      fails.push('the contact list no longer compiles standalone, so it cannot be verified: ' + e.message);
+    }
+    if (M) {
+      const Q = String.fromCharCode(34);
+      // ONE — formula injection. A cell beginning =, +, - or @ EXECUTES when
+      // the file opens in Excel or Sheets, and every value here is a business
+      // name scraped off an arbitrary web page, opened by a junior rep.
+      for (const bad of ['=cmd|calc', '+1+1', '-2+3', '@SUM(A1)']) {
+        if (M.cell(bad).indexOf(Q + "'") !== 0) fails.push(`the contact CSV does not neutralise a formula cell starting "${bad.slice(0, 3)}" — it opens as a live formula in Excel`);
+      }
+      // A guard that eats real data is the more expensive failure.
+      if (M.cell('Smith & Sons') !== Q + 'Smith & Sons' + Q) fails.push('the contact CSV mangles an ordinary company name');
+      if (M.cell('Say ' + Q + 'hi' + Q) !== Q + 'Say ' + Q + Q + 'hi' + Q + Q + Q) fails.push('the contact CSV does not double an embedded quote, so the row shape breaks');
+      if (M.cell('a' + String.fromCharCode(0) + 'b') !== Q + 'ab' + Q) fails.push('the contact CSV lets a control character through, which corrupts every row after it');
+
+      // TWO — the ORDER, with the trap that matters. A MEASURED zero must sort
+      // ABOVE an unscored lead: Number(null) is 0 and Number.isFinite(0) is
+      // true, so a naive `x || 0` puts a business we never scored level with
+      // one we scored zero, and a confident 0 reads as "we checked and it is
+      // bad". The unscored lead is named first alphabetically on purpose, so
+      // the tiebreak cannot rescue a broken comparator.
+      const ord = M.rows([
+        { name: 'Aaa Unscored', contactEmail: 'a@a.com' },
+        { name: 'Zed Measured Zero', contactEmail: 'z@z.com', contactIcp: 0 },
+        { name: 'Mid Co', contactEmail: 'm@m.com', contactIcp: 55 },
+      ]).map(r => r.company).join(',');
+      if (ord !== 'Mid Co,Zed Measured Zero,Aaa Unscored') {
+        fails.push(`the contact list is not ranked highest-first with UNSCORED last: ${ord} — an unscored lead is being treated as a measured zero`);
+      }
+
+      // THREE — the email confidence. Four materially different states, read
+      // from the TIER and never from prose that happens to contain the word
+      // "verified". A catch-all domain delivers and the RECIPIENT is unknown;
+      // a pattern guess is a bounce risk charged to the sending domain.
+      const say = (t) => M.rows([{ name: 'X', contactEmail: 'a@b.com', contactEmailTier: t, contactEmailSendable: t <= 3 }])[0];
+      const s1 = say(1), s2 = say(2), s3 = say(3), s4 = say(4);
+      if (new Set([s1.emailConfidence, s2.emailConfidence, s3.emailConfidence, s4.emailConfidence]).size !== 4) {
+        fails.push('two different email tiers get the same confidence sentence in the contact CSV, which is the defect the audit captions already have');
+      }
+      if (s4.emailSafeToSend.indexOf('NO') !== 0) fails.push('a tier-4 address does not report as unsafe to send, and the row reads like any other');
+      if (M.rows([{ name: 'X', contactOwner: 'A B' }])[0].emailConfidence !== '') fails.push('a lead with no address still carries an email-confidence sentence');
+
+      // FOUR — the three-state answers. "no" about a thing we never looked at
+      // is the unmeasured-as-zero failure wearing a tick box.
+      if (M.yn(null, 'yes', 'no') !== 'not checked') fails.push('contactYesNo reports an unmeasured signal as a definite answer');
+      if (M.yn(undefined, 'yes', 'no') !== 'not checked' || M.yn(0, 'yes', 'no') !== 'not checked') fails.push('contactYesNo laundered a non-boolean into a definite answer');
+      const blind = M.rows([{ name: 'X', contactEmail: 'a@b.com' }])[0];
+      if (blind.payingForAds !== 'not checked' || blind.hiringMarketing !== 'not checked' || blind.teamSize !== 'not published') {
+        fails.push('a lead whose site could not be read reports definite NOs for ads, hiring and team size — that is a claim about their business made from our own blindness');
+      }
+
+      // FIVE — the merge from the server. null must SURVIVE as null.
+      const f = M.fields({ signals: { adsCode: null, teamCount: null, hiringAny: null, hiringMarketing: null }, icp: {}, owner: {}, email: {} });
+      if (f.contactAdsCode !== null || f.contactTeamCount !== null || f.contactHiring !== null || f.contactHiringMarketing !== null) {
+        fails.push('contactFieldsFrom converts an unmeasured signal into false or zero on the way onto the lead');
+      }
+      const f2 = M.fields({ signals: { adsCode: false, teamCount: 0, hiringAny: false }, icp: { score: 0 }, owner: {}, email: {} });
+      if (f2.contactAdsCode !== false || f2.contactTeamCount !== 0 || f2.contactIcp !== 0) {
+        fails.push('contactFieldsFrom throws away a genuine measured false or zero, which is the same defect pointed the other way');
+      }
+
+      // SIX — the request the server actually reads. A field dropped here is a
+      // signal measured for nothing: the review count and the rating are two
+      // of the five terms in the score.
+      const b = M.body({ name: 'X Co', website: 'https://x.com', phone: '555', reviewCount: 40, rating: 4.6, location: 'Denver, CO', industry: 'roofer' },
+        { apiKey: 'k1', firecrawlKey: 'k2', verifierKey: 'k3' });
+      for (const k of ['name', 'website', 'phone', 'location', 'industry', 'reviewCount', 'rating']) {
+        if (b.company[k] === undefined || b.company[k] === null || b.company[k] === '') fails.push(`the contact request drops ${k}, so the server cannot use it`);
+      }
+      if (!b.keys.anthropicKey) fails.push('the contact request does not send the Anthropic key, so every lead is refused at preflight');
+      if (M.body({ name: 'X', reviewCount: '40' }, {}).company.reviewCount !== null) fails.push('the contact request sends a review count that is not a number, which the score then treats as a measurement');
+
+      // SEVEN — the file shape. One header, one row per lead, and a BOM,
+      // without which Excel reads it as Latin-1 and mangles every accented name.
+      const csv = M.csv([{ name: 'A', contactEmail: 'a@a.com' }, { name: 'B', contactPhone: '555' }]);
+      if (csv.charCodeAt(0) !== 0xFEFF) fails.push('the contact CSV has no byte-order mark, so Excel mangles every accented name in it');
+      const lines = csv.replace(/^﻿/, '').split('\r\n');
+      if (lines.length !== 4 || lines[3] !== '') fails.push(`the contact CSV emitted ${lines.length} line(s) for two leads plus a header`);
+      if (lines[0].split('","').length !== M.cols.length) fails.push('the contact CSV header does not have one cell per declared column');
+      // "rank"/"score" means a SEARCH POSITION nearly everywhere else in this
+      // app, so the column has to say which one it is.
+      const head = (M.cols.find(c => c[0] === 'icp') || [])[1] || '';
+      if (!/not a google position/i.test(head)) fails.push('the ICP column does not say it is NOT a Google position, and every other use of "score" here is a search position');
+      // The team column must never read as a headcount: it is a floor.
+      const teamHead = (M.cols.find(c => c[0] === 'teamSize') || [])[1] || '';
+      if (!/floor/i.test(teamHead)) fails.push('the team-size column reads as a headcount rather than as a floor, and it is the closest thing on the row to the revenue band the whole ICP is defined by');
+
+      // EIGHT — who belongs in the file at all.
+      if (M.has({}) || M.has({ name: 'X' })) fails.push('a lead with nothing to contact is being exported');
+      // The bare Places phone is NOT a contact row. Every lead in the Find
+      // queue carries one, so admitting it would put "Download CSV (167)" on
+      // screen before anything was read and hand a rep a file of numbers he
+      // already had.
+      if (M.has({ name: 'X', phone: '(317) 555-0134' })) fails.push('a lead that was never read is in the contact file on the strength of the phone number Find already had');
+      if (!M.has({ contactPhone: '(317) 555-0134' }) || !M.has({ contactOwner: 'A B' }) || !M.has({ contactEmail: 'a@b.com' })) {
+        fails.push('a lead with a phone, an owner or an address is being left out of the contact file');
+      }
+      contactStat = { cols: M.cols.length };
+    }
+  }
+
+  // ── THE CALL SITES ────────────────────────────────────────────────────────
+  // A fixture supplies its own arguments and therefore cannot see a caller.
+  // Every wire below is what makes the panel actually do the thing.
+  const _nn = (a, b) => a + b;
+  if (html.indexOf(_nn("BACKEND + '/api/find", "-contact'")) < 0) {
+    fails.push('nothing in the client calls /api/find-contact — the Find tab button cannot produce a contact');
+  }
+  if (html.indexOf(_nn('onClick: () => runContactBatch(_cUnread', '.slice(0, 50)),')) < 0) {
+    fails.push('the contact panel button no longer starts a contact run');
+  }
+  if (html.indexOf(_nn('const n = downloadFindContacts(_cExport', 'able);')) < 0) {
+    fails.push('the Download CSV button is not wired to the contact export');
+  }
+  // The write-through must be PER LEAD. A closed tab or a Stop half way must
+  // not throw away reads that were already paid for.
+  if (html.indexOf(_nn('const live = loadDiscovered();', '\n      const merged = live.map(x => (x && results.has(x.name))')) < 0) {
+    fails.push('the contact run no longer saves after every lead, so a Stop or a closed tab loses reads that were already paid for');
+  }
+  // The card strip must be gated on the lead having been read, or an untouched
+  // queue renders a wall of "not checked" rows.
+  if (html.indexOf(_nn('if (!co.contactAt) return', ' null;')) < 0) {
+    fails.push('the card contact strip renders on leads that were never read');
+  }
+  // The Find tab's runner must share NOTHING with the Research batch. Two
+  // artefacts, two costs, two buttons - and one shared runner is how one
+  // silently becomes the other.
+  if (/runContactBatch/.test(html.slice(html.indexOf('function ResearchView'), html.indexOf('function GenerateView')))) {
+    fails.push('ResearchView references the Find tab contact runner — the two runs are supposed to share nothing');
+  }
+  {
+    const defs = (html.match(/const runContactBatch\s*=/g) || []).length;
+    if (defs !== 1) fails.push(`${defs} definition(s) of runContactBatch — one implementation, or the second is the one that rots`);
+  }
+}
+
 Promise.all(PENDING).then(() => {
   if (fails.length) {
     console.log(`\n✗ index.html: ${fails.length} research-request defect(s)`);
@@ -2332,5 +2494,6 @@ Promise.all(PENDING).then(() => {
   console.log(`\n\u2713 index.html: all ${calls.length} research request(s) go through the one builder at line ${builderLine}, which sends ${builderKeys.length} fields including every measurement nothing downstream can recover. Two hand-written bodies disagreed about seventeen of them on 2026-08-19.`);
   if (roundTrip) console.log(`\u2713 index.html: the Supabase round trip was EXECUTED, not read \u2014 leadToRow and rowToLead run on five real lead shapes. A Find lead keeps every one of its ${roundTrip.fields} stored fields, a never-researched lead does NOT read as audited, the model's draft survives a reload instead of the research-time template, the call outcome survives, an empty lead still stores nothing, and no stored field is write-only. This pair is the only door between the app and its data, it has produced nine duplicate-key collisions, and nothing in this repo had ever run it.`);
   notes.forEach(n => console.log(n));
+  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the ${contactStat.cols}-column CSV neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, gives each email tier its own confidence sentence, and reports an unmeasured signal as "not checked" rather than as a definite no. Every call site is pinned too: the panel starts the run, the run posts to /api/find-contact, it saves after every lead so a Stop keeps what was paid for, the card strip renders only on a lead that was read, and the Research batch cannot reach any of it.`);
   if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
 }).catch((e) => { console.log('\n\u2717 index.html: the checks could not finish \u2014 ' + (e && e.message)); process.exit(1); });
