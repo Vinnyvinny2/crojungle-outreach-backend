@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260915;
+const CONTRACT_VERSION = 20260916;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -5561,23 +5561,58 @@ const predictReachability = (name, website, opts = {}) => {
 const CATEGORY_TIER = {
   Roofing:'A', Restoration:'A', Foundation:'A', Solar:'A', 'Kitchen Remodel':'A',
   'Bath Remodel':'A', 'Windows & Doors':'A', 'Pool Construction':'A', 'Home Builder':'A',
-  Construction:'A', Decks:'A', HVAC:'A', 'Med Spa':'A', 'Plastic Surgery':'A',
+  Construction:'A', HVAC:'A', 'Plastic Surgery':'A',
   Dermatology:'A', Orthodontics:'A', 'Oral Surgery':'A', 'Cosmetic Dentistry':'A',
-  Fertility:'A', LASIK:'A', 'PI Law':'A',
+  LASIK:'A', 'PI Law':'A',
+  // Added 2026-08-28. Each clears the premium floor on one job or a few clients.
+  'Behavioral Health':'A',   // $30-60k per admission
+  'Dental Implants':'A',     // $25-50k full-arch case
+  'Commercial Roofing':'A',  // $80-500k
+  'Commercial Mechanical':'A', // $100k-1M
+  'Outdoor Living':'A',      // $40-150k
+  'Home Additions':'A',      // $80-300k
+  'Basement Finishing':'A',  // $30-80k
+  Cabinetry:'A',             // $25-80k
+  Siding:'A',                // $15-45k, the same economics as Windows & Doors
+  // ── TIER CORRECTIONS, 2026-08-28 ──────────────────────────────────────
+  // Hardscaping was B while Decks was A, at a 3-5x larger ticket: an
+  // outdoor-living build is $25-120k against a deck at $5-25k. Both moved.
+  Hardscaping:'A',
+  // Paving was tiered on the residential driveway. A commercial parking lot is
+  // $50-250k, and the operators who do them are exactly the ICP.
+  Paving:'A',
+  // Well & Septic: wells run $3,500-$15,000, septic $3,600-$12,500, and a
+  // combined rural install is $8,000-$30,000 - Foundation-class economics, and
+  // Foundation is A. The argument that held it at B was marketing dependence in
+  // thin RURAL markets, which is a statement about where we search rather than
+  // about the trade: the grid is metros.
+  'Well & Septic':'A',
 
-  Paving:'B', Concrete:'B', Masonry:'B', Hardscaping:'B', Flooring:'B', Plumbing:'B',
+  Concrete:'B', Masonry:'B', Flooring:'B', Plumbing:'B',
   Electrical:'B', 'Pest Control':'B', Veterinary:'B', Dental:'B', 'Estate Law':'B',
-  Accounting:'B', Insurance:'B', 'Senior Care':'B', Chiropractic:'B',
+  Accounting:'B', Insurance:'B', 'Senior Care':'B',
+  // Decks moved A->B: $5-25k on a seasonal, weather-bound, small-crew model,
+  // below both Concrete and Masonry at the top end.
+  Decks:'B',
+  // Med Spa moved A->B: the modal med spa is one or two injectors under $1M,
+  // and its own money line ($1-4k a course) is the lowest of any tier-A row.
+  'Med Spa':'B',
+  // Added 2026-08-28.
+  'Funeral Homes':'B',   // $8-15k a service, high margin, steady volume
+  'Home Care':'B',       // recurring hourly, $25-40/hr
+  'Managed IT':'B',      // $3-15k a month PER CLIENT, so it is the client count
+  'Weight Loss':'B',     // $5-15k a program, cash-pay
+  Coatings:'B',          // $5-20k
   // Both of these were cut in the first pass and both cuts were WRONG on the data.
   // Insulation: the average residential spray-foam job is ~$5,500 at ~50% gross
   // margin, whole-house runs $10-30k, and a single-rig operator does $800k-$1.2M
   // with multi-rig firms reaching $3M. That is HVAC-class economics, not low-ticket.
   Insulation:'B',
-  // Well & Septic: wells run $3,500-$15,000, septic $3,600-$12,500, and a combined
-  // rural install is $8,000-$30,000. Mid-ticket. The weaker argument against it is
-  // marketing dependence in thin rural markets — a reason to rank it below tier A,
-  // not a reason to refuse to look at it.
-  'Well & Septic':'B',
+  // ('Well & Septic':'B' sat here and was DEAD - the promotion to A above is
+  // declared earlier in the same literal, so this later row silently won and
+  // the promotion never happened. Caught by dupkeys, which is the whole reason
+  // its baseline is zero: a number you are allowed to match is a number you
+  // stop reading. Its argument is folded into the A entry above.)
 
   // Cut. Average ticket too low, or the work is won by bid and relationship rather
   // than by inbound marketing, so nothing we sell moves their revenue.
@@ -5595,14 +5630,27 @@ const CATEGORY_TIER = {
   // ones genuinely cannot fund us; the large ones clearly can. Size, not category,
   // is the real filter — so this is reinstated behind the high review floor.
   'Tree Service':'B',
-  'Lawn Care':'C',         // $50-200/mo recurring
-  Signage:'C',             // B2B, low volume, relationship-won
-  Landscaping:'C',         // COMMERCIAL landscape contracts are won by bid, not by
-                           // inbound marketing. Hardscaping/design-build stays at B.
-  Excavation:'C',          // sub-contracted by builders — the buyer is a GC, not a
-                           // homeowner searching Google, so nothing we sell moves it
-  'Fire Protection':'C',   // B2B compliance work, won on bid and relationship
-  'Physical Therapy':'C',  // insurance-capped reimbursement caps what a visit is worth
+
+  // ── RESTORED FROM C, 2026-08-28 ───────────────────────────────────────
+  // All three were cut on a MARKETING-FIT argument dressed as a job-value one.
+  //
+  // Fire Protection: the cut described new-construction bid work and ignored the
+  //   half where the money and the retention story are. NFPA 25 makes sprinkler
+  //   inspection a legally mandated recurring contract, and a sprinkler
+  //   contractor is a $2-10M owner-operated business.
+  'Fire Protection':'B',
+  // Signage: a regional sign company doing monument, channel-letter and wraps is
+  //   $3-8M and buys Google Ads heavily. Lower confidence than the other two.
+  Signage:'B',
+  // Excavation: true of pure site-work subs, false of the residential
+  //   septic/pond/land-clearing excavators who sell direct at $15-60k.
+  Excavation:'B',
+
+  // Tier C currently has no members: Lawn Care and Physical Therapy were the
+  // last two and both are now deleted from GP_CATEGORIES outright rather than
+  // carried as unsearched rows. The tier and its GP_INCLUDE_TIER_C escape hatch
+  // stay because they are how a category gets benched WITHOUT deleting it, and
+  // TRADE TABLE COVERAGE CHECK proves every category still declares a tier.
 };
 // Set GP_INCLUDE_TIER_C=1 to search the cut trades again (e.g. to test the thesis).
 const GP_TIER_C_ON = process.env.GP_INCLUDE_TIER_C === '1';
@@ -5630,12 +5678,17 @@ const GP_CATEGORIES = [
   { q: 'paving contractor', label: 'Paving' }, { q: 'concrete contractor', label: 'Concrete' },
   { q: 'pool construction company', label: 'Pool Construction' },
   { q: 'custom home builder', label: 'Home Builder' },
-  { q: 'general contractor', label: 'Construction' },
+  // 'general contractor' was the lowest-precision query in this list: on Places it
+  // returns handymen, one-man LLCs and unlicensed subs. It was also the only
+  // tier-A category with no money line, which is the same fact said twice - there
+  // is no honest single figure for 'a general contractor job' because the query
+  // was not returning one kind of business. Two precise queries instead.
+  { q: 'design build remodeling company', label: 'Construction' },
+  { q: 'home addition contractor', label: 'Home Additions' },
   { q: 'fire protection sprinkler company', label: 'Fire Protection' },
   { q: 'excavation and grading contractor', label: 'Excavation' },
   { q: 'masonry contractor', label: 'Masonry' },
   { q: 'hardscaping and landscape design company', label: 'Hardscaping' },
-  { q: 'commercial landscaping company', label: 'Landscaping' },
   { q: 'tree service company', label: 'Tree Service' },
   { q: 'insulation and spray foam company', label: 'Insulation' },
   { q: 'electrical contractor', label: 'Electrical' },
@@ -5647,7 +5700,6 @@ const GP_CATEGORIES = [
   { q: 'well drilling and septic company', label: 'Well & Septic' },
   // ── RECURRING-REVENUE SERVICES — predictable cash flow, marketing-driven ──
   { q: 'pest control company', label: 'Pest Control' },
-  { q: 'lawn care and treatment company', label: 'Lawn Care' },
   // ── HIGH-REVENUE PRACTICES — marketing-hungry, owner-operated. NOTE: dental /
   //    dermatology / vet are being PE/DSO-consolidated, so Research must confirm
   //    the owner is still the buyer (not a group). Kept because the winners here
@@ -5658,10 +5710,7 @@ const GP_CATEGORIES = [
   { q: 'orthodontist office', label: 'Orthodontics', ownerRisk: true },
   { q: 'oral surgery practice', label: 'Oral Surgery', ownerRisk: true },
   { q: 'cosmetic dentistry practice', label: 'Cosmetic Dentistry', ownerRisk: true },
-  { q: 'fertility clinic', label: 'Fertility', ownerRisk: true },
   { q: 'LASIK eye center', label: 'LASIK', ownerRisk: true },
-  { q: 'chiropractic clinic', label: 'Chiropractic' },
-  { q: 'physical therapy clinic', label: 'Physical Therapy' },
   { q: 'veterinary hospital', label: 'Veterinary', ownerRisk: true },
   { q: 'dental practice', label: 'Dental', ownerRisk: true },
   // ── PROFESSIONAL SERVICES — high revenue, owner-operated, spend heavily on
@@ -5675,9 +5724,51 @@ const GP_CATEGORIES = [
   // franchise regex alone cannot catch them — flagging the whole category as
   // consolidation-risk makes Research confirm a real owner before we spend on it.
   { q: 'assisted living facility', label: 'Senior Care', ownerRisk: true },
-  // Dropped vs. prior list: fencing, painting, commercial cleaning, moving,
-  // auto repair — low ticket, most stay solo/sub-$800k. The review-count revenue
-  // proxy would bury them anyway; not worth spending queries on them.
+
+  // ══ ADDED 2026-08-28 — HIGH TICKET, OWNER-OPERATED, ALREADY BUYING ═══════
+  // Every one of these clears the premium floor ($35k build / $10k-mo retainer)
+  // on a single job or a handful of clients, and every one is a business where
+  // one person still says yes. Three of them already had a TRADE_JOB_VALUE row
+  // in this file with no category attached to it, which is the coverage drift
+  // the new boot check now refuses.
+
+  // The highest-ticket local business there is, and it already spends heavily on
+  // marketing. ownerRisk because private equity has been rolling this up hard.
+  { q: 'addiction treatment center', label: 'Behavioral Health', ownerRisk: true },
+  // A full-arch case is $25-50k. Invisible today: swallowed by 'dental practice',
+  // whose money line prices a single crown at $4-7k.
+  { q: 'dental implant center', label: 'Dental Implants', ownerRisk: true },
+  // Separates the $10M roofer from the $900k one. Today they are one query.
+  { q: 'commercial roofing contractor', label: 'Commercial Roofing' },
+  { q: 'outdoor living and outdoor kitchen builder', label: 'Outdoor Living' },
+  { q: 'commercial mechanical contractor', label: 'Commercial Mechanical' },
+  { q: 'custom cabinet maker', label: 'Cabinetry' },
+  { q: 'basement finishing company', label: 'Basement Finishing' },
+  { q: 'siding and exterior remodeling company', label: 'Siding' },
+  // Family-owned, high margin, and marketing-naive. ownerRisk: SCI and Dignity
+  // Memorial own an enormous share and the home keeps its family name.
+  { q: 'funeral home', label: 'Funeral Homes', ownerRisk: true },
+  // A different business from the assisted-living facilities above, which are
+  // REIT-owned. ownerRisk because the national franchises keep local names.
+  { q: 'in home senior care agency', label: 'Home Care', ownerRisk: true },
+  { q: 'managed IT services provider', label: 'Managed IT' },
+  { q: 'medical weight loss clinic', label: 'Weight Loss' },
+  { q: 'epoxy flooring and concrete coating company', label: 'Coatings' },
+
+  // ══ REMOVED 2026-08-28, and why ═════════════════════════════════════════
+  // Chiropractic and Physical Therapy: the practitioner personally delivers every
+  //   unit of service, so review volume means the owner is BUSY, not big. A solo
+  //   DC is $400-800k and chiropractic farms reviews harder than any other trade
+  //   here - so it PASSED the volume proxy and FAILED the ICP, which is the worst
+  //   combination a category can have.
+  // Fertility: roughly three quarters investor or network owned. The independent
+  //   practice is close to extinct, so the owner we need usually does not exist.
+  // Lawn Care: $50-200/mo recurring. Correct cut, now an outright delete so
+  //   GP_CATEGORIES stops disagreeing with what is actually searched.
+  // Landscaping: a worse-queried duplicate of Hardscaping. The word 'commercial'
+  //   guaranteed the bid-won buyer its own tier note said we did not want.
+  // Earlier drops, still right: fencing, painting, commercial cleaning, moving,
+  //   auto repair - low ticket, most stay solo/sub-$800k.
 ];
 // ── REVIEW FLOOR BY TICKET SIZE ────────────────────────────────────────────
 // One global MIN_REVIEWS treats every trade as if a review meant the same thing.
@@ -5695,9 +5786,246 @@ const GP_CATEGORIES = [
 // High-ticket trades keep the standard floor. Low-ticket, high-frequency trades
 // must show sustained volume before we spend ~10 research credits on them.
 const HIGH_VOLUME_LOW_TICKET = new Set([
-  'Garage Doors', 'Tree Service', 'Pest Control', 'Flooring', 'Chiropractic',
+  'Garage Doors', 'Tree Service', 'Pest Control', 'Flooring',
+  // Added 2026-08-28. These are the two highest review-per-dollar trades in the
+  // whole list and both sat at the base floor: a service call generates a review,
+  // so a $600k drain-cleaning shop and a $4M repipe contractor look identical at
+  // sixty reviews. HVAC was considered and left out - its replacement ticket is
+  // $8-18k, so a 40-review floor would cost more good leads than it saves.
+  'Plumbing', 'Electrical',
+  // ('Chiropractic' was here. The category is deleted, so the entry was dead.)
 ]);
-const reviewFloorFor = (label, base) => HIGH_VOLUME_LOW_TICKET.has(label) ? Math.max(base, 40) : base;
+
+// ── AND THE INVERSE, WHICH NEVER EXISTED ───────────────────────────────────
+// The set above raises the floor for trades that earn many cheap reviews. There
+// was nothing for the trades that earn almost none, and that is the more
+// expensive gap: a $6M custom home builder may have NINE reviews, a $3M CPA firm
+// has five to twenty, and a pool builder doing $150k jobs has a handful a year.
+// The 15-review floor was silently deleting the richest and most owner-reachable
+// businesses in the entire ICP - the exact leads a $35k build and a $10k/mo
+// retainer are for.
+//
+// The floor still exists for them, at 5, because zero reviews on a business with
+// a Google listing usually means it is not really trading.
+const LOW_VOLUME_HIGH_TICKET = new Set([
+  'Home Builder', 'Home Additions', 'Construction', 'Pool Construction',
+  'Kitchen Remodel', 'Bath Remodel', 'Outdoor Living', 'Cabinetry',
+  'Commercial Roofing', 'Commercial Mechanical', 'Masonry', 'Well & Septic',
+  'Accounting', 'Insurance', 'PI Law', 'Estate Law', 'Funeral Homes', 'Managed IT',
+]);
+const LOW_VOLUME_FLOOR = 5;
+const reviewFloorFor = (label, base) => HIGH_VOLUME_LOW_TICKET.has(label) ? Math.max(base, 40)
+  : LOW_VOLUME_HIGH_TICKET.has(label) ? Math.min(base, LOW_VOLUME_FLOOR)
+  : base;
+// The base floor lived inside searchGooglePlaces, so nothing at module scope
+// could read the number every other consumer of reviewFloorFor has to agree
+// with. One declaration; the discovery loop reads this.
+const MIN_REVIEWS_BASE = parseInt(process.env.GP_MIN_REVIEWS || '15', 10); // established-business proxy
+
+// ══ DOES VOLUME MEAN CAPACITY, OR DOES IT MEAN THE OWNER IS BUSY? ════════════
+// Vin, 2026-08-28: "a handyman that runs his own company and does all the jobs is
+// likely not worth it - he may have great reviews and a lot of reviews."
+//
+// He is right and it generalises past handymen. A handyman with 300 reviews has
+// done 300 small jobs HIMSELF; a roofer with 300 has run 300 crews. Same number,
+// opposite business, and only one of them can fund a $10k/mo retainer.
+//
+// WHAT THIS DOES **NOT** DO, stated because building it revealed it: most of the
+// work is already done by the job-value multiplier in affordabilityBand. A
+// handyman's low ticket times his volume already lands him well below a roofer,
+// without any of this. What the class catches is the two cases the multiplier
+// cannot see:
+//   1. a trade with NO TRADE_JOB_VALUE row, where the multiplier has nothing to
+//      multiply and would otherwise leave the lead unjudged rather than capped;
+//   2. a trade that is genuinely capped by one person's throughput however good
+//      the ticket is - so the cap is a DECLARED judgement a reviewer can argue
+//      with, not an emergent property of two numbers.
+//
+// 'solo' caps the affordability band at the lower tier however high the volume.
+// 'mixed' is one truck or twelve, and there volume genuinely discriminates,
+// because one van cannot run five hundred calls a year. 'crewed' is work that
+// is physically impossible alone.
+const TRADE_CAPACITY_CLASS = {
+  // CREWED - cannot be done by one person, so volume is crews.
+  HVAC:'crewed', Roofing:'crewed', Restoration:'crewed', Foundation:'crewed',
+  Solar:'crewed', 'Kitchen Remodel':'crewed', 'Bath Remodel':'crewed',
+  'Windows & Doors':'crewed', Paving:'crewed', Concrete:'crewed',
+  'Pool Construction':'crewed', 'Home Builder':'crewed', Construction:'crewed',
+  'Home Additions':'crewed', 'Fire Protection':'crewed', Excavation:'crewed',
+  Masonry:'crewed', Hardscaping:'crewed', 'Tree Service':'crewed',
+  Insulation:'crewed', 'Well & Septic':'crewed', Decks:'crewed', Signage:'crewed',
+  'Commercial Roofing':'crewed', 'Commercial Mechanical':'crewed',
+  'Outdoor Living':'crewed', 'Basement Finishing':'crewed', Siding:'crewed',
+  Cabinetry:'crewed', Coatings:'crewed', 'Senior Care':'crewed',
+  'Home Care':'crewed', 'Behavioral Health':'crewed', 'Funeral Homes':'crewed',
+
+  // MIXED - one truck or twelve, one chair or six. Volume is the discriminator.
+  Electrical:'mixed', Plumbing:'mixed', Flooring:'mixed', 'Garage Doors':'mixed',
+  'Pest Control':'mixed', 'Managed IT':'mixed', Veterinary:'mixed', Dental:'mixed',
+  'Dental Implants':'mixed', Orthodontics:'mixed', 'Oral Surgery':'mixed',
+  'Cosmetic Dentistry':'mixed', Dermatology:'mixed', LASIK:'mixed',
+  'Plastic Surgery':'mixed', Accounting:'mixed', Insurance:'mixed',
+  'Estate Law':'mixed', 'PI Law':'mixed',
+
+  // SOLO - the modal business is one provider personally delivering every unit,
+  // so review volume measures how busy that person is, not how big the business
+  // could become. Both of these earn many cheap reviews, which is exactly the
+  // shape that fools a volume proxy.
+  'Med Spa':'solo', 'Weight Loss':'solo',
+};
+
+// The same judgement as text, for the two cases a label cannot reach: a lead
+// whose Google category is not one of ours, and the try-a-niche box, where an
+// operator can type any trade at all. Chiropractic, physical therapy and massage
+// are here rather than in the table above because their CATEGORIES were deleted
+// on 2026-08-28 - but a chiropractor can still arrive under a Places category
+// string, and this is the rule that still caps him.
+const SOLO_TRADE_RE = /\bhandy ?man|\blocksmith|\bmassage|\bpersonal train|\bchiropract|\bphysical therap|\bacupunct|\bnotary|\bphotograph|\btutor|\bmobile detail|\bbarber\b|\bnail salon|\bpet groom/i;
+
+// solo / mixed / crewed for a lead, from its label first and its trade text
+// second. Returns null when neither says anything - UNKNOWN, never 'crewed',
+// because guessing 'crewed' on an unclassified trade is how a one-man band gets
+// promoted to a premium call.
+const capacityClassFor = (label, tradeText) => {
+  const byLabel = TRADE_CAPACITY_CLASS[String(label || '').trim()];
+  if (byLabel) return byLabel;
+  if (SOLO_TRADE_RE.test(String(tradeText || '') + ' ' + String(label || ''))) return 'solo';
+  return null;
+};
+
+// ══ THE HOURS WE HAVE BEEN BUYING AND NEVER READING ═════════════════════════
+// `places.regularOpeningHours` has been in the discovery FIELD_MASK for its
+// whole life and no line in the discovery loop has ever read it. Instance
+// twenty-seven of computed-but-not-passed, and it is the one CAPACITY signal
+// available before a penny is spent: one person cannot open seven days a week,
+// and a business publishing that has staff whatever its review count says.
+//
+// The open-day count is the reliable half. Weekly hours are parsed too and
+// returned as null the moment ANY day fails to parse - a partial total read as
+// a real one would understate a staffed business, which is the direction that
+// costs us the lead. "Open 24 hours" is counted as 24 and flagged separately,
+// because in the emergency trades it is normal rather than remarkable.
+const readPublishedHours = (roh) => {
+  const lines = Array.isArray(roh && roh.weekdayDescriptions) ? roh.weekdayDescriptions : null;
+  if (!lines || !lines.length) return { checked: false, openDays: null, weeklyHours: null, open24: null };
+  const mins = (m) => {
+    const h = Number(m[1]); const mm = Number(m[2] || 0);
+    if (!Number.isFinite(h) || !Number.isFinite(mm) || h < 1 || h > 12) return null;
+    return ((h % 12) + (/p/i.test(m[3]) ? 12 : 0)) * 60 + mm;
+  };
+  let openDays = 0, total = 0, parsedAll = true, any24 = false;
+  for (const raw of lines) {
+    const body = String(raw || '').replace(/^[^:]*:\s*/, '');
+    if (!body) { parsedAll = false; continue; }
+    if (/closed/i.test(body)) continue;
+    openDays++;
+    if (/open 24 ?hours/i.test(body)) { any24 = true; total += 24; continue; }
+    const times = [...body.matchAll(/(\d{1,2})(?::(\d{2}))?\s*([AaPp])\.?[Mm]/g)];
+    if (times.length < 2 || times.length % 2) { parsedAll = false; continue; }
+    for (let i = 0; i + 1 < times.length; i += 2) {
+      const a = mins(times[i]), b = mins(times[i + 1]);
+      if (a === null || b === null) { parsedAll = false; continue; }
+      total += (((b - a) + 1440) % 1440) / 60;
+    }
+  }
+  return { checked: true, openDays, weeklyHours: parsedAll ? Math.round(total) : null, open24: any24 };
+};
+
+// ══ CAN THIS BUSINESS AFFORD WHAT WE SELL ═══════════════════════════════════
+// Vin, 2026-08-28: "our goal here is to get the most likely businesses that
+// need our help and our ICP and can afford us into Find and filter out all the
+// ones that cannot afford us."
+//
+// The signal it REPLACES is the star rating, which was never a revenue signal
+// at all, and the client rendered `Est. $1M-$5M+` off a review count alone -
+// exactly the invented figure this file forbids everywhere else.
+//
+// WHAT THIS IS: what one job in their trade is worth, times how many jobs are
+// on record, capped where the owner does the work himself, and sharpened by a
+// published team and published hours when we have them.
+//
+// WHAT IT IS NOT, and this is the rule that keeps it honest: IT NEVER PRODUCES
+// A DOLLAR FIGURE. Revenue for a private local business is not free, we do not
+// buy it, and a band derived from a review count and printed as "$1M-$5M" is a
+// measurement we never took. It orders leads and it labels them premium fit or
+// lower tier, and every input it used is named so a person can argue with it.
+//
+// UNMEASURED LEAVES THE DENOMINATOR. A lead with nothing measured comes back
+// null, never below_floor: "we did not look" has never meant "they cannot pay"
+// anywhere else in this file, and a confident refusal on an unread lead deletes
+// exactly the businesses a call would have qualified.
+const AFFORD_TERMS = [
+  { id: 'tierA',    points: +7,  why: 'a trade where one job is large enough that a couple of extra ones funds a retainer' },
+  { id: 'tierB',    points: +3,  why: 'a mid-ticket trade' },
+  { id: 'tierC',    points: -25, why: 'a trade whose average job is too small to fund anything we sell' },
+  { id: 'crewed',   points: +3,  why: 'work that cannot be done by one person, so the job count means crews' },
+  { id: 'soloCap',  points: -8,  why: 'the owner personally delivers every job, so a high job count means he is busy rather than big' },
+  { id: 'volHigh',  points: +4,  why: 'enough jobs on record to be a real operation rather than a side business' },
+  { id: 'volThin',  points: -6,  why: 'too few jobs on record for a trade where volume is the normal shape' },
+  { id: 'teamReal', points: +6,  why: 'a published team too large to be one person and a helper' },
+  { id: 'teamTiny', points: -8,  why: 'the team they publish is one or two people' },
+  { id: 'staffed',  points: +3,  why: 'published opening hours one person could not cover alone' },
+];
+const AFFORD_PREMIUM_AT = 7;      // asserted at boot, with the leads either side of it
+const AFFORD_FLOOR_AT = -5;
+const AFFORD_VOL_HIGH = 120;      // jobs on record; the top of the establishment curve
+const AFFORD_VOL_MIN_MULT = 2;    // 'thin' is under twice the trade's own review floor
+
+const affordabilityBand = (m) => {
+  const l = m || {};
+  const label = String(l.label || l.industry || '').trim();
+  const terms = [];
+  const take = (id) => { const t = AFFORD_TERMS.find(x => x.id === id); if (t) terms.push({ id: t.id, points: t.points, why: t.why }); };
+
+  // 1. WHAT ONE JOB IS WORTH. CATEGORY_TIER is the declared answer and every
+  // row of it carries its reasoning; an unknown trade contributes nothing
+  // rather than a guess.
+  const tier = l.tier || CATEGORY_TIER[label] || null;
+  if (tier === 'A') take('tierA'); else if (tier === 'B') take('tierB'); else if (tier === 'C') take('tierC');
+
+  // 2. WHETHER THE JOB COUNT MEANS CAPACITY. A handyman with 300 reviews has
+  // done 300 jobs himself; a roofer with 300 has run 300 crews.
+  const cap = capacityClassFor(label, l.trade || '');
+  if (cap === 'crewed') take('crewed'); else if (cap === 'solo') take('soloCap');
+
+  // 3. HOW MANY JOBS ARE ON RECORD. Thin volume is only a fault where volume
+  // is the normal shape of the trade: a $6m custom home builder may have NINE
+  // reviews and a $3m accounting firm five to twenty, and penalising them for
+  // it deletes the richest and most owner-reachable leads in the whole ICP.
+  const rv = Number(l.reviewCount);
+  const haveRv = typeof l.reviewCount === 'number' && Number.isFinite(rv);
+  if (haveRv) {
+    const floor = reviewFloorFor(label, MIN_REVIEWS_BASE);
+    if (rv >= AFFORD_VOL_HIGH) take('volHigh');
+    else if (!LOW_VOLUME_HIGH_TICKET.has(label) && rv < floor * AFFORD_VOL_MIN_MULT) take('volThin');
+  }
+
+  // 4. A MEASURED HEADCOUNT BEATS EVERY PROXY ABOVE IT, and it is only ever
+  // present after a contact read. It is a FLOOR, never a headcount: a firm
+  // with forty staff may publish four.
+  const team = Number(l.teamCount);
+  if (typeof l.teamCount === 'number' && Number.isFinite(team) && team > 0) {
+    if (team >= 8) take('teamReal'); else if (team <= 2) take('teamTiny');
+  }
+
+  // 5. AND THE HOURS THEY PUBLISH THEMSELVES. Seven open days, or more than
+  // sixty hours a week, is not a one-man show. Silent when unread, and
+  // deliberately positive-only: plenty of real businesses keep short hours.
+  const h = l.hours && typeof l.hours === 'object' ? l.hours : null;
+  if (h && h.checked === true && (h.openDays === 7 || (Number.isFinite(Number(h.weeklyHours)) && Number(h.weeklyHours) > 60))) take('staffed');
+
+  const points = terms.reduce((n, t) => n + t.points, 0);
+  if (!terms.length) {
+    return { band: null, points: 0, terms, why: 'not enough measured on this lead to say what they can afford' };
+  }
+  // The solo cap is a CEILING, not just a deduction: a busy one-man operation
+  // can be a good lower-tier sale and can never be a premium one, however many
+  // jobs are on record. That is the whole of what Vin described.
+  let band = points >= AFFORD_PREMIUM_AT ? 'premium' : points >= AFFORD_FLOOR_AT ? 'lower' : 'below_floor';
+  if (band === 'premium' && cap === 'solo') band = 'lower';
+  const why = terms.map(t => t.why).join('; ');
+  return { band, points, terms, why };
+};
 
 // ── UPPER BOUND ────────────────────────────────────────────────────────────
 // Past a certain review volume a local business is no longer our ICP: it is
@@ -5722,7 +6050,13 @@ const GP_CITY_COORDS = {
   'Indianapolis IN': [39.77, -86.16], 'Jacksonville FL': [30.33, -81.66], 'San Antonio TX': [29.42, -98.49],
   'Raleigh NC': [35.78, -78.64], 'Salt Lake City UT': [40.76, -111.89], 'Oklahoma City OK': [35.47, -97.52],
   'Louisville KY': [38.25, -85.76], 'Cincinnati OH': [39.10, -84.51], 'Richmond VA': [37.54, -77.44],
-  'Boise ID': [43.62, -116.20], 'Greenville SC': [34.85, -82.39],
+  'Greenville SC': [34.85, -82.39],
+  // Added 2026-08-28 with the metros below. This map is not decoration: the
+  // coverage-gap check reads Object.keys(GP_CITY_COORDS) as THE SEARCHED SET,
+  // so a city here that the grid never searches would let us tell an owner he
+  // is absent from a market we never looked at. The two lists move together.
+  'Atlanta GA': [33.75, -84.39], 'Minneapolis MN': [44.98, -93.27],
+  'Houston TX': [29.76, -95.37], 'Cleveland OH': [41.50, -81.69],
 };
 
 // Miles between two points. Enough precision for "is this the same region".
@@ -5738,10 +6072,24 @@ const milesBetween = (a, b) => {
 // absence says nothing about their marketing.
 const SERVICE_RADIUS_MILES = 120;
 
+// Twenty metros, sampled EQUALLY - which is what makes the choice of metro a
+// real decision rather than a list. Every city gets the same share of a fixed
+// query budget, so a metro with 800k people costs exactly what one with 5.1m
+// costs and returns a fraction of the businesses.
+//
+// Changed 2026-08-28. Boise out on that arithmetic alone: ~800k against
+// Phoenix's 5.1m, for the same money. In: Atlanta (the deepest bench of
+// $5-15m owner-operated trades in the Sun Belt), Houston (restoration demand
+// and the largest commercial mechanical market on the list), and Minneapolis
+// and Cleveland - which are here for a reason the Sun Belt metros cannot
+// give us: basements, frozen pipes, ice dams and snow. Every metro on the
+// old list was warm, so basement finishing, waterproofing and insulation had
+// almost no ground to be found on.
 const GP_CITIES = [
   'Phoenix AZ','Dallas TX','Charlotte NC','Tampa FL','Denver CO','Nashville TN','Columbus OH','Austin TX',
   'Kansas City MO','Indianapolis IN','Jacksonville FL','San Antonio TX','Raleigh NC','Salt Lake City UT',
-  'Oklahoma City OK','Louisville KY','Cincinnati OH','Richmond VA','Boise ID','Greenville SC',
+  'Oklahoma City OK','Louisville KY','Cincinnati OH','Richmond VA','Greenville SC',
+  'Atlanta GA','Minneapolis MN','Houston TX','Cleveland OH',
 ];
 // National franchises / DSOs / chains — the local operator does NOT own the marketing,
 // so they are not our ICP no matter how reachable the branch is.
@@ -5758,8 +6106,9 @@ const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour|ai
 // repeats the whole thing. The list is a hand-kept memory of brands, and a
 // hand-kept memory of anything in this file has failed the same way every time.
 //
-// The evidence is already in hand and free. A Find run searches 39 categories
-// across twenty metros that are hundreds of miles apart — Phoenix, Dallas,
+// The evidence is already in hand and free. A Find run searches every category
+// in GP_CATEGORIES across every metro in GP_CITIES, and those metros are
+// hundreds of miles apart — Phoenix, Dallas,
 // Charlotte, Denver, Nashville. A single owner-operated business does not trade
 // in three of them. A brand that comes back in three or more of them is a
 // franchise or a corporate chain, which is the exact judgement GP_FRANCHISE
@@ -5883,7 +6232,7 @@ const detectChainOutlets = (leads, minMetros) => {
 // which. A meter that presents a guessed rate as a measurement is the class of
 // error this file already records for the SMTP log line: a message that
 // overstates its own certainty costs exactly what one that understates it does.
-// Three of twenty metros. Two would be wrong: Charlotte and Raleigh are 140
+// Three of the metros we search. Two would be wrong: Charlotte and Raleigh are 140
 // miles apart and Greenville is 100 from Charlotte, so a real two-market
 // operator exists and is a GOOD lead \u2014 we even have a coverage-gap finding
 // built on exactly that shape.
@@ -6094,7 +6443,7 @@ const orderGridByFreshness = (byCat, state, opts = {}) => {
 //   onlyNoWebsite                  businesses with no site at all
 //   onlyBuilderSite                businesses on a free page builder
 //   minReviews                     raise the floor for bigger operators
-const searchGooglePlaces = async (placesKey, filters = {}) => {
+const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   const _flt = filters && typeof filters === 'object' ? filters : {};
   if (!placesKey) { console.log('Google Places: no key (set GOOGLE_PLACES_KEY)'); return []; }
   // places.location added so a coverage claim can be distance-aware. Without it
@@ -6193,7 +6542,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   const PAIN_BAND_HIGH = Number.isFinite(Number(_flt.maxRating)) ? Number(_flt.maxRating) : 4.85;
 
   // GP_FREE_BUILDER is declared at module scope so the boot check can assert it.
-  const MIN_REVIEWS = parseInt(process.env.GP_MIN_REVIEWS || '15', 10); // established-business proxy (~$500k+)
+  const MIN_REVIEWS = MIN_REVIEWS_BASE;   // one declaration, at module scope
   // The caller may size this down when the bench already holds leads we have
   // paid for. Absent, the env setting stands and the run is what it always was.
   const _capEnv = parseInt(process.env.GP_QUERY_CAP || '100', 10);
@@ -6228,8 +6577,8 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   if (_cut) console.log(`ICP FILTER: searching ${_cats.length} of ${GP_CATEGORIES.length} categories — ${_cut} cut for average job value too low to fund a $10k+/mo retainer`);
   // ── STRATIFIED, NOT RANDOM ────────────────────────────────────────────────
   // Fisher-Yates fixed the broken `sort(() => Math.random() - 0.5)`, but a uniform
-  // shuffle still samples the grid blindly: with 40 categories x 20 cities = 800
-  // combinations and only RUN_CAP queries actually run, some categories draw four
+  // shuffle still samples the grid blindly: with every category crossed against
+  // every city and only RUN_CAP of those queries actually run, some categories draw four
   // slots and others draw none. A live run covered 36 of 38 — two whole verticals
   // contributed nothing, purely by luck of the draw.
   //
@@ -6295,7 +6644,11 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // expects a stranger to know the shape of his own coverage, it is measured
   // rather than inferred, and the fix is a retainer rather than a page edit.
   const citiesSearchedByCat = new Map();
-  let calls = 0, skippedFranchise = 0, skippedCatCap = 0, skippedTooBig = 0, skippedNoPain = 0, keptNoWebsite = 0, keptBuilder = 0;
+  let calls = 0, skippedFranchise = 0, skippedCatCap = 0, skippedTooBig = 0, skippedNoPain = 0, keptNoWebsite = 0, keptBuilder = 0, lowRatingKept = 0;
+  // The review floor is now the gate that decides whether a business is
+  // established enough to be worth researching - the star band used to do it
+  // and no longer does - so it needs a counter like every other gate here.
+  let skippedUnderFloor = 0, seenFromGoogle = 0;
   let skippedNearPerfect = 0;   // dropped by the ceiling: 4.86 and above
   let demotedTooBig = 0;        // over the review ceiling: benched, not deleted
   // ══ BUSINESSES WE ALREADY OWN, SKIPPED BEFORE THEY COST A SLOT ═══════════
@@ -6422,6 +6775,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         // so they are kept and MARKED as call leads. Mike can dial a number we
         // already hold from the same response, and the opening line writes
         // itself. Discarding them was throwing away the clearest leads we find.
+        const _hours = readPublishedHours(p.regularOpeningHours);
         const _noWebsite = !website;
         const _builderSite = !!website && GP_FREE_BUILDER.test(website);
         if (p.businessStatus && p.businessStatus !== 'OPERATIONAL') continue;
@@ -6429,7 +6783,8 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         const _reviewFloor = Number.isFinite(Number(_flt.minReviews))
           ? Math.max(Number(_flt.minReviews), reviewFloorFor(cat.label, MIN_REVIEWS))
           : reviewFloorFor(cat.label, MIN_REVIEWS);
-        if (reviews < _reviewFloor) continue;
+        seenFromGoogle++;
+        if (reviews < _reviewFloor) { skippedUnderFloor++; continue; }
         // Website-shape filters. Applied here rather than in the UI so a run
         // looking only for call leads does not spend a query on anything else.
         if (_flt.onlyNoWebsite && !_noWebsite) continue;
@@ -6467,19 +6822,39 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
         //
         // GP_BAND_MODE=cut restores the old hard delete exactly, for the day the
         // evidence says the band was right after all.
-        let _outsideBand = false, _bandWhy = '';
-        if (rating !== null && (rating < PAIN_BAND_LOW || rating > PAIN_BAND_HIGH)) {
+        // ══ AND THE FLOOR IS GONE ENTIRELY. VOLUME DECIDES. ════════════════
+        // Vin, 2026-08-28, on the low side: "the ones with lower ratings have
+        // way more pain, especially visibility pain - if they can afford us
+        // then these leads are gold as well." He is right twice over. Rating
+        // is one of the inputs Google weighs in the local pack, so a low-rated
+        // business really is less visible and really does have more reason to
+        // buy; and rating was never a revenue signal, so using it to decide who
+        // enters the queue was answering the affordability question with the
+        // wrong measurement.
+        //
+        // What decides instead is the trade-aware review floor a few lines
+        // above, which is a JOB COUNT and is at least adjacent to revenue: 2.4
+        // stars over 150 reviews is an established business in pain, 2.4 over
+        // 16 is a business dying, and the floor already tells them apart. A
+        // modest lift for the first shape lives in placesTriageScore.
+        //
+        // The CEILING stays, and it is a different claim: at 4.9 there are
+        // almost no negative reviews on record to mine, which is a fact about
+        // what an AUDIT will find rather than about what the business can
+        // afford. Fourteen audits are behind it, and it demotes rather than
+        // deletes exactly as before.
+        let _outsideBand = false, _bandWhy = '', _lowRating = false;
+        if (rating !== null && rating > PAIN_BAND_HIGH) {
           skippedNoPain++;
-          // Counted separately: these are the near-perfect profiles the ceiling
-          // exists to exclude. Reported so the cost is a number rather than an
-          // assumption - fourteen audits said there is nothing to find up here,
-          // and if that ever stops being true this is where it will show.
-          if (rating > PAIN_BAND_HIGH) skippedNearPerfect++;
+          skippedNearPerfect++;
           if (GP_BAND_HARD_CUT) { _missBand++; continue; }
           _outsideBand = true;
-          _bandWhy = rating > PAIN_BAND_HIGH
-            ? `${rating} stars, above the ${PAIN_BAND_HIGH} ceiling \u2014 at this average there are almost no negative reviews on record to mine, so the review-pain finding is unlikely. Every other finding is unaffected.`
-            : `${rating} stars, below the ${PAIN_BAND_LOW} floor.`;
+          _bandWhy = `${rating} stars, above the ${PAIN_BAND_HIGH} ceiling \u2014 at this average there are almost no negative reviews on record to mine, so the review-pain finding is unlikely. Every other finding is unaffected.`;
+        } else if (rating !== null && rating < PAIN_BAND_LOW) {
+          // Kept, ranked, and marked as what it is: a lead with visibility pain
+          // whose star rating is now a REASON rather than a refusal.
+          _lowRating = true;
+          lowRatingKept++;
         }
         // Too big is as disqualifying as too small: at this volume they are
         // multi-location or already agency-managed, and the audit lands on someone
@@ -6584,6 +6959,11 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
           // is three copies of one rule. It travels on the lead.
           ...(_outsideBand ? { outsideBand: true, bandNote: _bandWhy } : {}),
           ...(_tooBig ? { aboveSizeCeiling: true, sizeNote: _tooBigWhy } : {}),
+          ...(_lowRating ? { lowRating: true, lowRatingNote: `${rating} stars. Kept deliberately: rating is one of the inputs Google weighs in the local pack, so a low-rated business is genuinely harder to find and has more reason to buy. Whether it is bad marketing or bad work is what the audit answers.` } : {}),
+          // The hours Google already sent us on this same call, which nothing
+          // had ever read. Seven open days is not a one-man show, and that is
+          // the only capacity signal available before a penny is spent.
+          ...(_hours.checked ? { publishedHours: _hours } : {}),
           industry: cat.label, reviewCount: reviews, rating,
           phone: p.internationalPhoneNumber || '',
           jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. ${cat.ownerRisk ? 'Practice \u2014 confirm a reachable owner (field is being PE/DSO-consolidated).' : 'Owner-operated, high reachability.'}${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}`,
@@ -6689,8 +7069,8 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // ══ HOW DEEP THE RUN ACTUALLY REACHED ════════════════════════════════════
   // The number to watch when leads feel repetitive. Places answers each query
   // with its twenty most prominent businesses in the same order every time, so
-  // without extra pages a run can only ever see 39 categories x 20 cities x 20 =
-  // about 15,600 businesses in total. Pages are bought only for queries that ran
+  // without extra pages a run can only ever see twenty businesses per
+  // category-and-city pair, ever. Pages are bought only for queries that ran
   // out of NEW businesses, which is exactly where the repetition comes from.
   if (pagesBought) {
     const _pp = _deepYield / Math.max(1, pagesBought);
@@ -6704,7 +7084,7 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   // ══ WHAT THE RATING BAND AND THE WEBSITE READ ACTUALLY DID ═══════════════
   // Printed separately because these three numbers are the whole experiment:
   // whether filtering on what we can know BEFORE auditing changes the odds.
-  console.log(`\u2696 PAIN BAND [Places]: ${skippedNoPain} lead(s) ${GP_BAND_HARD_CUT ? 'DROPPED' : 'demoted behind the in-band leads'} for sitting outside ${PAIN_BAND_LOW}-${PAIN_BAND_HIGH} stars. Every business at 4.9 in our last fourteen audits returned no repeating complaint \u2014 there is nothing on record to find, and both emails that earned a reply came from inside this band.${skippedNearPerfect ? ` \u2014 ${skippedNearPerfect} of them were above the ceiling, where fourteen audits found nothing minable. A 4.7 ceiling was tested and reverted: three of the five leads that produced a complaint or a reply sit at 4.8.` : ''}`);
+  console.log(`\u2696 PAIN BAND [Places]: ${skippedNoPain} lead(s) ${GP_BAND_HARD_CUT ? 'DROPPED' : 'demoted behind every other lead'} for sitting ABOVE ${PAIN_BAND_HIGH} stars \u2014 at that average there are almost no negative reviews left on record, and the repeating complaint is one of only two findings that has ever earned a human reply. ${lowRatingKept} lead(s) below ${PAIN_BAND_LOW} stars were KEPT and ranked: the floor was retired on 2026-08-28 because rating is not a revenue signal and a low-rated business is genuinely harder to find on Google, which is a reason to buy rather than a reason to skip them. What decides now is the trade-aware review floor, which is a job count.`);
   if (keptNoWebsite) console.log(`\u260e CALL LEADS [Places]: ${keptNoWebsite} business(es) with real review counts and NO WEBSITE AT ALL. These used to be discarded because Research needs a page to audit. They need no audit \u2014 the finding is the absence, and Mike has the number.`);
   if (keptBuilder) console.log(`\u{1F527} REBUILD LEADS [Places]: ${keptBuilder} business(es) running on a free page builder. They audit normally, but the fact that matters is already known before we spend anything.`);
   // ══ THE OPERATORS BIG ENOUGH TO FUND A FIX ═══════════════════════════════
@@ -6766,6 +7146,22 @@ const searchGooglePlaces = async (placesKey, filters = {}) => {
   }
   if (_bandDemoted) {
     console.log(`\u2696 BAND DEMOTED [Places]: ${_bandDemoted} qualified business(es) sit outside ${PAIN_BAND_LOW}-${PAIN_BAND_HIGH} stars. They are no longer deleted \u2014 they are returned behind every in-band lead, so they fill the bench instead of this run's queue. Only ONE of the 41 findings reads the star rating and it can never be emailed; the ladder produces the same two sayable findings at 4.6, 4.9 and 5.0, leading on the same one. Set GP_BAND_MODE=cut to restore the old delete.`);
+  }
+  // ══ WHAT THIS RUN LOST, AND WHERE ═══════════════════════════════════════
+  // Written into an object the CALLER owns rather than a module global: two
+  // Find runs cannot overlap today (the job store dedupes them), and a global
+  // that is only safe because of a rule enforced somewhere else is exactly the
+  // cross-run leak this file records at the audit cache. The caller passes the
+  // object in, so the tally belongs to the run that asked for it.
+  if (tally && typeof tally === 'object') {
+    tally.seen = seenFromGoogle;
+    tally.underFloor = skippedUnderFloor;
+    tally.franchise = skippedFranchise + skippedChain;
+    tally.alreadyOwned = skippedAlreadyOwned;
+    tally.catCap = skippedCatCap;
+    tally.demoted = benched.length;
+    tally.lowRatingKept = lowRatingKept;
+    tally.queries = calls;
   }
   return interleaved.concat(_benchInterleaved);
 };
@@ -9696,13 +10092,77 @@ const applyPattern = (pattern, fullName, domain) => {
 // verified negative.
 let VERIFIER_EXHAUSTED = false;
 let VERIFIER_DEAD = false;
+//
+// ══ AND A LATCH WITH NO WAY BACK IS A DEADLOCK ═══════════════════════════
+// Both of these were one-way for their whole life: no TTL, no probe, no
+// reset. So a single busy minute on a free-tier daily allowance turned SMTP
+// verification off for every remaining lead until Render restarted the
+// process - and section 43 records exactly this shape on the Firecrawl
+// credit latch, where one 402 shut Firecrawl down for the life of the
+// process because no paid call could ever be made to clear it.
+//
+// The cost here is quieter and just as expensive: tier 2 is UNREACHABLE
+// without a live verifier (the catch-all block is skipped entirely), so
+// every address after the blip falls to tier 3 or 4 and reads as
+// pattern-built rather than confirmed. On a fifty-lead run that exhausts at
+// lead twelve, thirty-eight leads are silently downgraded.
+//
+// Time-based, exactly as the Firecrawl breaker is and for the same reason: an
+// in-flight flag has to be released on every exit path, and the one path
+// somebody forgets is a second deadlock wearing different clothes. A clock
+// cannot be forgotten. One probe per window, so fifty leads cannot hammer a
+// door that is genuinely shut.
+const VERIFIER_COOLDOWN_MS = Number(process.env.VERIFIER_COOLDOWN_MS || 10 * 60 * 1000);
+let VERIFIER_LATCHED_AT = 0;
+let VERIFIER_PROBE_AT = 0;
+// Read-only: says whether the verifier is currently stood down. Deliberately
+// does NOT consume the recovery probe, because a caller asking "is it off"
+// must not spend the one attempt that would turn it back on.
+const verifierBlocked = () => (VERIFIER_EXHAUSTED || VERIFIER_DEAD);
+// Consuming: the door itself. After the cooldown, exactly ONE call is let
+// through to find out whether the allowance came back.
+const verifierGate = (nowMs) => {
+  if (!verifierBlocked()) return true;
+  // The clock is a parameter with today's default. Nothing in production
+  // passes one; the boot check does, because the whole point of this gate
+  // is what happens ten minutes after a latch and a fixture that cannot
+  // travel there cannot see it.
+  const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  if (now - VERIFIER_LATCHED_AT < VERIFIER_COOLDOWN_MS) return false;
+  if (now - VERIFIER_PROBE_AT < VERIFIER_COOLDOWN_MS) return false;
+  VERIFIER_PROBE_AT = now;
+  console.log(`\u{1F513} EMAIL VERIFIER: the ${Math.round(VERIFIER_COOLDOWN_MS / 60000)}-minute cooldown has passed, so ONE call is going through to find out whether it answers again. If it is refused the clock restarts; nothing else is spent meanwhile.`);
+  return true;
+};
+// A caller GATING a verify call has to know whether an attempt would be made,
+// not just whether the latch is set - otherwise every guard site refuses, no
+// call ever reaches verifyEmailSMTP, and the recovery probe can never fire.
+// That is the §43 deadlock rebuilt one level up, so it is answered here and
+// read-only: it never consumes the probe.
+const verifierMayTry = (nowMs) => {
+  if (!verifierBlocked()) return true;
+  const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  return now - VERIFIER_LATCHED_AT >= VERIFIER_COOLDOWN_MS && now - VERIFIER_PROBE_AT >= VERIFIER_COOLDOWN_MS;
+};
+const verifierLatch = (kind) => {
+  VERIFIER_LATCHED_AT = Date.now();
+  if (kind === 'dead') VERIFIER_DEAD = true; else VERIFIER_EXHAUSTED = true;
+};
+// A call that ANSWERED is the proof the account is live again. Clearing on a
+// real answer rather than on a timer alone is what stops a permanently dead
+// key being reported as healthy every ten minutes.
+const verifierAnswered = () => {
+  if (!verifierBlocked()) return;
+  console.log(`\u{1F7E2} EMAIL VERIFIER: back. A probe answered, so SMTP verification is on again for every lead after this one - and every address checked while it was off is tier 3 at best, which is a fact about US and not about those prospects.`);
+  VERIFIER_EXHAUSTED = false; VERIFIER_DEAD = false; VERIFIER_LATCHED_AT = 0;
+};
 // One place to tune, and the error message quotes it so a future reader knows
 // what the cap actually was when the failure happened.
 const VERIFIER_TIMEOUT_MS = Number(process.env.VERIFIER_TIMEOUT_MS || 30000);
 
 const verifyEmailSMTP = async (email, verifierKey) => {
   if (!email || !verifierKey) return { valid: null, catchAll: null, unknown: true, error: true };
-  if (VERIFIER_EXHAUSTED || VERIFIER_DEAD) return { valid: null, catchAll: null, unknown: true, error: true };
+  if (!verifierGate()) return { valid: null, catchAll: null, unknown: true, error: true };
   try {
     // ══ 12 SECONDS IS NOT ENOUGH FOR AN SMTP HANDSHAKE ══════════════════════
     // Every recent lead \u2014 HEGG, Hawk, Craig, Rachel, Scott, Mid-American \u2014
@@ -9729,14 +10189,16 @@ const verifyEmailSMTP = async (email, verifierKey) => {
     // No status at all means the call did not actually run a check.
     if (!status) {
       if (/limit|quota|credit|exceed|insufficient|upgrade/.test(blob)) {
-        if (!VERIFIER_EXHAUSTED) console.log(`\ud83d\udd34 EMAIL VERIFIER OUT OF CREDITS — SMTP checks are no longer running. Nothing below can be read as "this mailbox does not exist"; it means we could not ask.`);
-        VERIFIER_EXHAUSTED = true;
+        if (!VERIFIER_EXHAUSTED) console.log(`\ud83d\udd34 EMAIL VERIFIER OUT OF CREDITS — SMTP checks are no longer running. Nothing below can be read as "this mailbox does not exist"; it means we could not ask. It re-tests itself in ${Math.round(VERIFIER_COOLDOWN_MS / 60000)} minutes; a daily allowance that resets, or a top-up, comes back on its own.`);
+        verifierLatch('exhausted');
       } else if (r.status === 401 || r.status === 403 || /invalid.?key|unauthor|forbidden/.test(blob)) {
-        if (!VERIFIER_DEAD) console.log(`\ud83d\udd11 EMAIL VERIFIER KEY REJECTED — SMTP verification is off. This is not evidence about any prospect.`);
-        VERIFIER_DEAD = true;
+        if (!VERIFIER_DEAD) console.log(`\ud83d\udd11 EMAIL VERIFIER KEY REJECTED — SMTP verification is off. This is not evidence about any prospect. Check VERIFIER_KEY in Settings; it re-tests itself every ${Math.round(VERIFIER_COOLDOWN_MS / 60000)} minutes in case the key was fixed.`);
+        verifierLatch('dead');
       }
       return { valid: null, catchAll: null, unknown: true, error: true };
     }
+    // It answered, which is the only proof that the account is live.
+    verifierAnswered();
     const catchAll = /true|yes/i.test(String(d?.Catch_All_Status ?? d?.catch_all ?? ''));
     return {
       valid: status === 'valid',
@@ -12328,7 +12790,15 @@ const RECURRING_OFFER_RE = /\b(membership|memberships|member(?:s)? (?:plan|progr
 //
 // Every stem below carries \w* deliberately. `vet` is the exception and stays
 // exact: `vet\w*` would match "veteran" and "vetted".
-const RECURRING_NORMAL_TRADES = /\b(hvac|heating|cooling|air condition\w*|plumb\w*|electric\w*|pest|exterminat\w*|lawn|landscap\w*|tree (?:service\w*|care|trim\w*|removal\w*|surgeon\w*)|arborist\w*|irrigation|pool|septic|chimney|gutter\w*|roof\w*|window clean\w*|janitor\w*|clean(?:ing|er\w*)|dent(?:al|ist\w*)|orthodont\w*|periodont\w*|vet\b|veterinar\w*|animal (?:hospital\w*|clinic\w*)|chiroprac\w*|physical therap\w*|med ?spa\w*|aesthetic\w*|derm\w*|salon\w*|barber\w*|gym|fitness|pilates|yoga|massage|account(?:ing|ant\w*)|bookkeep\w*|cpa|payroll|managed (?:it|service\w*)|msp|security (?:system\w*|monitor\w*)|alarm\w*|water treatment|softener\w*|garage door\w*|appliance repair\w*|water heater\w*)\b/i;
+// Added 2026-08-28, four trades whose ENTIRE business model is a renewing
+// contract and which were reading as one-off work: fire protection (sprinkler
+// and alarm inspection is legally mandated every year, so the recurring plan is
+// not an upsell, it is the product), independent insurance agencies (a renewal
+// book IS the business), in-home care and assisted living (a weekly care plan
+// and a monthly resident fee), and medical weight loss (a monthly programme).
+// `insurance` is deliberately anchored to agen/broker: a restoration company
+// saying "we work with your insurance" is not an insurance agency.
+const RECURRING_NORMAL_TRADES = /\b(hvac|heating|cooling|air condition\w*|plumb\w*|electric\w*|pest|exterminat\w*|lawn|landscap\w*|tree (?:service\w*|care|trim\w*|removal\w*|surgeon\w*)|arborist\w*|irrigation|pool|septic|chimney|gutter\w*|roof\w*|window clean\w*|janitor\w*|clean(?:ing|er\w*)|dent(?:al|ist\w*)|orthodont\w*|periodont\w*|vet\b|veterinar\w*|animal (?:hospital\w*|clinic\w*)|chiroprac\w*|physical therap\w*|med ?spa\w*|aesthetic\w*|derm\w*|salon\w*|barber\w*|gym|fitness|pilates|yoga|massage|account(?:ing|ant\w*)|bookkeep\w*|cpa|payroll|managed (?:it|service\w*)|msp|security (?:system\w*|monitor\w*)|alarm\w*|water treatment|softener\w*|garage door\w*|appliance repair\w*|water heater\w*|fire protection\w*|fire sprinkler\w*|sprinkler inspect\w*|insurance agen\w*|insurance broker\w*|home ?care\w*|companion care\w*|caregiv\w*|senior care\w*|assisted living\w*|memory care\w*|weight loss\w*|semaglutide\w*)\b/i;
 
 const readRecurringOffer = ({ text, trade, pagesRead } = {}) => {
   const t = String(text || '');
@@ -17161,13 +17631,53 @@ const REFERRAL_ADJUST = {
 // fabricated, and it needs no verification pass. The brain is not involved.
 // Trailing \\b broke on suffixes — "orthodont\\b" cannot match "orthodontist".
 // Prefixes are left open so the stem matches whatever follows.
-const EMERGENCY_TRADES = /\b(restoration|remediation|water damage|fire damage|flood|mold|storm damage|disaster|biohazard|trauma clean|sewage|septic|plumb|drain|rooter|hvac|heating|cooling|air condition|furnace|boiler|water heater|electric|locksmith|tow(?!n)|wrecker|emergency|24.?hour|garage door|appliance repair|well pump|board.?up|tree (removal|service)|pest control|glass repair|windshield|urgent care)/i;
+// Added 2026-08-28: two trades whose contact event is not a purchase decision
+// at all. A family rings a funeral home within hours of a death and rings an
+// addiction treatment centre within hours of a crisis; in both, whoever answers
+// takes the admission and nobody compares quotes. That is word for word the
+// EMERGENCY prompt line, and both were classifying UNKNOWN, which is no profile.
+const EMERGENCY_TRADES = /\b(restoration|remediation|water damage|fire damage|flood|mold|storm damage|disaster|biohazard|trauma clean|sewage|septic|plumb|drain|rooter|hvac|heating|cooling|air condition|furnace|boiler|water heater|electric|locksmith|tow(?!n)|wrecker|emergency|24.?hour|garage door|appliance repair|well pump|board.?up|tree (removal|service)|pest control|glass repair|windshield|urgent care|funeral|mortuar|cremat|addiction|detox|substance (abuse|use)|rehab facilit|behavioral health)/i;
 // ══ ELECTIVE SURGERY IS THE MOST CONSIDERED PURCHASE THERE IS ═════════════
 // "lasik surgery" returned UNKNOWN, so a business whose patients research for
 // weeks got the default after-hours harm of 81 and an email about booking
 // widgets. Elective medical, veterinary and legal work all belong here: the
 // buyer compares providers, reads reviews, and decides before making contact.
-const CONSIDERED_TRADES = /\b(remodel|renovation|renovat|kitchen|bathroom|custom home|home build|addition|orthodont|dentist|dental|plastic surg|cosmetic|med ?spa|aesthetic|lasik|vision correction|ophthalmolog|optometr|eye (care|surgery|center)|dermatolog|chiropract|physical therapy|fertility|ivf|bariatric|hair (transplant|restoration)|weight loss|surgeon|surgery|clinic|practice|cpa|accountant|accounting|bookkeep|tax(?!i)|attorney|lawyer|law firm|legal|financial advis|wealth|insurance agen|architect|interior design|landscape|pool (build|install|construction)|solar|deck|fence|cabinet|flooring|window replace|siding|general contractor|home builder|pool service|photograph|wedding|catering|event plan|private school|tutoring|driving school)/i;
+// ══ NINETEEN OF FIFTY-FIVE SEARCHED CATEGORIES HAD NO PROFILE AT ALL ═════
+// Executed against the real query strings on 2026-08-28: a third of the
+// hunted set returned UNKNOWN from both regexes, so URGENCY_ADJUST - up to
+// 26 points either way, the largest business-type rule in the ladder - could
+// never fire on them. Roofing, Foundation, Paving, Concrete and Windows &
+// Doors among them, which are five of the biggest tickets we search.
+//
+// The Windows & Doors miss is the recorded stem trap in a new place: the list
+// carried `window replace`, and the query is "window and door replacement" -
+// two words apart, so the literal could never match. Nothing said so, because
+// an alternation that matches nothing is silent rather than wrong.
+//
+// WHAT WAS DELIBERATELY LEFT UNKNOWN, because UNKNOWN is the honest answer
+// for a genuinely mixed trade and a wrong profile costs 26 points:
+//   · Roofing - a 2am leak is an emergency and a re-roof is a considered
+//     purchase, and one company sells both. Neither line is true of it.
+//   · Home Care - a hospital discharge is decided in two days, which is
+//     neither "weeks of research" nor "nobody compares".
+// Both keep the neutral ladder, which is what UNKNOWN means.
+const CONSIDERED_TRADES = /\b(remodel|renovation|renovat|kitchen|bathroom|custom home|home build|addition|orthodont|dentist|dental|plastic surg|cosmetic|med ?spa|aesthetic|lasik|vision correction|ophthalmolog|optometr|eye (care|surgery|center)|dermatolog|chiropract|physical therapy|fertility|ivf|bariatric|hair (transplant|restoration)|weight loss|surgeon|surgery|clinic|practice|cpa|accountant|accounting|bookkeep|tax(?!i)|attorney|lawyer|law firm|legal|financial advis|wealth|insurance agen|architect|interior design|landscape|pool (build|install|construction)|solar|deck|fence|cabinet|flooring|window replace|window and door|replacement window|siding|general contractor|home builder|pool service|photograph|wedding|catering|event plan|private school|tutoring|driving school|foundation repair|basement waterproof|crawl space|basement finish|paving|asphalt|seal ?coat|concrete|masonry|stonework|brickwork|excavat|grading|site work|land clearing|insulation|spray foam|signage|sign (company|shop)|monument sign|channel letter|vehicle wrap|fire protection|fire sprinkler|sprinkler system|veterinar|assisted living|senior living|memory care|retirement communit|commercial roof|commercial mechanical|commercial hvac|managed (it|service)|msp\b)/i;
+
+// ── THE TRADES WITH NO HONEST URGENCY PROFILE ─────────────────────────────
+// Declared, so TRADE TABLE COVERAGE CHECK can tell a deliberate UNKNOWN from a
+// term somebody forgot to add. Both directions fail: a category that starts
+// classifying cannot stay on this list looking like a decision.
+//
+//   Roofing   - a 2am leak is an emergency and a re-roof is compared against
+//               two other quotes, and one company sells both. Neither prompt
+//               line is true of it, and a wrong profile moves a finding by up
+//               to 26 points.
+//   Home Care - a hospital discharge is decided in about two days, which is
+//               neither "weeks of research" nor "nobody compares providers".
+//
+// UNKNOWN is not a gap here. It means the neutral ladder, which is the right
+// answer when neither profile describes the business.
+const TRADE_URGENCY_MIXED = new Set(['Roofing', 'Home Care']);
 
 const purchaseUrgency = (trade) => {
   const t = String(trade || '').toLowerCase();
@@ -22272,6 +22782,14 @@ const catalogPriceFor = (product) => {
 const TRADE_JOB_VALUE = [
   // Home exterior / structural
   { re: /\bcustom home|\bhome build|\bnew construction|\bluxury home/i, say: 'a custom home runs several hundred thousand dollars' },
+  // The four categories added or re-queried on 2026-08-28. Design-build and home
+  // additions are what replaced 'general contractor', which returned handymen and
+  // therefore had no honest single figure - the missing money line and the bad
+  // query were the same fact said twice.
+  { re: /\bhome addition|\broom addition|\bsecond stor(?:y|ey) addition/i, say: 'a home addition runs $80k-$300k' },
+  { re: /\bdesign[- ]build|\bdesign and build/i, say: 'a design-build remodel runs $40k-$150k' },
+  { re: /\boutdoor (?:living|kitchen)|\bpergola|\bcovered patio/i, say: 'an outdoor kitchen or living build runs $40k-$150k' },
+  { re: /\bcommercial mechanical|\bmechanical contract/i, say: 'a commercial mechanical contract runs into six figures' },
   { re: /\bwaterproof|\bfoundation|\bcrawl ?space|\bpiering|\bslabjack|\bunderpinning|\bstructural repair/i, say: 'a foundation or waterproofing job runs five figures' },
   // A basement REMODEL is a finish-out, not foundation work and not a kitchen.
   // Bare `basement` is deliberately matched by none of these — a "basement
@@ -22294,7 +22812,11 @@ const TRADE_JOB_VALUE = [
   // it. Specific trades are matched BEFORE the broad exterior bucket, and `door`
   // is no longer a bare alternative.
   { re: /\bgarage door|\boverhead door|\bdock door|\broll[- ]?up door/i, say: 'a garage door replacement runs $1k-$4k' },
-  { re: /\bwindow(?!\s?(?:clean|tint|treat|wash))|\bsiding|\bexterior|\bentry door|\bpatio door|\breplacement door/i, say: 'a window or siding job runs $8k-$40k' },
+  // Bare `exterior` caught 'exterior painting company' and beat the paint row
+  // below it to a figure three times too high, because .find() stops first.
+  // Same class as the two failures documented directly above, in the same
+  // regex that was written to fix them. Scoped to exterior REMODELLING.
+  { re: /\bwindow(?!\s?(?:clean|tint|treat|wash))|\bsiding|\bexterior (?:remodel|renovat|contract)|\bentry door|\bpatio door|\breplacement door/i, say: 'a window or siding job runs $8k-$40k' },
   // ══ AND WATERPROOFING IS NOT ROOFING ══════════════════════════════════════
   // The note directly above diagnosed this exact class for `door`, fixed that
   // one instance, and never searched for the next. `/\broof/i` is a bare
@@ -22316,7 +22838,22 @@ const TRADE_JOB_VALUE = [
   { re: /\bpool (?:service|cleaning|maintenance)|\bpool tech/i, say: 'a season of pool service runs several hundred dollars' },
   { re: /\bpool build|\bpool install|\bpool construction|\bspa install|\bpool/i, say: 'a pool build runs $40k-$100k' },
   { re: /\bconcrete|\bpaving|\basphalt|\bdriveway/i, say: 'a driveway or concrete job runs $5k-$25k' },
-  { re: /\blandscap|\bhardscape|\blawn care/i, say: 'a landscaping project runs $5k-$30k' },
+  // ══ LAWN CARE IS NOT LANDSCAPING, AND THIS FILE ALREADY KNEW ════════════
+  // One row said 'a landscaping project runs $5k-$30k' and matched `lawn care`.
+  // CATEGORY_TIER, four thousand lines above, prices lawn care at $50-200 a
+  // MONTH. Two tables in one file disagreeing about one trade by roughly a
+  // hundred times, and the one that reaches the prospect was the wrong one.
+  //
+  // Lawn Care being an unsearched category never protected anything: these rows
+  // match on TRADE TEXT, so any lead whose Google category reads 'Lawn care
+  // service' - which includes landscapers, irrigation and tree companies - was
+  // quoted a five-figure project. Mowing first, because the general row would
+  // otherwise swallow it, exactly as ortho/dental and pool service/build below.
+  { re: /\blawn (?:care|treatment|service|maintenance)|\bmowing|\bgrounds maintenance/i, say: 'a season of lawn care runs a few hundred dollars' },
+  // And `hardscape` could not match 'hardscaping' - the recorded stem trap,
+  // where a word boundary after a stem makes it match only itself. The label
+  // Hardscaping returned NO money line at all until this was widened.
+  { re: /\blandscap|\bhardscap/i, say: 'a landscaping or hardscaping project runs $5k-$30k' },
   { re: /\bsolar/i, say: 'a solar install runs $15k-$40k' },
   { re: /\bfence|\bdeck|\bpatio/i, say: 'a deck or fence job runs $5k-$25k' },
   // Home services / trades
@@ -22357,16 +22894,58 @@ const TRADE_JOB_VALUE = [
   //
   // Ortho FIRST, because the general row would otherwise swallow it.
   { re: /\borthodon|\bbraces\b|\binvisalign|\baligner/i, say: 'a full orthodontic case runs $3k-$7k' },
+  // Implants and cosmetic dentistry are a different order of magnitude from a
+  // single crown, and the general row swallowed both - the orthodontist error
+  // above, pointing the other way. A full-arch case is $25-50k and a veneer
+  // case is $15-45k; quoting either practice $4-7k says nobody read the site.
+  // Specific first, as everywhere else in this table.
+  { re: /\bfull ?arch|\ball ?on ?(?:4|4|six|6)|\bdental implant|\bimplant (?:center|centre|dentist)/i, say: 'a full-arch implant case runs $25k-$50k' },
+  { re: /\bcosmetic dent|\bveneer|\bsmile (?:design|makeover)/i, say: 'a veneer case runs $15k-$45k' },
   { re: /\bdentist|\bdental|\bdds|\bdmd/i, say: 'a single implant or crown case runs $4k-$7k' },
   // Split from med spa and dermatology, which are a different order of magnitude
   // — the same cross-industry error the trade tables already record for roofing
   // and waterproofing. A botox appointment is not a rhinoplasty.
   { re: /\bplastic surg|\bcosmetic surg|\bfacial plastic|\breconstructive/i, say: 'a single surgical case runs $6k-$15k' },
-  { re: /\bmed ?spa|\baesthetic|\bdermatolog|\binjectable/i, say: 'a course of treatment runs $1k-$4k' },
+  // Dermatology was lumped in with med spa at the COSMETIC figure. Medical
+  // dermatology's unit is a $200-600 visit, and a Mohs surgeon quoted a botox
+  // course reads the same way an orthodontist reads an implant price. The
+  // comment above splits plastic surgery from med spa for exactly this reason
+  // and then left derm on the wrong side of the split.
+  { re: /\bdermatolog|\bmohs|\bskin cancer/i, say: 'a course of dermatology care runs several hundred dollars a visit' },
+  { re: /\bmed ?spa|\baesthetic|\binjectable/i, say: 'a course of treatment runs $1k-$4k' },
   { re: /\blasik|\bophthalm|\beye (?:care|center)/i, say: 'a LASIK case runs $4k-$6k' },
   { re: /\bchiropract/i, say: 'a care plan runs $1k-$3k' },
   { re: /\bveterinar|\banimal hospital/i, say: 'a surgical case runs $1k-$5k' },
+  // In-home care is a different business from a facility: it bills by the hour
+  // against a care plan, not by the resident-month. Specific first.
+  { re: /\bin[- ]?home (?:care|senior)|\bhome ?care|\bcompanion care|\bcaregiv/i, say: 'one client on a weekly care plan is thousands of dollars a month' },
   { re: /\bassisted living|\bsenior (?:living|care)|\bmemory care/i, say: 'one resident is several thousand dollars a month' },
+
+  // ══ ADDED 2026-08-28 — CATEGORIES WE SEARCH AND NEVER PRICED ════════════
+  // Nine categories were searched with no money line at all, five of them tier
+  // A or B. A finding on one of those leads reached the owner with the loss
+  // element missing, which the prompt's own words call 'a gesture at a loss,
+  // not a loss'. Several of these numbers were already sitting in the
+  // CATEGORY_TIER comments; they just never reached the table that says them.
+  //
+  // TRADE TABLE COVERAGE CHECK now fails the boot when a searched category has
+  // no row, which is the mechanism NICHE_BRIEF_EXPECT has always had and this
+  // table never did - and the correlation is exact: the tables with the check
+  // have no drift, the ones without it had ten gaps between them.
+  { re: /\baddiction|\bsubstance (?:abuse|use)|\brehab(?:ilitation)? (?:cent|facil)|\bdetox|\bbehavioral health|\btreatment cent/i, say: 'one admission runs $30k-$60k' },
+  { re: /\bmanaged (?:it|service)|\bmsp\b|\bit support|\bmanaged service provider/i, say: 'one managed client is thousands of dollars a month, every month' },
+  { re: /\bfuneral|\bmortuar|\bcremat/i, say: 'one service runs $8k-$15k' },
+  { re: /\bmedical weight|\bweight loss|\bsemaglutide|\bhormone (?:therapy|clinic)|\btrt\b/i, say: 'one program runs $5k-$15k' },
+  { re: /\bepoxy|\bconcrete coating|\bgarage floor/i, say: 'a coated floor runs $5k-$20k' },
+  { re: /\bcabinet(?:ry|maker)?\b|\bmillwork|\bcasework/i, say: 'a custom cabinetry package runs $25k-$80k' },
+  { re: /\bfire ?(?:protection|sprinkler)|\bsprinkler (?:system|contract)|\bfire alarm/i, say: 'a sprinkler install runs $20k-$150k' },
+  { re: /\bexcavat|\bgrading|\bsite ?work|\bland clearing/i, say: 'a site work or excavation job runs $10k-$60k' },
+  { re: /\bmasonry|\bstonework|\bbrick(?:work|layer)|\bchimney/i, say: 'a masonry or stonework job runs $10k-$40k' },
+  { re: /\btree (?:service|care|removal|trimming|surgeon)|\barborist/i, say: 'a large tree removal runs $2k-$8k' },
+  { re: /\binsulation|\bspray ?foam/i, say: 'a whole-home insulation job runs $5k-$20k' },
+  { re: /\bwell drilling|\bseptic|\bwater well/i, say: 'a well or septic install runs $8k-$30k' },
+  { re: /\boral surg|\bmaxillofacial|\bperiodont/i, say: 'a surgical extraction or implant case runs $3k-$6k' },
+  { re: /\bsign(?:age| company| shop)|\bmonument sign|\bchannel letter|\bvehicle wrap/i, say: 'a monument or channel-letter sign runs $5k-$30k' },
   // Professional services
   // Removed. The decision block above this table rules that a law matter has
   // no honest single figure ("a parking ticket to a wrongful-death suit") and
@@ -22465,7 +23044,14 @@ const NICHE_BRIEFS = [
     id: 'crew_trades',
     label: 'Crew trades — the truck-and-crew half of the target list',
     // Matched on the trade word we already resolve, never on a guess.
-    match: /\b(hvac|heating|cooling|air ?condition\w*|furnace|plumb\w*|electric\w*|roof\w*|restorat\w*|water damage|foundation|waterproof\w*|solar|remodel\w*|kitchen|bath(?:room)?|window\w*|siding|pav\w*|asphalt|concrete|masonry|pool|home ?build\w*|general contract\w*|construct\w*|fire ?protect\w*|sprinkler|excavat\w*|grading|hardscap\w*|landscap\w*|tree (?:service|care|remov\w*)|insulat\w*|spray foam|floor\w*|garage doors?|deck\w*|patio|sign(?:age|s)?|well drill\w*|septic|gutter\w*|chimney|fenc\w*)\b/i,
+    // Widened 2026-08-28 for four categories we search that this could not see:
+    // home additions, commercial mechanical, custom cabinetry and basement
+    // finishing. All four are crew, job, estimate-to-close businesses - the
+    // brief was right for them and the vocabulary had simply never been added,
+    // so they got NO brief at all. `cabinet\w*` is safe on its own because the
+    // shared model disqualifier already refuses a showroom, a store and a
+    // supplier, which is what the other half of a cabinet search returns.
+    match: /\b(hvac|heating|cooling|air ?condition\w*|furnace|plumb\w*|electric\w*|roof\w*|restorat\w*|water damage|foundation|waterproof\w*|solar|remodel\w*|kitchen|bath(?:room)?|window\w*|siding|pav\w*|asphalt|concrete|masonry|pool|home ?build\w*|general contract\w*|construct\w*|fire ?protect\w*|sprinkler|excavat\w*|grading|hardscap\w*|landscap\w*|tree (?:service|care|remov\w*)|insulat\w*|spray foam|floor\w*|garage doors?|deck\w*|patio|sign(?:age|s)?|well drill\w*|septic|gutter\w*|chimney|fenc\w*|home addition\w*|addition contract\w*|mechanical contract\w*|cabinet\w*|millwork|basement finish\w*)\b/i,
     // A supplier, a manufacturer or a franchise head office is not a crew.
     notWhen: /\b(supply|supplies|wholesale\w*|manufactur\w*|distribut\w*|franchis\w*|equipment rental)\b/i,
     declared: {
@@ -22692,7 +23278,13 @@ const NICHE_BRIEFS = [
     match: /\b(assisted living|senior living|memory care|retirement (?:community|home)|independent living|senior care)\b/i,
     // The whole segment is dominated by national operators; the community name
     // rarely reveals the parent, which is why GP_CATEGORIES already flags it.
-    notWhen: /\b(brookdale|atria|sunrise senior|life care services|holiday by atria|five star senior|capital senior|reit)\b/i,
+    // Added 2026-08-28 with the in-home care category: `senior care` in this
+    // brief's own match fires on "in home senior care agency", and the two are
+    // different businesses. This brief's declared unit is one occupied
+    // unit-month; an agency bills a caregiver hour against a weekly care plan
+    // and owns no building. Handing it this vocabulary is the wrong-brief
+    // failure, so it is refused by name and gets no brief until one is written.
+    notWhen: /\b(brookdale|atria|sunrise senior|life care services|holiday by atria|five star senior|capital senior|reit|in.?home|home ?care|companion care|caregiv\w*)\b/i,
     declared: {
       unit: 'one occupied unit-month',
       buyer: 'the executive director or the owner. Confirm which — national operators run most of this segment.',
@@ -22846,12 +23438,12 @@ const NICHE_BRIEF_EXPECT = {
   'concrete contractor': 'crew_trades',
   'pool construction company': 'crew_trades',
   'custom home builder': 'crew_trades',
-  'general contractor': 'crew_trades',
+  'design build remodeling company': 'crew_trades',
+  'home addition contractor': 'crew_trades',
   'fire protection sprinkler company': 'crew_trades',
   'excavation and grading contractor': 'crew_trades',
   'masonry contractor': 'crew_trades',
   'hardscaping and landscape design company': 'crew_trades',
-  'commercial landscaping company': 'crew_trades',
   'tree service company': 'crew_trades',
   'insulation and spray foam company': 'crew_trades',
   'electrical contractor': 'crew_trades',
@@ -22864,8 +23456,14 @@ const NICHE_BRIEF_EXPECT = {
   'deck and patio builder': 'crew_trades',
   'sign and signage company': 'crew_trades',
   'well drilling and septic company': 'crew_trades',
+  'commercial roofing contractor': 'crew_trades',
+  'commercial mechanical contractor': 'crew_trades',
+  'outdoor living and outdoor kitchen builder': 'crew_trades',
+  'siding and exterior remodeling company': 'crew_trades',
+  'basement finishing company': 'crew_trades',
+  'custom cabinet maker': 'crew_trades',
+  'epoxy flooring and concrete coating company': 'crew_trades',
   'pest control company': 'recurring_services',
-  'lawn care and treatment company': 'recurring_services',
   'med spa': 'aesthetic_practices',
   'plastic surgery practice': 'aesthetic_practices',
   'dermatology practice': 'aesthetic_practices',
@@ -22873,16 +23471,41 @@ const NICHE_BRIEF_EXPECT = {
   'LASIK eye center': 'aesthetic_practices',
   'orthodontist office': 'clinical_practices',
   'oral surgery practice': 'clinical_practices',
-  'fertility clinic': 'clinical_practices',
-  'chiropractic clinic': 'clinical_practices',
-  'physical therapy clinic': 'clinical_practices',
   'veterinary hospital': 'clinical_practices',
   'dental practice': 'clinical_practices',
+  // An implant centre is an owner-doctor practice whose unit is one new
+  // patient and the case that follows, which is this brief exactly - and its
+  // buyer line ("confirm he still owns it, this segment is consolidating") is
+  // more true of implant centres than of anything else in the list.
+  'dental implant center': 'clinical_practices',
   'personal injury law firm': 'law_firms',
   'estate planning law firm': 'law_firms',
   'accounting and CPA firm': 'accounting_firms',
   'independent insurance agency': 'insurance_agencies',
   'assisted living facility': 'senior_care',
+
+  // ── FIVE CATEGORIES WE SEARCH AND DELIBERATELY GIVE NO BRIEF ───────────
+  // null is the declared answer, not an omission. The library has nine briefs
+  // and none of them describes these models, and this file's own rule is that
+  // no brief costs a paragraph on a call sheet while the wrong brief puts a
+  // page of confident vocabulary about somebody else's trade in front of an
+  // owner who knows his own business. Writing one is 2-4 hours of research per
+  // brief under the DECLARED/SOURCED discipline, not a guess made here.
+  //
+  //   in home senior care  - bills a caregiver hour, owns no building; the
+  //                          senior_care brief's unit is an occupied unit-month
+  //   addiction treatment  - the unit is an admission and the payer is usually
+  //                          an insurer, which no clinical brief here describes
+  //   funeral home         - the contact event is a death, not a purchase
+  //                          decision; nothing in the library is shaped for it
+  //   managed IT           - the only pure B2B recurring-contract model we hunt
+  //   medical weight loss  - closest to the med spa brief, and 'closest' is how
+  //                          a flooring retailer got a roofer's questions
+  'in home senior care agency': null,
+  'addiction treatment center': null,
+  'funeral home': null,
+  'managed IT services provider': null,
+  'medical weight loss clinic': null,
 };
 // The OTHER half of the same question: the trade text a lead actually arrives
 // with is Google's own category or a phrase read off their homepage, not our
@@ -23874,6 +24497,22 @@ const tradeJobValue = (tradeWord) => {
   return hit ? hit.say : null;   // unlisted trade -> no money sentence, shorter email
 };
 
+// ── THE CATEGORIES THAT DELIBERATELY HAVE NO JOB VALUE ────────────────────
+// TRADE TABLE COVERAGE CHECK fails the build on a searched category with no
+// money line, because a finding without one reaches the owner with the loss
+// element missing. These two are declared exceptions rather than gaps, and the
+// check fails in the other direction too: if one of them ever DOES get a row,
+// the exemption has to be deleted, because an exemption that excuses nothing
+// hides the next real gap.
+//
+// Both are contingency-fee or one-off legal work where the honest answer is a
+// range so wide it says nothing. A personal injury case is $5k or $500k and the
+// firm keeps a third of whichever it turns out to be; an estate plan is $2k and
+// the estate behind it is not ours to price. Inventing a single figure for
+// either is the fabrication this file exists to prevent, and a wide range in a
+// cold email reads as a guess, which is worse than saying nothing.
+const TRADE_MONEY_EXEMPT = new Set(['PI Law', 'Estate Law']);
+
 // ══ ONE NUMBER FOR THE WEBSITE, WITH EVERY POINT TRACEABLE ═══════════════════
 // Vin: "id like to see on the ui just a ranking out of 10 of their website so we
 // know if all else fails we can just push a website." The number is code, not
@@ -23895,7 +24534,22 @@ const FINANCING_RE = /wisetack|greensky|synchrony|hearth\.com|acorn ?finance|ser
 // as open-ended stems on purpose — \bplumb\b cannot match "plumbing" is the
 // recorded trap — and kept NARROW: a trade not listed simply never fires the
 // rung, which is the cheap direction to be wrong in.
-const BIG_TICKET_TRADE_RE = /\b(?:roof|hvac|heat|air.?condition|remodel|kitchen|bath|pool|foundation|solar|siding|window|concrete|pav(?:e|ing)|restorat|water.?damage|garage.?door|deck|epoxy|turf|masonr)/i;
+// Widened 2026-08-28 after executing it against all 55 searched categories.
+// Added: the remodelling shapes it missed (home addition, basement finishing,
+// cabinetry), the envelope trades (insulation, spray foam), well and septic
+// installs, hardscaping and outdoor kitchens, whole-home flooring, and the
+// elective medical work where a pay-over-time plan is the industry standard
+// offering rather than an extra - implants, veneers, ortho, oral surgery,
+// LASIK, plastic surgery, bariatric and hair restoration.
+//
+// PLUMBING AND ELECTRICAL WERE CONSIDERED AND LEFT OUT, and the reason is the
+// one BIG_TICKET_EXCLUDE_RE already encodes: their modal job is a service call
+// under a few hundred dollars, so "a trade where most jobs cost more than
+// people pay at once" is false of them however large a repipe is. HVAC is in
+// because its modal SALE is a system replacement. Home Builder is left out for
+// a different reason: a custom home is bought with a construction loan the
+// buyer arranges, so a builder who offers no financing has no gap.
+const BIG_TICKET_TRADE_RE = /\b(?:roof|hvac|heat|air.?condition|remodel|kitchen|bath|pool|foundation|solar|siding|window|concrete|pav(?:e|ing)|restorat|water.?damage|garage.?door|deck|epoxy|turf|masonr|home addition|basement finish|basement waterproof|cabinet|insulation|spray.?foam|septic|water well|well drilling|hardscap|outdoor (?:living|kitchen)|floor(?:ing)?|dental implant|full.?arch|veneer|cosmetic dent|orthodont|oral surg|lasik|plastic surg|bariatric|hair (?:transplant|restoration))/i;
 // The stems above are right for installers and wrong for maintainers: 'window'
 // matches "Window cleaning service" and 'pool' matches "Pool cleaning service",
 // both trades where a job costs a car wash, not a kitchen. One exclusion, read
@@ -31720,7 +32374,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, employees, 
     // formal variant is the single most likely address we have not yet checked.
     // Capped at 2 checks, and only after the primaries are exhausted, so the
     // typical lead never pays for it.
-    if (!VERIFIER_EXHAUSTED && !VERIFIER_DEAD) {
+    if (verifierMayTry()) {
       const _canon = cleanPersonForEmail(name);
       const _first = _canon[0] || '', _last = _canon[_canon.length - 1] || '';
       const _variants = (NICKNAMES[_first] || []).filter(v => v.length >= 3 && v !== _first);
@@ -31893,7 +32547,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, employees, 
     // Honesty is preserved by labelling: we do not claim this is his personal box.
     // We say it is the company's, that he runs the company, and that the mail
     // should open with his name.
-    if (verifierKey && name && !VERIFIER_EXHAUSTED && !VERIFIER_DEAD) {
+    if (verifierKey && name && verifierMayTry()) {
       // WHICH four boxes to probe depends on the trade. A plumbing shop lives in
       // info@/office@/service@; a chiropractic or dental practice answers from
       // frontdesk@ — a box the fixed list never checked, which is why practice
@@ -31932,8 +32586,8 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, employees, 
     // looked and there is nothing there". Opposite meanings, opposite next actions:
     // one says re-run later, the other says stop spending on this lead. Hunter is
     // only the explanation when the free SMTP path did NOT get to run.
-    const _smtpActuallyRan = (catchAll === false && !!verifierKey && !VERIFIER_EXHAUSTED && !VERIFIER_DEAD);
-    const _why = (VERIFIER_EXHAUSTED || VERIFIER_DEAD) ? 'the email verifier stopped answering'
+    const _smtpActuallyRan = (catchAll === false && !!verifierKey && !verifierBlocked());
+    const _why = verifierBlocked() ? 'the email verifier stopped answering'
       : (_lookupBlocked && !_smtpActuallyRan)
         ? (_lookupBlocked === 'hunter_key_rejected' ? 'Hunter key rejected' : _lookupBlocked === 'hunter_rate_limited' ? 'Hunter rate-limited — a throttle, not an empty balance; re-run this lead in a minute' : 'Hunter out of credits')
       : null;
@@ -32014,7 +32668,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, employees, 
   // because our verifier is down is worth re-running, and one blocked because the
   // mail server denied every address is not.
   const inferred = candidates[0];
-  const _blockWhy = (VERIFIER_EXHAUSTED || VERIFIER_DEAD)
+  const _blockWhy = verifierBlocked()
     ? 'the email verifier is unavailable, so nothing could be checked'
     : catchAll === null
     ? 'the catch-all probe could not run, so SMTP results would prove nothing'
@@ -33570,13 +34224,21 @@ const scoreReachability = (c) => {
 // CALLS, exactly as OWNER_KNOWS does in the email ladder at a spread of 22. It
 // must never lift a lead with no owner and no mailbox over one that has both,
 // and CONTACT RANK CHECK asserts that at boot rather than trusting the comment.
+//   AFFORD     the whole point of the list. A lead that cannot fund anything
+//              in the catalogue is not a call worth making, and one that can
+//              fund the premium tier is the call to make first. Read from
+//              affordabilityBand, never re-derived here - two affordability
+//              rules in one app is how the card and the list end up telling
+//              an operator different things about one business.
 const CONTACT_RANK_TERMS = [
   { id: 'phone',      points: 8,   why: 'a number to dial' },
   { id: 'authority',  points: 6,   why: 'the person named can actually buy' },
+  { id: 'premium',    points: 4,   why: 'the job value and the job count clear the premium tier' },
+  { id: 'belowFloor', points: -12, why: 'nothing in the catalogue is affordable at this job value and volume' },
   { id: 'outOfBand',  points: -10, why: 'outside the star band discovery demotes on' },
   { id: 'aboveSize',  points: -10, why: 'above the review ceiling discovery demotes on' },
 ];
-const CONTACT_RANK_MAX_MODIFIER = 14;   // the two positives; asserted at boot
+const CONTACT_RANK_MAX_MODIFIER = 18;   // the three positives; asserted at boot
 
 // contactRankFor - the ONE place a contact list is ordered.
 // Returns { rank, why, terms } and never throws: a missing measurement is
@@ -33630,6 +34292,24 @@ const placesTriageScore = (m) => {
   else if (rv < 40)   revBonus = (rv / 40) * 10;
   else if (rv <= 450) revBonus = 10 + ((rv - 40) / 410) * 16;
   else                revBonus = Math.max(5, 26 - ((rv - 450) / 550) * 15.6);
+  // ══ AND THE CURVE ITSELF READS VOLUME AS CAPACITY ═══════════════════════
+  // This is where Vin's handyman actually goes wrong, and a flat deduction
+  // bolted on afterwards could not fix it: the curve is worth up to 26 points,
+  // so a solo operator at 400 jobs out-scored a crewed trade at 60 by more
+  // than any term below could take back. The boot check caught exactly that
+  // and was right to.
+  //
+  // A solo trade's review count is not meaningless - a busy one-man operation
+  // is a better lead than an idle one - it simply does not SCALE, because the
+  // owner is the constraint whatever the number says. So the curve is halved
+  // rather than deleted, and the affordability band still caps the lead at the
+  // lower tier however high the count goes.
+  //
+  // Halving is a judgement and is written here rather than hidden: it is the
+  // smallest change that stops the ordering being wrong, and FIND SCORE CHECK
+  // asserts the outcome (a solo trade at 400 must not out-rank a crewed one at
+  // 60) rather than the number.
+  if (capacityClassFor(String((m && (m.label || m.industry)) || ''), (m && m.trade) || '') === 'solo') revBonus *= 0.5;
   base += revBonus;
   // == AND IT MUST NOT PAY FOR THE THING THAT DEMOTED IT ====================
   // A 4.9-star business earned +5 here AND was demoted for sitting above the
@@ -33646,8 +34326,27 @@ const placesTriageScore = (m) => {
     if (rv >= 20 && rating >= 4.8)      base += 5;
     else if (rv >= 20 && rating >= 4.6) base += 3;
     else if (rv >= 20 && rating >= 4.3) base += 1.25;
-    else if (rv >= 20 && rating && rating < 3.8) base -= 5;
   }
+  // ══ A LOW RATING IS PAIN, NOT A REASON TO SKIP THEM ══════════════════════
+  // This used to subtract 5 from any business under 3.8 stars, and the star
+  // floor deleted them outright a few hundred lines up. Vin, 2026-08-28: "the
+  // ones with lower ratings have way more pain, especially visibility pain - if
+  // they can afford us then these leads are gold." He is right, and there is a
+  // mechanism behind it: rating is one of the inputs Google weighs in the local
+  // pack, so a low-rated business is genuinely less visible and has a reason to
+  // buy that a 4.9 does not.
+  //
+  // The lift is deliberately MODEST, because at Find time we cannot tell "bad
+  // at marketing" from "bad at the job", and only one of those is a customer.
+  // The audit is what tells them apart, and it runs after this.
+  //
+  // And it requires REAL VOLUME, because 2.4 stars over 150 reviews is an
+  // established business in pain while 2.4 over 16 is a business dying. The bar
+  // is twice the trade's own review floor, so it means the same thing in a
+  // trade where sixty reviews is thin as in one where nine is normal - not a
+  // new constant, the one reviewFloorFor already declares.
+  const _lowFloor = reviewFloorFor(String((m && (m.label || m.industry)) || ''), MIN_REVIEWS_BASE) * 2;
+  if (rating && rating < 4.3 && rv >= Math.max(_lowFloor, 25)) base += 4;
   if (m && m.consolidationRisk) base -= 14;
   // REACHABILITY PREDICTION. Research costs ~9-11 credits, so the queue must be
   // ordered by which leads will actually yield a contact we can email. A
@@ -33658,10 +34357,18 @@ const placesTriageScore = (m) => {
   // simply never looked at.
   const reach = Number(m && m.reachScore);
   if (typeof (m && m.reachScore) === 'number' && Number.isFinite(reach)) base += (reach - 18) * 0.85;
-  // AFFORDABILITY TIER. A tier-A trade can pay for a retainer out of a couple
-  // of extra jobs; a tier-C one cannot, whatever else is true about it.
-  if (m && m.tier === 'A') base += 7;
-  else if (m && m.tier === 'C') base -= 25;
+  // ══ AFFORDABILITY, AS ONE DERIVATION WITH TWO CONSUMERS ══════════════════
+  // This was `tier === 'A' ? +7 : tier === 'C' ? -25 : 0` - the job value and
+  // nothing else. affordabilityBand keeps those two numbers exactly and adds
+  // what the tier cannot see: whether the job count means crews or one busy
+  // owner, whether the volume is real for that trade, a published team, and
+  // published hours one person could not cover.
+  //
+  // The score reads the SAME function the card's tier label reads. A second
+  // affordability rule living in the score is how the score and the label end
+  // up telling an operator two different things about one lead, which is the
+  // defect this file just finished fixing for the demotion penalty.
+  base += affordabilityBand(m || {}).points;
   // == THE DEMOTION IS IN THE NUMBER ========================================
   // Same table the contact ranker reads, so the Find card and the contact list
   // can no longer hand an operator two different verdicts on one business.
@@ -33690,6 +34397,21 @@ const contactRankFor = (c) => {
   // buying floor is deliberately NOT authority - holding it back is the whole
   // point, and reading heldBackContact here would quietly undo it.
   take('authority', !!(lead.decisionMaker && lead.decisionMaker.canBuy === true));
+  // Affordability, read from the ONE derivation the Find score and the card
+  // label also read. A team count measured during the contact read is passed
+  // through, so a list built after a read is sharper than the same list built
+  // from the Places response alone - and a lead with nothing measured comes
+  // back with no band and takes NEITHER term, rather than a confident refusal
+  // on a business nobody looked at.
+  const _aff = affordabilityBand({
+    label: lead.industry || '', trade: lead.trade || '',
+    tier: lead.tier || null,
+    reviewCount: typeof lead.reviewCount === 'number' ? lead.reviewCount : null,
+    teamCount: typeof lead.teamCount === 'number' ? lead.teamCount : null,
+    hours: lead.publishedHours || null,
+  });
+  take('premium', _aff.band === 'premium');
+  take('belowFloor', _aff.band === 'below_floor');
   // The demotions come from the ONE place that answers "is this lead
   // demoted", shared with the Find score so the two rankers cannot hand an
   // operator two different verdicts about one business.
@@ -34368,7 +35090,21 @@ const clearLeadBench = async (ids) => {
 // The floor is the important half. Scaling straight down to the shortfall is
 // the saving; scaling to ZERO would mean a bench full of roofers stops us ever
 // searching for anything else, and the grid would never widen again.
-const placesBudgetFor = ({ benchCount, target, runCap, floorPct = 0.25 }) => {
+//
+// ══ AND THE FLOOR WAS TOO LOW, ON AN ASSUMPTION NOTHING MEASURED ═══════════
+// The 25% floor rests on "a benched lead replaces a fresh one", and benched
+// leads do not survive one for one: they still face the ICP filter, the size
+// gate, a 60-day TTL and the client's own dedupe. So the run that finally got
+// the bench working - the row-level security fix on 2026-08-28 - was also the
+// run that returned about eighty leads, because a full bench cut the Google
+// budget by three quarters and the grid deals round-robin, so 25 queries
+// reaches 25 categories at one city each.
+//
+// 60% rather than 100%: the saving is real and the bench really does replace
+// SOME searching. The honest number is the survival rate, which nothing has
+// ever measured - so the run now reports what the bench actually contributed
+// against what this budget assumed, and the next move is made on that.
+const placesBudgetFor = ({ benchCount, target, runCap, floorPct = 0.60 }) => {
   const cap = Math.max(1, Number(runCap) || 100);
   const need = Math.max(0, (Number(target) || 0) - (Number(benchCount) || 0));
   const floor = Math.max(1, Math.round(cap * floorPct));
@@ -34607,6 +35343,36 @@ const STEM_COMPLETE_WORDS = new Set([
   'septic', 'staffing', 'talent', 'township', 'treatment', 'vet', 'workforce', 'yoga',
 ]);
 
+// ══ HOW A BRAND BLOCKLIST IS ALLOWED TO MATCH ═══════════════════════════════
+// Pure and at module scope so a boot check can execute the RULE, which is
+// where the defect was. The lists themselves are built inside the discovery
+// handler; this is the matcher all of them go through.
+//
+// A SINGLE-WORD entry must be the whole name, because thirty of the entries
+// are also ordinary words in small-business names - kelly, block, square,
+// target, fox, volt, visa - and matching them anywhere deleted Kelly Roofing,
+// Fox Plumbing and Target Pest Control at discovery, before anything else in
+// the pipeline ever saw them.
+//
+// A MULTI-WORD entry keeps every position it had. "robert half", "bank of
+// america" and "waste management" are phrases nobody names a two-truck
+// plumbing company after, so matching them at the front of a name is safe and
+// is what catches "Robert Half Technology".
+const BRAND_LEGAL_SUFFIX_RE = /\s+(inc|llc|l\.?l\.?c|corp|corporation|co|company|ltd|limited|plc|group|holdings)$/i;
+const brandNameHit = (rawName, set) => {
+  const name = String(rawName || '').toLowerCase().trim();
+  if (!name || !(set instanceof Set)) return false;
+  const bare = name.replace(/[.,]/g, '').replace(BRAND_LEGAL_SUFFIX_RE, '').trim();
+  // 'the' is stripped for the whole-name test because the two brand sets
+  // tested it by hand and the rule belongs here rather than at each caller.
+  const noThe = bare.replace(/^the\s+/, '');
+  if (set.has(name) || set.has(bare) || set.has(noThe)) return true;
+  const words = bare.split(/\s+/);
+  const first = words[0] === 'the' ? (words[1] || '') : words[0];
+  const firstTwo = words.slice(0, 2).join(' ');
+  const multi = (s) => !!s && /\s/.test(s) && set.has(s);
+  return multi(first) || multi(firstTwo);
+};
 // Cheap name-only enterprise/staffing/health screen. Lets us SKIP paying The
 // Companies API to "confirm" what a name pattern already rejects for free — so a
 // credit is only ever spent on a lead that could plausibly be our ICP.
@@ -34838,6 +35604,11 @@ const runDiscovery = async (body) => {
   // before the search runs rather than after.
   const _bench = await loadLeadBench();
   const _benchIds = _bench.map(b => b._benchId).filter(Boolean);
+  // Owned by this run, handed to the search, read by the FIND YIELD line
+  // below. Not a module global: a global is only safe because Find dedupes
+  // its own runs somewhere else, and a guard enforced in another function is
+  // the cross-run leak this file records at the audit cache.
+  const _findYield = {};
   const _placesBudget = placesBudgetFor({
     benchCount: _bench.length, target: 120,
     runCap: parseInt(process.env.GP_QUERY_CAP || '100', 10),
@@ -34947,7 +35718,7 @@ const runDiscovery = async (body) => {
           queryState: _pqState,
           onClaim: (pairs) => claimPlacesQueries(pairs, _pqState),
           onQuery: (o) => _pqOutcomes.push(o),
-        });
+        }, _findYield);
         const _rows = pqOutcomeRows(_pqOutcomes, _pqState, new Date().toISOString());
         if (_rows.length) {
           const _saved = await savePlacesQueryState(_rows);
@@ -35102,16 +35873,33 @@ const runDiscovery = async (body) => {
       const firstTwo = nameWords.slice(0, 2).join(' ');
       const firstWord = nameWords[0] === 'the' ? (nameWords[1]||'') : nameWords[0];
 
-      // ── ORIGINAL BLOCKLIST (exact-ish) ──
-      if (BLOCKED_COMPANIES.has(name)) return false;
-      if (nameWords.some(w => BLOCKED_COMPANIES.has(w) && w.length >= 2)) return false;
-      if (firstWord && BLOCKED_COMPANIES.has(firstWord)) return false;
-      if (BLOCKED_COMPANIES.has(firstTwo)) return false;
+      // ══ A ONE-WORD BRAND MUST BE THE WHOLE NAME ═══════════════════════════
+      // The blocklist is a list of BRANDS, and thirty of its entries are also
+      // ordinary words a small business puts in its own name: kelly, block,
+      // square, target, fox, volt, visa, apple, meta, oracle, charter, stride.
+      // Matched anywhere in a name, or as the first word, they delete exactly
+      // the leads this pipeline exists to find - Kelly Roofing, Fox Plumbing,
+      // Block Electric, Target Pest Control, Square Deal Plumbing. Section 14
+      // records the same failure in the size gate, which refused a dermatology
+      // practice for containing "cancer center", and the rule it earned is that
+      // a filter widened until it catches the ICP is the more expensive one.
+      //
+      // So: a SINGLE-WORD entry has to be the whole name (a legal suffix aside).
+      // A MULTI-WORD entry keeps every position it had, because "robert half",
+      // "bank of america" and "waste management" are phrases nobody names a
+      // two-truck plumbing company after.
+      if (brandNameHit(name, BLOCKED_COMPANIES)) return false;
 
-      // ── STAFFING + ENTERPRISE BRAND SETS (name, first word, first two words) ──
-      const nameNoThe = name.replace(/^the\s+/, '');
-      if (STAFFING_BRANDS.has(name) || STAFFING_BRANDS.has(nameNoThe) || STAFFING_BRANDS.has(firstTwo) || STAFFING_BRANDS.has(firstWord)) return false;
-      if (ENTERPRISE_BRANDS.has(name) || ENTERPRISE_BRANDS.has(nameNoThe) || ENTERPRISE_BRANDS.has(firstTwo) || ENTERPRISE_BRANDS.has(firstWord)) return false;
+      // ── STAFFING + ENTERPRISE BRAND SETS ─────────────────────────────
+      // Through the SAME matcher, because these two sets carry the same
+      // hazard: 35 of the 64 staffing entries and 20 of the 41 enterprise
+      // entries are single words, and among them are jacobs, reece, hays,
+      // path and volt - surnames and ordinary words that owner-operated
+      // businesses are named after. "Jacobs Roofing" and "Hays Plumbing"
+      // are exactly the leads this pipeline exists to find, and matching a
+      // one-word brand at the FRONT of a name deleted both.
+      if (brandNameHit(name, STAFFING_BRANDS)) return false;
+      if (brandNameHit(name, ENTERPRISE_BRANDS)) return false;
 
       // ── PATTERN-BASED STAFFING DETECTION (catches variants we've never seen) ──
       // These words in a company NAME almost always mean "we rent out labor."
@@ -35851,15 +36639,26 @@ const WEIGHTS = {
           const _dem = demotionPenalty(c);
           c.demotionPoints = _dem.points;
           c.demotionWhy = _dem.terms.map(t => t.why).join('; ');
-          triage = placesTriageScore({
+          // ONE argument object, read by the score AND by the band, so the
+          // number on the card and the tier label under it cannot be computed
+          // from two different views of one lead.
+          const _affIn = {
             reviewCount: rv,
             rating,
             consolidationRisk: !!s.consolidation_risk,
             reachScore: rp.score,
-            tier: CATEGORY_TIER[c.industry] || null,   // c.industry is cat.label at discovery
+            label: c.industry || '',                    // c.industry is cat.label at discovery
+            tier: CATEGORY_TIER[c.industry] || null,
+            hours: c.publishedHours || null,
+            teamCount: typeof c.teamCount === 'number' ? c.teamCount : null,
             outsideBand: c.outsideBand === true,
             aboveSizeCeiling: c.aboveSizeCeiling === true,
-          });
+          };
+          const _aff = affordabilityBand(_affIn);
+          c.affordBand = _aff.band;
+          c.affordWhy = _aff.why;
+          c.affordPoints = _aff.points;
+          triage = placesTriageScore(_affIn);
           // (the curve moved to placesTriageScore; the call is above)
         } else if (c.source === 'for_sale' || s.preparing_for_exit) {
           // Owner IS the seller — directly reachable + urgent. Broker adds a layer.
@@ -35973,12 +36772,23 @@ const WEIGHTS = {
     for (const c of allScored) if (c.stackCombo) comboTally[c.stackCombo.id] = (comboTally[c.stackCombo.id]||0)+1;
     if (Object.keys(comboTally).length) console.log('Stack combos:', JSON.stringify(comboTally));
 
-    // Adzuna is now the highest-signal source (AI-replacement = biggest tickets).
-    // Old 40% cap was built when it was noise — flip it to 70% majority.
-    // Total raised to 120 so we return enough leads for a meaningful queue.
-    const MAX_TOTAL = 120;
-    const MAX_ADZUNA = Math.floor(MAX_TOTAL * 0.70); // 84 max from Adzuna
-    const srcTally = {};
+    // ══ HOW MANY LEADS A RUN RETURNS ════════════════════════════════════
+    // Was a hardcoded 120 with no setting, and this file already records what
+    // that number was silently deciding: 393 qualified businesses were dropped
+    // on the floor by it in one run, every one paid for. The bench catches the
+    // overflow now, so raising it costs nothing extra at Google - the same
+    // searches are already bought - it only decides how many of them come back
+    // in THIS response instead of waiting on the bench for the next one.
+    //
+    // 300 because Vin is calling fifty a day and a 120-row queue is two and a
+    // half days of work; FIND_RUN_MAX moves it without a deploy.
+    const MAX_TOTAL = Math.max(20, parseInt(process.env.FIND_RUN_MAX || '300', 10));
+    // (MAX_ADZUNA was here, capping a lane at 70% of the run. The Adzuna lane
+    // has been disabled since TheirStack replaced it - see PART 4 section 1 -
+    // so the cap governed a source that cannot produce a lead. Dead code that
+    // reads like a live rule is worse than no rule, because the next person to
+    // tune the mix tunes this one.)
+    // (srcTally counted the Adzuna lane against its cap. Both are gone.)
     const scored = [];
     let _skippedKnown = 0;
     for (const c of allScored) {
@@ -35993,11 +36803,6 @@ const WEIGHTS = {
       if (_knownNames.size) {
         const k = _normName(c.name || c.company || '');
         if (k && k.length > 4 && _knownNames.has(k)) { _skippedKnown++; continue; }
-      }
-      const isPureAdzuna = c.sourceCount === 1 && c.source === 'adzuna_ai';
-      if (isPureAdzuna) {
-        srcTally['_adzuna'] = (srcTally['_adzuna']||0) + 1;
-        if (srcTally['_adzuna'] > MAX_ADZUNA) continue;
       }
       scored.push(c);
       if (scored.length >= MAX_TOTAL) break;
@@ -36042,6 +36847,34 @@ const WEIGHTS = {
       }
     }
     console.log('Unique:', unique.length, '| Returning:', scored.length);
+    // ══ WHY THIS RUN RETURNED WHAT IT RETURNED ══════════════════════════
+    // A run that comes back thin is the single hardest thing to diagnose in
+    // this system, because every loss is correct on its own line and no line
+    // adds them up. Vin's 80-lead run took three sessions and a full read of
+    // the discovery loop to explain, and the answer turned out to be a
+    // BUDGET decision (a full bench cutting the Google spend by three
+    // quarters), not a thin market and not a bug.
+    //
+    // Every number here is a counter the run already keeps. The point is that
+    // they are printed together, in the order they fire, so the largest single
+    // loss is visible without reading the code that caused it.
+    {
+      const _y = _findYield;
+      const _rows = [
+        ['seen from Google', _y.seen], ['bench served', _bench.length],
+        ['under the trade review floor', _y.underFloor],
+        ['not our ICP by name', _y.notIcp],
+        ['franchise or chain outlet', _y.franchise],
+        ['already in the pipeline', _y.alreadyOwned],
+        ['per-category cap', _y.catCap],
+        ['demoted to the bench', _y.demoted],
+        ['returned', scored.length],
+      ].filter(r => Number.isFinite(Number(r[1])));
+      const _worst = _rows.slice(2, -1).sort((a, b) => Number(b[1]) - Number(a[1]))[0];
+      console.log(`\u{1F4C9} FIND YIELD: ${_rows.map(r => `${r[0]} ${r[1]}`).join(' \u2192 ')}.` +
+        (_worst && Number(_worst[1]) > 0 ? ` The largest single loss is "${_worst[0]}" at ${_worst[1]}.` : '') +
+        ` The Google budget for this run was ${_placesBudget} quer${_placesBudget === 1 ? 'y' : 'ies'}, and the bench contributed ${_bench.length} lead(s) toward the ${MAX_TOTAL} this run can return - if those two numbers disagree badly, the budget assumption is what to change, not the market.`);
+    }
     console.log('Breakdown:', breakdown);
     const reachSummary = {
       // Find-time reachability is an ESTIMATE — we have size but no confirmed
@@ -40959,7 +41792,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
             // wrong reconstruction can never leave the building.
             const _fixed = reconstructTruncatedEmail(emailResult.email, _dmName);
             let _recovered = false;
-            if (_fixed && verifierKey && !VERIFIER_EXHAUSTED && !VERIFIER_DEAD) {
+            if (_fixed && verifierKey && verifierMayTry()) {
               try {
                 const _v = await verifyEmailSMTP(_fixed, verifierKey);
                 if (_v.valid === true) {
@@ -55916,7 +56749,7 @@ app.listen(PORT, () => {
     // FOUR - the modifiers order CLOSE CALLS. A lead with a phone and a buyer
     // must never overtake one that is genuinely more reachable, or the small
     // spread this is built on has quietly become a ranking of its own.
-    if (CONTACT_RANK_MAX_MODIFIER !== 14) _fails.push(`the positive modifiers total ${CONTACT_RANK_MAX_MODIFIER}, not the 14 this check is calibrated to`);
+    if (CONTACT_RANK_MAX_MODIFIER !== 18) _fails.push(`the positive modifiers total ${CONTACT_RANK_MAX_MODIFIER}, not the 18 this check is calibrated to`);
     const _pos = CONTACT_RANK_TERMS.filter(t => t.points > 0).reduce((a, t) => a + t.points, 0);
     if (_pos !== CONTACT_RANK_MAX_MODIFIER) _fails.push(`the declared positive terms sum to ${_pos} but CONTACT_RANK_MAX_MODIFIER says ${CONTACT_RANK_MAX_MODIFIER}`);
     const _weak = contactRankFor({ reachability: 34, phone: '5125550134', decisionMaker: { name: 'A B', canBuy: true } });
@@ -56029,15 +56862,85 @@ app.listen(PORT, () => {
       }
     }
 
-    // 5. THE CALL SITE. A fixture supplies its own arguments and therefore cannot
+    // 5. AFFORDABILITY IS ONE DERIVATION, READ TWICE. The score's own tier
+    //    term became affordabilityBand on 2026-08-28, so the card's number and
+    //    the card's tier label cannot disagree by construction. That only holds
+    //    while the score actually reads it.
+    {
+      const _tierA = placesTriageScore({ reviewCount: 120, rating: 4.5, reachScore: 30, tier: 'A' });
+      const _tierC = placesTriageScore({ reviewCount: 120, rating: 4.5, reachScore: 30, tier: 'C' });
+      if (!(_tierA > _tierC)) _fails.push(`a tier-A trade scores ${_tierA} against a tier-C one at ${_tierC} - the job value stopped reaching the score`);
+      // A solo trade at high volume must not out-rank a crewed trade at
+      // ordinary volume. This is Vin's own case, by name: "a handyman that runs
+      // his own company and does all the jobs is likely not worth it - he may
+      // have great reviews and a lot of reviews." Same tier on both sides, so
+      // only the capacity class can separate them.
+      const _solo = placesTriageScore({ reviewCount: 400, rating: 4.5, reachScore: 30, label: 'Med Spa', tier: 'B' });
+      const _crew = placesTriageScore({ reviewCount: 60, rating: 4.5, reachScore: 30, label: 'Roofing', tier: 'B' });
+      if (!(_crew > _solo)) _fails.push(`a solo trade at 400 jobs scores ${_solo} against a crewed trade at 60 scoring ${_crew} - review volume is being read as capacity again, which is the whole failure the capacity class exists for`);
+      const _band = affordabilityBand({ reviewCount: 400, rating: 4.5, label: 'Med Spa', tier: 'A' });
+      if (_band.band === 'premium') _fails.push('a solo trade reached the premium band on volume alone - the cap is a ceiling, not a deduction');
+      // A low-volume high-ticket trade must not be punished for the volume it
+      // never has. A $6m custom home builder may have NINE reviews.
+      const _builder = affordabilityBand({ reviewCount: 9, label: 'Home Builder', tier: 'A' });
+      if (_builder.band !== 'premium') _fails.push(`a custom home builder with 9 reviews came back ${_builder.band} - the low-volume trades are being judged on a volume that is normal for them`);
+      // UNMEASURED LEAVES THE DENOMINATOR. A lead with nothing measured must
+      // come back null, never below_floor: "we did not look" has never meant
+      // "they cannot pay" anywhere else in this file.
+      const _blank = affordabilityBand({});
+      if (_blank.band !== null || _blank.points !== 0) _fails.push(`an unmeasured lead came back as ${_blank.band} - a confident refusal on a business nobody looked at deletes exactly the leads a call would have qualified`);
+      // And it never produces a dollar figure, which is the rule that keeps it
+      // honest: we do not buy revenue for a private local business.
+      const _why = affordabilityBand({ reviewCount: 400, label: 'Roofing', tier: 'A' }).why;
+      if (/\$|\bm\b|million|revenue/i.test(_why)) _fails.push(`the band's reason reads like a revenue estimate ("${_why.slice(0, 60)}") - it orders leads, it does not price them`);
+    }
+
+    // 6. THE HOURS WE PAY FOR ON EVERY SEARCH AND NEVER READ. Seven open days
+    //    is the one capacity signal available before a penny is spent.
+    {
+      const _seven = readPublishedHours({ weekdayDescriptions: [
+        'Monday: 7:00 AM \u2013 7:00 PM', 'Tuesday: 7:00 AM \u2013 7:00 PM', 'Wednesday: 7:00 AM \u2013 7:00 PM',
+        'Thursday: 7:00 AM \u2013 7:00 PM', 'Friday: 7:00 AM \u2013 7:00 PM', 'Saturday: 8:00 AM \u2013 4:00 PM',
+        'Sunday: 8:00 AM \u2013 4:00 PM'] });
+      if (_seven.openDays !== 7) _fails.push(`a seven-day business read as ${_seven.openDays} open days`);
+      if (_seven.weeklyHours !== 76) _fails.push(`a 7am-7pm five-day week plus two 8-4 weekend days totalled ${_seven.weeklyHours} hours, not 76`);
+      const _shut = readPublishedHours({ weekdayDescriptions: [
+        'Monday: 9:00 AM \u2013 5:00 PM', 'Tuesday: 9:00 AM \u2013 5:00 PM', 'Wednesday: 9:00 AM \u2013 5:00 PM',
+        'Thursday: 9:00 AM \u2013 5:00 PM', 'Friday: 9:00 AM \u2013 5:00 PM', 'Saturday: Closed', 'Sunday: Closed'] });
+      if (_shut.openDays !== 5 || _shut.weeklyHours !== 40) _fails.push(`a plain weekday business read as ${_shut.openDays} days and ${_shut.weeklyHours} hours, not 5 and 40`);
+      const _24 = readPublishedHours({ weekdayDescriptions: ['Monday: Open 24 hours', 'Tuesday: Open 24 hours'] });
+      if (_24.open24 !== true) _fails.push('an always-open listing is not flagged, and in the emergency trades that is the normal shape rather than a remarkable one');
+      const _none = readPublishedHours(null);
+      if (_none.checked !== false || _none.openDays !== null) _fails.push('a listing with no published hours reports a measurement instead of saying it did not look');
+      // A day nobody can parse must null the WEEKLY total rather than
+      // understating it - understating is the direction that costs us the lead.
+      const _mixed = readPublishedHours({ weekdayDescriptions: ['Monday: 9:00 AM \u2013 5:00 PM', 'Tuesday: by appointment'] });
+      if (_mixed.weeklyHours !== null) _fails.push(`a day that could not be parsed still produced a weekly total of ${_mixed.weeklyHours}, which understates a staffed business`);
+      if (_mixed.openDays !== 2) _fails.push('an unparseable but OPEN day stopped counting as an open day');
+      if (affordabilityBand({ tier: 'B', label: 'Plumbing', reviewCount: 200, hours: _seven }).points
+          <= affordabilityBand({ tier: 'B', label: 'Plumbing', reviewCount: 200, hours: _shut }).points) {
+        _fails.push('published hours one person could not cover are not reaching the band, so the only free capacity signal is measured and discarded');
+      }
+    }
+
+    // 7. THE CALL SITE. A fixture supplies its own arguments and therefore cannot
     //    see a caller: the handler could stop passing the demotion flags entirely
     //    and every assertion above would stay green.
     const _src = selfSourceNoCommentsLF();
     const _n = (a, b) => a + b;
     for (const _needle of [_n('outsideBand: c.outsideBand', ' === true,'),
                           _n('aboveSizeCeiling: c.aboveSize', 'Ceiling === true,'),
-                          _n('triage = placesTriage', 'Score({')]) {
-      if (!_src.includes(_needle)) _fails.push('the Find handler no longer passes ' + _needle.slice(0, 28) + ' into the score');
+                          _n('label: c.industry', " || '',"),
+                          _n('hours: c.publishedHours', ' || null,'),
+                          _n('_hours = readPublished', 'Hours(p.regularOpeningHours)'),
+                          _n('triage = placesTriage', 'Score(_affIn)')]) {
+      if (!_src.includes(_needle)) _fails.push('the Find handler no longer passes ' + _needle.slice(0, 30) + ' into the score');
+    }
+    // ONE argument object, or the score and the label are computed from two
+    // different views of one lead - which is the exact defect the demotion
+    // penalty was extracted to fix, one round earlier.
+    if (!_src.includes(_n('affordabilityBand(_aff', 'In)'))) {
+      _fails.push('the card label no longer reads the same argument object the score reads, so the number and the tier can disagree about one business again');
     }
 
     if (_fails.length) {
@@ -60169,7 +61072,7 @@ app.listen(PORT, () => {
     // a hundred searches to fill a queue of 120.
     {
       const b = placesBudgetFor({ benchCount: 400, target: 120, runCap: CAP });
-      if (b > CAP * 0.25) _fails.push(`with 400 banked leads the run still buys ${b} of ${CAP} searches — the bench is being loaded and then ignored`);
+      if (b > CAP * 0.60) _fails.push(`with 400 banked leads the run still buys ${b} of ${CAP} searches — the bench is being loaded and then ignored`);
     }
 
     // 3. BUT NEVER TO ZERO. A bench full of one trade must not stop us ever
@@ -60179,14 +61082,20 @@ app.listen(PORT, () => {
         _fails.push(`a bench of ${n} stops discovery completely — no new ground is ever walked and the grid freezes wherever it is`);
       }
     }
-    if (placesBudgetFor({ benchCount: 9999, target: 120, runCap: CAP }) !== Math.round(CAP * 0.25)) {
-      _fails.push('the discovery floor is not holding at a quarter of the cap');
+    // The floor moved 25% -> 60% on 2026-08-28. It rested on "a benched lead
+    // replaces a fresh one", which nothing has ever measured and which is
+    // false in at least four ways - a benched lead still faces the ICP
+    // filter, the size gate, a 60-day TTL and the client's own dedupe. The
+    // run that finally got the bench WORKING is the run that came back with
+    // eighty leads, because a full bench cut the budget by three quarters.
+    if (placesBudgetFor({ benchCount: 9999, target: 120, runCap: CAP }) !== Math.round(CAP * 0.60)) {
+      _fails.push('the discovery floor is not holding at 60% of the cap - a full bench starves the grid again, and a run that returns eighty leads reads as a thin market rather than as a budget decision');
     }
 
     // 4. A PARTIAL BENCH BUYS THE SHORTFALL, NOT THE WHOLE RUN.
     {
       const b = placesBudgetFor({ benchCount: 60, target: 120, runCap: CAP });
-      if (b >= CAP || b <= CAP * 0.25) _fails.push(`a half-full bench bought ${b} of ${CAP} searches — it should scale to the shortfall, between the floor and the cap`);
+      if (b >= CAP || b < CAP * 0.60) _fails.push(`a half-full bench bought ${b} of ${CAP} searches — it should scale to the shortfall, between the floor and the cap`);
     }
     // Monotonic: more banked leads can never mean more searching.
     {
@@ -60694,6 +61603,35 @@ app.listen(PORT, () => {
     // ── A MEASURED HEADCOUNT MUST BEAT A GUESS ABOUT A NAME ───────────────
     if (_src.indexOf(_nd('if (!_smallVerified && ', 'ICP_INSTITUTION.test(nameLower))')) < 0) {
       _fails.push('a verified small headcount no longer overrides the name pattern — on the live run the headcount gate was right nine times out of nine and the name pattern wrong five times out of six');
+    }
+
+    // ── AND A ONE-WORD BRAND MUST BE THE WHOLE NAME ───────────────────────
+    // The brand blocklist matched a single generic word ANYWHERE in a name,
+    // and thirty of its entries are ordinary small-business words. Executed
+    // against a set carrying the exact live entries that caused it, plus the
+    // multi-word phrases that must keep working - because a filter loosened
+    // until it catches nothing is the more expensive failure, and this file
+    // records that at this very check.
+    {
+      const _set = new Set(['kelly', 'block', 'square', 'target', 'fox', 'volt', 'visa',
+        'robert half', 'bank of america', 'waste management', 'the new york times']);
+      const _mustLive = ['Kelly Roofing', 'Block Electric Company', 'Square Deal Plumbing',
+        'Fox Plumbing & Heating', 'Target Pest Control', 'Volt Electric LLC',
+        'Visa Home Improvements', 'Halfway Roofing', 'Foxworth Construction'];
+      for (const n of _mustLive) {
+        if (brandNameHit(n, _set)) _fails.push(`"${n}" is deleted at discovery by a one-word brand entry - these are the leads the whole pipeline exists to find`);
+      }
+      const _mustDie = ['Kelly', 'Kelly Inc', 'Block', 'Target', 'The New York Times',
+        'Robert Half Technology', 'Bank of America', 'Waste Management, Inc.'];
+      for (const n of _mustDie) {
+        if (!brandNameHit(n, _set)) _fails.push(`"${n}" is no longer refused - the rule was loosened past the brands it exists for, which is the more expensive failure`);
+      }
+      // The call site, because a fixture supplies its own set and cannot see
+      // a caller: the handler could go back to matching any word and every
+      // assertion above would stay green.
+      if (!_src.includes(_nd('brandNameHit(name, ', 'BLOCKED_COMPANIES)'))) {
+        _fails.push('the discovery filter no longer goes through the shared brand matcher, so the any-word rule can come straight back');
+      }
     }
 
     if (_fails.length) {
@@ -62391,6 +63329,181 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 NICHE BRIEF COVERAGE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ EVERY CATEGORY WE SEARCH IS PLACED IN EVERY TABLE THAT PRICES IT ═════
+  // NICHE_BRIEF_EXPECT has had a coverage check since it was written and has
+  // never drifted. The four tables beside it had none, and on 2026-08-28 they
+  // held ten gaps between them: nine searched categories with no money line at
+  // all, a whole trade (Hardscaping) whose stem could not match its own word,
+  // and a lawn-care row quoting a $5k-$30k project against this same file's
+  // note that lawn care is $50-200 a month. The correlation is exact - the
+  // table with the check has no drift, the tables without it had ten gaps.
+  //
+  // It runs the LIVE regexes against the REAL query strings, which is how those
+  // ten were found. A hand-written fixture asserts what somebody remembered to
+  // write down; only the real strings can say what a real run will do.
+  //
+  // The cost of a gap is not abstract. A category with no TRADE_JOB_VALUE row
+  // reaches an owner with the loss element missing, which the audit prompt's
+  // own words call "a gesture at a loss, not a loss". A category with no
+  // capacity class cannot be judged for affordability at all. A category with
+  // no tier is not searched.
+  try {
+    const _fails = [];
+    const _labels = GP_CATEGORIES.map(c => c.label);
+
+    // 1. TIER. No tier means the category is not dealt into the grid at all.
+    const _noTier = _labels.filter(l => !CATEGORY_TIER[l]);
+    if (_noTier.length) _fails.push(`${_noTier.length} searched categor(ies) have no CATEGORY_TIER row, so they are never dealt into the grid: ${_noTier.slice(0, 4).join(', ')}`);
+    const _orphanTier = Object.keys(CATEGORY_TIER).filter(l => !_labels.includes(l));
+    if (_orphanTier.length) _fails.push(`CATEGORY_TIER still ranks ${_orphanTier.length} label(s) nothing searches: ${_orphanTier.slice(0, 4).join(', ')} \u2014 a declaration nothing uses reads as though it is being checked`);
+
+    // 2. CAPACITY CLASS, and the rule that an UNKNOWN trade is never assumed
+    // to be crewed. Guessing 'crewed' promotes a one-man band to a premium
+    // call, which is the whole reason the class exists.
+    const _noCap = _labels.filter(l => !TRADE_CAPACITY_CLASS[l]);
+    if (_noCap.length) _fails.push(`${_noCap.length} searched categor(ies) have no TRADE_CAPACITY_CLASS: ${_noCap.slice(0, 4).join(', ')}`);
+    const _badCap = Object.entries(TRADE_CAPACITY_CLASS).filter(([, v]) => !['solo', 'mixed', 'crewed'].includes(v));
+    if (_badCap.length) _fails.push(`TRADE_CAPACITY_CLASS holds ${_badCap.length} value(s) outside solo/mixed/crewed: ${_badCap.slice(0, 3).map(x => x.join('=')).join(', ')}`);
+    const _orphanCap = Object.keys(TRADE_CAPACITY_CLASS).filter(l => !_labels.includes(l));
+    if (_orphanCap.length) _fails.push(`TRADE_CAPACITY_CLASS classifies ${_orphanCap.length} label(s) nothing searches: ${_orphanCap.slice(0, 4).join(', ')}`);
+    if (capacityClassFor('Nothing We Have Ever Heard Of', 'widget refurbishment') !== null) {
+      _fails.push('an unclassified trade comes back with a class instead of null \u2014 an unknown trade guessed as crewed is a one-man band promoted to a premium call');
+    }
+    if (capacityClassFor('', 'mobile massage therapist') !== 'solo') {
+      _fails.push('the text rule no longer catches a solo trade arriving with no label of ours, which is every lead whose Google category is not one of our queries');
+    }
+
+    // 3. THE MONEY LINE, run through the SAME lookup production uses \u2014 not a
+    // re-implementation of it, because a second copy of the lookup would agree
+    // with itself and prove nothing.
+    const _noMoney = GP_CATEGORIES.filter(c => !tradeJobValue(c.q) && !tradeJobValue(c.label))
+      .map(c => c.label).filter(l => !TRADE_MONEY_EXEMPT.has(l));
+    if (_noMoney.length) _fails.push(`${_noMoney.length} searched categor(ies) produce NO money sentence from either their query or their label: ${_noMoney.slice(0, 4).join(', ')} \u2014 a finding on one of those reaches the owner with the loss element missing`);
+    const _staleExempt = [...TRADE_MONEY_EXEMPT].filter(l => !_labels.includes(l));
+    if (_staleExempt.length) _fails.push(`TRADE_MONEY_EXEMPT excuses ${_staleExempt.length} label(s) nothing searches any more: ${_staleExempt.join(', ')}`);
+    const _wronglyExempt = [...TRADE_MONEY_EXEMPT].filter(l => {
+      const c = GP_CATEGORIES.find(x => x.label === l);
+      return c && (tradeJobValue(c.q) || tradeJobValue(c.label));
+    });
+    if (_wronglyExempt.length) _fails.push(`${_wronglyExempt.join(', ')} now HAS a money line but is still declared exempt \u2014 an exemption that excuses nothing hides the next real gap`);
+
+    // 4. URGENCY. Not every trade has an honest profile: a roofer sells both a
+    // 2am leak and a planned re-roof, and neither prompt line is true of him.
+    // So UNKNOWN is allowed and DECLARED, and an undeclared UNKNOWN fails \u2014
+    // the same shape as the exemption above. URGENCY_ADJUST moves a finding by
+    // up to 26 points, which is the largest business-type rule in the ladder.
+    const _noUrg = GP_CATEGORIES.filter(c => purchaseUrgency(c.q) === 'UNKNOWN' && purchaseUrgency(c.label) === 'UNKNOWN')
+      .map(c => c.label).filter(l => !TRADE_URGENCY_MIXED.has(l));
+    if (_noUrg.length) _fails.push(`${_noUrg.length} searched categor(ies) classify UNKNOWN for purchase urgency and are not declared mixed: ${_noUrg.slice(0, 4).join(', ')} \u2014 either give them a profile or write down that the trade genuinely has neither`);
+    const _staleMixed = [...TRADE_URGENCY_MIXED].filter(l => {
+      const c = GP_CATEGORIES.find(x => x.label === l);
+      return !c || purchaseUrgency(c.q) !== 'UNKNOWN' || purchaseUrgency(c.label) !== 'UNKNOWN';
+    });
+    if (_staleMixed.length) _fails.push(`TRADE_URGENCY_MIXED declares ${_staleMixed.join(', ')} as having no honest profile, and ${_staleMixed.length > 1 ? 'they now classify' : 'it now classifies'} fine or is not searched`);
+
+    // 5. AND THE TWO LIVE DEFECTS THIS CHECK WAS BUILT AFTER, BY NAME, so the
+    // wording can be rewritten but the answers cannot silently go back.
+    const _lawn = String(tradeJobValue('lawn care service') || '');
+    if (/\$\s?5k|\$\s?30k/.test(_lawn) || !/hundred/.test(_lawn)) {
+      _fails.push(`a lawn care company is quoted "${_lawn}" \u2014 the landscaping row is swallowing it again, and this same file prices lawn care at $50-200 a MONTH, about a hundred times less`);
+    }
+    if (!tradeJobValue('hardscaping contractor')) {
+      _fails.push('hardscaping produces no money line \u2014 the stem is back to the bare hardscape form, which cannot match "hardscaping" because the i is a word character');
+    }
+    const _paint = String(tradeJobValue('exterior painting company') || '');
+    if (/\$\s?40k/.test(_paint)) _fails.push(`an exterior painting company is quoted the window-and-siding figure ("${_paint}") \u2014 bare exterior is stealing the paint row again`);
+
+    if (_fails.length) {
+      console.log(`\u26d4 TRADE TABLE COVERAGE CHECK: ${_fails.slice(0, 5).join(' | ')}${_fails.length > 5 ? ` | +${_fails.length - 5} more` : ''}.`);
+    } else {
+      console.log(`\u2713 TRADE TABLE COVERAGE CHECK: all ${GP_CATEGORIES.length} searched categories are tiered, capacity-classified and priced, run through the live regexes against the real query strings. ${TRADE_MONEY_EXEMPT.size} categor(ies) are declared to have no honest single job value and ${TRADE_URGENCY_MIXED.size} to have no honest urgency profile, and an undeclared gap fails the build. The four tables this guards held ten gaps on the day it was written, including nine categories with no money line and a lawn-care row quoting a $5k-$30k project.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 TRADE TABLE COVERAGE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE EMAIL VERIFIER CAN COME BACK ════════════════════════════════════
+  // VERIFIER_EXHAUSTED and VERIFIER_DEAD were one-way for their whole life:
+  // no TTL, no probe, no reset. One busy minute on a free-tier daily
+  // allowance turned SMTP verification off for every remaining lead until
+  // Render restarted the process, and section 43 records exactly this shape
+  // on the Firecrawl credit latch.
+  //
+  // The cost is quiet and expensive: tier 2 is UNREACHABLE without a live
+  // verifier, so every address after the blip falls to tier 3 or 4 and reads
+  // as pattern-built rather than confirmed. On a fifty-lead run that exhausts
+  // at lead twelve, thirty-eight leads are silently downgraded.
+  //
+  // THIS CHECK EXISTS BECAUSE THE FIX CAME BACK GREEN THROUGH A REAL REVERT.
+  // Restoring the one-way gate broke nothing, because nothing was watching -
+  // the mechanism was built and never guarded, which is the shape only a
+  // falsification run ever finds.
+  try {
+    const _fails = [];
+    const T0 = Date.now();
+    const AFTER = T0 + VERIFIER_COOLDOWN_MS + 1000;
+
+    // 1. A CLEAN VERIFIER IS NEVER IN THE WAY.
+    if (verifierBlocked()) _fails.push('the verifier is already latched at boot, so this check is measuring a state production never starts in');
+    else {
+      if (!verifierGate() || !verifierMayTry()) _fails.push('an unlatched verifier is refusing calls');
+
+      // 2. A LATCH STOPS CALLS IMMEDIATELY. That half always worked.
+      verifierLatch('exhausted');
+      if (!verifierBlocked()) _fails.push('an exhausted verifier is not latched, so a dead account is asked once per lead');
+      if (verifierGate(T0) || verifierMayTry(T0)) _fails.push('a just-latched verifier still lets calls through, so an empty allowance is hammered');
+
+      // 3. AND IT LETS EXACTLY ONE CALL THROUGH AFTER THE COOLDOWN. This is
+      // the branch that was unguarded: without it the latch is a deadlock,
+      // because no call can ever be made to clear it.
+      if (!verifierMayTry(AFTER)) _fails.push(`the read-only look-ahead still refuses ${Math.round(VERIFIER_COOLDOWN_MS / 60000)} minutes after the latch - every guard site refuses, so no call reaches the verifier and the recovery probe can never fire`);
+      if (!verifierGate(AFTER)) _fails.push('the gate never opens after the cooldown - the latch has no way back, which is the deadlock this exists to prevent');
+      // ONE probe per window, or fifty leads hammer a door that is shut.
+      if (verifierGate(AFTER)) _fails.push('a SECOND call went through in the same cooldown window - the probe is not rationed, so a fifty-lead batch retries a dead account fifty times');
+
+      // 4. AN ANSWER IS WHAT CLEARS IT, not the clock. A permanently dead key
+      // must not be reported as healthy every ten minutes.
+      verifierAnswered();
+      if (verifierBlocked()) _fails.push('a call that ANSWERED did not clear the latch, so a topped-up account stays off until Render restarts');
+      if (!verifierGate() || !verifierMayTry()) _fails.push('the verifier is still refusing after a successful answer');
+
+      // 5. A REJECTED KEY LATCHES THE SAME WAY, and is a different fact from
+      // an empty allowance - one is a Settings problem, one waits for a reset.
+      verifierLatch('dead');
+      if (!VERIFIER_DEAD) _fails.push('a rejected key does not latch as DEAD, so a Settings problem is reported as an empty allowance');
+      if (verifierGate(T0)) _fails.push('a rejected key still lets calls through immediately');
+      verifierAnswered();
+      if (verifierBlocked()) _fails.push('the dead-key latch cannot be cleared by an answer');
+
+      // 6. AND THE CALL SITE, because everything above exercises the
+      // FUNCTIONS and a fixture supplies its own arguments. The first
+      // version of this check did exactly that, and the call-site revert
+      // came back GREEN through it: swapping verifyEmailSMTP's door back to
+      // a bare verifierBlocked() read leaves every assertion above passing
+      // while the latch is one-way again in production. verifierBlocked is
+      // READ-ONLY by design - it never consumes the probe - so a call site
+      // gated on it can never fire the one attempt that clears the latch.
+      // Read off the live function rather than off the file text, so no
+      // needle can match this check's own source.
+      const _smtpSrc = String(verifyEmailSMTP);
+      if (!/verifierGate\(/.test(_smtpSrc)) _fails.push('verifyEmailSMTP does not go through verifierGate - the one call site that can fire the recovery probe is not asking the door, so nothing in production ever reaches the probe and the latch is one-way again');
+      if (/verifierBlocked\(/.test(_smtpSrc)) _fails.push('verifyEmailSMTP is gated on verifierBlocked, which is read-only and never consumes the probe - so the cooldown can pass forever and no call is ever made to find out the allowance came back');
+    }
+    // Whatever happened above, this process must leave here unlatched. A boot
+    // check that leaves state behind fails its neighbour and the neighbour
+    // gets the blame - recorded at the Firecrawl pacing check.
+    VERIFIER_EXHAUSTED = false; VERIFIER_DEAD = false; VERIFIER_LATCHED_AT = 0; VERIFIER_PROBE_AT = 0;
+
+    if (_fails.length) {
+      console.log(`\u26d4 VERIFIER LATCH CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 VERIFIER LATCH CHECK: the email verifier can come back. A latch stops calls at once, exactly ONE probe is let through after the ${Math.round(VERIFIER_COOLDOWN_MS / 60000)}-minute cooldown, a call that ANSWERED is what clears it, and a rejected key latches separately from an empty allowance. Both flags were one-way for their whole life, so one busy minute turned SMTP verification off until Render restarted - and tier 2 is unreachable without it, so every address after the blip read as pattern-built rather than confirmed.`);
+    }
+  } catch (e) {
+    VERIFIER_EXHAUSTED = false; VERIFIER_DEAD = false; VERIFIER_LATCHED_AT = 0; VERIFIER_PROBE_AT = 0;
+    console.log(`\u26d4 VERIFIER LATCH CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
 
@@ -64601,7 +65714,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (_fails.length) {
       console.log(`⛔ CHAIN OUTLET CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ CHAIN OUTLET CHECK: a brand trading in three of our twenty metros is caught as a chain from the run's own results — by its franchisor's website when the outlets share one, and by its brand when they do not — with no list for anybody to keep up to date. Three unrelated "All American" businesses, a genuine two-market operator and one business found three times all survive, because a filter loosened until it catches nothing is the more expensive failure.`);
+      console.log(`✓ CHAIN OUTLET CHECK: a brand trading in three of our ${GP_CITIES.length} metros is caught as a chain from the run's own results — by its franchisor's website when the outlets share one, and by its brand when they do not — with no list for anybody to keep up to date. Three unrelated "All American" businesses, a genuine two-market operator and one business found three times all survive, because a filter loosened until it catches nothing is the more expensive failure.`);
     }
   } catch (e) {
     console.log(`⛔ CHAIN OUTLET CHECK COULD NOT RUN — ${(e && e.message) || e}.`);

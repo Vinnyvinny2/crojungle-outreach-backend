@@ -1195,6 +1195,16 @@ const FIND_WALL_MS = 25 * 60 * 1000;
 //   * outsideBand and aboveSizeCeiling moved the sort and were never said out
 //     loud, so a lead the run had deliberately placed last showed a high
 //     number with nothing on screen accounting for its position.
+// affordLabel - the tier label, read from the server's affordabilityBand and
+// never re-derived here. A second affordability rule in the browser is how the
+// card and the CSV end up telling an operator two different things about one
+// business, which is the defect this app just finished fixing twice.
+const AFFORD_LABEL = {
+  premium: 'Premium fit',
+  lower: 'Lower tier only',
+  below_floor: 'Below our floor',
+};
+const affordLabel = (co) => AFFORD_LABEL[String((co || {}).affordBand || '')] || '';
 const findScoreLine = (co) => {
   const c = co || {};
   if (c.icpScore == null) return '';
@@ -1214,8 +1224,16 @@ const findScoreLine = (co) => {
   } else if (typeof c.reachPredict === 'number') {
     parts.push('owner findable ' + c.reachPredict + '/40, a guess until we read them');
   }
+  // What they can afford is the whole question this list exists to answer, so
+  // it is said on the card rather than only in the sort.
+  const aff = affordLabel(c);
+  if (aff) parts.push(aff);
+  // A low rating no longer sorts a lead last - it is a REASON, and the card
+  // says which, because a number that moved with nothing accounting for it is
+  // what made the old rating read as broken.
+  if (c.lowRating) parts.push('low rating, kept: harder to find on Google, so more reason to buy');
   const why = [
-    c.outsideBand ? 'outside the star band' : '',
+    c.outsideBand ? 'above the review-mining ceiling' : '',
     c.aboveSizeCeiling ? 'above the review ceiling' : '',
   ].filter(Boolean).join(' and ');
   if (why) parts.push('sorted last: ' + why);
@@ -1281,7 +1299,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260915;
+const CLIENT_CONTRACT = 20260916;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5546,6 +5564,7 @@ const FIND_CSV_COLUMNS = [
   ['emailConfidence', 'How confident we are in that address'],
   ['emailSafeToSend', 'Safe to send'],
   ['phone', 'Phone'],
+  ['affordTier', 'What they can afford'],
   ['payingForAds', 'Already paying for ads'],
   ['teamSize', 'People on their team page (a floor, not a headcount)'],
   ['hiringMarketing', 'Hiring for marketing'],
@@ -5557,6 +5576,78 @@ const FIND_CSV_COLUMNS = [
   ['readVia', 'How their site was read'],
   ['notes', 'What we could not do'],
 ];
+// ══ THE FIRST MEASUREMENT OF WHETHER ANY OF THIS WORKS ══════════════════════
+// Vin, 2026-08-28: "i want u to double check on how well decision maker finding
+// is and how well our email finding is because we have been running without
+// email finder."
+//
+// Nothing in this system has ever counted it. Not a rate, not a counter, not a
+// log line - the per-lead FIND CONTACT line says what ONE lead produced and no
+// line has ever said what a RUN produced. So every judgement about the owner
+// resolver and the email engine, across the life of this project, has been made
+// from remembering a handful of leads.
+//
+// Pure, at module scope, executed by clientcheck. Percentages are over leads we
+// actually READ, never over leads we tried: a run that refused thirty
+// enterprises by name did not fail to find thirty owners.
+//
+// It reports the EMAIL TIER SPLIT rather than one "found" number, because that
+// is the whole of what Vin is asking. A published address and a guess from a
+// common pattern are both "an email"; only one of them is safe to send to, and
+// this project's two hard bounces both came from the second kind.
+const findRunTally = (companies) => {
+  const all = Array.isArray(companies) ? companies : [];
+  const read = all.filter(c => c && c.contactReadOk === true);
+  const t = { read: read.length, ofQueue: all.length,
+    owner: 0, ownerTitled: 0, ownerCanBuy: 0,
+    email: 0, tier1: 0, tier2: 0, tier3: 0, tier4: 0, sendable: 0,
+    phone: 0, verifierOff: 0 };
+  for (const c of read) {
+    if (c.contactOwner) {
+      t.owner++;
+      if (c.contactOwnerTitle) t.ownerTitled++;
+      if (c.contactOwnerCanBuy) t.ownerCanBuy++;
+    }
+    if (c.contactEmail) {
+      t.email++;
+      const tier = Number(c.contactEmailTier);
+      if (tier === 1) t.tier1++; else if (tier === 2) t.tier2++;
+      else if (tier === 3) t.tier3++; else if (tier === 4) t.tier4++;
+      if (c.contactEmailSendable === true) t.sendable++;
+    }
+    if (String(c.contactPhone || c.phone || '').replace(/\D/g, '')) t.phone++;
+    if ((c.contactNotes || []).some(n => /verifier/i.test(String(n)))) t.verifierOff++;
+  }
+  const pct = (n) => t.read ? Math.round((n / t.read) * 100) : null;
+  t.ownerPct = pct(t.owner); t.emailPct = pct(t.email);
+  t.sendablePct = pct(t.sendable); t.phonePct = pct(t.phone);
+  // Under twelve reads nothing here is a rate. The same floor §35 puts on the
+  // call-outcome report, and for the same reason: a thin number believed is
+  // worse than no number.
+  t.readable = t.read >= 12;
+  return t;
+};
+const findTallyLine = (t) => {
+  if (!t || !t.read) return '';
+  const p = (n, x) => n + (t.readable && x !== null ? ' (' + x + '%)' : '');
+  const parts = [
+    t.read + ' read of ' + t.ofQueue,
+    'owner ' + p(t.owner, t.ownerPct) + (t.ownerTitled ? ', ' + t.ownerTitled + ' with a title' : ''),
+    'email ' + p(t.email, t.emailPct),
+    'safe to send ' + p(t.sendable, t.sendablePct),
+    'phone ' + p(t.phone, t.phonePct),
+  ];
+  const tiers = [];
+  if (t.tier1) tiers.push(t.tier1 + ' published');
+  if (t.tier2) tiers.push(t.tier2 + ' mailbox-confirmed');
+  if (t.tier3) tiers.push(t.tier3 + ' pattern-built');
+  if (t.tier4) tiers.push(t.tier4 + ' a guess');
+  let s = parts.join(' \u00b7 ');
+  if (tiers.length) s += '. Addresses: ' + tiers.join(', ') + '.';
+  if (t.verifierOff) s += ' ' + t.verifierOff + ' lead(s) were read while the email verifier was not answering, so those addresses are pattern-built at best - a fact about us, not about them.';
+  if (!t.readable) s += ' Under 12 reads, so these are counts and not rates.';
+  return s;
+};
 const findContactRows = (companies) => {
   const list = (Array.isArray(companies) ? companies : []).filter(hasContactData);
   const rows = list.map(c => ({
@@ -5577,6 +5668,10 @@ const findContactRows = (companies) => {
       : (c.contactEmailLabel || 'unknown'),
     emailSafeToSend: !c.contactEmail ? '' : (c.contactEmailSendable ? 'yes' : 'NO - do not send'),
     phone: c.contactPhone || c.phone || '',
+    // Read from the server's band. Never a dollar figure and never re-derived
+    // here: an empty cell means nobody measured enough to say, which is a
+    // different thing from a business that cannot pay.
+    affordTier: affordLabel(c) || 'not enough measured to say',
     payingForAds: contactYesNo(c.contactAdsCode, 'yes', 'none found'),
     teamSize: (typeof c.contactTeamCount === 'number') ? String(c.contactTeamCount) : 'not published',
     hiringMarketing: contactYesNo(c.contactHiringMarketing, 'yes', 'no'),
@@ -5747,6 +5842,11 @@ function FindView({
   const [pullFilters, setPullFilters] = React.useState({
     niches: [], cities: [], minRating: '', maxRating: '',
     minReviews: '', websiteShape: 'any',   // any | none | builder | real
+    // Vin, 2026-08-28, on the tier label: "a filter to toggle to just lower
+    // ones - it will likely be for cold calling and maybe for me when I want an
+    // easy sale or quick cash." The band itself is the server's; this only
+    // chooses which bands to look at.
+    affordShape: 'any',                    // any | premium | lower
   });
   const [showFilters, setShowFilters] = React.useState(false);
   // == THE CONTACT RUN ======================================================
@@ -7046,11 +7146,19 @@ function FindView({
           || (pullFilters.websiteShape === 'none' && c.noWebsite)
           || (pullFilters.websiteShape === 'builder' && !!c.builderSite)
           || (pullFilters.websiteShape === 'real' && !c.noWebsite && !c.builderSite);
+        // The affordability band comes from the server's one derivation. A lead
+        // with NO band is shown under 'any' and hidden by either named filter:
+        // an unmeasured lead is not evidence of either tier, and putting it in
+        // one would be the confident-guess-on-an-unread-lead failure this app
+        // records everywhere else.
+        const affMatch = pullFilters.affordShape === 'any' || !pullFilters.affordShape
+          || (pullFilters.affordShape === 'premium' && c.affordBand === 'premium')
+          || (pullFilters.affordShape === 'lower' && c.affordBand === 'lower');
         const nicheMatch = !pullFilters.niches.length
           || pullFilters.niches.some(n => String(c.industry || '').toLowerCase() === String(n).toLowerCase());
         const cityMatch = !pullFilters.cities.length
           || pullFilters.cities.some(ct => String(c.location || '').toLowerCase().includes(String(ct).split(' ')[0].toLowerCase()));
-        return tabMatch && winMatch && verMatch && ratMatch && revMatch && siteMatch && nicheMatch && cityMatch;
+        return tabMatch && winMatch && verMatch && ratMatch && revMatch && siteMatch && affMatch && nicheMatch && cityMatch;
       });
       // ── PRIMARY CONTROL: Verified only ⟷ Show all ──────────────────────────
       // This is the one decision that matters. Verified-only hides every lead we
@@ -7289,12 +7397,18 @@ function FindView({
         '200-500': '$5M–$25M', '500-1k': '$15M–$50M', '1k-5k': '$50M+',
       };
       const revBand = co.verifiedRevenueBand ? BAND_REVENUE[co.verifiedRevenueBand] : null;
-      // Review-count revenue proxy for Places (no API band available)
-      const rv = co.reviewCount || 0;
-      const placesRev = co.source === 'google_places' && rv > 0
-        ? (rv >= 100 ? 'Est. $1M–$5M+' : rv >= 40 ? 'Est. $800k–$3M' : rv >= 20 ? 'Est. $500k–$1.5M' : 'Est. <$500k (thin)')
-        : null;
-      const revenueLabel = revBand || placesRev;
+      // ══ THE REVENUE BAND WE INVENTED FROM A REVIEW COUNT IS GONE ═══════
+      // It printed "Est. $1M-$5M+" off nothing but how many reviews a business
+      // had, on a card an operator reads before deciding what to audit. We do
+      // not buy revenue for a private local business and we never measured it,
+      // so that was a figure presented as a measurement - the one thing this
+      // system is built not to do.
+      //
+      // The employee band from the Companies API stays, because it IS a
+      // measurement: a verified headcount mapped to a published range. What
+      // replaces the invented half is the affordability tier, which orders and
+      // labels leads without ever naming a dollar.
+      const revenueLabel = revBand || null;
       return React.createElement('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 } },
         React.createElement('div', {
           style: { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11, padding: '2px 8px', borderRadius: 20,
@@ -7404,7 +7518,8 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       const _set = (k, v) => setPullFilters(p => ({ ...p, [k]: v }));
       const _activeCount = (pullFilters.niches.length ? 1 : 0) + (pullFilters.cities.length ? 1 : 0)
         + (pullFilters.minRating ? 1 : 0) + (pullFilters.maxRating ? 1 : 0)
-        + (pullFilters.minReviews ? 1 : 0) + (pullFilters.websiteShape !== 'any' ? 1 : 0);
+        + (pullFilters.minReviews ? 1 : 0) + (pullFilters.websiteShape !== 'any' ? 1 : 0)
+        + (pullFilters.affordShape !== 'any' ? 1 : 0);
 
       const filterBar = React.createElement('div', { style:{ marginBottom:14 } },
         React.createElement('button', {
@@ -7430,6 +7545,14 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
               React.createElement('option', { value:'real' }, 'Real website'))),
 
           React.createElement('div', { style:_fWrap },
+            React.createElement('div', { style:_fLabel }, 'What they can afford'),
+            React.createElement('select', { value: pullFilters.affordShape, style:_fInput,
+              onChange: e => _set('affordShape', e.target.value) },
+              React.createElement('option', { value:'any' }, 'Any'),
+              React.createElement('option', { value:'premium' }, 'Premium fit only'),
+              React.createElement('option', { value:'lower' }, 'Lower tier only'))),
+
+          React.createElement('div', { style:_fWrap },
             React.createElement('div', { style:_fLabel }, 'Rating from'),
             React.createElement('input', { type:'number', step:'0.1', min:'1', max:'5', placeholder:'3.8',
               value: pullFilters.minRating, style:_fInput, onChange: e => _set('minRating', e.target.value) })),
@@ -7450,7 +7573,7 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
           // one home each. What is left here narrows the list on screen only.
 
           _activeCount ? React.createElement('button', {
-            onClick: () => setPullFilters({ niches:[], cities:[], minRating:'', maxRating:'', minReviews:'', websiteShape:'any' }),
+            onClick: () => setPullFilters({ niches:[], cities:[], minRating:'', maxRating:'', minReviews:'', websiteShape:'any', affordShape:'any' }),
             style:{ padding:'7px 14px', borderRadius:7, border:'1px solid var(--b)', background:'transparent',
               color:'var(--m2)', cursor:'pointer', fontFamily:'Inter,sans-serif', fontSize:13 } }, 'Clear') : null,
 
@@ -7634,6 +7757,9 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
           sheetNote ? React.createElement('div', {
             style:{ fontSize:12, color:'var(--g)', flexBasis:'100%', lineHeight:1.5 },
           }, sheetNote) : null,
+          _cRead.length ? React.createElement('div', {
+            style:{ fontSize:12, color:'var(--m2)', marginTop:8, lineHeight:1.5 },
+          }, 'This queue so far: ' + findTallyLine(findRunTally(_cShown))) : null,
           _cReadNoContact > 0 ? React.createElement('div', {
             style:{ fontSize:11.5, color:'var(--m2)', flexBasis:'100%', lineHeight:1.5 },
           }, _cReadNoContact + ' of the ' + _cRead.length + ' read had no owner, no address and no number on their site, so they are not in the file.') : null,
