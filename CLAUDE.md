@@ -7905,6 +7905,43 @@ cannot see what the route buys.
 the guards, not a measurement. The first real run answers it outright — the
 `FIND CONTACT` line reports the credits and the dollars that lead actually cost.
 
+### The first live press: a paused server retired a hundred leads in two seconds
+
+Vin, minutes after the deploy: *"it loaded really fast like impossibly fast for
+it to get all the info we needed for 50 leads"*, then *"i ran it when the derve
+was paused now i cnat get it to do anything."*
+
+He read it exactly right. Render was paused, every request failed the instant it
+was made, and **the failure paths stamped `contactAt` anyway** — the same field
+the panel used to mean "this lead has been read". So a hundred leads were retired
+as done, with nothing on them, and the button could never pick them up again.
+The Render log showed nothing because no request ever reached the server.
+
+Three defects, one root: **a stamp that says "done" was being written by
+something that had not done it.**
+
+- `contactReadOk` is now the only thing that means a business was read, it is
+  written in ONE place — the function that parses a real server answer — and
+  every consumer keys on it. The hundred poisoned leads become unread again on
+  their own; nothing had to be repaired by hand.
+- A failure records itself as a failure (`contactFailedAt` plus the reason) and
+  the panel says so in the one colour this screen reserves for a stop, naming
+  the cause, because "it did nothing" with no reason attached is what sent an
+  operator to the Render logs looking for requests that were never made.
+- **Three transport failures in a row stop the run.** A dead server is one fact
+  about the server, said once, not a hundred instant per-lead failures dressed
+  as a finished run. And a **Clear N read** button exists for the case where a
+  successful read needs redoing.
+
+**The falsification that mattered came back GREEN first.** The revert that
+reproduces the exact live defect — putting the `contactAt` stamp back on both
+failure branches — passed, because every assertion written that hour keys on the
+new read flag, so the reverted branches merely wrote a field nothing consulted
+any more. Green for the wrong reason is not a pass. The failure branches are now
+asserted *directly*: both must record the failure, and neither may write the read
+timestamp. That revert then went red, and so did the other four.
+
+
 ### What was deliberately NOT done
 
 - **No second route.** The mode inherits the boot-window gate, the day ceilings,
