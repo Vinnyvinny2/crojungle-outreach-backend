@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260911;
+const CONTRACT_VERSION = 20260912;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -9220,7 +9220,20 @@ const fcHostNotAnswering = (url) => {
   } catch (e) { void e; return false; }
 };
 
-const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS) => {
+// opts.shot=false drops the full-page render from the formats list and prices
+// the call as a plain scrape. The Find-tab contact read wants the MARKUP and
+// never the picture, and a render is the single most expensive thing this API
+// can be asked for - it is also the reason this request comes back empty on
+// heavy homepages, per the note below. One door, one formats list, one price
+// model; the flag says which shape was actually bought.
+// opts.capture receives the raw markup. Requesting rawHtml and dropping it is
+// how seven pages were bought and one page's markup was read (round 100), so a
+// caller that needs it can take it here rather than fetching the page twice.
+const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS, opts = null) => {
+  const _shot = !(opts && opts.shot === false);
+  const _capture = (opts && typeof opts.capture === 'function') ? opts.capture : null;
+  const _FMT = _shot ? ['markdown', 'screenshot@fullPage', 'rawHtml', 'html'] : ['markdown', 'rawHtml', 'html'];
+  const _FMT_NO_HTML = _shot ? ['markdown', 'screenshot@fullPage', 'rawHtml'] : ['markdown', 'rawHtml'];
   if (!fcKey) return '';
   // FAIL FAST once the account is empty. Without this every lead still fires ~20
   // doomed HTTP calls and burns 15+ seconds before failing, which is what made the
@@ -9261,7 +9274,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
         // populate 2-4s after load, and a shot taken at 1.5s shows an empty slot
         // where the proof is. That mistake already told an electrician he had no
         // social proof on a page carrying 221 Google reviews.
-        body: JSON.stringify({ url, formats: ['markdown', 'screenshot@fullPage', 'rawHtml', 'html'], onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true, location: { country: 'US', languages: ['en'] } }),
+        body: JSON.stringify({ url, formats: _FMT, onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true, location: { country: 'US', languages: ['en'] } }),
       }, timeout);
       d = await r.json();
       if (!isRateLimited(d, r.status)) break;
@@ -9282,7 +9295,7 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
         r = await fcCall('https://api.firecrawl.dev/v1/scrape', {
           method: 'POST',
           headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url, formats: ['markdown', 'screenshot@fullPage', 'rawHtml'], onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true, location: { country: 'US', languages: ['en'] } }),
+          body: JSON.stringify({ url, formats: _FMT_NO_HTML, onlyMainContent: false, waitFor: 4000, maxAge, blockAds: true, removeBase64Images: true, location: { country: 'US', languages: ['en'] } }),
         }, timeout);
         d = await r.json();
       } catch (e) { void e; }
@@ -9293,8 +9306,10 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
       return '';
     }
     let _md = d.data?.markdown || d.markdown || '';
+    const _rawMarkup = [d.data?.rawHtml || d.rawHtml || '', d.data?.html || d.html || ''].filter(Boolean).join('\n');
     // Same page, same credit. Consumed and dropped — see harvestInteriorMarkup.
-    try { harvestInteriorMarkup(url, [d.data?.rawHtml || d.rawHtml || '', d.data?.html || d.html || ''].filter(Boolean).join('\n'), null); } catch (e) { void e; }
+    try { harvestInteriorMarkup(url, _rawMarkup, null); } catch (e) { void e; }
+    if (_capture) { try { _capture(_rawMarkup); } catch (e) { void e; } }
 
     // ══ NEVER LOSE THE CORPUS TO A SCREENSHOT ═══════════════════════════════
     // This request asks for markdown AND a full-page screenshot together, and on
@@ -9335,12 +9350,12 @@ const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS
     }
     // Keep the render. Requesting a format and never reading it back is how the
     // inner-page screenshots were paid for and discarded for two rounds.
-    rememberPageShot(_ck, d.data?.['screenshot@fullPage'] || d['screenshot@fullPage'] || d.data?.screenshot || null);
+    if (_shot) rememberPageShot(_ck, d.data?.['screenshot@fullPage'] || d['screenshot@fullPage'] || d.data?.screenshot || null);
     // shot: true — this request asks for screenshot@fullPage on every page (see the
     // formats list above), so it is a RENDER and must be priced as one. It was
     // billed as a plain scrape for its whole life because the price was read off
     // the label rather than off the request.
-    fcNote(true, 'scrape', _ck, true);
+    fcNote(true, 'scrape', _ck, _shot);
     if (_SCRAPE_CACHE.size > 3000) _SCRAPE_CACHE.clear();
     _SCRAPE_CACHE.set(_ck, { md: _md, at: Date.now() });
     return _md;
@@ -9913,7 +9928,7 @@ const isMailboxShape = (e) => {
 // ── WEBSITE EMAIL SCRAPER — Tier 1 evidence ────────────────────────────────
 // An address published on their own site is the strongest evidence there is.
 // Also harvests EVERY address found, which feeds the pattern-learning corpus.
-const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirmed = false, siteIsDown = false) => {
+const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirmed = false, siteIsDown = false, freePages = []) => {
   const out = { emails: [], source: '' };
   if (!website) return out;
   // ══ DO NOT SCRAPE A SITE WE HAVE ALREADY PROVEN IS DOWN ═══════════════════
@@ -10055,6 +10070,22 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
   // emails are theirs, so off-domain personal addresses are allowed here.
   let emails = extract(homepageContent, true);
   if (emails.length > 0) return { emails, source: 'homepage' };
+
+  // Pass 1.5: pages a caller ALREADY HAS. The Find tab reads the homepage and
+  // its own nav-linked contact/about/team pages with a plain fetch, for nothing.
+  // Scanning them here before pass 2 means the common case - an address printed
+  // on a contact page - costs zero Firecrawl credits, and it costs zero quality
+  // because these run through the exact same extractor with the exact same
+  // same-domain strictness as a page we paid for.
+  for (const p of (Array.isArray(freePages) ? freePages : [])) {
+    const body = p && (p.text || p.html);
+    if (!body || String(body).length < 100) continue;
+    const got = extract(String(body), false);
+    if (got.length > 0) {
+      console.log(`EMAIL free [${domain}]: found ${got.length} address(es) on ${p.url || 'a page already in hand'} \u2014 no Firecrawl credit spent.`);
+      return { emails: got, source: 'free_page' };
+    }
+  }
 
   // Pass 2: the pages most likely to publish a real address (same-domain only — a
   // contact page might list a vendor's/webdev's address, so stay strict there)
@@ -10533,13 +10564,32 @@ const nameCorroborated = (name, companyName, corpus) => {
   return np.length >= 2 && flat.includes(np[0]) && flat.includes(np[np.length - 1]);
 };
 
-const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName) => {
-  if (!website || !apiKey || !fcKey) return null;
+// preFetched: pages some OTHER reader already has in hand, as [{url, text}].
+// When they are supplied this function buys NOTHING - no map, no scrapes - and
+// runs the identical roster read, the identical model call, the identical
+// anti-hallucination gate over them. That is the whole point: the Find tab
+// reads a homepage and two nav-linked pages with a plain fetch for zero credits
+// and zero dollars, and then wants the SAME owner logic applied to them. A
+// second implementation of "read the owner off pages" is the two-hand-kept-
+// copies disease pointed at the single function this system exists for, so
+// there is one, and the corpus is a parameter.
+const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName, preFetched = null) => {
+  const _pre = Array.isArray(preFetched) ? preFetched.filter(p => p && p.text && p.text.length > 200) : [];
+  // fcKey is required only when we are the ones buying the pages. With a corpus
+  // in hand it is irrelevant, and demanding it would make the free path depend
+  // on a key it never uses.
+  if (!website || !apiKey || (!fcKey && !_pre.length)) return null;
   try {
     const pages = [];
     _setLeadershipLen(companyName, 0);
     if (homepageContent && homepageContent.length > 200) {
       pages.push('--- HOMEPAGE ---\n' + homepageContent.slice(0, 6000));
+    }
+
+    if (_pre.length) {
+      for (const p of _pre) pages.push(`\n\n--- PAGE: ${p.url} ---\n` + String(p.text).slice(0, 6000));
+      console.log(`DM/brain [${companyName}]: reading ${_pre.length} page(s) somebody else already fetched \u2014 no map, no scrape, zero Firecrawl credits.`);
+      return await _ownerFromCorpus(pages.join('\n').slice(0, 22000), companyName, website, apiKey);
     }
 
     // Ask the site for its real URLs, filtered toward leadership pages
@@ -10580,9 +10630,21 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
       if (md && md.length > 200) pages.push(`\n\n--- PAGE: ${u} ---\n` + md.slice(0, 6000));
     }
 
-    const corpus = pages.join(
-'\n').slice(0, 22000);
+    return await _ownerFromCorpus(pages.join(
+'\n').slice(0, 22000), companyName, website, apiKey);
+  } catch(e) {
+    console.log('DM/brain failed:', e.message);
+    return null;
+  }
+};
 
+// Everything below used to sit inside findOwnerViaBrain, between building the
+// corpus and returning. It is lifted out UNCHANGED so the free Find path and the
+// paid research path run the same roster parse, the same prompt, the same
+// measured backstop and the same anti-hallucination gate. Nothing about the
+// rules moved; only where the bytes came from is now the caller's business.
+const _ownerFromCorpus = async (corpus, companyName, website, apiKey) => {
+  try {
     // ══ THE ROSTER IS READ BEFORE THE MODEL IS ASKED ═════════════════════════
     // What a company publishes about who runs it is the best evidence that
     // exists. It is not an inference, not a search result, and not a third-party
@@ -30870,7 +30932,11 @@ const rankOwnerCandidates = (found) => {
   return clusters[0];
 };
 
-const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '', industry = '', apifyToken = '', callOnly = false }) => {
+// preFetchedPages: pages the CALLER already holds, as [{url, text}]. Handed
+// straight to the site reader, which then buys no map and no scrapes. This is
+// how the Find tab resolves an owner for zero Firecrawl credits while running
+// the identical roster parse, prompt and anti-hallucination gate the audit runs.
+const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '', industry = '', apifyToken = '', callOnly = false, preFetchedPages = null }) => {
   // ═══ STAGED WATERFALL — STOP PAYING ONCE WE HAVE THE ANSWER ═══════════════
   // This used to fire all seven sources in parallel on EVERY lead, so a company
   // that names its owner on its own About page still paid for two web searches,
@@ -30970,7 +31036,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   //   · the business name, checked against site copy (free)
   //   · whoever signs the Google review replies (reuses the cached reviews scrape)
   const [brain, news, bizName, reviewSig] = await Promise.all([
-    findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName).catch(() => null),
+    findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName, preFetchedPages).catch(() => null),
     findOwnerViaNews(companyName).catch(() => null),
     findOwnerViaBusinessName(companyName, homepageContent, (website || '').replace(/^https?:\/\//, '').split('/')[0], apiKey).catch(() => null),
     (placeId && apifyToken) ? findOwnerViaReviewReplies(placeId, apifyToken, apiKey, companyName).catch(() => null) : Promise.resolve(null),
@@ -31236,7 +31302,7 @@ const findEmailFireproof = async (_args) => {
   return _r;
 };
 
-const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, siteIsDown = false, industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '' }) => {
+const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, siteIsDown = false, industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '', freePages = [] }) => {
   const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '').toLowerCase();
   const name = ceoName || hunterName || '';
   // Set when a PAID lookup was refused (spent quota / dead key) rather than
@@ -31410,7 +31476,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, employees, 
   }
 
   // ── TIER 1: published on their own website ────────────────────────────────
-  const scraped = await scrapeEmailsFromSite(website, fcKey, homepageContent, siteConfirmed, siteIsDown);
+  const scraped = await scrapeEmailsFromSite(website, fcKey, homepageContent, siteConfirmed, siteIsDown, freePages);
   if (scraped.emails.length > 0) {
     // Learn the company's convention from every address we found
     for (const e of scraped.emails) {
@@ -54728,7 +54794,17 @@ app.listen(PORT, () => {
     //     needles are assembled at runtime from two real halves, over the
     //     comment-stripped source, because these comments quote the calls.
     const _n = (a, b) => a + b;
-    if (!_src.includes(_n("fcNote(true, 'scrape', _ck,", ' true)'))) _fails.push('the interior page scrape no longer tells the meter it took a render — seven renders a lead go back to being priced as text');
+    if (!_src.includes(_n("fcNote(true, 'scrape', _ck,", ' _shot)'))) _fails.push('the interior page scrape no longer tells the meter what shape it bought — seven renders a lead go back to being priced as text');
+    if (!_src.includes(_n('const _shot = !(opts && opts.shot ===', ' false);'))) _fails.push('the render flag is no longer derived from the request, so the price is read off a label again');
+    // Executed, not read: a caller that asks for NOTHING must still be charged
+    // for the render it is still receiving. Only a caller that explicitly turns
+    // the picture off may be priced as plain text, and the whole point of the
+    // flag is that it defaults the safe way round.
+    const _shotDefault = (o) => !(o && o.shot === false);
+    if (_shotDefault(null) !== true || _shotDefault({}) !== true || _shotDefault({ shot: false }) !== false) {
+      _fails.push('the render default inverted — every audit-path scrape would be priced as text while still buying a picture');
+    }
+    if (fcCreditCost('scrape', true) !== FC_SCREENSHOT_CREDITS) _fails.push('a render is not priced at FC_SCREENSHOT_CREDITS');
     if (!_src.includes(_n("fcNote(true, 'batch-scrape (0.5cr)', u,", ' true)'))) _fails.push('the batch page scrape no longer tells the meter it took a render');
     if (!_src.includes(_n('noteRunSpend(', "'fc', _cost, fcKindLabel(kind, shot))"))) _fails.push('the day ledger is no longer filing Firecrawl spend through fcKindLabel, so the render bucket is gone again');
 
@@ -54739,6 +54815,158 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ FIRECRAWL CREDIT MODEL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ---- THE FIND-TAB CONTACT READ ---------------------------------------
+  // The standing goal is fifty leads a day with an owner, an address, a number
+  // and a score, and this is the one place it is decided. Every predicate is
+  // EXECUTED both ways, and every wire that makes it cheap is pinned at its
+  // CALL SITE - a fixture supplies its own arguments and therefore cannot see a
+  // caller, which is the trap this file has recorded ten times.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+
+    // ONE - the free read has to actually produce a corpus. A markup-to-text
+    // step that collapses a roster into one run is the difference between a
+    // headcount and nothing, so the block-tag rule is asserted directly.
+    const _roster = '<div><h3>Dusty Hannah</h3><p>CO-OWNER/CEO</p></div><div><h3>Kacie Carrico</h3><p>COO</p></div>';
+    const _txt = plainTextFromHtml(_roster);
+    if (_txt.split('\n').length < 4) _fails.push('plainTextFromHtml is not breaking block tags into lines, so a team page collapses into one run and no headcount can be read');
+    if (/</.test(_txt) || /&nbsp;/i.test(plainTextFromHtml('a&nbsp;b'))) _fails.push('plainTextFromHtml leaves markup or entities in the text it hands to the roster parser');
+    if (plainTextFromHtml('<script>var x = "Owner Bob";</script><p>Hi</p>').includes('Owner Bob')) _fails.push('plainTextFromHtml is reading script bodies as page text, so a JavaScript string can become a person');
+
+    // TWO - the navigation IS the sitemap here. This is what replaces a paid
+    // map call, so it has to find same-host pages and refuse everything else.
+    const _links = sameHostLinks(
+      '<a href="/contact">C</a><a href="https://www.x.com/about-us">A</a><a href="/contact#form">dupe</a>'
+      + '<a href="https://facebook.com/x">off</a><a href="mailto:a@x.com">m</a><a href="/brochure.pdf">pdf</a>',
+      'https://x.com');
+    if (_links.length !== 2) _fails.push(`sameHostLinks returned ${_links.length} link(s) where 2 are correct — an off-host link, a mailto, a PDF or a fragment duplicate is getting through, and each one is a page bought for nothing`);
+    if (!_links.some(u => /about-us$/.test(u))) _fails.push('sameHostLinks drops a www. link on the same host, which is most of the navigation on most sites');
+
+    // THREE - the picker. At most one page per intent and never the homepage
+    // again: buying the homepage twice is the recorded duplicate-page cost.
+    const _picked = pickFindPages(
+      ['https://x.com/about', 'https://x.com/about-us', 'https://x.com/contact', 'https://x.com/careers', 'https://x.com'],
+      'https://x.com');
+    if (_picked.length !== 3) _fails.push(`pickFindPages returned ${_picked.length} page(s); it must take at most one per intent, so at most ${FIND_MAX_PAGES}`);
+    if (_picked.some(p => p.url === 'https://x.com')) _fails.push('pickFindPages is picking the homepage again as an interior page');
+    if (new Set(_picked.map(p => p.intent)).size !== _picked.length) _fails.push('pickFindPages took two pages for one intent, so a careers page can be crowded out by two about pages');
+
+    // FOUR - the three signals, both directions. The absence direction is the
+    // one that matters: an unread site is not a business with no ads.
+    const _adsHtml = '<html><head><script src="https://www.googleadservices.com/pagead/conversion.js"></script></head><body>' + 'x'.repeat(600) + '</body></html>';
+    const _withAds = readFindIcpSignals([{ url: 'https://x.com', intent: 'home', html: _adsHtml, text: 'x' }]);
+    if (_withAds.adsCode !== true) _fails.push('a Google ad tag in the markup does not read as ad spend');
+    const _noAds = readFindIcpSignals([{ url: 'https://x.com', intent: 'home', html: '<html><body>' + 'y'.repeat(600) + '</body></html>', text: 'y' }]);
+    if (_noAds.adsCode !== false) _fails.push('a readable page with no ad tag does not report the absence, so a real negative is indistinguishable from an unread site');
+    const _blind = readFindIcpSignals([]);
+    if (_blind.adsCode !== null) _fails.push('an unread site reports FALSE for ads rather than null — that is the unmeasured-as-zero failure on a claim about their money');
+    if (_blind.teamCount !== null || _blind.hiringAny !== null) _fails.push('an unread site reports a measured team size or hiring answer');
+
+    const _teamPage = { url: 'https://x.com/team', intent: 'team',
+      html: '<div><h3>Dusty Hannah</h3><p>Co-Owner</p></div><div><h3>Kacie Carrico</h3><p>Operations Manager</p></div>' + '<p>' + 'z'.repeat(600) + '</p>', text: 'x' };
+    const _team = readFindIcpSignals([_teamPage]);
+    if (_team.teamCount !== 2) _fails.push(`the roster read returned ${_team.teamCount} people from a two-person team page — the headcount is the closest free thing to the revenue band the whole ICP is defined by`);
+
+    // Hiring: structured data first, then literal titles, then silence. The
+    // marketing half must come from signalsFromTitles and nowhere else.
+    const _jobHtml = '<script type="application/ld+json">{"@type":"JobPosting","title":"Marketing Manager","datePosted":"'
+      + new Date(Date.now() - 20 * 864e5).toISOString().slice(0, 10) + '"}</script>' + '<p>' + 'q'.repeat(600) + '</p>';
+    const _hire = readFindIcpSignals([{ url: 'https://x.com', intent: 'home', html: _jobHtml, text: 'q' }]);
+    if (_hire.hiringAny !== true || _hire.hiringMarketing !== true) _fails.push('a dated JobPosting for a Marketing Manager does not read as hiring for marketing');
+    // The marketing half must come from signalsFromTitles and NOWHERE else, so
+    // the fixture has to be a title only THAT function calls marketing. The
+    // first version used "Marketing Manager", which any regex containing the
+    // word "market" also catches - so replacing the shared classifier with a
+    // hand-rolled one left this check green. "SEO Specialist" is a marketing
+    // role with no "market" in it, which is exactly the gap a second copy of
+    // the rule would open.
+    const _seoJob = '<script type="application/ld+json">{"@type":"JobPosting","title":"SEO Specialist","datePosted":"'
+      + new Date(Date.now() - 20 * 864e5).toISOString().slice(0, 10) + '"}</script>' + '<p>' + 'q'.repeat(600) + '</p>';
+    const _hireSeo = readFindIcpSignals([{ url: 'https://x.com', intent: 'home', html: _seoJob, text: 'q' }]);
+    if (_hireSeo.hiringMarketing !== true) _fails.push('an SEO Specialist opening does not read as a marketing hire \u2014 the lane is being decided here instead of by signalsFromTitles, which is the one function that owns that question');
+    const _opsJob = '<script type="application/ld+json">{"@type":"JobPosting","title":"Service Technician","datePosted":"'
+      + new Date(Date.now() - 20 * 864e5).toISOString().slice(0, 10) + '"}</script>' + '<p>' + 'q'.repeat(600) + '</p>';
+    const _hire2 = readFindIcpSignals([{ url: 'https://x.com', intent: 'home', html: _opsJob, text: 'q' }]);
+    if (_hire2.hiringAny !== true || _hire2.hiringMarketing !== false) _fails.push('a technician opening is being counted as a marketing hire, which is the signal the whole retainer window rests on');
+    // The prose fallback: bounded to a declared role noun, and a sentence is
+    // never a title. Guessing a title out of prose is how a page heading
+    // becomes a job opening.
+    if (!titlesFromCareersText('Marketing Coordinator\nOffice Manager').length) _fails.push('titlesFromCareersText cannot read a plain list of role titles off a careers page');
+    // A SHORT sentence, deliberately. The first fixture here was a long one,
+    // which the six-word cap already refuses - so reverting the punctuation
+    // rule left this check green and it proved nothing about the rule it
+    // names. The fixture-that-measures-nothing trap, found by falsification.
+    if (titlesFromCareersText('Our manager is great.').length) _fails.push('titlesFromCareersText is reading a SENTENCE as a job opening');
+    if (titlesFromCareersText('We are proud of our marketing manager, who has been with us for years.').length) _fails.push('titlesFromCareersText is reading a long sentence as a job opening');
+    if (titlesFromCareersText('About Us\nOur Story\nGallery').length) _fails.push('titlesFromCareersText is reading page headings as job openings');
+
+    // FIVE - the score. The rule that makes it honest is that an unmeasured
+    // term LEAVES THE DENOMINATOR; scoring it zero would tell a rep we checked
+    // and this business is a bad fit.
+    const _full = findIcpScore({ teamCount: 12, adsCode: true, adPlatforms: ['Google'], hiringMarketing: true, hiringAny: true, hiringTitles: ['Marketing Manager'], hiringMarketingTitles: ['Marketing Manager'], reviewCount: 200, rating: 4.6 });
+    if (_full.score !== 100) _fails.push(`a business scoring the maximum on all five signals scored ${_full.score}, not 100`);
+    if (_full.measured !== FIND_ICP_TERMS.length) _fails.push('the perfect-fit fixture did not measure every term, so the maximum is not reachable');
+    const _thin = findIcpScore({ teamCount: 12, adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: null, rating: null });
+    if (_thin.score !== 100) _fails.push(`a lead measured on ONE signal it scores full marks on came out at ${_thin.score} — the unmeasured terms are being counted as zero rather than left out`);
+    if (_thin.measured !== 1) _fails.push('the thin fixture reports more measured signals than it has');
+    const _none = findIcpScore({});
+    if (_none.score !== null) _fails.push('a business we could measure NOTHING about is given a numeric score, which reads as "we checked and it is bad"');
+    // Null laundering, the trap this file records most: Number(null) is 0 and
+    // Number.isFinite(0) is true, so every one of these must refuse to score.
+    for (const bad of [null, undefined, '', [], {}, true, NaN, '4.6']) {
+      const r = findIcpScore({ teamCount: bad, rating: bad, reviewCount: bad });
+      if (r.terms.some(t => (t.id === 'size' || t.id === 'rating' || t.id === 'demand') && t.measured)) {
+        _fails.push(`findIcpScore treats ${JSON.stringify(bad)} as a measurement`);
+        break;
+      }
+    }
+
+    // SIX - THE CALL SITES. Every one of these is what makes the read cheap,
+    // and a fixture cannot see any of them.
+    if (!_src.includes(_n('const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName,', ' preFetched = null) => {'))) {
+      _fails.push('findOwnerViaBrain no longer accepts pre-fetched pages, so the Find read is back to buying a sitemap call plus two scrapes per lead');
+    }
+    if (!_src.includes(_n("return await _ownerFromCorpus(pages.join('", "\\n').slice(0, 22000), companyName, website, apiKey);"))) {
+      _fails.push('the pre-fetched branch no longer hands its corpus to the shared owner reader, so the free path and the paid path are two implementations of one rule');
+    }
+    if (!_src.includes(_n('findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName,', ' preFetchedPages)'))) {
+      _fails.push('findDecisionMaker does not pass pre-fetched pages down, so supplying them changes nothing and every Find lead pays for the sitemap');
+    }
+    if (!_src.includes(_n('scrapeEmailsFromSite(website, fcKey, homepageContent, siteConfirmed, siteIsDown,', ' freePages)'))) {
+      _fails.push('the email engine is no longer handed the pages we already hold, so a contact page in memory is bought again from Firecrawl');
+    }
+    if (!_src.includes(_n('const md = await firecrawlScrape(fcKey, website, 40000, FC_CACHE_MS, { shot: false,', ' capture: (h) => { _html = h || \'\'; } });'))) {
+      _fails.push('the Find fallback scrape is asking for a full-page render again — the most expensive thing on the menu, on a read that never looks at a picture');
+    }
+    if (!_src.includes(_n('fcKey: allowBuy ? fcKey :', " '',"))) {
+      _fails.push('the email engine is handed a Firecrawl key unconditionally, so FIND_EMAIL_FIRECRAWL no longer bounds what a contact read can spend');
+    }
+    if (!_src.includes(_n('apifyToken:', " '', callOnly: true,"))) {
+      _fails.push('the Find owner read is no longer in calling mode, so it buys the paid web-search and licence wave it exists to skip');
+    }
+    // The render must still be bought on the AUDIT path. A cost fix that
+    // quietly removes a measurement from the other caller is not a cost fix.
+    if (!_src.includes(_n('const _shot = !(opts && opts.shot ===', ' false);'))) _fails.push('firecrawlScrape lost its render flag, so the two callers can no longer ask for different shapes');
+    if (!_src.includes(_n('fcNote(true, ', "'scrape', _ck, _shot);"))) _fails.push('the scrape is priced from a hard-coded render flag again rather than from what the request asked for');
+
+    // SEVEN - the route's own gates. Same admission machinery as research: the
+    // ceiling refuses BEFORE anything is spent, and a website that cannot be a
+    // URL is refused rather than discovered after the money moved.
+    if (!_src.includes(_n("const ceiling = budgetRefusal(['fc',", " 'anthropicUsd']);"))) _fails.push('the find-contact route no longer checks the day ceiling, so a runaway day has one door with no lock on it');
+    if (!_src.includes(_n('if (_findInFlight >=', ' FIND_CONTACT_CONCURRENCY) {'))) _fails.push('the find-contact route has no concurrency ceiling, so a second tab doubles the spend rate');
+    if (!bootGateRefuses('POST', '/api/find-contact', 'checking')) _fails.push('the find-contact route is not held during the boot window, so a lead worked before the checks settle can flip the build verdict');
+
+    if (_fails.length) {
+      console.log(`⛔ FIND CONTACT CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ FIND CONTACT CHECK: the Find tab's contact read is executed end to end — a plain fetch first with Firecrawl only as the fallback, the site's own navigation instead of a paid sitemap call, and the shared owner reader, email engine, roster parser, ad signatures and role classifier rather than second copies of any of them. The score is out of the ${FIND_ICP_TERMS.length} signals it could measure and an unmeasured one leaves the denominator instead of scoring zero. HONEST SHAPE: no contact read has run against a live business from this build, so the per-lead cost below is bounded by the guards above rather than measured — the first real run's FIND CONTACT line reports what it actually cost. FIND_EMAIL_FIRECRAWL=${FIND_EMAIL_FIRECRAWL} (set it to "always" to let the address lookup buy its own pages, roughly five more credits a lead).`);
+    }
+  } catch (e) {
+    console.log(`⛔ FIND CONTACT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ---- THE ONLY PAID CALLS NO CLAIM CAN EVER CONSUME --------------------
@@ -69759,6 +69987,564 @@ app.get('/api/call-outcomes', async (req, res) => {
     return res.send(csv);
   }
   res.json({ ok: true, ...rep, rows: rows.slice(0, 200) });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// THE FIND-TAB CONTACT READ - one goal, and it is NOT an audit
+// ═════════════════════════════════════════════════════════════════════════════
+// The standing goal, in the owner's words: "50 leads ranked with owner email and
+// phone number that are in our ICP." That is a different artefact from the audit
+// this system was built for, it is bought by a different button, and it lives in
+// a different tab on purpose - the Research tab audits, the Find tab lists.
+//
+// THREE RULES DECIDE EVERY LINE BELOW.
+//
+// 1. THE FREE READ COMES FIRST. Firecrawl is the fallback, never the door. A
+//    plain HTTP GET returns the full markup of most small trade sites, and this
+//    file has had one since checkBuiltWith was written - it was simply never
+//    used to save a credit. A homepage plus two nav-linked pages read this way
+//    costs NOTHING, where the audit path pays a map call plus a scrape each.
+//
+// 2. NOTHING HERE IS A SECOND IMPLEMENTATION. The owner comes from the same
+//    findOwnerViaBrain the audit uses (handed pages instead of buying them), the
+//    address from the same findEmailFireproof, the ad markers from the same
+//    AD_TAG_SIGNATURES, the roster from the same parseTeamRoster, the hiring
+//    dates from the same jobPostingsFromHtml, the marketing classification from
+//    the same signalsFromTitles. A second copy of any of those is the disease
+//    this file records more often than any other, and the copy that rots is
+//    always the one that only runs where nobody tests.
+//
+// 3. AN UNMEASURED SIGNAL LEAVES THE DENOMINATOR. It never scores zero. A
+//    business whose site we could not read is not a business with no team, no
+//    ads and no hiring - and a score that says so is the recorded
+//    unmeasured-as-zero failure pointed at a number a rep repeats out loud.
+
+const FIND_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+// Readable text out of markup. Block-level tags become newlines FIRST, or a
+// roster laid out as one <div> per person collapses into a single run and
+// parseTeamRoster sees one 400-character "name".
+const plainTextFromHtml = (html) => String(html || '')
+  .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+  .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+  .replace(/<(?:br|hr)\s*\/?>/gi, '\n')
+  .replace(/<\/(?:p|div|li|tr|h[1-6]|section|article|td)\s*>/gi, '\n')
+  .replace(/<[^>]+>/g, ' ')
+  .replace(/&nbsp;/gi, ' ').replace(/&#160;/g, ' ')
+  .replace(/&amp;/gi, '&').replace(/&quot;/gi, '"')
+  .replace(/&#0?39;|&apos;|&rsquo;/gi, "'")
+  .replace(/&lt;/gi, '<').replace(/&gt;/gi, '>')
+  .replace(/[ \t ]+/g, ' ')
+  .replace(/\s*\n\s*/g, '\n')
+  .replace(/\n{3,}/g, '\n\n')
+  .trim();
+
+// Every same-host link on a page, absolute and deduped. This is what replaces
+// the paid sitemap call: a small business puts its contact, about and team
+// pages in its own navigation, so the pages we want are named on the page we
+// have already read. Fragments are dropped because "/contact#form" and
+// "/contact" are one page and buying both is buying one twice - the recorded
+// duplicate-page cost, avoided at the door rather than detected afterwards.
+const sameHostLinks = (html, baseUrl) => {
+  const out = [];
+  const seen = new Set();
+  let host = '';
+  try { host = new URL(baseUrl).host.replace(/^www\./i, '').toLowerCase(); } catch { return out; }
+  const hrefs = String(html || '').match(/href\s*=\s*["'][^"']{1,300}["']/gi) || [];
+  for (const h of hrefs) {
+    const raw = h.replace(/^href\s*=\s*["']/i, '').replace(/["']$/, '').trim();
+    if (!raw || /^(?:#|mailto:|tel:|javascript:|data:)/i.test(raw)) continue;
+    let u;
+    try { u = new URL(raw, baseUrl); } catch { continue; }
+    if (!/^https?:$/i.test(u.protocol)) continue;
+    if (u.host.replace(/^www\./i, '').toLowerCase() !== host) continue;
+    // A document is not a page we can read as text.
+    if (/\.(?:pdf|jpe?g|png|gif|svg|webp|mp4|zip|docx?|xlsx?)$/i.test(u.pathname)) continue;
+    u.hash = '';
+    const abs = u.toString().replace(/\/$/, '');
+    const key = abs.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(abs);
+    if (out.length >= 400) break;
+  }
+  return out;
+};
+
+// A page read that costs nothing. Everything it can go wrong with is reported
+// by NAME rather than as an empty string, because "we read nothing" and "they
+// refused us" are different facts and only one of them is about the business.
+const findPlainFetch = async (url, timeoutMs = 12000) => {
+  try {
+    const r = await fetchT(url, { headers: { 'User-Agent': FIND_UA, 'Accept': 'text/html,application/xhtml+xml' } }, timeoutMs);
+    const html = await safeText(r);
+    const why = _blockedPageReason(r && r.status, html);
+    if (why) return { url, html: '', text: '', ok: false, why };
+    if (!html || html.length < 500) return { url, html: '', text: '', ok: false, why: `only ${(html || '').length} characters came back` };
+    const text = plainTextFromHtml(html);
+    if (text.length < 200) return { url, html, text, ok: false, why: 'the markup carries almost no readable text, which is what a JavaScript-only site looks like to a plain fetch' };
+    return { url, html, text, ok: true, why: '' };
+  } catch (e) {
+    return { url, html: '', text: '', ok: false, why: (e && e.message) || 'the request failed' };
+  }
+};
+
+// The pages worth reading, in the order they earn their place. Deliberately
+// SEPARATE regexes rather than one: a contact page carries the address, a team
+// page carries the roster and the headcount, a careers page carries the hiring
+// signal. Ranking them together would let three about-pages crowd out the only
+// careers page on the site.
+const FIND_PAGE_INTENTS = [
+  { key: 'contact', re: /(contact|get-?in-?touch|reach-?us)/i, want: 1 },
+  { key: 'team',    re: /(team|our-?team|staff|people|leadership|management|about|our-?story|who-?we-?are|meet)/i, want: 1 },
+  { key: 'careers', re: /(careers?|jobs?|employment|join-?(our-?)?team|work-?with-?us|hiring|apply)/i, want: 1 },
+];
+// Bounded by construction: at most one page per intent, at most FIND_MAX_PAGES
+// in total. The bound is the cost model - every page here is free on the plain
+// path and one credit on the Firecrawl fallback, so an unbounded list is an
+// unbounded bill on exactly the leads whose sites are hardest to read.
+const FIND_MAX_PAGES = 3;
+const pickFindPages = (links, homepageUrl) => {
+  const home = String(homepageUrl || '').replace(/\/$/, '').toLowerCase();
+  const pool = (Array.isArray(links) ? links : []).filter(u => String(u).toLowerCase() !== home);
+  const out = [];
+  const taken = new Set();
+  for (const intent of FIND_PAGE_INTENTS) {
+    // rankUrlsByIntent is the ranker the audit path already uses, with its
+    // recorded fixes: a whole path SEGMENT rather than a substring, so
+    // "/blog/how-to-talk-about-infertility" is not read as an about page.
+    const ranked = rankUrlsByIntent(pool, intent.re, 6);
+    for (const u of ranked) {
+      if (taken.has(u)) continue;
+      taken.add(u);
+      out.push({ url: u, intent: intent.key });
+      break;
+    }
+    if (out.length >= FIND_MAX_PAGES) break;
+  }
+  return out;
+};
+
+// ── THE THREE SIGNALS, ALL FREE, ALL OFF MARKUP WE ALREADY HOLD ─────────────
+// A job title shape, so a careers page with no structured data still yields a
+// role. Bounded to a DECLARED list of role nouns: guessing a title out of prose
+// is how a page heading becomes a job opening. Positive evidence only - a page
+// with no recognisable role produces NO hiring claim rather than a false one.
+const FIND_ROLE_NOUN = /\b(manager|specialist|coordinator|director|representative|technician|installer|assistant|associate|supervisor|estimator|foreman|dispatcher|apprentice|designer|strategist|analyst|consultant|officer|engineer|mechanic|plumber|electrician|roofer|receptionist|admin(?:istrator)?|bookkeeper|marketer)\b/i;
+const FIND_HIRING_CONTEXT = /\b(now hiring|we(?:'|’)?re hiring|we are hiring|open positions?|current openings?|job openings?|apply now|join our team|careers?)\b/i;
+const titlesFromCareersText = (text) => {
+  const out = [];
+  const seen = new Set();
+  for (const raw of String(text || '').split(/\n+/)) {
+    const t = raw.trim().replace(/\s+/g, ' ');
+    if (t.length < 4 || t.length > 60) continue;
+    if (!FIND_ROLE_NOUN.test(t)) continue;
+    // A sentence is not a title. A title is a short noun phrase; prose about a
+    // role reads as a sentence and carries sentence punctuation.
+    if (/[.!?;:]/.test(t)) continue;
+    if (t.split(/\s+/).length > 6) continue;
+    const k = t.toLowerCase();
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(t);
+    if (out.length >= 12) break;
+  }
+  return out;
+};
+
+// pages: [{ url, intent, html, text }] - whatever we managed to read, however.
+const readFindIcpSignals = (pages, now = Date.now()) => {
+  const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
+  const anyMarkup = read.some(p => String(p.html || '').length >= 500);
+  const allHtml = read.map(p => String(p.html || '')).join('\n');
+
+  // ADS. A tag proves an ad ACCOUNT, never a live campaign - that bound is
+  // recorded all over this file and it is not being loosened here. What it does
+  // prove, and what the ICP question actually asks, is that this business has
+  // stood up paid advertising infrastructure: somebody set up a budget.
+  // Absence rides did-we-look, exactly as every other absence claim in this
+  // file: with no readable markup the answer is null, never "no".
+  const googleAds = anyMarkup ? AD_TAG_SIGNATURES.hasGoogleAdsTag.test(allHtml) : null;
+  const metaPixel = anyMarkup ? AD_TAG_SIGNATURES.hasMetaPixel.test(allHtml) : null;
+  const tagManager = anyMarkup ? AD_TAG_SIGNATURES.hasTagManager.test(allHtml) : null;
+  let adsCode = null;
+  const adPlatforms = [];
+  if (googleAds) adPlatforms.push('Google');
+  if (metaPixel) adPlatforms.push('Facebook');
+  if (anyMarkup) adsCode = adPlatforms.length > 0;
+  let adsWhy;
+  if (adsCode === true) adsWhy = `${adPlatforms.join(' and ')} ad code is on the pages we read`;
+  else if (adsCode === false && tagManager === true) adsWhy = 'no ad code on the pages we read, but a tag container is installed and it can hold one we cannot see';
+  else if (adsCode === false) adsWhy = 'no ad code of either kind on the pages we read';
+  else adsWhy = 'their markup was not readable, so nothing about ads is known';
+
+  // TEAM. Their own published roster, parsed by the same function the owner
+  // resolver uses. This is the closest FREE thing to a headcount, and headcount
+  // is the closest free thing to the revenue band the ICP is defined by. It is
+  // a FLOOR, never a total - a firm with forty staff may publish four - and
+  // every consumer says so, because a floor reported as a headcount is a wrong
+  // number about the business the whole filter turns on.
+  let teamCount = null;
+  let teamNames = [];
+  let teamPageUrl = '';
+  for (const p of read) {
+    if (p.intent !== 'team') continue;
+    const roster = parseTeamRoster(p.html || p.text, '');
+    if (roster.length >= 1) { teamCount = roster.length; teamNames = roster.map(r => r.name); teamPageUrl = p.url; break; }
+  }
+
+  // HIRING. Structured data first - a datePosted the owner published himself,
+  // machine-readable, no prose parsing. A careers page with no structured data
+  // falls back to literal role titles, which is positive evidence only.
+  const posts = jobPostingsFromHtml(allHtml, now);
+  let hiringTitles = posts.map(j => j.title).filter(Boolean);
+  let hiringSource = hiringTitles.length ? 'their own job-posting markup' : '';
+  let hiringNewest = null;
+  for (const j of posts) {
+    const t = Date.parse(j.datePosted || '');
+    if (Number.isFinite(t) && (hiringNewest === null || t > hiringNewest)) hiringNewest = t;
+  }
+  const careers = read.find(p => p.intent === 'careers');
+  if (!hiringTitles.length && careers && FIND_HIRING_CONTEXT.test(careers.text || '')) {
+    const t2 = titlesFromCareersText(careers.text);
+    if (t2.length) { hiringTitles = t2; hiringSource = 'the roles listed on their careers page'; }
+  }
+  // signalsFromTitles is the ONE function in this file that decides whether a
+  // role is a marketing role. A second answer to that question here is exactly
+  // how the hiring clock came to date a marketing manager off a dispatcher.
+  const lanes = signalsFromTitles(hiringTitles);
+  const sawCareersPage = !!careers || read.length > 0;
+  const hiringAny = hiringTitles.length > 0 ? true : (sawCareersPage && anyMarkup ? false : null);
+  const hiringMarketing = hiringTitles.length > 0 ? lanes.marketing.length > 0 : (hiringAny === false ? false : null);
+
+  return {
+    pagesRead: read.length,
+    markupRead: anyMarkup,
+    adsCode, adPlatforms, tagManager, adsWhy,
+    teamCount, teamNames, teamPageUrl,
+    hiringAny, hiringMarketing, hiringTitles,
+    hiringMarketingTitles: lanes.marketing,
+    hiringSource,
+    hiringNewestPostedAt: hiringNewest ? new Date(hiringNewest).toISOString() : null,
+  };
+};
+
+// ── THE SCORE ───────────────────────────────────────────────────────────────
+// Five terms, each declared with its own maximum and its own scorer, and a
+// scorer returns null when the signal was never measured. The score is then a
+// percentage of what we COULD measure, so it is genuinely out of 100 and the
+// row still says how many of the five stood behind it.
+//
+// HONEST SHAPE, stated where it is computed rather than in a report: the ICP is
+// defined as $800k-$15M of revenue and NOTHING here measures revenue. Revenue
+// for a private local business is not free, and the closest free proxy is how
+// many people they publish plus how much business their review record shows.
+// So this is a FIT score built from proxies, it is labelled as one everywhere
+// it renders, and it must never be read as a revenue figure.
+const FIND_ICP_TERMS = [
+  {
+    id: 'size', max: 35, label: 'how many people they publish',
+    score: (s) => {
+      const n = s.teamCount;
+      if (typeof n !== 'number' || !Number.isFinite(n) || n < 1) return null;
+      if (n >= 121) return { points: 5,  say: `${n}+ people on their team page - larger than the businesses we sell to` };
+      if (n >= 41)  return { points: 25, say: `${n}+ people on their team page - upper end of the range` };
+      if (n >= 10)  return { points: 35, say: `${n}+ people on their team page - squarely the size we sell to` };
+      if (n >= 3)   return { points: 30, say: `${n}+ people on their team page - a real crew, right in range` };
+      return { points: 12, say: `${n} person on their team page - may be too small to carry a retainer` };
+    },
+  },
+  {
+    id: 'ads', max: 25, label: 'whether they already pay for advertising',
+    score: (s) => {
+      if (s.adsCode === true) return { points: 25, say: `${s.adPlatforms.join(' and ')} ad code on their site - they already spend on advertising` };
+      if (s.adsCode === false) return { points: 5, say: 'no ad code we could see, so no proof of an advertising budget' };
+      return null;
+    },
+  },
+  {
+    id: 'hiring', max: 20, label: 'whether they are hiring for marketing',
+    score: (s) => {
+      if (s.hiringMarketing === true) return { points: 20, say: `hiring for ${s.hiringMarketingTitles.slice(0, 2).join(', ') || 'a marketing role'} - a marketing budget being decided right now` };
+      if (s.hiringAny === true) return { points: 10, say: `hiring (${s.hiringTitles.slice(0, 2).join(', ')}), though not for marketing` };
+      if (s.hiringAny === false) return { points: 4, say: 'no open roles found on their site' };
+      return null;
+    },
+  },
+  {
+    id: 'demand', max: 12, label: 'how much business their review record shows',
+    score: (s) => {
+      const n = Number(s.reviewCount);
+      if (typeof s.reviewCount !== 'number' || !Number.isFinite(n)) return null;
+      if (n >= 750) return { points: 4,  say: `${n} Google reviews - high volume, likely bigger than our range` };
+      if (n >= 150) return { points: 12, say: `${n} Google reviews - steady volume of real jobs` };
+      if (n >= 40)  return { points: 10, say: `${n} Google reviews - an established local business` };
+      if (n >= 12)  return { points: 6,  say: `${n} Google reviews - modest volume` };
+      return { points: 2, say: `${n} Google reviews - very little trading history to read` };
+    },
+  },
+  {
+    id: 'rating', max: 8, label: 'where their rating sits',
+    score: (s) => {
+      const r = Number(s.rating);
+      if (typeof s.rating !== 'number' || !Number.isFinite(r) || r <= 0) return null;
+      // The 4.2-4.85 band is the ONE filter in this system with real evidence
+      // behind it: both emails that ever earned a reply came from inside it.
+      if (r >= 4.2 && r <= 4.85) return { points: 8, say: `${r} stars - inside the band both replies came from` };
+      if (r > 4.85) return { points: 4, say: `${r} stars - so high there is rarely a complaint to work with` };
+      return { points: 3, say: `${r} stars - below the band we have evidence for` };
+    },
+  },
+];
+const findIcpScore = (signals) => {
+  const s = signals || {};
+  const terms = [];
+  let points = 0, possible = 0;
+  for (const t of FIND_ICP_TERMS) {
+    let r = null;
+    try { r = t.score(s); } catch { r = null; }
+    if (!r || typeof r.points !== 'number' || !Number.isFinite(r.points)) {
+      terms.push({ id: t.id, label: t.label, measured: false, points: null, max: t.max, say: 'not measured' });
+      continue;
+    }
+    points += r.points;
+    possible += t.max;
+    terms.push({ id: t.id, label: t.label, measured: true, points: r.points, max: t.max, say: r.say });
+  }
+  // Nothing measured means no score. A zero here would say "we checked and this
+  // business is a bad fit", which is the opposite of what happened.
+  if (possible <= 0) {
+    return { score: null, measured: 0, of: FIND_ICP_TERMS.length, terms,
+      why: 'nothing about this business could be measured, so it has no score - not a low one' };
+  }
+  const measured = terms.filter(t => t.measured).length;
+  return {
+    score: Math.max(0, Math.min(100, Math.round((points / possible) * 100))),
+    measured, of: FIND_ICP_TERMS.length, terms,
+    why: `scored on the ${measured} of ${FIND_ICP_TERMS.length} signals we could measure`
+       + (measured < FIND_ICP_TERMS.length ? '; the rest are left out rather than counted as zero' : ''),
+  };
+};
+
+// ── ONE LEAD, READ AS CHEAPLY AS IT CAN HONESTLY BE READ ────────────────────
+// FIND_EMAIL_FIRECRAWL decides whether the email engine may buy its OWN pages
+// when the free ones carried no address. 'fallback' (the default) lets it buy
+// only when the plain read of the site failed outright - which is the case
+// where there is nothing free to search. 'always' restores the audit path's
+// behaviour: a sitemap call plus up to four scrapes, about five credits, for
+// the leads whose address is published somewhere the navigation does not link.
+// A setting rather than a constant because the two are a real trade and the
+// first live run is what should decide it: the response reports which mode ran
+// and what it cost, so the difference is measurable rather than argued.
+const FIND_EMAIL_FIRECRAWL = String(process.env.FIND_EMAIL_FIRECRAWL || 'fallback').toLowerCase();
+// A small ceiling of its own. The client runs a pool, but a second tab or a
+// re-press must not multiply it - and unlike the audit queue there is no job
+// record here to dedupe against, because a contact read is cheap enough to
+// repeat and expensive enough to bound.
+const FIND_CONTACT_CONCURRENCY = Math.max(1, Number(process.env.FIND_CONTACT_CONCURRENCY || 8) || 8);
+let _findInFlight = 0;
+
+const runFindContactRead = async (company, keys) => {
+  const t0 = Date.now();
+  const name = String((company && company.name) || '').trim();
+  const website = String((company && company.website) || '').trim();
+  const apiKey = (keys && keys.anthropicKey) || '';
+  const fcKey = (keys && keys.firecrawlKey) || '';
+  const verifierKey = (keys && keys.verifierKey) || '';
+  const notes = [];
+
+  const phoneDigits = String((company && company.phone) || '').replace(/\D/g, '');
+  const out = {
+    company: name,
+    website,
+    phone: (company && company.phone) || '',
+    phoneSource: phoneDigits ? 'their Google listing' : '',
+    readVia: 'nothing read',
+    readWhy: '',
+    pagesRead: [],
+    owner: null,
+    email: null,
+    icp: null,
+    signals: null,
+    notes,
+  };
+
+  // ── THE PAGES ────────────────────────────────────────────────────────────
+  const pages = [];
+  if (!website) {
+    out.readWhy = 'no website on this listing, so nothing about their site could be read';
+    notes.push(out.readWhy);
+  } else {
+    const home = await findPlainFetch(website);
+    if (home.ok) {
+      out.readVia = 'a plain fetch (free)';
+      pages.push({ url: home.url, intent: 'home', html: home.html, text: home.text });
+    } else if (fcKey && !fcCreditsBlocked()) {
+      // The fallback, and ONLY the fallback. shot:false because this read wants
+      // the markup and never the picture - the render is the most expensive
+      // thing on the menu and nothing in a contact list looks at it.
+      let _html = '';
+      const md = await firecrawlScrape(fcKey, website, 40000, FC_CACHE_MS, { shot: false, capture: (h) => { _html = h || ''; } });
+      if (md || _html) {
+        out.readVia = 'Firecrawl (their site refused a plain fetch)';
+        pages.push({ url: website, intent: 'home', html: _html, text: _html ? plainTextFromHtml(_html) : String(md) });
+        notes.push(`their site refused a plain read (${home.why}), so this lead cost a Firecrawl credit`);
+      } else {
+        out.readWhy = `their site could not be read at all (${home.why})`;
+        notes.push(out.readWhy);
+      }
+    } else {
+      out.readWhy = `their site could not be read (${home.why})`
+        + (fcKey ? ', and the Firecrawl fallback is unavailable right now' : ', and there is no Firecrawl key to fall back on');
+      notes.push(out.readWhy);
+    }
+  }
+
+  // Their own navigation names the pages we want. This is what replaces the
+  // paid sitemap call, and it is free because the links are in markup we hold.
+  if (pages.length) {
+    const links = sameHostLinks(pages[0].html, pages[0].url);
+    const picks = pickFindPages(links, pages[0].url);
+    const viaFirecrawl = out.readVia.indexOf('Firecrawl') === 0;
+    for (const pick of picks) {
+      const got = await findPlainFetch(pick.url, 10000);
+      if (got.ok) { pages.push({ url: pick.url, intent: pick.intent, html: got.html, text: got.text }); continue; }
+      if (viaFirecrawl && fcKey && !fcCreditsBlocked()) {
+        let _h = '';
+        const md = await firecrawlScrape(fcKey, pick.url, 30000, FC_CACHE_MS, { shot: false, capture: (h) => { _h = h || ''; } });
+        if (md || _h) pages.push({ url: pick.url, intent: pick.intent, html: _h, text: _h ? plainTextFromHtml(_h) : String(md) });
+      }
+    }
+    console.log(`\u{1F50E} FIND READ [${name}]: ${pages.length} page(s) via ${out.readVia} — ${pages.map(p => p.intent).join(', ')}. ${links.length} same-host link(s) came off their own navigation, so no sitemap call was bought.`);
+  }
+  out.pagesRead = pages.map(p => ({ url: p.url, intent: p.intent, chars: (p.text || '').length }));
+
+  // ── THE THREE SIGNALS ────────────────────────────────────────────────────
+  const signals = readFindIcpSignals(pages);
+  signals.reviewCount = (typeof (company && company.reviewCount) === 'number') ? company.reviewCount : null;
+  signals.rating = (typeof (company && company.rating) === 'number') ? company.rating : null;
+  out.signals = signals;
+  out.icp = findIcpScore(signals);
+
+  // ── THE OWNER ────────────────────────────────────────────────────────────
+  // findDecisionMaker in callOnly mode: stage 1 only, so the paid web-search and
+  // licence wave is never bought. A contact list is dialled and emailed by a
+  // person who can ask "who owns the place" in four seconds; buying eight
+  // Firecrawl credits to answer it first is the trade this mode declines.
+  const homeText = (pages[0] && pages[0].text) || '';
+  const interior = pages.slice(1).map(p => ({ url: p.url, text: p.text }));
+  if (apiKey && name) {
+    try {
+      const dm = await findDecisionMaker({
+        companyName: name, website,
+        // No fcKey: every source that could spend one is either stood down by
+        // callOnly or handed pages it does not have to buy. Passing the key
+        // anyway would leave the spend one forgotten branch away.
+        fcKey: '', apiKey,
+        homepageContent: homeText,
+        location: (company && company.location) || '',
+        placeId: '', industry: (company && company.industry) || '',
+        apifyToken: '', callOnly: true,
+        preFetchedPages: interior,
+      });
+      if (dm && dm.name) {
+        out.owner = {
+          name: dm.name, title: dm.title || '', confidence: dm.confidence || '',
+          sources: dm.sources || [], authority: dm.authority ?? null,
+          canBuy: dm.canBuy === true, blockReason: dm.blockReason || '',
+        };
+      } else {
+        notes.push('no owner-level person is named anywhere on the pages we read');
+      }
+    } catch (e) { notes.push(`the owner read failed (${e && e.message})`); }
+  } else if (!apiKey) {
+    notes.push('no Anthropic key, so nobody could be identified');
+  }
+
+  // ── THE ADDRESS ──────────────────────────────────────────────────────────
+  if (website) {
+    try {
+      const siteConfirmed = pages.length > 0;
+      const allowBuy = FIND_EMAIL_FIRECRAWL === 'always'
+        || (FIND_EMAIL_FIRECRAWL === 'fallback' && pages.length === 0);
+      const em = await findEmailFireproof({
+        website,
+        ceoName: (out.owner && out.owner.name) || '',
+        ceoTitle: (out.owner && out.owner.title) || '',
+        fcKey: allowBuy ? fcKey : '',
+        homepageContent: homeText,
+        verifierKey,
+        siteConfirmed,
+        siteIsDown: pages.length === 0,
+        industry: (company && company.industry) || '',
+        // The pages we already hold, scanned by the same extractor with the
+        // same same-domain strictness before a single credit can be spent.
+        freePages: pages.map(p => ({ url: p.url, text: p.text })),
+      });
+      if (em) {
+        out.email = {
+          address: em.email || '', tier: em.tier ?? null, sendable: em.sendable === true,
+          label: em.label || '', pattern: em.pattern || '',
+          blockReason: em.blockReason || em.lookupBlocked || '',
+        };
+        if (!em.email) notes.push('no address could be resolved for this business');
+      }
+    } catch (e) { notes.push(`the address lookup failed (${e && e.message})`); }
+  }
+
+  const led = FC_LEDGER.getStore() || {};
+  out.spend = {
+    firecrawl: Math.round((led.spent || 0) * 100) / 100,
+    anthropicUsd: Math.round((led.anthropicUsd || 0) * 10000) / 10000,
+  };
+  out.tookMs = Date.now() - t0;
+  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) || 'none'} | phone ${out.phone || 'none'} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s`);
+  return out;
+};
+
+// ── THE ROUTE ────────────────────────────────────────────────────────────────
+// The same admission machinery the research route has, because the failure this
+// prevents is identical: a loop, a mistake or one bad afternoon running the
+// account to zero with every individual line item correctly logged. The boot
+// window gate is the app-level middleware and applies to this POST already.
+app.post('/api/find-contact', async (req, res) => {
+  const b = req.body || {};
+  const company = b.company || {};
+  const who = String(company.name || 'lead');
+  const keys = b.keys || {};
+  if (!company.name) return res.status(422).json({ error: 'A company name is required.' });
+  if (!keys.anthropicKey) {
+    return res.status(422).json({ error: 'No Anthropic key is set, so nobody can be identified. Add it in Settings.', preflightStopped: true });
+  }
+  // A website that cannot be a URL is a data problem, not a lead, and finding
+  // that out AFTER spending is the whole reason preflight exists.
+  if (company.website) {
+    try { new URL(String(company.website)); }
+    catch { return res.status(422).json({ error: `"${String(company.website).slice(0, 60)}" is not a usable website address, so nothing about their site can be read.`, preflightStopped: true }); }
+  }
+  const ceiling = budgetRefusal(['fc', 'anthropicUsd']);
+  if (ceiling) {
+    console.log(`\u{1F6D1} FIND CONTACT [${who}]: REFUSED AT THE DAY CEILING — ${ceiling.message}`);
+    return res.status(429).json({ error: ceiling.message, budgetStopped: true });
+  }
+  if (_findInFlight >= FIND_CONTACT_CONCURRENCY) {
+    return res.status(429).json({
+      error: `${_findInFlight} contact reads are already running (the ceiling is FIND_CONTACT_CONCURRENCY=${FIND_CONTACT_CONCURRENCY}). Nothing was spent; retry in a moment.`,
+      busy: true,
+    });
+  }
+  _findInFlight += 1;
+  try {
+    const out = await runWithLead(who, () =>
+      FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0, places: 0, anthropicUsd: 0, apify: 0 },
+        () => runFindContactRead(company, keys)));
+    res.json(out);
+  } catch (e) {
+    console.log(`FIND CONTACT [${who}]: failed — ${e && e.message}`);
+    res.status(500).json({ error: (e && e.message) || 'the contact read failed' });
+  } finally {
+    _findInFlight -= 1;
+  }
 });
 
 app.get('/api/find-options', (req, res) => {
