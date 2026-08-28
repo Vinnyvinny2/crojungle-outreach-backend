@@ -2404,6 +2404,9 @@ let contactStat = null;
       if (f.contactAdsCode !== null || f.contactTeamCount !== null || f.contactHiring !== null || f.contactHiringMarketing !== null) {
         fails.push('contactFieldsFrom converts an unmeasured signal into false or zero on the way onto the lead');
       }
+      if (M.fields({ icp: {}, owner: {}, email: {}, signals: {} }).contactReadOk !== true) {
+        fails.push('a real server answer does not set the read flag, so a lead that WAS read comes back into the next press and is paid for twice');
+      }
       const f2 = M.fields({ signals: { adsCode: false, teamCount: 0, hiringAny: false }, icp: { score: 0 }, owner: {}, email: {} });
       if (f2.contactAdsCode !== false || f2.contactTeamCount !== 0 || f2.contactIcp !== 0) {
         fails.push('contactFieldsFrom throws away a genuine measured false or zero, which is the same defect pointed the other way');
@@ -2467,10 +2470,44 @@ let contactStat = null;
   if (html.indexOf(_nn('const live = loadDiscovered();', '\n      const merged = live.map(x => (x && results.has(x.name))')) < 0) {
     fails.push('the contact run no longer saves after every lead, so a Stop or a closed tab loses reads that were already paid for');
   }
-  // The card strip must be gated on the lead having been read, or an untouched
-  // queue renders a wall of "not checked" rows.
-  if (html.indexOf(_nn('if (!co.contactAt) return', ' null;')) < 0) {
-    fails.push('the card contact strip renders on leads that were never read');
+  // The card strip must be gated on the READ FLAG, not on the timestamp. Live,
+  // 2026-08-28: the server was paused, every request failed instantly, the
+  // failure path stamped contactAt anyway, and a hundred leads were retired as
+  // "read" in about two seconds with nothing on them and no way to press the
+  // button again. contactReadOk is written in ONE place - the success path - so
+  // it cannot be set by anything that did not read the business.
+  if (html.indexOf(_nn('if (co.contactReadOk !== true) return', ' null;')) < 0) {
+    fails.push('the card contact strip is no longer gated on the read flag, so a lead whose request FAILED renders as if it had been read');
+  }
+  if (html.indexOf(_nn('const _cUnread = _cShown.filter(c => c && c.contactReadOk !==', ' true && c.name);')) < 0) {
+    fails.push('the panel decides what is unread from something other than the read flag — a failed request would retire a lead permanently');
+  }
+  // contactReadOk may be assigned true in exactly one place: the function that
+  // reads a real server answer. A second writer is how a failure gets to claim
+  // it read something.
+  {
+    const writers = (html.match(/contactReadOk:\s*true/g) || []).length;
+    if (writers !== 1) fails.push(`contactReadOk is set to true in ${writers} place(s); it must be written only where the server actually answered`);
+    // BOTH failure branches - a refusal and a thrown fetch - must say so on the
+    // lead. This is the assertion the live defect needed and did not have: a
+    // falsification that put the old `contactAt` stamp back on those branches
+    // came back GREEN, because every other assertion here keys on the read flag
+    // and the reverted branches simply wrote a field nothing consulted. Green
+    // for the wrong reason is not a pass, so the branches are asserted directly.
+    const deniers = (html.match(/contactReadOk:\s*false,\s*contactFailedAt:/g) || []).length;
+    if (deniers !== 2) fails.push(`${deniers} of the 2 contact-run failure branches record the failure on the lead; a branch that records nothing leaves a failed lead indistinguishable from an unread one, and a branch that records a READ retires it forever`);
+    // And no failure branch may write the read TIMESTAMP. contactAt is shown as
+    // when we read this business; a failure writing it is a false claim about
+    // work that never happened.
+    const runner = html.slice(html.indexOf('const runContactBatch'), html.indexOf('const addManyToPipeline'));
+    if (/contactNotes: \[(?:d\.error|\(e &&)/.test(runner) && /contactAt: new Date\(\)\.toISOString\(\), contactNotes:/.test(runner)) {
+      fails.push('a contact-run failure branch stamps contactAt - the timestamp that says when we READ this business - on a request that never read anything');
+    }
+  }
+  // A dead server must stop the run rather than burning through the whole queue
+  // in two seconds and reporting it as finished.
+  if (html.indexOf(_nn('if (transportFails >=', ' 3) {')) < 0) {
+    fails.push('the contact run no longer stops after repeated transport failures — a paused server runs the entire queue instantly and reports it as done');
   }
   // The Find tab's runner must share NOTHING with the Research batch. Two
   // artefacts, two costs, two buttons - and one shared runner is how one

@@ -5344,7 +5344,17 @@ const contactFieldsFrom = (data) => {
   const own = d.owner || {};
   const em = d.email || {};
   return {
+    // contactReadOk is the ONLY thing that means "this business was read". It is
+    // set here and nowhere else, so it can only ever be true after the server
+    // actually answered. contactAt is the timestamp OF that read - it used to be
+    // stamped on the failure paths too, and on 2026-08-28 that ran a hundred
+    // leads against a paused server in about two seconds, marked every one of
+    // them read, and left no way to press the button again: "i ran it when the
+    // derve was paused now i cnat get it to do anything". A stamp that says
+    // "done" must be written by the thing that did it.
+    contactReadOk: true,
     contactAt: new Date().toISOString(),
+    contactFailedAt: null,
     contactIcp: (typeof icp.score === 'number') ? icp.score : null,
     contactIcpWhy: icp.why || '',
     contactIcpTerms: Array.isArray(icp.terms) ? icp.terms : [],
@@ -5522,6 +5532,7 @@ const leadFromCompany = (company) => {
       verifiedCEOTitle: company.verifiedCEOTitle || company.contactOwnerTitle || '',
       // The contact read in full, so a lead listed today and audited next week
       // does not pay twice for the same owner and the same address.
+      contactReadOk: company.contactReadOk === true,
       contactAt: company.contactAt || null,
       contactIcp: (typeof company.contactIcp === 'number') ? company.contactIcp : null,
       contactOwner: company.contactOwner || '',
@@ -6096,6 +6107,7 @@ function FindView({
     const started = Date.now();
     setContactRun({ total: list.length, done: 0, withEmail: 0, withOwner: 0, running: [], fc: 0, usd: 0, startedAt: started, failed: 0 });
     let next = 0;
+    let transportFails = 0;
     const results = new Map();
     const one = async (co) => {
       setContactRun(s => s ? { ...s, running: s.running.concat([co.name]) } : s);
@@ -6107,16 +6119,38 @@ function FindView({
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) {
-          // A refusal is a fact worth keeping on the lead. Reporting it only in
-          // a toast means the next press repeats it with no record of why.
-          fields = { contactAt: new Date().toISOString(), contactNotes: [d.error || ('the server answered ' + r.status)] };
+          // A refusal is a fact worth keeping on the lead - reporting it only in
+          // a toast means the next press repeats it with no record of why. But
+          // it is NOT a read: contactReadOk stays false, so the next press picks
+          // this lead up again instead of skipping it forever.
+          fields = { contactReadOk: false, contactFailedAt: new Date().toISOString(),
+                     contactNotes: [d.error || ('the server answered ' + r.status)] };
+          // 502/503/504 and a plain refusal are TRANSPORT failures - the server
+          // is down, restarting, or unreachable. Nothing about this lead caused
+          // it and nothing about the next lead will fix it.
+          if (r.status >= 500 || r.status === 0) transportFails += 1; else transportFails = 0;
           if (d.budgetStopped || d.busy || d.booting) contactStop.current = true;
           if (d.error) setContactErr(d.error);
         } else {
+          transportFails = 0;
           fields = contactFieldsFrom(d);
         }
       } catch (e) {
-        fields = { contactAt: new Date().toISOString(), contactNotes: [(e && e.message) || 'the request failed'] };
+        // fetch itself threw: the server is not answering at all.
+        transportFails += 1;
+        fields = { contactReadOk: false, contactFailedAt: new Date().toISOString(),
+                   contactNotes: [(e && e.message) || 'the request failed'] };
+      }
+      // ══ A DEAD SERVER MUST NOT LOOK LIKE A FINISHED RUN ══════════════════
+      // Live, 2026-08-28: the server was paused, a hundred requests failed
+      // instantly, and the panel reported a hundred leads read in about two
+      // seconds - "it loaded really fast like impossibly fast". Three failures
+      // in a row is not a run worth continuing; it is one fact about the server,
+      // and it is said once, plainly, instead of a hundred times per lead.
+      if (transportFails >= 3) {
+        contactStop.current = true;
+        setContactErr('The server is not answering (' + ((fields.contactNotes || [])[0] || 'no response')
+          + '). Nothing was read and nothing was spent. If it is asleep or redeploying, give it a minute and press the button again \u2014 no lead has been marked as read.');
       }
       results.set(co.name, fields);
       setContactRun(s => s ? {
@@ -6124,7 +6158,7 @@ function FindView({
         done: s.done + 1,
         withEmail: s.withEmail + (fields.contactEmail ? 1 : 0),
         withOwner: s.withOwner + (fields.contactOwner ? 1 : 0),
-        failed: s.failed + (fields.contactIcp === undefined && (fields.contactNotes || []).length ? 1 : 0),
+        failed: s.failed + (fields.contactReadOk === true ? 0 : 1),
         fc: s.fc + (fields.contactSpendFc || 0),
         usd: s.usd + (fields.contactSpendUsd || 0),
         running: s.running.filter(n => n !== co.name),
@@ -6982,7 +7016,7 @@ function FindView({
     // refused: everything else is ordinary text, because a coloured box
     // confirming the ordinary case is exactly what drowns the one that matters.
     (() => {
-      if (!co.contactAt) return null;
+      if (co.contactReadOk !== true) return null;
       const _line = { fontSize:12.5, color:'var(--t)', lineHeight:1.55 };
       const _dot = React.createElement('span', { style:{ opacity:.4, margin:'0 7px' } }, '·');
       const _emailBad = !!co.contactEmail && co.contactEmailSendable !== true;
@@ -7218,9 +7252,13 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       // results because it decides what the next press spends, which is the
       // same rule that moved the trade and market pickers up here.
       const _cShown = _shown;
-      const _cRead = _cShown.filter(c => c && c.contactAt);
+      // contactReadOk, not contactAt. A lead whose request failed is UNREAD and
+      // must come back into the next press - that is what stops a paused server
+      // from permanently retiring a hundred leads.
+      const _cRead = _cShown.filter(c => c && c.contactReadOk === true);
       const _cWithEmail = _cShown.filter(c => c && c.contactEmail).length;
-      const _cUnread = _cShown.filter(c => c && !c.contactAt && c.name);
+      const _cUnread = _cShown.filter(c => c && c.contactReadOk !== true && c.name);
+      const _cFailed = _cShown.filter(c => c && c.contactReadOk !== true && c.contactFailedAt);
       const _cExportable = discovered.filter(hasContactData);
       const _running = !!(contactRun && !contactRun.finishedAt && contactRun.done < contactRun.total);
       const _pct = contactRun && contactRun.total ? Math.round((contactRun.done / contactRun.total) * 100) : 0;
@@ -7297,6 +7335,36 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
             style:{ background: contactSort ? 'var(--p)' : 'transparent', color: contactSort ? '#fff' : 'var(--m2)', border:'1px solid var(--b)' },
             onClick: () => setContactSort(v => !v),
           }, contactSort ? 'Sorted by fit score' : 'Sort by fit score') : null,
+          // The way back. Everything a contact read produced, cleared, so the
+          // next press reads them fresh. Confirmed, because it throws away work
+          // that cost real credits.
+          _cRead.length ? React.createElement('button', {
+            className: 'btn btn-sm',
+            style:{ background:'transparent', color:'var(--m2)', border:'1px solid var(--b)' },
+            title: 'Forgets every contact read on screen so they can be read again. The audit side is untouched.',
+            onClick: () => {
+              if (!window.confirm('Clear the contact read on ' + _cRead.length + ' lead(s)? They will be read again on the next press, which costs credits.')) return;
+              const names = new Set(_cRead.map(c => c.name));
+              const cleared = loadDiscovered().map(x => (x && names.has(x.name))
+                ? Object.assign({}, x, { contactReadOk: false, contactAt: null, contactFailedAt: null,
+                    contactIcp: null, contactIcpWhy: '', contactIcpTerms: [], contactOwner: '', contactOwnerTitle: '',
+                    contactEmail: '', contactEmailTier: null, contactEmailLabel: '', contactPhone: '',
+                    contactAdsCode: null, contactTeamCount: null, contactHiring: null, contactHiringMarketing: null,
+                    contactHiringTitles: [], contactReadVia: '', contactNotes: [] })
+                : x);
+              saveDiscovered(cleared); setDiscovered(cleared); setContactErr('');
+            },
+          }, 'Clear ' + _cRead.length + ' read') : null,
+          // A failed read is a stop, so it gets the one colour this screen uses
+          // for one. It also names the reason, because "it did nothing" with no
+          // cause attached is what sent an operator to the Render logs looking
+          // for requests that were never made.
+          _cFailed.length ? React.createElement('div', {
+            style:{ flexBasis:'100%', fontSize:12, color:'#fca5a5', border:'1px solid rgba(239,68,68,.25)',
+                    borderRadius:9, padding:'8px 11px', lineHeight:1.5 },
+          }, _cFailed.length + ' lead' + (_cFailed.length === 1 ? '' : 's') + ' could not be read: '
+             + (((_cFailed[0].contactNotes || [])[0]) || 'no reason recorded')
+             + '. They are still counted as unread, so the button above picks them up again.') : null,
           React.createElement('div', { style:{ fontSize:11.5, color:'var(--m2)', flexBasis:'100%', lineHeight:1.5 } },
             _cUnread.length === 0 && _cRead.length === 0
               ? 'Find some leads first, or widen the filters above.'
