@@ -10121,9 +10121,13 @@ let VERIFIER_PROBE_AT = 0;
 const verifierBlocked = () => (VERIFIER_EXHAUSTED || VERIFIER_DEAD);
 // Consuming: the door itself. After the cooldown, exactly ONE call is let
 // through to find out whether the allowance came back.
-const verifierGate = () => {
+const verifierGate = (nowMs) => {
   if (!verifierBlocked()) return true;
-  const now = Date.now();
+  // The clock is a parameter with today's default. Nothing in production
+  // passes one; the boot check does, because the whole point of this gate
+  // is what happens ten minutes after a latch and a fixture that cannot
+  // travel there cannot see it.
+  const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
   if (now - VERIFIER_LATCHED_AT < VERIFIER_COOLDOWN_MS) return false;
   if (now - VERIFIER_PROBE_AT < VERIFIER_COOLDOWN_MS) return false;
   VERIFIER_PROBE_AT = now;
@@ -10135,8 +10139,11 @@ const verifierGate = () => {
 // call ever reaches verifyEmailSMTP, and the recovery probe can never fire.
 // That is the §43 deadlock rebuilt one level up, so it is answered here and
 // read-only: it never consumes the probe.
-const verifierMayTry = () => !verifierBlocked()
-  || (Date.now() - VERIFIER_LATCHED_AT >= VERIFIER_COOLDOWN_MS && Date.now() - VERIFIER_PROBE_AT >= VERIFIER_COOLDOWN_MS);
+const verifierMayTry = (nowMs) => {
+  if (!verifierBlocked()) return true;
+  const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  return now - VERIFIER_LATCHED_AT >= VERIFIER_COOLDOWN_MS && now - VERIFIER_PROBE_AT >= VERIFIER_COOLDOWN_MS;
+};
 const verifierLatch = (kind) => {
   VERIFIER_LATCHED_AT = Date.now();
   if (kind === 'dead') VERIFIER_DEAD = true; else VERIFIER_EXHAUSTED = true;
@@ -63415,6 +63422,74 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 TRADE TABLE COVERAGE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE EMAIL VERIFIER CAN COME BACK ════════════════════════════════════
+  // VERIFIER_EXHAUSTED and VERIFIER_DEAD were one-way for their whole life:
+  // no TTL, no probe, no reset. One busy minute on a free-tier daily
+  // allowance turned SMTP verification off for every remaining lead until
+  // Render restarted the process, and section 43 records exactly this shape
+  // on the Firecrawl credit latch.
+  //
+  // The cost is quiet and expensive: tier 2 is UNREACHABLE without a live
+  // verifier, so every address after the blip falls to tier 3 or 4 and reads
+  // as pattern-built rather than confirmed. On a fifty-lead run that exhausts
+  // at lead twelve, thirty-eight leads are silently downgraded.
+  //
+  // THIS CHECK EXISTS BECAUSE THE FIX CAME BACK GREEN THROUGH A REAL REVERT.
+  // Restoring the one-way gate broke nothing, because nothing was watching -
+  // the mechanism was built and never guarded, which is the shape only a
+  // falsification run ever finds.
+  try {
+    const _fails = [];
+    const T0 = Date.now();
+    const AFTER = T0 + VERIFIER_COOLDOWN_MS + 1000;
+
+    // 1. A CLEAN VERIFIER IS NEVER IN THE WAY.
+    if (verifierBlocked()) _fails.push('the verifier is already latched at boot, so this check is measuring a state production never starts in');
+    else {
+      if (!verifierGate() || !verifierMayTry()) _fails.push('an unlatched verifier is refusing calls');
+
+      // 2. A LATCH STOPS CALLS IMMEDIATELY. That half always worked.
+      verifierLatch('exhausted');
+      if (!verifierBlocked()) _fails.push('an exhausted verifier is not latched, so a dead account is asked once per lead');
+      if (verifierGate(T0) || verifierMayTry(T0)) _fails.push('a just-latched verifier still lets calls through, so an empty allowance is hammered');
+
+      // 3. AND IT LETS EXACTLY ONE CALL THROUGH AFTER THE COOLDOWN. This is
+      // the branch that was unguarded: without it the latch is a deadlock,
+      // because no call can ever be made to clear it.
+      if (!verifierMayTry(AFTER)) _fails.push(`the read-only look-ahead still refuses ${Math.round(VERIFIER_COOLDOWN_MS / 60000)} minutes after the latch - every guard site refuses, so no call reaches the verifier and the recovery probe can never fire`);
+      if (!verifierGate(AFTER)) _fails.push('the gate never opens after the cooldown - the latch has no way back, which is the deadlock this exists to prevent');
+      // ONE probe per window, or fifty leads hammer a door that is shut.
+      if (verifierGate(AFTER)) _fails.push('a SECOND call went through in the same cooldown window - the probe is not rationed, so a fifty-lead batch retries a dead account fifty times');
+
+      // 4. AN ANSWER IS WHAT CLEARS IT, not the clock. A permanently dead key
+      // must not be reported as healthy every ten minutes.
+      verifierAnswered();
+      if (verifierBlocked()) _fails.push('a call that ANSWERED did not clear the latch, so a topped-up account stays off until Render restarts');
+      if (!verifierGate() || !verifierMayTry()) _fails.push('the verifier is still refusing after a successful answer');
+
+      // 5. A REJECTED KEY LATCHES THE SAME WAY, and is a different fact from
+      // an empty allowance - one is a Settings problem, one waits for a reset.
+      verifierLatch('dead');
+      if (!VERIFIER_DEAD) _fails.push('a rejected key does not latch as DEAD, so a Settings problem is reported as an empty allowance');
+      if (verifierGate(T0)) _fails.push('a rejected key still lets calls through immediately');
+      verifierAnswered();
+      if (verifierBlocked()) _fails.push('the dead-key latch cannot be cleared by an answer');
+    }
+    // Whatever happened above, this process must leave here unlatched. A boot
+    // check that leaves state behind fails its neighbour and the neighbour
+    // gets the blame - recorded at the Firecrawl pacing check.
+    VERIFIER_EXHAUSTED = false; VERIFIER_DEAD = false; VERIFIER_LATCHED_AT = 0; VERIFIER_PROBE_AT = 0;
+
+    if (_fails.length) {
+      console.log(`\u26d4 VERIFIER LATCH CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 VERIFIER LATCH CHECK: the email verifier can come back. A latch stops calls at once, exactly ONE probe is let through after the ${Math.round(VERIFIER_COOLDOWN_MS / 60000)}-minute cooldown, a call that ANSWERED is what clears it, and a rejected key latches separately from an empty allowance. Both flags were one-way for their whole life, so one busy minute turned SMTP verification off until Render restarted - and tier 2 is unreachable without it, so every address after the blip read as pattern-built rather than confirmed.`);
+    }
+  } catch (e) {
+    VERIFIER_EXHAUSTED = false; VERIFIER_DEAD = false; VERIFIER_LATCHED_AT = 0; VERIFIER_PROBE_AT = 0;
+    console.log(`\u26d4 VERIFIER LATCH CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
 

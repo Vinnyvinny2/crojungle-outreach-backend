@@ -2549,6 +2549,20 @@ let contactTally = null;
         if (/%/.test(M.tallyLine(thin))) fails.push('a run under the floor still prints percentages: ' + M.tallyLine(thin));
         if (!/counts and not rates/.test(M.tallyLine(thin))) fails.push('a thin run does not say that its numbers are not rates');
         if (!M.tallyLine(t) || !/owner 7 \(58%\)/.test(M.tallyLine(t))) fails.push('the tally line does not report the owner rate: ' + M.tallyLine(t));
+        // ── AND THE SPLIT HAS TO REACH THE SENTENCE ──────────────────────
+        // This assertion exists because the fix came back GREEN through a real
+        // revert: deleting the tier lines from the RENDERED line changed
+        // nothing, because everything above tests the tally OBJECT. The split
+        // is the whole answer to "how well is our email finding working" - a
+        // published address and a guess from a common pattern are both "an
+        // email", and this project's two hard bounces came from the second
+        // kind - so it has to be in the sentence somebody reads.
+        {
+          const line = M.tallyLine(t);
+          if (!/4 published/.test(line)) fails.push('the tally line does not name how many addresses were published on their own site: ' + line);
+          if (!/3 pattern-built/.test(line)) fails.push('the tally line does not name how many addresses were built from a pattern rather than confirmed - which is the kind both of this project hard bounces came from: ' + line);
+          if (!/Addresses:/.test(line)) fails.push('the tier split has no heading in the line, so the numbers read as part of the sentence before them');
+        }
         if (M.tallyLine(M.tally([])) !== '') fails.push('an empty queue prints a tally line about nothing');
         // A verifier that was not answering is a fact about US and has to be
         // said, or thirty downgraded addresses read as thirty bad prospects.
