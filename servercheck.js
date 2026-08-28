@@ -620,6 +620,68 @@ const runLead = async (b, over, capMs) => {
       `a website that cannot be a URL was not refused before spending (got ${H4b.code}: ${String((H4b.json || {}).error || '').slice(0, 120)})`);
     ok(state.requests.length === h4, `the two refusals still made ${state.requests.length - h4} network call(s) — "nothing was spent" is false`);
 
+    // == I: THE FIND RUN OUTLIVES ITS REQUEST =============================
+    // The whole point of the change, driven rather than read. A full-grid Find
+    // is 102-120 seconds of work and something between the browser and Render
+    // cuts a request at 60, so on 2026-08-28 three presses each completed and
+    // each had its answer dropped with the connection. A boot fixture cannot
+    // see any of this: what is new is a ROUTE and the store behind it.
+    console.log('── scenario I: the Find run outlives the request that started it');
+    {
+      const _t0 = Date.now();
+      const I = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/discover-async`, {
+        keywords: ['roofing'], filters: { niches: ['roofer'], cities: ['Dallas, TX'] }, keys: {},
+      });
+      const _submitMs = Date.now() - _t0;
+      ok(I.code === 200 && I.json && I.json.jobId,
+        `the Find submit answered ${I.code} with ${JSON.stringify(I.json).slice(0, 160)} — the async door is not wired to runDiscovery`);
+      // The number that matters. If the submit itself takes a minute we have
+      // moved the wall rather than removed it.
+      ok(_submitMs < 10000, `the Find submit took ${_submitMs}ms — it is still holding the run open, which is the whole defect`);
+
+      if (I.json && I.json.jobId) {
+        // A second press must NOT buy the grid again. Roughly a hundred Places
+        // searches per press, and the 60-second cut produced exactly this.
+        const I2 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/discover-async`, { keywords: ['roofing'], keys: {} });
+        if (I2.json && I2.json.jobId === I.json.jobId) {
+          ok(I2.json.deduped === true, 'a second Find press returned the running job without saying it was deduped');
+        } else {
+          // Only acceptable if the first run had already finished by then.
+          const _st = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/discover-job/${I.json.jobId}`);
+          ok(_st.json && _st.json.status !== 'running',
+            'a second Find press started a SECOND full grid while the first was still running');
+        }
+
+        // And the answer is collected by polling, which is what a cut
+        // connection can no longer destroy.
+        let done = null;
+        const _p0 = Date.now();
+        for (;;) {
+          const st = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/discover-job/${I.json.jobId}`);
+          if (st.json && st.json.status !== 'running') { done = st.json; break; }
+          if (Date.now() - _p0 > 120000) break;
+          await sleep(1000);
+        }
+        ok(done && done.status === 'done',
+          `the Find job never reported done: ${JSON.stringify(done && { s: done.status, e: done.error }).slice(0, 200)}`);
+        ok(done && done.result && Array.isArray(done.result.companies),
+          'the finished Find job carries no companies array, so the answer the run paid for is not being handed back');
+      }
+
+      // An id this server has never heard of is a real ending, said plainly,
+      // rather than a poll that never resolves.
+      const IGone = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/discover-job/find_nope`);
+      ok(IGone.code === 404 && IGone.json && IGone.json.status === 'gone',
+        `polling an unknown Find id answered ${IGone.code} instead of a plain 'gone'`);
+
+      // And a RESEARCH job must not be readable at the Find door: the Find tab
+      // would try to read an audit as a lead list. Both kinds share one store.
+      const IWrong = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/research-async`, leadBody(biz('I')));
+      if (IWrong.json && IWrong.json.jobId) {
+        const _x = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/discover-job/${IWrong.json.jobId}`);
+        ok(_x.code === 404, 'a research job can be polled through the Find door, so one tab can be handed the other tab\'s payload');
+      }
+    }
     // ── E: FIRECRAWL OUT OF CREDITS ─────────────────────
     // LAST on this boot: the 402 latch is process state by design, so every
     // scenario that needs to SPEND has to run above this line.

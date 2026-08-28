@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260914;
+const CONTRACT_VERSION = 20260915;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -33584,6 +33584,90 @@ const CONTACT_RANK_MAX_MODIFIER = 14;   // the two positives; asserted at boot
 // records that trap more often than any other - so reachability has to be a
 // real number or there is no rank at all, rather than a confident 0 that sorts
 // a perfectly good lead to the bottom while looking measured.
+// == demotionPenalty - one answer to "is this lead demoted, and by how much" =
+//
+// outsideBand and aboveSizeCeiling changed the SORT and never the NUMBER. So a
+// 4.9-star business could show a Find score of 90 on its card and sit below a
+// 4.5-star lead scoring 60, with nothing on screen explaining why - which reads
+// as a broken rating, and is a real contradiction rather than a display quirk.
+//
+// Meanwhile contactRankFor DID subtract for both, so two rankers in one app
+// disagreed about one lead and the Find card showed the one that did not know.
+//
+// Reads the SAME declared table the contact ranker reads. Two hand-kept copies
+// of one penalty is how one of them stays wrong.
+const demotionPenalty = (lead) => {
+  const l = lead || {};
+  const terms = [];
+  const want = [['outOfBand', l.outsideBand === true], ['aboveSize', l.aboveSizeCeiling === true]];
+  for (const [id, on] of want) {
+    if (!on) continue;
+    const t = CONTACT_RANK_TERMS.find(x => x.id === id);
+    if (t) terms.push({ id: t.id, points: t.points, why: t.why });
+  }
+  return { points: terms.reduce((n, t) => n + t.points, 0), terms };
+};
+
+// == placesTriageScore - the Find card's number, as a function you can run ====
+//
+// This was thirty lines inside a 1,300-line request handler, so nothing in this
+// repo could ever execute it - and the number an operator reads off every Find
+// card, and repeats when deciding what to audit, was the one score with no
+// guard on it at all. It is a pure function now and a boot check runs it.
+//
+// The curve itself is unchanged. What changed is the two places it argued with
+// the rest of the system; both are commented at the line that fixes them.
+const placesTriageScore = (m) => {
+  const rv = Number(m && m.reviewCount) || 0;
+  const rating = Number(m && m.rating) || 0;
+  let base = 48;
+  // CONTINUOUS establishment curve. Review volume \u2248 revenue, so a 45-review
+  // shop and a 300-review shop must NOT score identically. Rises through the
+  // sweet spot, then tapers above ~450 where a huge review count signals a
+  // regional brand (less owner-reachable), not a bigger owner-operated shop.
+  let revBonus;
+  if (rv <= 0)        revBonus = 0;
+  else if (rv < 40)   revBonus = (rv / 40) * 10;
+  else if (rv <= 450) revBonus = 10 + ((rv - 40) / 410) * 16;
+  else                revBonus = Math.max(5, 26 - ((rv - 450) / 550) * 15.6);
+  base += revBonus;
+  // == AND IT MUST NOT PAY FOR THE THING THAT DEMOTED IT ====================
+  // A 4.9-star business earned +5 here AND was demoted for sitting above the
+  // 4.85 ceiling: the score paying for the exact property that makes the lead
+  // worse for us. PART 5 is explicit about why the ceiling exists - at 4.9
+  // there are almost no negative reviews left to mine, and the repeating
+  // complaint is one of only two findings with a real human reply behind it.
+  //
+  // Only the ABOVE-the-ceiling case loses its bonus. A lead demoted for a LOW
+  // rating still takes the struggling deduction below, which is the same
+  // judgement pointed the other way and was never in dispute.
+  const ratingDemoted = (m && m.outsideBand === true) && rating >= 4.8;
+  if (!ratingDemoted) {
+    if (rv >= 20 && rating >= 4.8)      base += 5;
+    else if (rv >= 20 && rating >= 4.6) base += 3;
+    else if (rv >= 20 && rating >= 4.3) base += 1.25;
+    else if (rv >= 20 && rating && rating < 3.8) base -= 5;
+  }
+  if (m && m.consolidationRisk) base -= 14;
+  // REACHABILITY PREDICTION. Research costs ~9-11 credits, so the queue must be
+  // ordered by which leads will actually yield a contact we can email. A
+  // business named after a person resolved almost every time in real runs; an
+  // institutional name repeatedly did not. Free signal, large credit saving.
+  // Skipped rather than read as zero when it was never measured: Number(null)
+  // is 0 and 0 is finite, and a laundered 0 here is a full -15 on a lead we
+  // simply never looked at.
+  const reach = Number(m && m.reachScore);
+  if (typeof (m && m.reachScore) === 'number' && Number.isFinite(reach)) base += (reach - 18) * 0.85;
+  // AFFORDABILITY TIER. A tier-A trade can pay for a retainer out of a couple
+  // of extra jobs; a tier-C one cannot, whatever else is true about it.
+  if (m && m.tier === 'A') base += 7;
+  else if (m && m.tier === 'C') base -= 25;
+  // == THE DEMOTION IS IN THE NUMBER ========================================
+  // Same table the contact ranker reads, so the Find card and the contact list
+  // can no longer hand an operator two different verdicts on one business.
+  base += demotionPenalty(m || {}).points;
+  return Math.max(30, Math.min(Math.round(base), 97));
+};
 const contactRankFor = (c) => {
   const lead = c || {};
   const base = Number(lead.reachability);
@@ -33606,8 +33690,10 @@ const contactRankFor = (c) => {
   // buying floor is deliberately NOT authority - holding it back is the whole
   // point, and reading heldBackContact here would quietly undo it.
   take('authority', !!(lead.decisionMaker && lead.decisionMaker.canBuy === true));
-  take('outOfBand', lead.outsideBand === true);
-  take('aboveSize', lead.aboveSizeCeiling === true);
+  // The demotions come from the ONE place that answers "is this lead
+  // demoted", shared with the Find score so the two rankers cannot hand an
+  // operator two different verdicts about one business.
+  for (const _t of demotionPenalty(lead).terms) { score += _t.points; applied.push(_t); }
   const rank = Math.max(0, Math.min(100, Math.round(score)));
   return {
     rank,
@@ -34653,7 +34739,25 @@ app.get('/api/cron/discover', async (req, res) => {
   res.json({ ok: true, added: rows.length, theirstackRan: runTheirStack, breakdown: data.breakdown });
 });
 
-app.post('/api/discover', async (req, res) => {
+// == runDiscovery - the Find run, with no HTTP request holding it open =======
+//
+// This was the body of app.post('/api/discover') and it ran for 102-120
+// seconds on a full grid. Something between the browser and Render cuts a
+// request at 60 seconds, so on 2026-08-28 three consecutive presses each
+// found 1,437 unique businesses, each completed, and each had its answer
+// thrown away with the connection - reported in the browser as "Failed to
+// fetch". Every attempt still billed its Places searches, so a full-grid
+// press cost money and delivered nothing, every time, by construction.
+//
+// The only lever the operator had was to narrow the pull until the run fit
+// inside a minute, which is a workaround wearing the clothes of a setting.
+//
+// So the work is a function and an HTTP request is not what holds it open.
+// Returns { code, payload } - the shape the research job wrapper already
+// hands its poller - rather than writing to a response, because a function
+// closing over `res` can only ever be called from inside a request.
+const runDiscovery = async (body) => {
+  const req = { body: (body && typeof body === 'object') ? body : {} };
   // A Find run is the expensive half — one press costs about what sixty
   // audits cost — so the Places ceiling is checked before a single query is
   // dealt. Same rule as research admission: refuse whole, never truncate,
@@ -34663,7 +34767,7 @@ app.post('/api/discover', async (req, res) => {
     const _ceiling = budgetRefusal(['places']);
     if (_ceiling) {
       console.log(`\u{1F6D1} FIND REFUSED AT THE DAY CEILING \u2014 ${_ceiling.message}`);
-      return res.status(429).json({ error: _ceiling.message, budgetStopped: true, service: _ceiling.service });
+      return { code: 429, payload: { error: _ceiling.message, budgetStopped: true, service: _ceiling.service } };
     }
   }
   // ══ FILTERS AT THE PULL, NOT JUST THE DISPLAY ════════════════════════════
@@ -35738,39 +35842,25 @@ const WEIGHTS = {
           // Measured on a 3,000-lead simulated population, this curve clamps 0% and
           // produces ~66 distinct scores across a 30-96 range. Scores will LOOK lower
           // than before; they are not worse, they are finally separated.
-          let base = 48;
-          // CONTINUOUS establishment curve. Review volume ≈ revenue, so a 45-review
-          // shop and a 300-review shop must NOT score identically. Rises through the
-          // sweet spot, then tapers above ~450 where a huge review count signals a
-          // regional brand (less owner-reachable), not a bigger owner-operated shop.
-          let revBonus;
-          if (rv <= 0)        revBonus = 0;
-          else if (rv < 40)   revBonus = (rv / 40) * 10;                              // 0 → 10 approaching 40
-          else if (rv <= 450) revBonus = 10 + ((rv - 40) / 410) * 16;                 // 10 → 26 across the sweet spot
-          else                revBonus = Math.max(5, 26 - ((rv - 450) / 550) * 15.6); // taper 26 → 5 for mega-brands
-          base += revBonus;
-          // Rating refines within the same review band — a thriving 4.9★ outranks a
-          // wobbly 4.0★. Four bands instead of three so it separates rather than ties.
-          if (rv >= 20 && rating >= 4.8)      base += 5;
-          else if (rv >= 20 && rating >= 4.6) base += 3;
-          else if (rv >= 20 && rating >= 4.3) base += 1.25;
-          else if (rv >= 20 && rating && rating < 3.8) base -= 5; // struggling — shakier revenue bet
-          if (s.consolidation_risk)           base -= 14;         // maybe group-owned → no reachable owner
-          // REACHABILITY PREDICTION — research costs ~9-11 credits, so the queue must be
-          // ordered by which leads will actually yield a contact we can email. A business
-          // named after a person resolved almost every time in real runs; a generic
-          // institutional name repeatedly did not. Free signal, large credit saving.
+          //
+          // The curve itself lives in placesTriageScore, at module scope, because a
+          // score buried in a request handler is a score nothing can ever run.
           const rp = predictReachability(c.name, c.website, { reviewCount: rv });
-          base += (rp.score - 18) * 0.85;   // roughly -15 → +19 swing
-          // AFFORDABILITY TIER. A tier-A trade can pay for a retainer out of a
-          // couple of extra jobs; a tier-B one needs to be at the top of its
-          // revenue range first. Rank accordingly rather than treating a $60k pool
-          // build and a $600 garage door call as the same opportunity.
-          const _tier = CATEGORY_TIER[c.industry] || null;   // c.industry is set to cat.label at discovery
-          if (_tier === 'A') base += 7;
-          else if (_tier === 'C') base -= 25;
-          c.reachPredict = rp.score; c.reachPredictWhy = rp.why;
-          triage = Math.max(30, Math.min(Math.round(base), 97));
+          c.reachPredict = rp.score;
+          c.reachPredictWhy = rp.why;
+          const _dem = demotionPenalty(c);
+          c.demotionPoints = _dem.points;
+          c.demotionWhy = _dem.terms.map(t => t.why).join('; ');
+          triage = placesTriageScore({
+            reviewCount: rv,
+            rating,
+            consolidationRisk: !!s.consolidation_risk,
+            reachScore: rp.score,
+            tier: CATEGORY_TIER[c.industry] || null,   // c.industry is cat.label at discovery
+            outsideBand: c.outsideBand === true,
+            aboveSizeCeiling: c.aboveSizeCeiling === true,
+          });
+          // (the curve moved to placesTriageScore; the call is above)
         } else if (c.source === 'for_sale' || s.preparing_for_exit) {
           // Owner IS the seller — directly reachable + urgent. Broker adds a layer.
           // brokerPosted is written inside signals{}; the top-level read meant
@@ -35974,12 +36064,20 @@ const WEIGHTS = {
     console.log('Predicted owner-reachability (0-40, free name-based estimate):', reachSummary);
     console.log('=== DISCOVERY END ===\n');
 
-    res.json({ companies: scored, total: scored.length, breakdown });
+    return { code: 200, payload: { companies: scored, total: scored.length, breakdown } };
 
   } catch(e) {
     console.error('Discovery fatal error:', e);
-    res.status(500).json({ error: e.message });
+    return { code: 500, payload: { error: e.message } };
   }
+};
+
+// The SYNC door. Unchanged behaviour for any caller that has not learned
+// about -async yet, including an index.html that has not been deployed. It
+// runs the SAME function, so there is no second copy of a Find run to drift.
+app.post('/api/discover', async (req, res) => {
+  const out = await runDiscovery(req.body);
+  return res.status(out.code).json(out.payload);
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -48910,6 +49008,10 @@ const _mins = (ms) => Math.round(ms / 60000);
 const JOB_STALE_AFTER_MS = RESEARCH_WALL_CEILING_MS + 5 * 60 * 1000;
 const JOB_TTL_MS = Math.max(30 * 60 * 1000, JOB_STALE_AFTER_MS + 5 * 60 * 1000);
 const JOB_MAX = 200;
+// A Find grid is about two minutes of Places calls. Twenty is generous and
+// still bounded, so a run that hangs cannot sit in the store forever telling
+// the operator a press is still in flight.
+const FIND_JOB_STALE_AFTER_MS = 20 * 60 * 1000;
 
 const _sweepJobs = () => {
   const now = Date.now();
@@ -48930,6 +49032,19 @@ const _sweepJobs = () => {
     // was 10 minutes against an 8-minute timeout, and the day the timeout
     // learned to exclude gate wait, a hardcoded 10 would have swept live leads
     // out from under the clock that was deliberately still letting them run.
+    // A Find job's phase is 'find' so the research slot counters cannot see
+    // it. The consequence is that the stale branch below cannot either, so it
+    // gets its own, with its own ceiling and a message that does not tell the
+    // operator to re-run a lead when what hung was a whole discovery grid.
+    if (j.kind === 'discover' && j.status === 'running'
+        && (now - (j.startedAt || now)) > FIND_JOB_STALE_AFTER_MS) {
+      j.status = 'error';
+      j.phase = 'dead';
+      j.finishedAt = now;
+      j.error = `This Find run stopped reporting and was cleared after ${Math.round(FIND_JOB_STALE_AFTER_MS / 60000)} minutes. Press Find again.`;
+      console.log(`\u26d4 FIND JOB ${id}: STALE, still running after ${Math.round((now - j.startedAt) / 60000)} minutes with no result. Cleared.`);
+      continue;
+    }
     if (j.status === 'running' && j.phase === 'running') {
       const workAge = now - (j.startedWorkAt || j.startedAt || now);
       if (workAge > JOB_STALE_AFTER_MS) {
@@ -49367,6 +49482,106 @@ app.post('/api/research-async', (req, res) => {
   res.json({ jobId: id, status: 'running' });
 });
 
+// == THE FIND JOB ==========================================================
+//
+// The SAME store, sweep, TTL and cap as research. A second job system would be
+// the two-hand-kept-copies disease, and this copy would be the one that rots,
+// because Find is pressed far less often than Research.
+//
+// But a Find run is NOT a research lead: it holds no Firecrawl browser, decodes
+// no page render, and must never take a research slot. That is enforced by
+// CONSTRUCTION rather than by a predicate somebody has to remember to add at
+// each counter: both slot counts key on phase === 'running', and a Find job's
+// phase is 'find'. A third counter written tomorrow is correct without knowing
+// this route exists.
+//
+// The cost of that choice is that the stale sweep does not see it either, so
+// the sweep carries an explicit Find branch below with its own ceiling. A Find
+// grid is about two minutes; twenty is generous and still bounded.
+app.post('/api/discover-async', (req, res) => {
+  _sweepJobs();
+
+  // == ONE RUN AT A TIME ===================================================
+  // A Find press is about a hundred Places searches. A double-click, a retried
+  // submit or a second tab used to buy the whole grid again - and that is
+  // precisely what the 60-second cut produced on 2026-08-28: three presses,
+  // three complete runs, three hundred searches, nothing delivered. If a run is
+  // in flight, hand back ITS id; the client polls by id either way.
+  for (const [, j] of _jobs) {
+    if (j.kind === 'discover' && j.status === 'running') {
+      console.log(`FIND JOB: a run is already in flight (${j.id}, started ${Math.round((Date.now() - j.startedAt) / 1000)}s ago). Returning it rather than buying a second full grid.`);
+      return res.json({ jobId: j.id, status: 'running', deduped: true });
+    }
+  }
+
+  // The SAME gate the sync door clears, asked here so the refusal is immediate
+  // instead of arriving as a job result the operator has to poll for. One
+  // function at two doors is not two copies of a rule.
+  {
+    const _ceiling = budgetRefusal(['places']);
+    if (_ceiling) {
+      console.log(`\u{1F6D1} FIND REFUSED AT THE DAY CEILING \u2014 ${_ceiling.message}`);
+      return res.status(429).json({ error: _ceiling.message, budgetStopped: true, service: _ceiling.service });
+    }
+  }
+
+  const id = 'find_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  const job = {
+    id,
+    kind: 'discover',
+    status: 'running',
+    phase: 'find',            // deliberately NOT 'running' - see the note above
+    company: 'Find run',
+    startedAt: Date.now(),
+    startedWorkAt: Date.now(),
+    finishedAt: null,
+    result: null,
+    error: null,
+    httpStatus: null,
+  };
+  _jobs.set(id, job);
+  console.log(`FIND JOB ${id}: accepted. The run is no longer held open by an HTTP request, so a cut connection can no longer throw a finished run's answer away.`);
+
+  runDiscovery(req.body)
+    .then((out) => {
+      job.finishedAt = Date.now();
+      job.phase = 'done';
+      job.httpStatus = out.code;
+      job.result = out.payload;
+      job.status = out.code >= 400 ? 'error' : 'done';
+      if (job.status === 'error') job.error = (out.payload && out.payload.error) || ('HTTP ' + out.code);
+      const _n = (job.result && typeof job.result.total === 'number') ? `${job.result.total} lead(s) waiting to be collected` : 'no leads';
+      console.log(`FIND JOB ${id}: ${job.status} in ${((job.finishedAt - job.startedAt) / 1000).toFixed(1)}s, ${_n}.`);
+    })
+    .catch((e) => {
+      job.finishedAt = Date.now();
+      job.phase = 'done';
+      job.status = 'error';
+      job.httpStatus = 500;
+      job.error = (e && e.message) ? e.message : String(e);
+      console.log(`FIND JOB ${id}: threw, ${job.error}`);
+    });
+
+  return res.json({ jobId: id, status: 'running' });
+});
+
+app.get('/api/discover-job/:id', (req, res) => {
+  const job = _jobs.get(req.params.id);
+  // The kind is checked, not just the id: polling a research job here would
+  // hand the Find tab an audit payload it would try to read as a lead list.
+  if (!job || job.kind !== 'discover') {
+    return res.status(404).json({ status: 'gone', error: 'That Find run is not on this server any more. It restarted, or the run expired. Press Find again.' });
+  }
+  const elapsedMs = (job.finishedAt || Date.now()) - job.startedAt;
+  if (job.status === 'running') return res.json({ status: 'running', elapsedMs });
+  return res.json({
+    status: job.status,
+    elapsedMs,
+    httpStatus: job.httpStatus,
+    error: job.error || null,
+    result: job.result || null,
+  });
+});
 app.get('/api/research-job/:id', (req, res) => {
   const job = _jobs.get(req.params.id);
   if (!job) {
@@ -55747,6 +55962,92 @@ app.listen(PORT, () => {
     console.log(`⛔ CONTACT RANK CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // == FIND SCORE CHECK ======================================================
+  //
+  // The number on every Find card, and the number an operator repeats when he
+  // decides what to audit, spent its whole life inside a 1,300-line request
+  // handler where nothing could run it. Vin, 2026-08-28: "the rating for each
+  // lead that comes into find is not proepr it should eb depend on if theyre a
+  // match for our icp and if they are reachable." It did read both - and it also
+  // argued with the two other verdicts this app holds about the same lead.
+  try {
+    const _fails = [];
+    const _base = { reviewCount: 120, rating: 4.5, reachScore: 30, tier: 'A' };
+
+    // 1. A DEMOTED LEAD SCORES LOWER. It used to score exactly the same: the
+    //    demotion moved the sort and never the number, so the top of the list
+    //    filled with businesses the run had already decided to serve last.
+    const _plain = placesTriageScore(_base);
+    const _band  = placesTriageScore({ ..._base, outsideBand: true });
+    const _size  = placesTriageScore({ ..._base, aboveSizeCeiling: true });
+    const _both  = placesTriageScore({ ..._base, outsideBand: true, aboveSizeCeiling: true });
+    if (!(_band < _plain)) _fails.push(`a band-demoted lead scores ${_band} against ${_plain} for the same business - the demotion is still not in the number`);
+    if (!(_size < _plain)) _fails.push(`a lead above the review ceiling scores ${_size} against ${_plain} - the demotion is still not in the number`);
+    if (!(_both < _band && _both < _size)) _fails.push('two demotions do not cost more than one, so one of them is being dropped');
+
+    // 2. THE TWO RANKERS READ ONE TABLE. contactRankFor subtracted for both and
+    //    the Find card did not, so one app held two verdicts about one lead and
+    //    the card showed the one that did not know.
+    const _declared = CONTACT_RANK_TERMS.filter(t => t.id === 'outOfBand' || t.id === 'aboveSize')
+      .reduce((n, t) => n + t.points, 0);
+    if (demotionPenalty({ outsideBand: true, aboveSizeCeiling: true }).points !== _declared) {
+      _fails.push('the demotion penalty no longer matches the declared table the contact ranker reads');
+    }
+
+    // 3. THE SCORE MUST NOT PAY FOR WHAT DEMOTED IT. A 4.9 earned +5 here AND was
+    //    demoted for sitting above the 4.85 ceiling.
+    //
+    //    ISOLATED, and it took a falsification run to see why it had to be.
+    //    The first version compared a demoted 4.9 against an IN-BAND 4.7 and
+    //    held whether the guard existed or not: the demotion is -10 and the
+    //    rating bonus is +5, so the demotion swamped the very thing under
+    //    test. Two fixes hiding each other, which this file records and which
+    //    only reverting ever finds. Both leads below carry the SAME demotion,
+    //    so the rating bonus is the only thing that can separate them.
+    const _in47 = placesTriageScore({ ..._base, rating: 4.7 });
+    const _dem49 = placesTriageScore({ ..._base, rating: 4.9, outsideBand: true });
+    const _dem47 = placesTriageScore({ ..._base, rating: 4.7, outsideBand: true });
+    if (!(_dem49 < _dem47)) {
+      _fails.push(`a 4.9 above the ceiling scores ${_dem49} against a 4.7 demoted the same way at ${_dem47} - the rating bonus is still paying for the property that demoted the lead`);
+    }
+    // and the in-band 4.9 keeps every point it ever had, because the bonus is
+    // right whenever the ceiling is not the reason we are looking at the lead.
+    if (!(placesTriageScore({ ..._base, rating: 4.9 }) > _in47)) {
+      _fails.push('an in-band 4.9 lost its rating bonus - the guard was widened past the case it exists for');
+    }
+
+    // 4. AN UNMEASURED REACHABILITY IS SKIPPED, NOT READ AS ZERO. Number(null) is
+    //    0 and 0 is finite; laundered here it is a full -15 on a lead nobody
+    //    looked at. This file records that trap more often than any other.
+    const _noReach = placesTriageScore({ reviewCount: 120, rating: 4.5, tier: 'A' });
+    const _zeroReach = placesTriageScore({ reviewCount: 120, rating: 4.5, tier: 'A', reachScore: 0 });
+    if (!(_noReach > _zeroReach)) _fails.push('an unmeasured reachability is being read as a measured 0');
+    for (const _bad of [null, undefined, [], '', false, NaN]) {
+      if (placesTriageScore({ reviewCount: 120, rating: 4.5, tier: 'A', reachScore: _bad }) !== _noReach) {
+        _fails.push('an unmeasured reachability of ' + JSON.stringify(_bad) + ' changed the score, so something is being coerced');
+        break;
+      }
+    }
+
+    // 5. THE CALL SITE. A fixture supplies its own arguments and therefore cannot
+    //    see a caller: the handler could stop passing the demotion flags entirely
+    //    and every assertion above would stay green.
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    for (const _needle of [_n('outsideBand: c.outsideBand', ' === true,'),
+                          _n('aboveSizeCeiling: c.aboveSize', 'Ceiling === true,'),
+                          _n('triage = placesTriage', 'Score({')]) {
+      if (!_src.includes(_needle)) _fails.push('the Find handler no longer passes ' + _needle.slice(0, 28) + ' into the score');
+    }
+
+    if (_fails.length) {
+      console.log(`\u26d4 FIND SCORE CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 FIND SCORE CHECK: the Find card's number was EXECUTED, not read. A demoted lead scores lower than the same business undemoted and two demotions cost more than one; the penalty comes from the same declared table the contact list reads, so one app can no longer hold two verdicts about one business; a 4.9 above the star ceiling no longer earns the bonus for the very rating that demoted it, while an in-band 4.9 keeps every point; and a reachability nobody measured is skipped rather than laundered into a confident zero. The handler is pinned at its call site.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 FIND SCORE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
   // ---- NOT READY IS NOT A STATE THAT TAKES WORK ---------------------------
   // A lead worked during the boot window prints its own refusal glyphs, and
   // the verdict recorder cannot tell a lead's refusal from a failed boot
@@ -68162,6 +68463,22 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     const _busySites = (_qsrc.match(/_jobs\.values\(\)\]\.filter\(j => j\.phase === 'running' && j\.workDone !== true/g) || []).length;
     if (_busySites < 2) _fails.push(`only ${_busySites} of 2 slot-count sites key on pending WORK — a poller-killed job frees its slot while still making paid calls`);
     if (!/\.finally\(\(\) => \{ job\.workDone = true;/.test(_qsrc)) _fails.push('nothing sets workDone when the work ends — every slot would leak permanently');
+    // ══ AND A FIND RUN MUST NOT TAKE A RESEARCH SLOT ══════════════════════
+    // Both counters above key on phase === 'running', so a Find job carrying
+    // that phase would silently occupy one of the research slots the memory
+    // ceiling exists to bound - a whole discovery grid counted as a lead being
+    // audited. The Find job's phase is 'find' for exactly that reason, and it is
+    // enforced by CONSTRUCTION rather than by a predicate each counter has to
+    // remember, so a third counter written tomorrow is correct without knowing
+    // the Find route exists.
+    {
+      const _fj = _qsrc.indexOf(['const id = ', "'find_' + Date.now()"].join(''));
+      const _win = _fj >= 0 ? _qsrc.slice(_fj, _fj + 700) : '';
+      if (!_win) _fails.push('the Find job is no longer created here, so nothing can say which phase it carries');
+      else if (!_win.includes(["phase: 'f", "ind',"].join(''))) {
+        _fails.push('a Find job no longer carries its own phase, so a whole discovery grid now occupies one of the research slots');
+      }
+    }
     // ══ AND WAITING IN OUR OWN GATE IS NOT WORKING EITHER ═════════════════
     // 2026-08-22, live: RESEARCH_CONCURRENCY went 3 → 6 and four leads of five
     // died at "passed 8 minutes of WORK". Their own ⏱ TIME line said why — at

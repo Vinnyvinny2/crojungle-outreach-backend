@@ -2631,6 +2631,99 @@ let contactStat = null;
   }
 }
 
+// == THE FIND RUN: ITS CLOCK, ITS QUEUE AND ITS CARD ========================
+//
+// A full-grid Find takes 102-120 seconds and something between the browser and
+// Render cuts a request at 60, so three consecutive presses on 2026-08-28 each
+// found 1,437 businesses, each completed, and each had its answer dropped with
+// the connection. The run now outlives its request. These assert the three
+// things that could quietly undo that.
+let findStat = null;
+{
+  // ---- 1. The browser's wall must sit ABOVE the server's own sweep --------
+  // Otherwise the browser becomes the thing that decides, and a healthy run is
+  // killed by a clock in the wrong file. Both numbers are READ from their own
+  // source, so moving either one past the other fails the build.
+  const _cw = src.match(/const FIND_WALL_MS\s*=\s*([^;]+);/);
+  const _ss = server.match(/const FIND_JOB_STALE_AFTER_MS\s*=\s*([^;]+);/);
+  if (!_cw) fails.push('index.html no longer declares FIND_WALL_MS, so the Find poller has no bound at all');
+  else if (!_ss) fails.push('server.js no longer declares FIND_JOB_STALE_AFTER_MS, so a hung Find run is never swept');
+  else {
+    let wall = null, sweep = null;
+    try { wall = new Function('return (' + _cw[1] + ')')(); } catch (e) { wall = null; }
+    try { sweep = new Function('return (' + _ss[1] + ')')(); } catch (e) { sweep = null; }
+    if (!Number.isFinite(wall) || !Number.isFinite(sweep)) {
+      fails.push('one of the two Find clocks no longer evaluates to a number');
+    } else if (!(wall > sweep)) {
+      fails.push(`the browser gives up on a Find run after ${Math.round(wall / 60000)} minutes while the server only sweeps it at ${Math.round(sweep / 60000)} — the browser is deciding again, which is the clock this whole change removed`);
+    }
+  }
+
+  // ---- 2. The submit goes through the poller, and only the poller ---------
+  // A fixture cannot see a caller. If runDiscover goes back to awaiting one
+  // long fetch, every assertion here would still pass.
+  if (!/const d = await discoverViaJob\(discoverAbort\.signal/.test(src)) {
+    fails.push('runDiscover no longer submits through discoverViaJob, so a Find run is back to depending on one long HTTP request');
+  }
+  {
+    // The sync door survives ONLY inside the helper, as the old-server
+    // fallback. A second bare call anywhere else is the 60-second wall coming
+    // straight back through a door nobody is watching.
+    const _bare = (src.match(/post\('\/api\/discover'\)|BACKEND \+ '\/api\/discover'/g) || []).length;
+    if (_bare !== 1) fails.push(`${_bare} call site(s) hit the synchronous /api/discover door — exactly one is expected, the old-server fallback inside discoverViaJob`);
+  }
+
+  // ---- 3. The queue cap is ONE number ------------------------------------
+  // It was 200, hand-written in the merge, the Supabase upsert and the Supabase
+  // restore, so raising it meant finding all three. A run banks over a thousand
+  // leads it paid for; a cap somebody forgets to raise throws them away.
+  {
+    const _decl = src.match(/const FIND_QUEUE_MAX\s*=\s*(\d+);/);
+    if (!_decl) fails.push('FIND_QUEUE_MAX is gone, so the Find queue cap is a hand-written number again');
+    else {
+      const uses = (src.match(/FIND_QUEUE_MAX/g) || []).length;
+      if (uses < 4) fails.push(`FIND_QUEUE_MAX is used ${uses - 1} time(s) after its declaration — the merge, the Supabase write and the Supabase read all need it`);
+      if (/discovered_queue\?order=icp_score\.desc&limit=200/.test(src)) {
+        fails.push('the Supabase queue read still asks for a hardcoded 200, so raising the cap silently does nothing on reload');
+      }
+    }
+  }
+
+  // ---- 4. The card stops guessing once we have measured ------------------
+  const _m = src.match(/const findScoreLine = \(co\) => \{[\s\S]*?\n\};/);
+  if (!_m) fails.push('findScoreLine is gone — the Find card is building its own sentence again, where nothing can run it');
+  else {
+    let line = null;
+    try { line = new Function('return ' + _m[0].replace(/^const findScoreLine = /, ''))(); } catch (e) { line = null; }
+    if (typeof line !== 'function') fails.push('findScoreLine could not be executed');
+    else {
+      const unread = line({ icpScore: 74, reachPredict: 31 });
+      const read = line({
+        icpScore: 74, reachPredict: 31, contactReadOk: true,
+        contactOwner: 'Rick Miller', contactEmail: 'rick@x.com',
+        contactEmailTier: 2, contactEmailSendable: true, contactPhone: '(502) 555-0100',
+      });
+      const demoted = line({ icpScore: 74, reachPredict: 31, outsideBand: true });
+      const both = line({ icpScore: 61, reachPredict: 20, outsideBand: true, aboveSizeCeiling: true });
+      if (!/owner findable 31\/40/.test(unread)) fails.push('an unread lead no longer says its owner-findable number is a guess');
+      if (/findable/.test(read)) fails.push('a lead we actually READ still shows the name-based guess beside the owner, email and phone we measured');
+      if (!/owner/.test(read) || !/email confirmed/.test(read) || !/phone/.test(read)) {
+        fails.push('a read lead does not report what was measured: ' + read);
+      }
+      if (!/no email/.test(line({ icpScore: 50, contactReadOk: true }))) {
+        fails.push('a read lead with nothing found reports nothing rather than saying so');
+      }
+      if (/sorted last/.test(unread)) fails.push('an undemoted lead claims it was sorted last');
+      if (!/sorted last: outside the star band/.test(demoted)) {
+        fails.push('a band-demoted lead says nothing about it, so its position on the screen has no explanation');
+      }
+      if (!/star band and above the review ceiling/.test(both)) {
+        fails.push('a lead demoted twice names only one reason');
+      }
+      findStat = { unread, read, demoted };
+    }
+  }
+}
 Promise.all(PENDING).then(() => {
   if (fails.length) {
     console.log(`\n✗ index.html: ${fails.length} research-request defect(s)`);
@@ -2641,6 +2734,7 @@ Promise.all(PENDING).then(() => {
   console.log(`\n\u2713 index.html: all ${calls.length} research request(s) go through the one builder at line ${builderLine}, which sends ${builderKeys.length} fields including every measurement nothing downstream can recover. Two hand-written bodies disagreed about seventeen of them on 2026-08-19.`);
   if (roundTrip) console.log(`\u2713 index.html: the Supabase round trip was EXECUTED, not read \u2014 leadToRow and rowToLead run on five real lead shapes. A Find lead keeps every one of its ${roundTrip.fields} stored fields, a never-researched lead does NOT read as audited, the model's draft survives a reload instead of the research-time template, the call outcome survives, an empty lead still stores nothing, and no stored field is write-only. This pair is the only door between the app and its data, it has produced nine duplicate-key collisions, and nothing in this repo had ever run it.`);
   notes.forEach(n => console.log(n));
+  if (findStat) console.log(`\u2713 index.html: the Find run's clock, queue cap and card were EXECUTED, not read \u2014 the browser's wall sits above the server's own sweep so a healthy run is never killed by the wrong file, the submit goes through the poller and exactly one call site still touches the synchronous door as the old-server fallback, the queue cap is one number rather than three, and a lead we have actually read stops showing the name-based guess beside the owner, email and phone we measured. A demoted lead now says why it was sorted last: "${findStat.demoted}".`);
   if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the ${contactStat.cols}-column CSV neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, gives each email tier its own confidence sentence, and reports an unmeasured signal as "not checked" rather than as a definite no. Every call site is pinned too: the panel starts the run, the run posts to /api/find-contact, it saves after every lead so a Stop keeps what was paid for, the card strip renders only on a lead that was read, and the Research batch cannot reach any of it.`);
   if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
 }).catch((e) => { console.log('\n\u2717 index.html: the checks could not finish \u2014 ' + (e && e.message)); process.exit(1); });

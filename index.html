@@ -1157,6 +1157,121 @@ const {
   useEffect
 } = React;
 const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
+
+// discoverViaJob - press Find, and stop depending on one long HTTP request.
+//
+// A full-grid Find run is 102-120 seconds of server work. Something between
+// this browser and Render cuts a request at 60 seconds, so on 2026-08-28 three
+// consecutive presses each found 1,437 unique businesses, each ran to
+// completion, and each had its answer thrown away with the connection. The
+// screen said "Failed to fetch"; the server log showed three finished runs.
+// Every one of them still billed about a hundred Places searches.
+//
+// So the request that STARTS the run returns in about a second and the answer
+// is collected by polling. A cut connection now costs one poll, not a run.
+//
+// The old single-request door is kept as a fallback for exactly one case: a
+// server predating this build, which answers 404 to -async. It is deliberately
+// NOT a retry for a failed run - falling back on any error would silently
+// re-buy the entire grid at full price.
+const FIND_POLL_MS = 3000;
+// The server sweeps a Find run it has lost after twenty minutes and answers
+// 'gone', which is a real ending. This browser-side wall must sit ABOVE that or
+// it becomes the thing that decides, and we are back to a clock in the browser
+// killing a run the server was still happily working on. clientcheck asserts
+// the order across the two files, so neither can be moved past the other.
+const FIND_WALL_MS = 25 * 60 * 1000;
+// findScoreLine - what a Find card says about a business, in one place a check
+// can actually run.
+//
+// Two things were wrong with it, and both are the same shape: the card was
+// showing a guess beside an answer.
+//
+//   * "Owner findable 31/40" is read off whether a person's name sits in the
+//     business name. It is free, it genuinely predicts, and on any lead the
+//     contact button has READ it was rendering next to a strip already naming
+//     the owner, the address and the phone number we measured.
+//
+//   * outsideBand and aboveSizeCeiling moved the sort and were never said out
+//     loud, so a lead the run had deliberately placed last showed a high
+//     number with nothing on screen accounting for its position.
+const findScoreLine = (co) => {
+  const c = co || {};
+  if (c.icpScore == null) return '';
+  const parts = ['Find score ' + c.icpScore + '/100'];
+  if (c.contactReadOk === true) {
+    // Measured. This business was actually read, so stop guessing about it.
+    const dial = String(c.contactPhone || '').replace(/\D/g, '');
+    parts.push([
+      c.contactOwner ? 'owner' : 'no owner',
+      !c.contactEmail ? 'no email'
+        : c.contactEmailSendable !== true ? 'email unsafe'
+        : c.contactEmailTier === 1 ? 'email published'
+        : c.contactEmailTier === 2 ? 'email confirmed'
+        : 'email unconfirmed',
+      dial ? 'phone' : 'no phone',
+    ].join(', '));
+  } else if (typeof c.reachPredict === 'number') {
+    parts.push('owner findable ' + c.reachPredict + '/40, a guess until we read them');
+  }
+  const why = [
+    c.outsideBand ? 'outside the star band' : '',
+    c.aboveSizeCeiling ? 'above the review ceiling' : '',
+  ].filter(Boolean).join(' and ');
+  if (why) parts.push('sorted last: ' + why);
+  return parts.join(' \u00b7 ');
+};
+const discoverViaJob = async (signal, onTick, body) => {
+  const post = (path) => fetch(BACKEND + path, {
+    method: 'POST', signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  // A server still inside its boot window answers 503 {booting:true}. Render
+  // switches traffic at port-open and the checks settle up to ~90 seconds
+  // later, so a press right after a deploy meets a door that is deliberately
+  // closed rather than a broken server.
+  let r = null;
+  for (let i = 0; i < 36; i++) {
+    r = await post('/api/discover-async');
+    if (r.status !== 503) break;
+    let b = null;
+    try { b = await r.clone().json(); } catch (e) { b = null; }
+    if (!b || b.booting !== true) break;
+    await new Promise(res => setTimeout(res, 5000));
+  }
+  if (!r) return { error: 'Find could not reach the server.' };
+
+  if (r.status === 404) {
+    console.log('Find: this server has no job queue yet, falling back to the single long request.');
+    const rs = await post('/api/discover');
+    return await rs.json();
+  }
+
+  let sub = null;
+  try { sub = await r.json(); } catch (e) { sub = null; }
+  if (!sub) return { error: 'The server answered ' + r.status + ' with something that was not JSON.' };
+  if (!r.ok || !sub.jobId) return Object.assign({ error: sub.error || ('the server answered ' + r.status) }, sub);
+  if (sub.deduped) console.log('Find: a run was already in flight, following that one rather than starting a second.');
+
+  const t0 = Date.now();
+  for (;;) {
+    await new Promise(res => setTimeout(res, FIND_POLL_MS));
+    if (signal && signal.aborted) throw new DOMException('Find was stopped', 'AbortError');
+    if (Date.now() - t0 > FIND_WALL_MS) return { error: 'The Find run has not answered in 25 minutes. Press Find again.' };
+    if (typeof onTick === 'function') onTick(Math.round((Date.now() - t0) / 1000));
+    const pr = await fetch(BACKEND + '/api/discover-job/' + encodeURIComponent(sub.jobId), { signal });
+    if (pr.status === 404) return { error: 'That Find run is no longer on the server. Press Find again.' };
+    let pd = null;
+    try { pd = await pr.json(); } catch (e) { pd = null; }
+    if (!pd) continue;
+    if (pd.status === 'running') continue;
+    if (pd.status === 'done') return pd.result || {};
+    return Object.assign({ error: pd.error || 'The Find run failed.' }, pd.result || {});
+  }
+};
+
 // ══ THE HANDSHAKE WITH THE SERVER ══════════════════════════════════════════
 // This file deploys to Netlify by hand while the server deploys on merge, and
 // a stale page silently reintroduces every client bug the server half already
@@ -1166,7 +1281,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260914;
+const CLIENT_CONTRACT = 20260915;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5254,7 +5369,7 @@ function ResearchLoader({ step }) {
   );
 }
 
-function FindLoader({ count }) {
+function FindLoader({ count, realSecs }) {
   // Honest loader: the backend doesn't stream counts, so we don't fake one.
   // Progress = elapsed time / expected duration (~55s), capped at 95% until done.
   // Phase text advances at real timestamps so the label matches what's happening.
@@ -5276,7 +5391,11 @@ function FindLoader({ count }) {
 
   const pct = Math.min(95, (elapsed / EXPECTED_MS) * 100);
   const phase = phases.filter(p => elapsed >= p.at).slice(-1)[0] || phases[0];
-  const secs = Math.floor(elapsed / 1000);
+  // The poller reports the run's REAL age, so prefer it. This component had
+  // only its own stopwatch and an expected duration, which is a guess dressed
+  // as progress; the number a person reads is now the server's own clock
+  // whenever the server is telling us one.
+  const secs = (typeof realSecs === 'number' && realSecs > 0) ? realSecs : Math.floor(elapsed / 1000);
 
   return React.createElement('div', {
     style: { display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '80px 0', gap: 22 }
@@ -5752,6 +5871,9 @@ function FindView({
   const [error, setError] = useState('');
   const [movedNote, setMovedNote] = useState('');
   const [loadingCount, setLoadingCount] = useState(0);
+  // Real seconds from the poller, not a guess. The loader used to invent
+  // progress against an expected 55 seconds because nothing told it anything.
+  const [discoverSecs, setDiscoverSecs] = useState(0);
   const [lastRun, _setLastRun] = useState(localStorage.getItem('cj_last_discover') || null);
   const setLastRun = (v) => { _setLastRun(v); if (onLastRunChange) onLastRunChange(v); };
   const [form, setForm] = useState({
@@ -5765,6 +5887,14 @@ function FindView({
     location: ''
   });
   const DB_KEY = 'cj_discovered_v1';
+  // How many companies the Find queue holds. It was 200, written out by hand in
+  // three separate places - the merge, the Supabase upsert and the Supabase
+  // restore - so raising it meant finding all three. One number now.
+  //
+  // 200 was a decision about how many rows are useful on a screen, acting as a
+  // decision about how many paid-for businesses are worth keeping. A single run
+  // returns 120 and banks over a thousand more.
+  const FIND_QUEUE_MAX = 1000;
   const existingLeads = getLeads();
 
   const loadDiscovered = () => {
@@ -5796,7 +5926,7 @@ function FindView({
         headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY }
       }).then(() => {
         if (!arr.length) return;
-        const rows = arr.slice(0, 200).map(c => ({
+        const rows = arr.slice(0, FIND_QUEUE_MAX).map(c => ({
           id: c.id || (c.name || '').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,40) + '_' + (c.source || 'find'),
           name: c.name || '',
           website: c.website || '',
@@ -5832,7 +5962,7 @@ function FindView({
   React.useEffect(() => {
     const local = loadDiscovered();
     if (local.length > 0) return; // already have data, nothing to restore
-    fetch(SB_URL + '/rest/v1/discovered_queue?order=icp_score.desc&limit=200', {
+    fetch(SB_URL + '/rest/v1/discovered_queue?order=icp_score.desc&limit=' + FIND_QUEUE_MAX, {
       headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Accept': 'application/json' }
     })
       .then(r => r.json())
@@ -5957,11 +6087,18 @@ function FindView({
     setError('');
     setLoadingCount(0);
     // Tab-switch resilience: browsers throttle background tabs, and Render's free
-    // tier can be slow to answer. We use AbortController for a hard 3-minute cap
-    // and force one clean re-render when the tab becomes visible again so state
-    // that changed in the background paints correctly.
+    // tier can be slow to answer. We force one clean re-render when the tab
+    // becomes visible again so state that changed in the background paints.
+    //
+    // The cap was three minutes, which was fine while the run was one request
+    // that could never survive sixty seconds anyway. Now that the run outlives
+    // its request, a three-minute browser clock would be the NEW thing that
+    // kills a healthy run - the two-clocks disease, one file over. FIND_WALL_MS
+    // sits above the server's own sweep so the server's honest answer always
+    // arrives first and this is only ever a last resort.
     const discoverAbort = new AbortController();
-    const discoverTimeout = setTimeout(() => discoverAbort.abort('timeout-3min'), 180000);
+    const discoverTimeout = setTimeout(() => discoverAbort.abort('find-wall'), FIND_WALL_MS);
+    setDiscoverSecs(0);
     const onVisible = () => { if (document.visibilityState === 'visible') { setLoadingCount(n => n); } };
     document.addEventListener('visibilitychange', onVisible);
     try {
@@ -5976,13 +6113,7 @@ function FindView({
       console.log('Browser sources: skipped (bot protection on all targets)');
 
       // ── BACKEND sources (need API keys or server-side) ────
-      const r = await fetch(BACKEND + '/api/discover', {
-        method: 'POST',
-        signal: discoverAbort.signal,
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
+      const d = await discoverViaJob(discoverAbort.signal, setDiscoverSecs, {
           keywords: defaultKw,
           location: settings.targetLocation || '',
           apiKey: settings.apiKey,
@@ -6058,9 +6189,7 @@ function FindView({
             companiesApiKey: settings.companiesApiKey,
             theirstackKey: settings.theirstackKey
           }
-        })
-      });
-      const d = await r.json();
+        });
       if (d.error) throw new Error(d.error);
       const backendCompanies = d.companies || [];
       // Recorded BEFORE the queue merge and before the 200-cap, so a business
@@ -6104,7 +6233,7 @@ function FindView({
       const existing = loadDiscovered();
       const existingNames = new Set([...existing.map(c => (c.name || '').toLowerCase()), ...existingLeads.map(l => (l.name || '').toLowerCase())]);
       const newOnes = scored.filter(c => !existingNames.has((c.name || '').toLowerCase()));
-      const merged = [...newOnes, ...existing].slice(0, 200);
+      const merged = [...newOnes, ...existing].slice(0, FIND_QUEUE_MAX);
       saveDiscovered(merged);
       setDiscovered(merged);
       const now = new Date().toISOString();
@@ -6768,7 +6897,7 @@ function FindView({
     style: {
       maxWidth: 920
     }
-  }, scopeBar, loading && React.createElement(FindLoader, { count: loadingCount }), !loading && discovered.length === 0 && React.createElement('div', {
+  }, scopeBar, loading && React.createElement(FindLoader, { count: loadingCount, realSecs: discoverSecs }), !loading && discovered.length === 0 && React.createElement('div', {
     style: {
       textAlign: 'center',
       padding: '48px 0',
@@ -7194,9 +7323,7 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       co.location && co.icpScore != null && React.createElement('span', { style:{ opacity:.5 } }, '·'),
       co.icpScore != null && React.createElement('span', {
         title: co.reachPredictWhy || ''
-      }, 'Find score ' + co.icpScore + '/100' + (co.reachPredict != null
-          ? ' · Owner findable ' + co.reachPredict + '/40' + (co.reachPredict >= 30 ? ' ⭐' : co.reachPredict >= 22 ? ' ✓' : '')
-          : (co.reachability != null ? ' · Reach ' + co.reachability + '/30' : '')))
+      }, findScoreLine(co))
     ),
  co.jobSnippet && React.createElement('div', {
       style: {
