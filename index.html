@@ -1166,7 +1166,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260913;
+const CLIENT_CONTRACT = 20260914;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5485,6 +5485,32 @@ const findContactCsv = (companies) => {
   // Latin-1 and mangles every accented name in it.
   return '﻿' + [head].concat(body).join('\r\n') + '\r\n';
 };
+// ══ THE SAME ROWS, GOING SOMEWHERE ELSE ═══════════════════════════════════
+// The sheet and the CSV are ONE list in two destinations, so they read the same
+// builder and the same declared columns. A second row-shaping function for the
+// sheet is the two-hand-kept-copies disease this file records more than any
+// other, and the copy that rots is always the one nobody opens.
+const findSheetPayload = (companies) => {
+  const rows = findContactRows(companies);
+  return {
+    header: FIND_CSV_COLUMNS.map(c => String(c[1])),
+    // Values as strings in declared column order, and a cell never carries a
+    // line break: the CSV learned that on 2026-08-28 when a 4KB file downloaded
+    // and would not open, and a spreadsheet cell is no better a place for one.
+    rows: rows.map(r => FIND_CSV_COLUMNS.map(c => {
+      const v = r[c[0]];
+      return (v === null || v === undefined ? '' : String(v)).replace(/\r\n|\r|\n/g, ' ');
+    })),
+  };
+};
+
+// The Apps Script the operator pastes into his own sheet. It lives here, next
+// to the payload it consumes, so the two shapes cannot drift: it reads
+// b.header and b.rows, and it dedupes on column 3, which is the company
+// name in FIND_CSV_COLUMNS. Change the column order and this comment is
+// the thing that has to change with it.
+const FIND_SHEET_SCRIPT = 'function doPost(e) {\n  var s = SpreadsheetApp.getActiveSheet();\n  var b = JSON.parse(e.postData.contents);\n  if (s.getLastRow() === 0) s.appendRow(b.header);\n  var have = {}, n = s.getLastRow();\n  if (n > 1) s.getRange(2, 3, n - 1, 1).getValues().forEach(function (r) { have[String(r[0]).trim()] = 1; });\n  var written = 0, skipped = 0;\n  b.rows.forEach(function (r) {\n    if (have[String(r[2]).trim()]) { skipped++; return; }\n    s.appendRow(r); written++;\n  });\n  return ContentService.createTextOutput(JSON.stringify({ written: written, skipped: skipped, sheet: s.getName() }))\n    .setMimeType(ContentService.MimeType.JSON);\n}';
+
 const downloadFindContacts = (companies) => {
   const rows = findContactRows(companies);
   if (!rows.length) return 0;
@@ -5615,6 +5641,23 @@ function FindView({
   // and 5 is what you press when you want to see whether it works before
   // spending on fifty.
   const [contactHowMany, setContactHowMany] = React.useState(50);
+  const [sheetBusy, setSheetBusy] = React.useState(false);
+  const [sheetNote, setSheetNote] = React.useState('');
+  const [sheetHelp, setSheetHelp] = React.useState(false);
+  // ══ THE QUEUE IS NOT ALL ONE KIND OF LEAD ═════════════════════════════════
+  // Live, 2026-08-28: a press for ten returned Coca-Cola Bottling, Penn
+  // Medicine, Lennar Homes, Securitas, Goodyear, SkillPath and a commercial
+  // property listing called "Vacant Former Dentist | Value-Add Investment". The
+  // name filter caught exactly one of them (Penske), and it was never going to
+  // catch the rest - "Penske Truck Rental" reads like a local business by name
+  // and so does "SkillPath".
+  //
+  // What separates them is not their NAME, it is where they came from. A Places
+  // lead has a Google listing by construction: a local address, a star rating, a
+  // review count, somebody who claimed it. The job-board, funding and for-sale
+  // lanes have none of that, and every one of tonight's wasted reads came from
+  // them. So the scope is the measurement, not a guess about the words.
+  const [contactPlacesOnly, setContactPlacesOnly] = React.useState(true);
   const contactStop = React.useRef(false);
   // Stop sets a flag the worker loop reads BETWEEN leads, and a lead can take
   // 155 seconds - live, Lodging Dynamics. So Stop appeared not to work: it had
@@ -6137,18 +6180,36 @@ function FindView({
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) {
-          // A refusal is a fact worth keeping on the lead - reporting it only in
-          // a toast means the next press repeats it with no record of why. But
-          // it is NOT a read: contactReadOk stays false, so the next press picks
-          // this lead up again instead of skipping it forever.
+          // ══ A VERDICT IS PERMANENT; A FAILURE IS NOT ═════════════════════
+          // These were one branch, and retrying everything was right for a
+          // server that was down and wrong for a business that is not a lead.
+          // Live, 2026-08-28: Penske was correctly refused at zero cost, stayed
+          // in the unread pool, and the panel said so out loud - "they are still
+          // counted as unread, so the button above picks them up again". Every
+          // future press would re-ask about it, forever, and the count would
+          // never go down.
+          //
+          // notIcp is the server saying "this is not a business we sell to",
+          // which no amount of retrying changes. It retires the lead. Anything
+          // else - a dead server, a bad URL, a busy moment - stays unread and
+          // comes back on the next press, which is what stops a paused server
+          // permanently retiring a hundred leads.
+          const _verdict = d.notIcp === true;
           fields = { contactReadOk: false, contactFailedAt: new Date().toISOString(),
+                     contactNotFit: _verdict,
                      contactNotes: [d.error || ('the server answered ' + r.status)] };
           // 502/503/504 and a plain refusal are TRANSPORT failures - the server
           // is down, restarting, or unreachable. Nothing about this lead caused
           // it and nothing about the next lead will fix it.
           if (r.status >= 500 || r.status === 0) transportFails += 1; else transportFails = 0;
           if (d.budgetStopped || d.busy || d.booting) contactStop.current = true;
-          if (d.error) setContactErr(d.error);
+          // ══ ONE HOME FOR ONE MESSAGE ═════════════════════════════════════
+          // The Penske refusal rendered TWICE on one panel: once in the failed
+          // box, which reads it off the lead, and again as a toast, because this
+          // line fired on every non-ok answer. A toast is for a fact about the
+          // RUN - no key, the day ceiling, a dead server - and a per-lead verdict
+          // is not one of those. It has a home already.
+          if (d.budgetStopped || d.busy || d.booting) setContactErr(d.error || '');
         } else {
           transportFails = 0;
           fields = contactFieldsFrom(d);
@@ -7276,14 +7337,25 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       // 100 for how well the business fits what we sell. It sits ABOVE the
       // results because it decides what the next press spends, which is the
       // same rule that moved the trade and market pickers up here.
-      const _cShown = _shown;
+      // A Google listing is the measurement that separates a local
+      // owner-operated business from a job-board or for-sale row. Places leads
+      // carry a placeId; nothing else in the queue does.
+      const _hasListing = (c) => !!(c && (c.placeId || c.source === 'google_places'));
+      const _cShown = contactPlacesOnly ? _shown.filter(_hasListing) : _shown;
+      const _cHidden = contactPlacesOnly ? (_shown.length - _cShown.length) : 0;
       // contactReadOk, not contactAt. A lead whose request failed is UNREAD and
       // must come back into the next press - that is what stops a paused server
       // from permanently retiring a hundred leads.
       const _cRead = _cShown.filter(c => c && c.contactReadOk === true);
       const _cWithEmail = _cShown.filter(c => c && c.contactEmail).length;
-      const _cUnread = _cShown.filter(c => c && c.contactReadOk !== true && c.name);
-      const _cFailed = _cShown.filter(c => c && c.contactReadOk !== true && c.contactFailedAt);
+      // A lead the server ruled out is not unread. It is answered, and asking
+      // again cannot change the answer.
+      const _cNotFit = _cShown.filter(c => c && c.contactNotFit === true);
+      const _cUnread = _cShown.filter(c => c && c.contactReadOk !== true && c.contactNotFit !== true && c.name);
+      // A FAILURE is something that might work next time. A VERDICT is not, and
+      // saying "could not be read" about a deliberate zero-cost refusal frames a
+      // correct decision as a fault.
+      const _cFailed = _cShown.filter(c => c && c.contactReadOk !== true && c.contactNotFit !== true && c.contactFailedAt);
       // ══ ONE POPULATION, OR THE PANEL CONTRADICTS ITSELF ══════════════
       // "14 read" counted the leads ON SCREEN and "Download CSV (8)" counted
       // the WHOLE QUEUE, so two numbers about the same thing disagreed on one
@@ -7353,6 +7425,22 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
             + ' and $' + contactRun.usd.toFixed(3) + ' of model. Stop keeps everything already read.'))
         // -- IDLE ---------------------------------------------------------
         : React.createElement('div', { style:{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginTop:14 } },
+          // ══ THE SCOPE, BESIDE THE BUTTON THAT SPENDS ═════════════════════
+          // Same rule that moved the trade and market pickers up here: a
+          // control that decides what a press BUYS belongs next to the press.
+          React.createElement('label', {
+            style:{ display:'flex', alignItems:'center', gap:7, fontSize:12.5, color:'var(--t)',
+                    flexBasis:'100%', cursor:'pointer', lineHeight:1.5 },
+          },
+            React.createElement('input', {
+              type:'checkbox', checked: contactPlacesOnly,
+              onChange: e => setContactPlacesOnly(!!e.target.checked),
+            }),
+            React.createElement('span', null,
+              'Only businesses with a Google listing'
+              + (_cHidden ? ' \u2014 hiding ' + _cHidden + ' from the job-board, funding and for-sale lanes' : '')),
+            React.createElement('span', { style:{ color:'var(--m2)' } },
+              'A Google listing means a local address, a rating and reviews. The other lanes are where the national brands come from.')),
           React.createElement('button', {
             className:'btn btn-sm',
             style:{ background:'var(--a)', color:'#0b0d10', border:'none', fontWeight:600 },
@@ -7386,6 +7474,39 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
             className:'btn btn-g btn-sm',
             onClick: () => { const n = downloadFindContacts(_cExportable); if (!n) setContactErr('Nothing to export yet.'); },
           }, 'Download CSV (' + _cExportable.length + ')') : null,
+          // ══ THE SAME LIST, STRAIGHT INTO HIS SHEET ═══════════════════════
+          // Same population as the CSV button beside it, same rows, same
+          // columns. If the two ever disagreed the operator would have no way
+          // to tell which one was right.
+          _cExportable.length ? React.createElement('button', {
+            className:'btn btn-sm',
+            style:{ background:'transparent', color:'var(--t)', border:'1px solid var(--b)' },
+            disabled: sheetBusy,
+            title: 'Appends these rows to the Google Sheet set up in Settings. A business already in the sheet is not added twice.',
+            onClick: async () => {
+              const url = String((settings && settings.sheetWebhookUrl) || '').trim();
+              if (!url) { setSheetHelp(true); setSheetNote(''); return; }
+              setSheetBusy(true); setSheetNote(''); setContactErr('');
+              try {
+                const payload = findSheetPayload(_cExportable);
+                const r = await fetch(BACKEND + '/api/export-sheet', {
+                  method:'POST', headers:{ 'Content-Type':'application/json' },
+                  body: JSON.stringify(Object.assign({ url }, payload)),
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok) { setSheetNote(''); setContactErr(d.error || ('The sheet export answered ' + r.status + '.')); if (d.setupNeeded) setSheetHelp(true); }
+                else {
+                  setSheetNote(d.written + ' row' + (d.written === 1 ? '' : 's') + ' added to the sheet'
+                    + (d.skipped ? ', ' + d.skipped + ' already there' : '') + '.');
+                }
+              } catch (e) {
+                setContactErr('Could not reach the server to send the sheet (' + ((e && e.message) || 'no response') + ').');
+              } finally { setSheetBusy(false); }
+            },
+          }, sheetBusy ? 'Sending to the sheet...' : 'Send to Google Sheet') : null,
+          sheetNote ? React.createElement('div', {
+            style:{ fontSize:12, color:'var(--g)', flexBasis:'100%', lineHeight:1.5 },
+          }, sheetNote) : null,
           _cReadNoContact > 0 ? React.createElement('div', {
             style:{ fontSize:11.5, color:'var(--m2)', flexBasis:'100%', lineHeight:1.5 },
           }, _cReadNoContact + ' of the ' + _cRead.length + ' read had no owner, no address and no number on their site, so they are not in the file.') : null,
@@ -7424,6 +7545,32 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
           }, _cFailed.length + ' lead' + (_cFailed.length === 1 ? '' : 's') + ' could not be read: '
              + (((_cFailed[0].contactNotes || [])[0]) || 'no reason recorded')
              + '. They are still counted as unread, so the button above picks them up again.') : null,
+          // ══ A DECISION IS NOT A FAILURE ══════════════════════════════════
+          // A lead the server ruled out was rendered in the same red box as a
+          // dead server, under the words "could not be read" - framing a
+          // deliberate, correct, zero-cost refusal as a fault. It is neither red
+          // nor a failure, and it has its own way back.
+          _cNotFit.length ? React.createElement('div', {
+            style:{ flexBasis:'100%', fontSize:12, color:'var(--t)', border:'1px solid var(--b)',
+                    borderRadius:9, padding:'8px 11px', lineHeight:1.5,
+                    display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' },
+          },
+            React.createElement('span', null,
+              _cNotFit.length + ' ruled out as not a business we sell to, at no cost: '
+              + _cNotFit.slice(0, 3).map(c => c.name).join(', ')
+              + (_cNotFit.length > 3 ? ' and ' + (_cNotFit.length - 3) + ' more' : '')
+              + '. They are not counted as unread, so the button above skips them from now on.'),
+            React.createElement('button', {
+              className:'btn btn-sm',
+              style:{ background:'transparent', color:'var(--m2)', border:'1px solid var(--b)', marginLeft:'auto' },
+              title: 'Puts them back in the unread pool. Use this if the filter has a real lead wrong.',
+              onClick: () => {
+                const names = new Set(_cNotFit.map(c => c.name));
+                const back = loadDiscovered().map(x => (x && names.has(x.name))
+                  ? Object.assign({}, x, { contactNotFit: false, contactFailedAt: null, contactNotes: [] }) : x);
+                saveDiscovered(back); setDiscovered(back);
+              },
+            }, 'Put them back')) : null,
           React.createElement('div', { style:{ fontSize:11.5, color:'var(--m2)', flexBasis:'100%', lineHeight:1.5 } },
             _cUnread.length === 0 && _cRead.length === 0
               ? 'Find some leads first, or widen the filters above.'
@@ -7431,7 +7578,41 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
 
         contactErr ? React.createElement('div', {
           style:{ marginTop:10, fontSize:12, color:'#fca5a5', border:'1px solid rgba(239,68,68,.25)', borderRadius:9, padding:'8px 11px' },
-        }, contactErr) : null);
+        }, contactErr) : null,
+
+        // ══ HOW THE SHEET GETS CONNECTED ═══════════════════════════════════
+        // Shown when the button is pressed with nothing configured, because the
+        // setup is two minutes and the instructions belong where the failure
+        // happens rather than in a document nobody opens.
+        sheetHelp ? React.createElement('div', {
+          style:{ marginTop:10, fontSize:12.5, color:'var(--t)', border:'1px solid var(--b)',
+                  borderRadius:11, padding:'12px 14px', lineHeight:1.6 },
+        },
+          React.createElement('div', { style:{ fontWeight:600, marginBottom:6 } }, 'Connect a Google Sheet, once'),
+          React.createElement('div', null,
+            'This sends the rows to a script inside your own spreadsheet, so there is no Google login to give the app and no key to manage. It takes about two minutes.'),
+          React.createElement('ol', { style:{ margin:'8px 0 8px 18px', padding:0 } },
+            React.createElement('li', null, 'Make a new Google Sheet, or open the one you want the leads in.'),
+            React.createElement('li', null, 'Extensions \u2192 Apps Script. Delete whatever is in the editor and paste the code below.'),
+            React.createElement('li', null, 'Deploy \u2192 New deployment \u2192 Web app. Execute as: Me. Who has access: Anyone.'),
+            React.createElement('li', null, 'Copy the web-app URL it gives you and paste it into Settings \u2192 Google Sheet URL.')),
+          React.createElement('pre', {
+            style:{ background:'var(--s)', border:'1px solid var(--b)', borderRadius:8, padding:'10px 12px',
+                    overflowX:'auto', fontSize:11.5, lineHeight:1.5, margin:'6px 0' },
+          }, FIND_SHEET_SCRIPT),
+          React.createElement('div', { style:{ display:'flex', gap:10, flexWrap:'wrap', marginTop:6 } },
+            React.createElement('button', {
+              className:'btn btn-sm',
+              style:{ background:'transparent', color:'var(--t)', border:'1px solid var(--b)' },
+              onClick: () => { try { navigator.clipboard.writeText(FIND_SHEET_SCRIPT); setSheetNote('Script copied.'); } catch (e) { void e; } },
+            }, 'Copy the script'),
+            React.createElement('button', {
+              className:'btn btn-sm',
+              style:{ background:'transparent', color:'var(--m2)', border:'1px solid var(--b)' },
+              onClick: () => setSheetHelp(false),
+            }, 'Close')),
+          React.createElement('div', { style:{ color:'var(--m2)', marginTop:8 } },
+            'Access must be "Anyone". Set to "Only myself", Google answers with its sign-in page instead of the script, which looks like a success and writes nothing \u2014 the send refuses that case by name rather than reporting rows it never added.')) : null);
 
       // ══ MOVE WHAT YOU ARE LOOKING AT INTO THE PIPELINE ═══════════════════
       // Acts on `filtered` — the list actually on screen — so the scope bar and
@@ -15183,6 +15364,12 @@ function SettingsView({
     type: 'text',
     ph: 'Second sequence/campaign ID — optional',
     hint: 'Deliverability rotation. Make a second Hunter sequence in the SAME Hunter account whose sender is a mailbox on your SECOND domain, paste its ID here, and sends split between the two so no single domain carries every bounce. Each lead always lands in the same sequence (stable by lead), so nobody ever sits in two campaigns. Leave blank and everything sends through the first sequence exactly as before.'
+  }), React.createElement(Fld, {
+    label: 'Google Sheet URL (contact list)',
+    k: 'sheetWebhookUrl',
+    type: 'text',
+    ph: 'https://script.google.com/macros/s/.../exec',
+    hint: 'Where "Send to Google Sheet" on the Find tab puts the contact list. This is the web-app URL of an Apps Script inside your own spreadsheet, not the sheet address itself — press the button with this blank and the Find tab shows the eight lines to paste and the four steps to deploy them. A webhook rather than a Google login on purpose: no OAuth, no key to manage, and you can repoint it at a different sheet without a deploy. Only script.google.com URLs are accepted, because this endpoint posts your contact list to whatever address it is given.'
   }), React.createElement(Fld, {
     label: 'SDR Booking Link',
     k: 'bookingLink',
