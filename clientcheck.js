@@ -2437,6 +2437,11 @@ let contactStat = null;
 
       // EIGHT — who belongs in the file at all.
       if (M.has({}) || M.has({ name: 'X' })) fails.push('a lead with nothing to contact is being exported');
+      // The bare Places phone is NOT a contact row. Every lead in the Find
+      // queue carries one, so admitting it would put "Download CSV (167)" on
+      // screen before anything was read and hand a rep a file of numbers he
+      // already had.
+      if (M.has({ name: 'X', phone: '(317) 555-0134' })) fails.push('a lead that was never read is in the contact file on the strength of the phone number Find already had');
       if (!M.has({ contactPhone: '(317) 555-0134' }) || !M.has({ contactOwner: 'A B' }) || !M.has({ contactEmail: 'a@b.com' })) {
         fails.push('a lead with a phone, an owner or an address is being left out of the contact file');
       }

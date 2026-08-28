@@ -5374,8 +5374,14 @@ const contactFieldsFrom = (data) => {
 // is the unmeasured-as-zero failure wearing a tick box.
 const contactYesNo = (v, yes, no) => (v === true ? yes : v === false ? no : 'not checked');
 
-// A contact row is worth exporting when there is something on it to contact.
-const hasContactData = (c) => !!(c && (c.contactEmail || c.contactOwner || String(c.contactPhone || c.phone || '').replace(/\D/g, '')));
+// A contact row is worth exporting when a contact READ produced something. The
+// bare Places phone is deliberately NOT enough on its own: every lead in the
+// Find queue has one, so counting it would have put "Download CSV (167)" on
+// screen before a single lead was read, and handed a rep 167 rows with nothing
+// in them but a number he already had. contactPhone is set BY the read, so a
+// lead that was read always qualifies even when the owner and the address both
+// came back empty - that is a real row, and its notes say what went wrong.
+const hasContactData = (c) => !!(c && (c.contactEmail || c.contactOwner || String(c.contactPhone || '').replace(/\D/g, '')));
 
 // -- THE FILE ---------------------------------------------------------------
 // A CSV on purpose: a contact list IS a table, and a spreadsheet is what a rep
