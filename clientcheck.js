@@ -2329,9 +2329,16 @@ const PENDING = [];
 // the confidence caption it derives by regex is exactly the shape that
 // collapses four different states into one sentence.
 let contactStat = null;
+let contactTally = null;
 {
   const NEED2 = ['findCsvCell', 'FIND_CSV_CTRL', 'FIND_CSV_COLUMNS', 'findContactRows', 'findContactCsv', 'findSheetPayload',
-                 'contactFieldsFrom', 'contactRequestBody', 'contactYesNo', 'hasContactData'];
+                 'contactFieldsFrom', 'contactRequestBody', 'contactYesNo', 'hasContactData',
+                 // The CSV's affordability column reads the same labeller the card
+                 // reads, so it has to be lifted with it.
+                 'AFFORD_LABEL', 'affordLabel',
+                 // The run tally - the first thing in this project that has ever
+                 // counted whether the owner resolver and the email engine work.
+                 'findRunTally', 'findTallyLine'];
   const got2 = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED2.includes(n.id.name) && n.init) {
@@ -2346,7 +2353,8 @@ let contactStat = null;
     try {
       M = new Function(NEED2.map(k => got2[k]).join('\n')
         + '\nreturn { cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
-        + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData };')();
+        + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
+        + ' tally: findRunTally, tallyLine: findTallyLine };')();
     } catch (e) {
       fails.push('the contact list no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -2506,6 +2514,49 @@ let contactStat = null;
       if (M.has({ name: 'X', phone: '(317) 555-0134' })) fails.push('a lead that was never read is in the contact file on the strength of the phone number Find already had');
       if (!M.has({ contactPhone: '(317) 555-0134' }) || !M.has({ contactOwner: 'A B' }) || !M.has({ contactEmail: 'a@b.com' })) {
         fails.push('a lead with a phone, an owner or an address is being left out of the contact file');
+      }
+      // ── THE RUN TALLY, EXECUTED ───────────────────────────────────────
+      // Nothing in this project has ever counted whether the owner resolver or
+      // the email engine work. The first thing that does must not be a number
+      // nobody can check, so it is run here on a shaped queue.
+      {
+        const mk = (n, o) => Array.from({ length: n }, (_, i) => Object.assign({ name: 'C' + i, contactReadOk: true }, o));
+        const q = [].concat(
+          mk(4, { contactOwner: 'A B', contactOwnerTitle: 'Owner', contactOwnerCanBuy: true,
+                  contactEmail: 'a@b.com', contactEmailTier: 1, contactEmailSendable: true, contactPhone: '3175550134' }),
+          mk(3, { contactOwner: 'C D', contactEmail: 'c@d.com', contactEmailTier: 3, contactEmailSendable: false }),
+          mk(5, { contactPhone: '3175550199' }),
+          // Refused before anything was read. It must not count against the
+          // resolver: a run that turned away enterprises did not fail to find
+          // their owners.
+          [{ name: 'Refused', contactFailedAt: 1, notIcp: true }],
+        );
+        const t = M.tally(q);
+        if (t.read !== 12) fails.push('the tally counts leads that were never read: ' + t.read + ' of an expected 12');
+        if (t.ofQueue !== 13) fails.push('the tally lost the size of the queue it was measured over');
+        if (t.owner !== 7 || t.ownerTitled !== 4 || t.ownerCanBuy !== 4) {
+          fails.push(`owners miscounted (${t.owner}/${t.ownerTitled}/${t.ownerCanBuy}) - this is the number Vin asked for by name`);
+        }
+        if (t.email !== 7 || t.tier1 !== 4 || t.tier3 !== 3) fails.push('the email tier split is wrong, and the split IS the answer - a published address and a guess are both "an email"');
+        if (t.sendable !== 4) fails.push('safe-to-send is not being counted separately from "we produced an address"');
+        if (t.phone !== 9) fails.push('phones miscounted: ' + t.phone);
+        if (t.ownerPct !== 58 || t.emailPct !== 58) fails.push(`rates are over the wrong denominator (${t.ownerPct}%) - they must be over leads READ, never over leads tried`);
+        if (t.readable !== true) fails.push('12 reads is the floor and is being called unreadable');
+        // Under the floor there are no rates at all. A thin number believed is
+        // worse than no number, which is the rule the call-outcome report uses.
+        const thin = M.tally(mk(3, { contactOwner: 'A B' }));
+        if (thin.readable !== false) fails.push('a three-lead run is being reported as a rate');
+        if (/%/.test(M.tallyLine(thin))) fails.push('a run under the floor still prints percentages: ' + M.tallyLine(thin));
+        if (!/counts and not rates/.test(M.tallyLine(thin))) fails.push('a thin run does not say that its numbers are not rates');
+        if (!M.tallyLine(t) || !/owner 7 \(58%\)/.test(M.tallyLine(t))) fails.push('the tally line does not report the owner rate: ' + M.tallyLine(t));
+        if (M.tallyLine(M.tally([])) !== '') fails.push('an empty queue prints a tally line about nothing');
+        // A verifier that was not answering is a fact about US and has to be
+        // said, or thirty downgraded addresses read as thirty bad prospects.
+        const off = M.tally(mk(12, { contactEmail: 'a@b.com', contactEmailTier: 3, contactNotes: ['the email verifier was not answering'] }));
+        if (off.verifierOff !== 12 || !/verifier/i.test(M.tallyLine(off))) {
+          fails.push('a run made while the verifier was down says nothing about it, so its tier-3 addresses read as a fact about those prospects');
+        }
+        contactTally = M.tallyLine(t);
       }
       contactStat = { cols: M.cols.length };
     }
@@ -2690,11 +2741,21 @@ let findStat = null;
   }
 
   // ---- 4. The card stops guessing once we have measured ------------------
+  // findScoreLine reads affordLabel, so both are lifted together. Executing the
+  // sentence is the whole point: a source scan cannot tell a label that renders
+  // from a label that is computed and dropped.
   const _m = src.match(/const findScoreLine = \(co\) => \{[\s\S]*?\n\};/);
+  const _mAff = src.match(/const AFFORD_LABEL = \{[\s\S]*?\n\};\nconst affordLabel = [^\n]+\n/);
+  if (!_mAff) fails.push('AFFORD_LABEL/affordLabel are gone — the Find card is deriving its own affordability tier again, which is a second copy of a rule the server already owns');
   if (!_m) fails.push('findScoreLine is gone — the Find card is building its own sentence again, where nothing can run it');
   else {
-    let line = null;
-    try { line = new Function('return ' + _m[0].replace(/^const findScoreLine = /, ''))(); } catch (e) { line = null; }
+    let line = null, affLabel = null;
+    try {
+      const _mk = new Function((_mAff ? _mAff[0] : 'const affordLabel = () => "";')
+        + 'return { line: ' + _m[0].replace(/^const findScoreLine = /, '').replace(/;$/, '') + ', affordLabel };');
+      const _got = _mk();
+      line = _got.line; affLabel = _got.affordLabel;
+    } catch (e) { line = null; }
     if (typeof line !== 'function') fails.push('findScoreLine could not be executed');
     else {
       const unread = line({ icpScore: 74, reachPredict: 31 });
@@ -2714,13 +2775,47 @@ let findStat = null;
         fails.push('a read lead with nothing found reports nothing rather than saying so');
       }
       if (/sorted last/.test(unread)) fails.push('an undemoted lead claims it was sorted last');
-      if (!/sorted last: outside the star band/.test(demoted)) {
+      if (!/sorted last: above the review-mining ceiling/.test(demoted)) {
         fails.push('a band-demoted lead says nothing about it, so its position on the screen has no explanation');
       }
-      if (!/star band and above the review ceiling/.test(both)) {
+      if (!/review-mining ceiling and above the review ceiling/.test(both)) {
         fails.push('a lead demoted twice names only one reason');
       }
-      findStat = { unread, read, demoted };
+
+      // ---- 4b. What they can afford, which is the question the list exists
+      // to answer. The band is the SERVER's; the browser only labels it. A
+      // second affordability rule here is how the card and the CSV end up
+      // telling an operator two different things about one business.
+      if (typeof affLabel === 'function') {
+        if (affLabel({ affordBand: 'premium' }) !== 'Premium fit') fails.push('the premium band has no label on the card');
+        if (affLabel({ affordBand: 'lower' }) !== 'Lower tier only') fails.push('the lower-tier band has no label on the card');
+        if (affLabel({ affordBand: 'below_floor' }) !== 'Below our floor') fails.push('a lead below the floor is labelled as though it were sellable');
+        // Unmeasured shows NOTHING rather than a tier. "We did not look" has
+        // never meant "they cannot pay" anywhere else in this app.
+        for (const _b of [null, undefined, '', 'nonsense', 0]) {
+          if (affLabel({ affordBand: _b }) !== '') { fails.push('an unmeasured affordability band renders a label: ' + JSON.stringify(_b)); break; }
+        }
+      }
+      const _prem = line({ icpScore: 74, affordBand: 'premium' });
+      if (!/Premium fit/.test(_prem)) fails.push('the affordability tier is computed and never rendered on the card, which is the whole question the Find list exists to answer');
+      if (/Premium fit/.test(line({ icpScore: 74 }))) fails.push('a lead with no measured band is being shown as a premium fit');
+      // A low rating is a REASON now, not a demotion, and the card has to say
+      // which - a number that moved with nothing accounting for it is what made
+      // the old rating read as broken.
+      const _low = line({ icpScore: 66, lowRating: true });
+      if (!/low rating, kept/.test(_low)) fails.push('a lead kept BECAUSE of its low rating says nothing about it, so its score reads as unexplained again');
+      if (/sorted last/.test(_low)) fails.push('a low-rated lead still claims it was sorted last, which is the behaviour that was removed');
+
+      // ---- 4c. And the invented revenue band is gone. It printed
+      // "Est. $1M-$5M+" off a review count alone, on the card an operator
+      // reads before deciding what to audit.
+      {
+        const _needle = ['Est. $', '1M'].join('');
+        const _bare = src.split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+        if (_bare.includes(_needle)) fails.push('the card still renders a revenue estimate built from a review count - a figure presented as a measurement, which is the one thing this system is built not to do');
+      }
+
+      findStat = { unread, read, demoted, prem: _prem };
     }
   }
 }
@@ -2734,7 +2829,8 @@ Promise.all(PENDING).then(() => {
   console.log(`\n\u2713 index.html: all ${calls.length} research request(s) go through the one builder at line ${builderLine}, which sends ${builderKeys.length} fields including every measurement nothing downstream can recover. Two hand-written bodies disagreed about seventeen of them on 2026-08-19.`);
   if (roundTrip) console.log(`\u2713 index.html: the Supabase round trip was EXECUTED, not read \u2014 leadToRow and rowToLead run on five real lead shapes. A Find lead keeps every one of its ${roundTrip.fields} stored fields, a never-researched lead does NOT read as audited, the model's draft survives a reload instead of the research-time template, the call outcome survives, an empty lead still stores nothing, and no stored field is write-only. This pair is the only door between the app and its data, it has produced nine duplicate-key collisions, and nothing in this repo had ever run it.`);
   notes.forEach(n => console.log(n));
-  if (findStat) console.log(`\u2713 index.html: the Find run's clock, queue cap and card were EXECUTED, not read \u2014 the browser's wall sits above the server's own sweep so a healthy run is never killed by the wrong file, the submit goes through the poller and exactly one call site still touches the synchronous door as the old-server fallback, the queue cap is one number rather than three, and a lead we have actually read stops showing the name-based guess beside the owner, email and phone we measured. A demoted lead now says why it was sorted last: "${findStat.demoted}".`);
+  if (findStat) console.log(`\u2713 index.html: the Find run's clock, queue cap and card were EXECUTED, not read \u2014 the browser's wall sits above the server's own sweep so a healthy run is never killed by the wrong file, the submit goes through the poller and exactly one call site still touches the synchronous door as the old-server fallback, the queue cap is one number rather than three, and a lead we have actually read stops showing the name-based guess beside the owner, email and phone we measured. A demoted lead now says why it was sorted last: "${findStat.demoted}". And the card answers what a business can afford instead of inventing a revenue band from its review count: "${findStat.prem}".`);
+  if (contactTally) console.log(`\u2713 index.html: the contact run TALLY was executed \u2014 the first thing in this project that has ever counted whether the owner resolver and the email engine work. Rates are over leads actually READ, the email tier split is reported rather than one "found" number because a published address and a guess are not the same thing, a run under twelve reads says its numbers are counts and not rates, and a run made while the verifier was down says so. On the fixture queue: ${contactTally}`);
   if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the ${contactStat.cols}-column CSV neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, gives each email tier its own confidence sentence, and reports an unmeasured signal as "not checked" rather than as a definite no. Every call site is pinned too: the panel starts the run, the run posts to /api/find-contact, it saves after every lead so a Stop keeps what was paid for, the card strip renders only on a lead that was read, and the Research batch cannot reach any of it.`);
   if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
 }).catch((e) => { console.log('\n\u2717 index.html: the checks could not finish \u2014 ' + (e && e.message)); process.exit(1); });
