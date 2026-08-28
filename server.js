@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260913;
+const CONTRACT_VERSION = 20260914;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -30765,6 +30765,14 @@ const findOwnerViaRegistry = async (companyName, fcKey) => {
 const HEADLINE_VERB = /\s+(?:named|appointed|promoted|elected|hired|joins|joined|announces|announced|takes|steps|retires|retired|launches|launched|becomes|became|assumes|assumed|to\s+lead|will\s+lead)\b.*$/i;
 const stripHeadlineVerb = (name) => String(name || '').replace(HEADLINE_VERB, '').trim();
 
+// Stage 1 reads pages somebody else already fetched, so it costs nothing. Only
+// stages 2 and 3 buy anything, and the line has to say which happened - "1 of 3
+// lookup stages purchased" was printed on leads whose own spend line read
+// "0 Firecrawl credit(s), $0.0000 of model".
+const ownerStageSay = (n) => (Number(n) <= 1)
+  ? 'stage 1 only, which is free \u2014 no paid lookup was bought'
+  : `${n} of 3 lookup stages run; stages 2 and up are the paid ones`;
+
 const findOwnerViaNews = async (companyName) => {
   if (!companyName) return null;
   try {
@@ -31165,7 +31173,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   }
   if (_siteIsDead && !settled()) {
     console.log(`DM [${companyName}]: their website returned nothing, so no audit can be produced for this lead. Stopping before the paid owner lookups \u2014 that ladder costs ~15 Firecrawl credits and an owner name is worth nothing without an audit to put in front of him. Everything free was still measured. Fix or replace the website URL and re-run.`);
-    console.log(`DM [${companyName}]: ${stagesRun} of 3 lookup stages purchased`);
+    console.log(`DM [${companyName}]: ${ownerStageSay(stagesRun)}`);
     return rankOwnerCandidates(found) || null;
   }
   if (settled()) {
@@ -31211,7 +31219,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
       console.log(`DM [${companyName}]: have a candidate but not corroborated — skipping the registry (low yield, mostly filing agents)`);
     }
   }
-  console.log(`DM [${companyName}]: ${stagesRun} of 3 lookup stages purchased`);
+  console.log(`DM [${companyName}]: ${ownerStageSay(stagesRun)}`);
 
   if (found.length === 0) {
     console.log(`DM [${companyName}]: NO decision-maker found in any source`);
@@ -54983,6 +54991,52 @@ app.listen(PORT, () => {
     console.log(`⛔ OWNER TRUTH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ---- THE SHEET EXPORT TAKES ITS DESTINATION FROM THE REQUEST ----------
+  // Which makes it the one endpoint here that would post a rep's contact list
+  // to whatever address somebody names. On a public server an unbounded URL
+  // there is an open relay: a link-local metadata address, an internal host, or
+  // anyone's collector. The feature is "send it to MY Apps Script", so the
+  // bound is the feature, and it is executed rather than read.
+  try {
+    const _fails = [];
+    const _mustRefuse = [
+      ['', 'nothing configured'],
+      ['not a url', 'unparseable'],
+      ['http://script.google.com/macros/s/x/exec', 'plain http'],
+      ['https://evil.example.com/collect', 'somebody else entirely'],
+      ['https://169.254.169.254/latest/meta-data/', 'the cloud metadata address'],
+      ['http://127.0.0.1:4000/api/spend', 'a local address on this very server'],
+      ['https://script.google.com.evil.test/exec', 'a lookalike host with the real one as a prefix'],
+      ['https://docs.google.com/spreadsheets/d/abc/edit', 'the SHEET address rather than the deployed script'],
+    ];
+    for (const [url, why] of _mustRefuse) {
+      if (!sheetsUrlRefusal(url)) _fails.push(`the sheet export would post the contact list to ${JSON.stringify(url)} (${why})`);
+    }
+    // And it must still ACCEPT the two hosts Apps Script actually answers on. A
+    // bound tightened until the feature cannot work is the more expensive
+    // failure, and this file records it at the size gate that refused a
+    // dermatology practice.
+    const _mustAccept = [
+      'https://script.google.com/macros/s/AKfycbxxxxxxxxxxxxxxxxxx/exec',
+      'https://script.googleusercontent.com/macros/echo?user_content_key=abc',
+    ];
+    for (const url of _mustAccept) {
+      const r = sheetsUrlRefusal(url);
+      if (r) _fails.push(`a real Apps Script web-app URL is being refused: ${r}`);
+    }
+    // The message has to name the host it saw. "Invalid URL" sends whoever reads
+    // it to inspect the wrong thing, which is the class this file records at the
+    // SMTP timeout and the Supabase table that existed.
+    const _wrongHost = sheetsUrlRefusal('https://evil.example.com/collect');
+    if (!/evil\.example\.com/.test(_wrongHost)) {
+      _fails.push('the refusal does not name the host it actually saw, so an operator cannot tell what is wrong with the URL they pasted');
+    }
+    if (_fails.length) console.log(`⛔ SHEET EXPORT URL CHECK: ${_fails.join(' | ')}.`);
+    else console.log('✓ SHEET EXPORT URL CHECK: the contact list can only be posted to a Google Apps Script web app over https — a lookalike host, a local address, the cloud metadata address, plain http and the spreadsheet’s own edit URL are all refused, and the two hosts Apps Script really answers on are accepted. This endpoint takes its destination from the request body, so without this it is an open relay for whatever is in those rows.');
+  } catch (e) {
+    console.log(`⛔ SHEET EXPORT URL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ---- THE FIND-TAB CONTACT READ ---------------------------------------
   // The standing goal is fifty leads a day with an owner, an address, a number
   // and a score, and this is the one place it is decided. Every predicate is
@@ -70711,6 +70765,91 @@ const runFindContactRead = async (company, keys) => {
 // prevents is identical: a loop, a mistake or one bad afternoon running the
 // account to zero with every individual line item correctly logged. The boot
 // window gate is the app-level middleware and applies to this POST already.
+// ══ THE CONTACT LIST, INTO A GOOGLE SHEET ═══════════════════════════════════
+// Vin: "can we hook it up so it just exports to a google sheet?"
+//
+// A WEBHOOK, not a Google integration, and for the reason section 35 already
+// gave when it chose the same shape for the CRM: a native integration means
+// OAuth or a service-account key, a credential to manage, and a new dependency
+// - for a feature whose whole job is "put these rows in that tab". An Apps
+// Script bound to his own sheet needs none of that: he pastes eight lines into
+// his own spreadsheet, deploys it, and the URL is a Settings field he can
+// repoint at a different sheet without a deploy.
+//
+// WHY THE SERVER FORWARDS IT rather than the browser posting directly: an Apps
+// Script web app answers from script.googleusercontent.com after a redirect,
+// and a browser POST there is a CORS fight that ends in `no-cors` - which
+// cannot read the response, so "did the rows land" becomes unanswerable. A
+// silent success is the failure class this file records most. Server-side there
+// is no CORS and the answer is readable, so the operator is told what happened.
+const SHEETS_HOSTS = new Set(['script.google.com', 'script.googleusercontent.com']);
+const sheetsUrlRefusal = (url) => {
+  const raw = String(url || '').trim();
+  if (!raw) return 'No Google Sheet URL is set. Paste the Apps Script web-app URL into Settings.';
+  let u;
+  try { u = new URL(raw); } catch { return `"${raw.slice(0, 60)}" is not a usable URL.`; }
+  // https only, and only Google's own script hosts. This endpoint takes a
+  // destination from the request body and posts business contact data to it, so
+  // an unbounded URL here is an open relay on a public server - it would happily
+  // POST a rep's contact list at an internal address or anywhere else somebody
+  // named. The feature is "send it to my Apps Script", so that is what it allows.
+  if (u.protocol !== 'https:') return 'The Google Sheet URL must start with https://.';
+  if (!SHEETS_HOSTS.has(u.hostname)) {
+    return `This endpoint only sends to a Google Apps Script web app (script.google.com), and that URL points at ${u.hostname}. Deploy the script from your own sheet and paste the URL it gives you.`;
+  }
+  return '';
+};
+
+app.post('/api/export-sheet', async (req, res) => {
+  const b = req.body || {};
+  const refusal = sheetsUrlRefusal(b.url);
+  if (refusal) return res.status(422).json({ error: refusal, setupNeeded: true });
+  const rows = Array.isArray(b.rows) ? b.rows : [];
+  const header = Array.isArray(b.header) ? b.header.map(String) : [];
+  if (!rows.length) return res.status(422).json({ error: 'There are no contact rows to send yet.' });
+  if (!header.length) return res.status(422).json({ error: 'The row header is missing, so the sheet would have no column names.' });
+  // A cap, because this posts one JSON body and a runaway list would be a
+  // multi-megabyte request against an Apps Script quota. 500 is ten days of
+  // fifty leads, and the refusal says so rather than silently truncating -
+  // sending the first 500 of 900 and reporting success is how you find out next
+  // week that half a list never went.
+  if (rows.length > 500) {
+    return res.status(422).json({ error: `${rows.length} rows is past the 500-row limit for one send. Narrow the list on screen and send it in batches.` });
+  }
+  try {
+    const r = await fetchT(String(b.url).trim(), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ header, rows }),
+      redirect: 'follow',
+    }, 30000);
+    const text = await r.text().catch(() => '');
+    let out = null;
+    try { out = JSON.parse(text); } catch { out = null; }
+    if (!r.ok) {
+      console.log(`\u{1F4C4} SHEET EXPORT: Google answered ${r.status}. ${String(text).slice(0, 160)}`);
+      return res.status(502).json({ error: `Google answered ${r.status} for that script URL. Check the deployment is set to "Anyone" can access.` });
+    }
+    // The script reports what it did. A script that answers 200 with no body is
+    // a script that was deployed wrong (an HTML login page comes back as 200
+    // too), so an unreadable answer is reported as one rather than as a success.
+    if (!out || typeof out.written !== 'number') {
+      console.log(`\u{1F4C4} SHEET EXPORT: the script answered 200 but not with the JSON it should. First 160 characters: ${String(text).slice(0, 160)}`);
+      return res.status(502).json({
+        error: 'That URL answered, but not with the JSON the export script returns. The usual cause is a deployment set to "Only myself" — Google serves its sign-in page instead, and it looks like a success. Re-deploy with access set to "Anyone".',
+      });
+    }
+    const written = Number(out.written) || 0;
+    const skipped = Number(out.skipped) || 0;
+    console.log(`\u{1F4C4} SHEET EXPORT: ${written} row(s) appended, ${skipped} already in the sheet.`);
+    return res.json({ ok: true, written, skipped, sheet: String(out.sheet || '') });
+  } catch (e) {
+    const msg = (e && e.message) || String(e);
+    console.log(`\u{1F4C4} SHEET EXPORT: the request failed — ${msg}`);
+    return res.status(502).json({ error: `The Google Sheet did not answer (${msg}). Nothing was sent.` });
+  }
+});
+
 app.post('/api/find-contact', async (req, res) => {
   const b = req.body || {};
   const company = b.company || {};

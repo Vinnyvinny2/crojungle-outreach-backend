@@ -2330,7 +2330,7 @@ const PENDING = [];
 // collapses four different states into one sentence.
 let contactStat = null;
 {
-  const NEED2 = ['findCsvCell', 'FIND_CSV_CTRL', 'FIND_CSV_COLUMNS', 'findContactRows', 'findContactCsv',
+  const NEED2 = ['findCsvCell', 'FIND_CSV_CTRL', 'FIND_CSV_COLUMNS', 'findContactRows', 'findContactCsv', 'findSheetPayload',
                  'contactFieldsFrom', 'contactRequestBody', 'contactYesNo', 'hasContactData'];
   const got2 = {};
   walk(ast, (n) => {
@@ -2345,7 +2345,7 @@ let contactStat = null;
     let M = null;
     try {
       M = new Function(NEED2.map(k => got2[k]).join('\n')
-        + '\nreturn { cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv,'
+        + '\nreturn { cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
         + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData };')();
     } catch (e) {
       fails.push('the contact list no longer compiles standalone, so it cannot be verified: ' + e.message);
@@ -2457,6 +2457,46 @@ let contactStat = null;
       const teamHead = (M.cols.find(c => c[0] === 'teamSize') || [])[1] || '';
       if (!/floor/i.test(teamHead)) fails.push('the team-size column reads as a headcount rather than as a floor, and it is the closest thing on the row to the revenue band the whole ICP is defined by');
 
+      // SEVEN-B — THE GOOGLE SHEET IS THE SAME LIST, SOMEWHERE ELSE.
+      // The sheet and the CSV must never be two shapes of one list: an operator
+      // handed a sheet that disagrees with the file has no way to tell which is
+      // right. So the payload is asserted against the SAME builder - same row
+      // count, same column count, same header text, same order.
+      {
+        const _leads = [
+          { name: 'Alpha Co', contactEmail: 'a@a.com', contactIcp: 71, contactOwner: 'Jo Blogs' },
+          { name: 'Beta Co', contactPhone: '(317) 555-0134', contactIcp: 12,
+            contactIcpWhy: 'scored on 3 of 5 signals\nthe rest are left out' },
+        ];
+        const _p = M.sheet(_leads);
+        const _r = M.rows(_leads);
+        if (!_p || !Array.isArray(_p.header) || !Array.isArray(_p.rows)) {
+          fails.push('the Google Sheet payload is not a header plus rows, so the export script has nothing to append');
+        } else {
+          if (_p.header.length !== M.cols.length) fails.push('the sheet header does not have one entry per declared column');
+          if (_p.header.join('|') !== M.cols.map(c => String(c[1])).join('|')) {
+            fails.push('the sheet header is not the declared column names in declared order, so the sheet and the CSV would disagree about what each column is');
+          }
+          if (_p.rows.length !== _r.length) fails.push(`the sheet got ${_p.rows.length} row(s) where the CSV builder produced ${_r.length} — they are not the same list`);
+          for (const row of _p.rows) {
+            if (row.length !== M.cols.length) { fails.push(`a sheet row has ${row.length} cell(s) against ${M.cols.length} columns`); break; }
+            if (row.some(v => typeof v !== 'string')) { fails.push('a sheet cell is not a string, so Sheets would coerce it however it likes'); break; }
+            if (row.some(v => /[\r\n]/.test(v))) { fails.push('a sheet cell still carries a line break — the same defect that made the CSV refuse to open'); break; }
+          }
+          // The ORDER must be the ranked order, not queue order: the whole point
+          // of the score is that the rep works the top of the list first.
+          if (_p.rows.length === 2 && _p.rows[0][2] !== 'Alpha Co') {
+            fails.push('the sheet rows are not in the ranked order the CSV uses');
+          }
+          // The script pasted into the sheet dedupes on column 3. If the company
+          // name ever stops being column 3, the script silently dedupes on the
+          // wrong field and starts dropping real rows.
+          if (String((M.cols[2] || [])[0]) !== 'company') {
+            fails.push('the company name is no longer the third column, but the Apps Script shown to the operator dedupes on the third column — it would drop rows by matching the wrong field');
+          }
+        }
+      }
+
       // EIGHT — who belongs in the file at all.
       if (M.has({}) || M.has({ name: 'X' })) fails.push('a lead with nothing to contact is being exported');
       // The bare Places phone is NOT a contact row. Every lead in the Find
@@ -2525,8 +2565,32 @@ let contactStat = null;
   if (html.indexOf(_nn('if (co.contactReadOk !== true) return', ' null;')) < 0) {
     fails.push('the card contact strip is no longer gated on the read flag, so a lead whose request FAILED renders as if it had been read');
   }
-  if (html.indexOf(_nn('const _cUnread = _cShown.filter(c => c && c.contactReadOk !==', ' true && c.name);')) < 0) {
-    fails.push('the panel decides what is unread from something other than the read flag — a failed request would retire a lead permanently');
+  // Unread is still decided by the READ FLAG, and now also excludes a lead the
+  // server RULED OUT. Those are different states and they were one: a permanent
+  // verdict ("this is a national brand, not a business we sell to") sat in the
+  // unread pool forever, and the panel said so out loud - "they are still
+  // counted as unread, so the button above picks them up again". A transient
+  // failure must still come back, which is what stops a paused server retiring
+  // a hundred leads.
+  if (html.indexOf(_nn('const _cUnread = _cShown.filter(c => c && c.contactReadOk !== true && c.contactNotFit !==',
+                       ' true && c.name);')) < 0) {
+    fails.push('the panel decides what is unread from something other than the read flag and the ruled-out flag — either a failed request retires a lead permanently, or a lead the server already ruled out is re-asked on every press forever');
+  }
+  // A verdict is written ONLY where the server said notIcp. Anything wider and
+  // a dead server starts retiring leads permanently again.
+  if (html.indexOf(_nn('const _verdict = d.notIcp ===', ' true;')) < 0) {
+    fails.push('the client no longer reads the server\u2019s not-a-fit verdict, so a refusal it can never change is retried on every press');
+  }
+  {
+    const writers = (html.match(/contactNotFit:\s*_verdict/g) || []).length;
+    if (writers !== 1) fails.push(`contactNotFit is written from the verdict in ${writers} place(s); it must be written only where the server actually ruled the business out`);
+  }
+  // A per-lead verdict has ONE home. It rendered twice on one panel - in the
+  // failed box AND as a toast - because the toast fired on every non-ok answer.
+  // The toast is for facts about the RUN.
+  if (html.indexOf(_nn('if (d.budgetStopped || d.busy || d.booting) setContactErr(d.error ||',
+                       " '');")) < 0) {
+    fails.push('a per-lead refusal is being raised as a run-level message again, so the same sentence renders twice on one panel');
   }
   // contactReadOk may be assigned true in exactly one place: the function that
   // reads a real server answer. A second writer is how a failure gets to claim
