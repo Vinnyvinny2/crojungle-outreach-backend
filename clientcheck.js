@@ -2362,6 +2362,25 @@ let contactStat = null;
       if (M.cell('Smith & Sons') !== Q + 'Smith & Sons' + Q) fails.push('the contact CSV mangles an ordinary company name');
       if (M.cell('Say ' + Q + 'hi' + Q) !== Q + 'Say ' + Q + Q + 'hi' + Q + Q + Q) fails.push('the contact CSV does not double an embedded quote, so the row shape breaks');
       if (M.cell('a' + String.fromCharCode(0) + 'b') !== Q + 'ab' + Q) fails.push('the contact CSV lets a control character through, which corrupts every row after it');
+      // A LINE BREAK INSIDE A CELL. Two columns carry prose - the score
+      // explanation and the notes - and the row terminator is CRLF. RFC 4180
+      // permits a newline inside quotes and plenty of readers do not, which is
+      // a 4KB file that downloads and will not open. Live, 2026-08-28.
+      if (/[\r\n]/.test(M.cell('one\ntwo'))) fails.push('a cell can still contain a line break, so the file has more rows than leads and a reader that does not honour quoted newlines opens nothing');
+      // And the whole FILE, parsed: every row must have exactly as many cells
+      // as the header. A count is what a spreadsheet actually does.
+      {
+        const _f = M.csv([
+          { name: 'A Co', contactEmail: 'a@a.com', contactIcpWhy: 'scored on 3 of 5 signals\nthe rest are left out', contactNotes: ['line one\r\nline two'] },
+          { name: 'B Co', contactOwner: 'Jo Blogs', contactNotes: ['plain'] },
+        ]).replace(/^\uFEFF/, '');
+        const _rows = _f.split('\r\n').filter(Boolean);
+        if (_rows.length !== 3) fails.push(`the contact CSV produced ${_rows.length} row(s) for a header plus two leads - a cell is breaking the row structure`);
+        const _cells = (r) => r.split('","').length;
+        for (const r of _rows) {
+          if (_cells(r) !== M.cols.length) { fails.push(`a contact CSV row has ${_cells(r)} cells against ${M.cols.length} columns - the file will not open as a table`); break; }
+        }
+      }
 
       // TWO — the ORDER, with the trap that matters. A MEASURED zero must sort
       // ABOVE an unscored lead: Number(null) is 0 and Number.isFinite(0) is
@@ -2459,11 +2478,38 @@ let contactStat = null;
   if (html.indexOf(_nn("BACKEND + '/api/find", "-contact'")) < 0) {
     fails.push('nothing in the client calls /api/find-contact — the Find tab button cannot produce a contact');
   }
-  if (html.indexOf(_nn('onClick: () => runContactBatch(_cUnread', '.slice(0, 50)),')) < 0) {
-    fails.push('the contact panel button no longer starts a contact run');
+  // The button reads how many to run from the operator's own number now, so the
+  // needle pins the WIRE rather than the literal 50 it used to carry.
+  if (html.indexOf(_nn('onClick: () => runContactBatch(_cUnread.slice(0, Math.max(1,', ' contactHowMany))),')) < 0) {
+    fails.push('the contact panel button no longer starts a contact run for the number the operator chose');
+  }
+  // Stop has to abort what is IN FLIGHT. The flag alone is read between leads,
+  // and a lead ran for 155 seconds live - which is why Stop read as broken.
+  if (html.indexOf(_nn('if (contactAbort.current) contactAbort.current', '.abort();')) < 0) {
+    fails.push('Stop no longer aborts the requests in flight, so it cannot take effect until every running lead finishes');
+  }
+  if (html.indexOf(_nn("signal: contactAbort.current ? contactAbort.current.signal :", ' undefined,')) < 0) {
+    fails.push('the contact request is not abortable, so Stop has nothing to cancel');
+  }
+  // An abort is the operator, not a failure: it must not be recorded on the
+  // lead and it must not count toward the dead-server tally.
+  if (html.indexOf(_nn("if (e && (e.name === 'AbortError' ||", ' contactStop.current)) {')) < 0) {
+    fails.push('a cancelled request is being recorded as a failed read, so pressing Stop marks leads as tried');
   }
   if (html.indexOf(_nn('const n = downloadFindContacts(_cExport', 'able);')) < 0) {
     fails.push('the Download CSV button is not wired to the contact export');
+  }
+  // ONE POPULATION. "14 read" counted the leads ON SCREEN and "Download CSV (8)"
+  // counted the WHOLE QUEUE, so two numbers about the same thing disagreed on
+  // one panel and the operator could not tell which was wrong. Live, 2026-08-28.
+  if (html.indexOf(_nn('const _cExportable = _cShown.filter', '(hasContactData);')) < 0) {
+    fails.push('the CSV count is taken from a different population than the read count beside it, so the two numbers on the panel contradict each other');
+  }
+  // The two can still legitimately differ - a lead can be read and carry no
+  // owner, no address and no number - so the panel has to SAY so rather than
+  // leave the gap to be guessed at.
+  if (html.indexOf(_nn('const _cReadNoContact = _cRead.length -', ' _cExportable.length;')) < 0) {
+    fails.push('the panel no longer explains why fewer leads are in the file than were read');
   }
   // The write-through must be PER LEAD. A closed tab or a Stop half way must
   // not throw away reads that were already paid for.

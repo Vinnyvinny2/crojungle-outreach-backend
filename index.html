@@ -1166,7 +1166,7 @@ const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260912;
+const CLIENT_CONTRACT = 20260913;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5401,6 +5401,14 @@ const FIND_CSV_CTRL = new RegExp('[' + String.fromCharCode(0) + '-' + String.fro
   + String.fromCharCode(14) + '-' + String.fromCharCode(31) + String.fromCharCode(127) + ']', 'g');
 const findCsvCell = (v) => {
   let s = (v === null || v === undefined) ? '' : String(v);
+  // ══ A CELL MAY NOT CONTAIN A LINE BREAK ═══════════════════════════════
+  // The row terminator here is CRLF, and two of these columns carry PROSE -
+  // the score explanation and the notes - which can contain a newline. RFC
+  // 4180 permits one inside quotes; plenty of readers do not, and the file
+  // then opens as nothing or as garbage. Live, 2026-08-28: a 4KB file that
+  // downloaded and would not open. A line break inside a spreadsheet cell
+  // carries no information anyway, so it becomes a space.
+  s = s.replace(/\r\n|\r|\n/g, ' ');
   // A cell beginning =, +, - or @ EXECUTES when the file opens in Excel or
   // Sheets, and every value here is scraped off an arbitrary web page and
   // opened by a junior rep. The apostrophe is the documented neutraliser.
@@ -5603,7 +5611,15 @@ function FindView({
   const [contactRun, setContactRun] = React.useState(null);
   const [contactErr, setContactErr] = React.useState('');
   const [contactSort, setContactSort] = React.useState(false);
+  // How many to read on the next press. A number, because 50 is the daily rate
+  // and 5 is what you press when you want to see whether it works before
+  // spending on fifty.
+  const [contactHowMany, setContactHowMany] = React.useState(50);
   const contactStop = React.useRef(false);
+  // Stop sets a flag the worker loop reads BETWEEN leads, and a lead can take
+  // 155 seconds - live, Lodging Dynamics. So Stop appeared not to work: it had
+  // worked, and was waiting on six requests to finish. It aborts them now.
+  const contactAbort = React.useRef(null);
   // The elapsed clock only advances when state changes, and state changes once
   // per lead. On a fifty-lead run that is a timer that sits still for a minute
   // at a time, which reads as a hung run rather than a slow one - and "i had to
@@ -6104,6 +6120,7 @@ function FindView({
     if (!settings.apiKey) { setContactErr('No Anthropic key in Settings, so nobody can be identified.'); return; }
     setContactErr('');
     contactStop.current = false;
+    contactAbort.current = new AbortController();
     const started = Date.now();
     setContactRun({ total: list.length, done: 0, withEmail: 0, withOwner: 0, running: [], fc: 0, usd: 0, startedAt: started, failed: 0 });
     let next = 0;
@@ -6116,6 +6133,7 @@ function FindView({
         const r = await fetch(BACKEND + '/api/find-contact', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(contactRequestBody(co, settings)),
+          signal: contactAbort.current ? contactAbort.current.signal : undefined,
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) {
@@ -6136,6 +6154,13 @@ function FindView({
           fields = contactFieldsFrom(d);
         }
       } catch (e) {
+        // An abort is the operator pressing Stop, not a failure. It must not
+        // count toward the dead-server tally and it must not be recorded on
+        // the lead as a failed read - the lead was simply never asked about.
+        if (e && (e.name === 'AbortError' || contactStop.current)) {
+          setContactRun(s => s ? { ...s, running: s.running.filter(n => n !== co.name) } : s);
+          return;
+        }
         // fetch itself threw: the server is not answering at all.
         transportFails += 1;
         fields = { contactReadOk: false, contactFailedAt: new Date().toISOString(),
@@ -7259,7 +7284,15 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       const _cWithEmail = _cShown.filter(c => c && c.contactEmail).length;
       const _cUnread = _cShown.filter(c => c && c.contactReadOk !== true && c.name);
       const _cFailed = _cShown.filter(c => c && c.contactReadOk !== true && c.contactFailedAt);
-      const _cExportable = discovered.filter(hasContactData);
+      // ══ ONE POPULATION, OR THE PANEL CONTRADICTS ITSELF ══════════════
+      // "14 read" counted the leads ON SCREEN and "Download CSV (8)" counted
+      // the WHOLE QUEUE, so two numbers about the same thing disagreed on one
+      // panel and the operator could not tell which was wrong. Same list now.
+      // The two can still legitimately differ - a lead can be read and carry
+      // no owner, no address and no number - so the button says what it is
+      // counting rather than leaving the gap to be guessed at.
+      const _cExportable = _cShown.filter(hasContactData);
+      const _cReadNoContact = _cRead.length - _cExportable.length;
       const _running = !!(contactRun && !contactRun.finishedAt && contactRun.done < contactRun.total);
       const _pct = contactRun && contactRun.total ? Math.round((contactRun.done / contactRun.total) * 100) : 0;
       const _elapsed = contactRun ? Math.max(0, Math.round((Date.now() - contactRun.startedAt) / 1000)) : 0;
@@ -7303,7 +7336,14 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
               + (_eta !== null ? ' · about ' + Math.max(1, Math.round(_eta / 60)) + ' min left (an estimate from this run)' : '')),
             React.createElement('button', {
               className:'btn btn-sm', style:{ background:'transparent', border:'1px solid var(--b)', color:'var(--m2)' },
-              onClick: () => { contactStop.current = true; },
+              onClick: () => {
+                contactStop.current = true;
+                // The flag alone only stops the NEXT lead. Six requests can be
+                // in flight and one can run for over two minutes, which is why
+                // Stop read as broken.
+                try { if (contactAbort.current) contactAbort.current.abort(); } catch (e) { void e; }
+                setContactRun(s => s ? { ...s, running: [], finishedAt: Date.now() } : s);
+              },
             }, 'Stop')),
           contactRun.running.length ? React.createElement('div', { style:{ fontSize:12, color:'var(--m2)', marginTop:6 } },
             'Now: ' + contactRun.running.slice(0, 4).join(', ')
@@ -7318,11 +7358,27 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
             style:{ background:'var(--a)', color:'#0b0d10', border:'none', fontWeight:600 },
             disabled: _cUnread.length === 0,
             title: 'Reads their homepage and up to three pages their own navigation links to. Buys no audit.',
-            onClick: () => runContactBatch(_cUnread.slice(0, 50)),
+            onClick: () => runContactBatch(_cUnread.slice(0, Math.max(1, contactHowMany))),
           }, _cUnread.length === 0
               ? 'Every lead on screen has been read'
-              : ('Get contacts for ' + Math.min(50, _cUnread.length) + ' lead' + (Math.min(50, _cUnread.length) === 1 ? '' : 's'))),
-          _cUnread.length > 50 ? React.createElement('button', {
+              : ('Get contacts for ' + Math.min(Math.max(1, contactHowMany), _cUnread.length) + ' lead' + (Math.min(Math.max(1, contactHowMany), _cUnread.length) === 1 ? '' : 's'))),
+          _cUnread.length ? React.createElement('div', {
+            style:{ display:'flex', alignItems:'center', gap:7, fontSize:12, color:'var(--t)' },
+          },
+            React.createElement('span', { style:{ color:'var(--m2)' } }, 'How many'),
+            React.createElement('input', {
+              type:'number', min:'1', max:'500', value: contactHowMany,
+              onChange: e => setContactHowMany(Math.max(1, Math.min(500, Number(e.target.value) || 1))),
+              style:{ width:72, padding:'6px 9px', borderRadius:7, border:'1px solid var(--b)',
+                      background:'var(--s)', color:'var(--t)', fontFamily:'Inter,sans-serif', fontSize:13 },
+            }),
+            [5, 25, 50].map(n => React.createElement('button', {
+              key: n, className:'btn btn-sm',
+              style:{ padding:'5px 9px', background: contactHowMany === n ? 'var(--p)' : 'transparent',
+                      color: contactHowMany === n ? '#fff' : 'var(--m2)', border:'1px solid var(--b)' },
+              onClick: () => setContactHowMany(n),
+            }, String(n)))) : null,
+          _cUnread.length > contactHowMany ? React.createElement('button', {
             className:'btn btn-g btn-sm',
             onClick: () => runContactBatch(_cUnread),
           }, 'All ' + _cUnread.length) : null,
@@ -7330,6 +7386,9 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
             className:'btn btn-g btn-sm',
             onClick: () => { const n = downloadFindContacts(_cExportable); if (!n) setContactErr('Nothing to export yet.'); },
           }, 'Download CSV (' + _cExportable.length + ')') : null,
+          _cReadNoContact > 0 ? React.createElement('div', {
+            style:{ fontSize:11.5, color:'var(--m2)', flexBasis:'100%', lineHeight:1.5 },
+          }, _cReadNoContact + ' of the ' + _cRead.length + ' read had no owner, no address and no number on their site, so they are not in the file.') : null,
           _cRead.length ? React.createElement('button', {
             className:'btn btn-sm',
             style:{ background: contactSort ? 'var(--p)' : 'transparent', color: contactSort ? '#fff' : 'var(--m2)', border:'1px solid var(--b)' },
