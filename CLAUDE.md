@@ -8223,6 +8223,33 @@ one level up.
   is the mechanism that matters today.
 - **No ranking or copy change to the audit ladder.** PART 6's rule holds.
 
+### What the falsification runs found in the checks themselves
+
+Twenty-three reverts, each applied ALONE against a baseline the harness refuses
+to start without proving green first. **Two came back STILL GREEN, and both were
+the same shape: a mechanism built and never watched.**
+
+- **The verifier's way back had no guard at all.** The cooldown, the one-probe
+  ration and the clear-on-an-answer were all written, and restoring the one-way
+  gate broke nothing, because nothing executed it. `VERIFIER LATCH CHECK` is the
+  answer, and the clock had to become a PARAMETER for it to exist: a fixture
+  that cannot travel ten minutes forward cannot reach a branch that only exists
+  ten minutes after a latch.
+- **And then the first version of that check was half a check.** It exercised
+  the FUNCTIONS, so the original revert — swapping `verifyEmailSMTP`'s door back
+  to a bare `verifierBlocked()` read — passed through it while the latch was
+  one-way again in production. `verifierBlocked` is read-only by design and
+  never consumes the probe, so a call site gated on it can never fire the one
+  attempt that clears the latch. The check now reads the LIVE FUNCTION
+  (`String(verifyEmailSMTP)`) rather than the file text, so no needle can match
+  the check's own source. Eleventh recorded instance of *a check that does not
+  assert its call site is half a check* — found only by running the revert.
+- **The email tier split was asserted on the OBJECT, never on the LINE.** Every
+  fixture read `t.tier1`, so the tally could stop printing the split entirely
+  and stay green. The assertions read the rendered sentence now.
+
+Both re-armed reverts then went red on their own named assertions.
+
 **HONEST SHAPE: none of this has run against a live Find press.** The bands, the
 tables, the tally and the yield line are executed at boot and in `clientcheck`;
 what a real 1,400-business grid returns under a 60% floor is settled by the first

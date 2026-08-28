@@ -63476,6 +63476,20 @@ app.listen(PORT, () => {
       if (verifierGate(T0)) _fails.push('a rejected key still lets calls through immediately');
       verifierAnswered();
       if (verifierBlocked()) _fails.push('the dead-key latch cannot be cleared by an answer');
+
+      // 6. AND THE CALL SITE, because everything above exercises the
+      // FUNCTIONS and a fixture supplies its own arguments. The first
+      // version of this check did exactly that, and the call-site revert
+      // came back GREEN through it: swapping verifyEmailSMTP's door back to
+      // a bare verifierBlocked() read leaves every assertion above passing
+      // while the latch is one-way again in production. verifierBlocked is
+      // READ-ONLY by design - it never consumes the probe - so a call site
+      // gated on it can never fire the one attempt that clears the latch.
+      // Read off the live function rather than off the file text, so no
+      // needle can match this check's own source.
+      const _smtpSrc = String(verifyEmailSMTP);
+      if (!/verifierGate\(/.test(_smtpSrc)) _fails.push('verifyEmailSMTP does not go through verifierGate - the one call site that can fire the recovery probe is not asking the door, so nothing in production ever reaches the probe and the latch is one-way again');
+      if (/verifierBlocked\(/.test(_smtpSrc)) _fails.push('verifyEmailSMTP is gated on verifierBlocked, which is read-only and never consumes the probe - so the cooldown can pass forever and no call is ever made to find out the allowance came back');
     }
     // Whatever happened above, this process must leave here unlatched. A boot
     // check that leaves state behind fails its neighbour and the neighbour
