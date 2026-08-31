@@ -1208,7 +1208,13 @@ const affordLabel = (co) => AFFORD_LABEL[String((co || {}).affordBand || '')] ||
 const findScoreLine = (co) => {
   const c = co || {};
   if (c.icpScore == null) return '';
-  const parts = ['Find score ' + c.icpScore + '/100'];
+  // ══ TWO NUMBERS OUT OF A HUNDRED, SIDE BY SIDE, NEITHER LABELLED ═════════
+  // The card renders this triage score and the contact-read FIT score next to
+  // each other, both /100, and nothing said which was which. They answer
+  // different questions - this one is "is this worth reading" before a byte is
+  // spent, FIT is "how good is what we read" afterwards - so the label has to
+  // carry the difference or an operator reads one as a correction of the other.
+  const parts = [(c.contactReadOk === true ? 'Find score (before we read them) ' : 'Find score ') + c.icpScore + '/100'];
   if (c.contactReadOk === true) {
     // Measured. This business was actually read, so stop guessing about it.
     const dial = String(c.contactPhone || '').replace(/\D/g, '');
@@ -5513,13 +5519,28 @@ const contactFieldsFrom = (data) => {
     contactEmailTier: (typeof em.tier === 'number') ? em.tier : null,
     contactEmailSendable: em.sendable === true,
     contactEmailLabel: em.label || '',
+    // ══ WHY IT CANNOT BE SENT TO, AND WHY WE THINK IT IS HIS ══════════════
+    // The engine writes both and neither reached the row, so a rep holding an
+    // address the system had refused was told only that it was refused. A
+    // block with no reason on it reads as a bug rather than as a judgement.
+    contactEmailBlockReason: em.blockReason || '',
+    contactEmailPattern: em.pattern || '',
+    contactOwnerBlockReason: own.blockReason || '',
     contactPhone: d.phone || '',
+    // Whether their own site prints the same number. null when we never read a
+    // page - "we did not look" has never meant "it disagrees" - and it never
+    // deletes the number, because a rep still dials it.
+    contactPhoneOnSite: (d.phoneOnSite === true || d.phoneOnSite === false) ? d.phoneOnSite : null,
+    contactPhoneSource: d.phoneSource || '',
     contactAdsCode: (sig.adsCode === true || sig.adsCode === false) ? sig.adsCode : null,
     contactAdsWhy: sig.adsWhy || '',
     contactTeamCount: (typeof sig.teamCount === 'number') ? sig.teamCount : null,
     contactHiring: (sig.hiringAny === true || sig.hiringAny === false) ? sig.hiringAny : null,
     contactHiringMarketing: (sig.hiringMarketing === true || sig.hiringMarketing === false) ? sig.hiringMarketing : null,
     contactHiringTitles: Array.isArray(sig.hiringTitles) ? sig.hiringTitles : [],
+    // The corporate titles on their own leadership page are what DECIDED the
+    // size half of the score the row displays, and they stopped at the server.
+    contactExecTitles: Array.isArray(sig.execTitles) ? sig.execTitles : [],
     contactReadVia: d.readVia || '',
     contactNotes: Array.isArray(d.notes) ? d.notes : [],
     contactSpendFc: (d.spend && typeof d.spend.firecrawl === 'number') ? d.spend.firecrawl : 0,
@@ -5827,7 +5848,24 @@ const leadFromCompany = (company) => {
       contactOwnerTitle: company.contactOwnerTitle || '',
       contactEmail: company.contactEmail || '',
       contactEmailTier: (typeof company.contactEmailTier === 'number') ? company.contactEmailTier : null,
+      // ══ THE ADDRESS TRAVELLED AND THE WARNING DID NOT ═════════════════
+      // This carried thirteen contact fields and contactEmailSendable was not
+      // one of them, so a lead promoted from Find arrived in the pipeline with
+      // the address AND without the flag the card refuses to send on and the
+      // CSV prints "NO - do not send" for. The two are one measurement: an
+      // address the email engine itself marked unsafe, separated from the mark.
+      contactEmailSendable: company.contactEmailSendable === true,
+      contactEmailBlockReason: company.contactEmailBlockReason || '',
+      // Why we believe the owner is the owner, and how far the authority gate
+      // trusted it. Both were computed on the contact read and stopped here,
+      // so a rep looking at a promoted lead could not tell a name read off a
+      // team page from one a model guessed.
+      contactOwnerSources: Array.isArray(company.contactOwnerSources) ? company.contactOwnerSources : [],
+      contactOwnerCanBuy: company.contactOwnerCanBuy === true,
       contactPhone: company.contactPhone || '',
+      // Whether their own site prints the number we are about to dial.
+      contactPhoneOnSite: (company.contactPhoneOnSite === true || company.contactPhoneOnSite === false)
+        ? company.contactPhoneOnSite : null,
       contactAdsCode: (company.contactAdsCode === true || company.contactAdsCode === false) ? company.contactAdsCode : null,
       contactTeamCount: (typeof company.contactTeamCount === 'number') ? company.contactTeamCount : null,
       contactHiringMarketing: (company.contactHiringMarketing === true || company.contactHiringMarketing === false) ? company.contactHiringMarketing : null,
@@ -5887,6 +5925,12 @@ function FindView({
     // easy sale or quick cash." The band itself is the server's; this only
     // chooses which bands to look at.
     affordShape: 'any',                    // any | premium | lower
+    // Off by default (Vin, 2026-08-31). The trigger lanes stay built - they are
+    // the only thing in this pipeline that puts a CLOCK on a finding - but a
+    // lead from one of them has no Google listing, so the rating band, the
+    // review floor, the capacity class and the affordability band all have
+    // nothing to read and the lead is scored as though they had.
+    extraLanes: false,
   });
   const [showFilters, setShowFilters] = React.useState(false);
   // == THE CONTACT RUN ======================================================
@@ -6006,6 +6050,24 @@ function FindView({
             }))
         : React.createElement('div', { style: { fontSize: 12, color: 'var(--m)' } },
             'Market list unavailable \u2014 the run will search every market.')),
+
+    // The lane switch lives here, beside the button that spends the money,
+    // for the same reason the market picker does: a control that decides what a
+    // run BUYS belongs where the decision is made, not five hundred lines down
+    // inside a panel that only exists after the run.
+    React.createElement('label', {
+      style: { display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 14, cursor: 'pointer' },
+    },
+      React.createElement('input', {
+        type: 'checkbox', checked: pullFilters.extraLanes === true,
+        onChange: e => setPullFilters(p => ({ ...p, extraLanes: e.target.checked })),
+        style: { marginTop: 2, cursor: 'pointer' },
+      }),
+      React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)', lineHeight: 1.5 } },
+        React.createElement('span', { style: { color: 'var(--t)', fontWeight: 600 } },
+          'Also search job boards, funding filings, news and businesses for sale'),
+        React.createElement('span', null,
+          ' \u2014 these find businesses with something happening right now, which is the only clock this system has. They have no Google listing, so the rating, review and affordability judgements have nothing to read and the queue needs a human eye before you spend a contact read on one.'))),
 
     React.createElement('div', { style: { fontSize: 12, color: 'var(--m)', marginTop: 12, lineHeight: 1.5 } },
       'Narrowing costs less. One trade in one market makes a fraction of the searches a national run does.'));
@@ -6259,6 +6321,15 @@ function FindView({
           keywords: defaultKw,
           location: settings.targetLocation || '',
           apiKey: settings.apiKey,
+          // ══ THE TRIGGER LANES ARE OFF UNLESS SOMEBODY TICKS THEM ═════
+          // A Places lead has a Google listing by construction, and every ICP
+          // rule in this system is written against those fields. The job-board,
+          // funding, news and for-sale lanes have none of them, so their leads
+          // arrive unjudged and are then scored as though they had been judged
+          // - which is where Coca-Cola Bottling and Penn Medicine came from.
+          // Sent explicitly rather than left absent, so this reads the same on
+          // the wire whichever way the box is set.
+          extraLanes: pullFilters.extraLanes === true,
           // ══ NARROW THE PULL BEFORE IT COSTS ANYTHING ═════════════════════
           // Every one of these is already implemented server-side and none of
           // them was ever sent — pullFilters was declared and never read, so
@@ -7401,7 +7472,7 @@ function FindView({
           React.createElement('div', { style:{ fontFamily:'Syne', fontWeight:700, fontSize:19, lineHeight:1,
             color: _fit === null ? 'var(--m)' : _fit >= 70 ? 'var(--a)' : 'var(--t)' } },
             _fit === null ? '—' : String(_fit)),
-          React.createElement('div', { style:{ fontSize:9.5, color:'var(--m2)', marginTop:3, letterSpacing:'.04em' } }, 'FIT')),
+          React.createElement('div', { style:{ fontSize:9.5, color:'var(--m2)', marginTop:3, letterSpacing:'.04em' } }, 'FIT/100')),
         React.createElement('div', { style:{ flex:1, minWidth:0 } },
           React.createElement('div', { style:_line },
             co.contactOwner
@@ -7615,7 +7686,7 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
           // one home each. What is left here narrows the list on screen only.
 
           _activeCount ? React.createElement('button', {
-            onClick: () => setPullFilters({ niches:[], cities:[], minRating:'', maxRating:'', minReviews:'', websiteShape:'any', affordShape:'any' }),
+            onClick: () => setPullFilters(p => ({ ...p, niches:[], cities:[], minRating:'', maxRating:'', minReviews:'', websiteShape:'any', affordShape:'any' })),
             style:{ padding:'7px 14px', borderRadius:7, border:'1px solid var(--b)', background:'transparent',
               color:'var(--m2)', cursor:'pointer', fontFamily:'Inter,sans-serif', fontSize:13 } }, 'Clear') : null,
 

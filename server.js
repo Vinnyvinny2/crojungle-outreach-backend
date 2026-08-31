@@ -6023,8 +6023,24 @@ const affordabilityBand = (m) => {
   // jobs are on record. That is the whole of what Vin described.
   let band = points >= AFFORD_PREMIUM_AT ? 'premium' : points >= AFFORD_FLOOR_AT ? 'lower' : 'below_floor';
   if (band === 'premium' && cap === 'solo') band = 'lower';
-  const why = terms.map(t => t.why).join('; ');
-  return { band, points, terms, why };
+  // ══ WHICH HALF OF THIS IS ABOUT THIS BUSINESS ════════════════════════════
+  // The sentence read as prose about the company, and for a Places lead most
+  // of it is not: the tier and the capacity class are inherited from the
+  // GOOGLE CATEGORY the lead was found under, so every plumber in a run shares
+  // them. Only the job count, the published team and the published hours are
+  // this business's own record. An operator reading the sentence has to be
+  // able to tell the two apart, or a shared judgement about a trade reads as a
+  // measurement of the company in front of him.
+  //
+  // Nothing is dropped and no term's wording changes - this only says which
+  // is which, and says nothing at all when only one kind is present.
+  const _tradeIds = new Set(['tierA', 'tierB', 'tierC', 'crewed', 'soloCap']);
+  const _fromTrade = terms.filter(t => _tradeIds.has(t.id));
+  const _fromThem = terms.filter(t => !_tradeIds.has(t.id));
+  const why = (_fromTrade.length && _fromThem.length)
+    ? `from their trade: ${_fromTrade.map(t => t.why).join('; ')}. From their own record: ${_fromThem.map(t => t.why).join('; ')}`
+    : terms.map(t => t.why).join('; ');
+  return { band, points, terms, why, fromTrade: _fromTrade.length, fromThem: _fromThem.length };
 };
 
 // ── UPPER BOUND ────────────────────────────────────────────────────────────
@@ -6093,7 +6109,7 @@ const GP_CITIES = [
 ];
 // National franchises / DSOs / chains — the local operator does NOT own the marketing,
 // so they are not our ICP no matter how reachable the branch is.
-const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow|chemdry|chem-?dry|brookdale|atria senior|sunrise senior|five star senior|holiday retirement|erickson living|watermark retirement|discovery senior|enlivant|pacifica senior|belmont village|silverado senior|oakmont senior|morningstar senior|merrill gardens|aegis living|bickford|legend senior|allegro (senior|living)|life care services|davey tree|bartlett tree|sav-?a-?tree|monster tree|brightview|yellowstone landscape|landcare|ruppert landscape|us lawns|weed ?man|scotts lawn|naturalawn|spring-?green|joshua tree experts)\b/i;
+const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour (heating|air|hvac|plumbing|electric|smile)|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow (international|restoration)|chemdry|chem-?dry|brookdale|atria senior|sunrise senior|five star senior|holiday retirement|erickson living|watermark retirement|discovery senior|enlivant|pacifica senior|belmont village|silverado senior|oakmont senior|morningstar senior|merrill gardens|aegis living|bickford|legend senior|allegro (senior|living)|life care services|davey tree|bartlett tree|sav-?a-?tree|monster tree|brightview|yellowstone landscape|landcare|ruppert landscape|us lawns|weed ?man|scotts lawn|naturalawn|spring-?green|joshua tree experts)\b/i;
 // ══ THE FRANCHISE LIST IS A LIST OF BRANDS SOMEBODY REMEMBERED ══════════════
 // Vin: "ive ran an audit on ram jack like 6 times it always pops up in the find
 // section". Ram Jack is a national foundation-repair franchise with dozens of
@@ -36000,9 +36016,43 @@ const runDiscovery = async (body) => {
     // ═══════════════════════════════════════════════════════════════════════
     // EVERY SIGNAL SOURCE — each one catches a different buying window
     // ═══════════════════════════════════════════════════════════════════════
+    // ══ EVERY LANE EXCEPT PLACES IS OFF UNTIL SOMEBODY ASKS FOR IT ═══════
+    // Live, 2026-08-28: a contact press for ten returned Coca-Cola Bottling,
+    // Penn Medicine, Lennar Homes, Securitas, Goodyear, SkillPath and a
+    // commercial property listing called "Vacant Former Dentist". The name
+    // filter caught exactly one of them, and it was never going to catch the
+    // rest: "Penske Truck Rental" reads like a local business by name.
+    //
+    // What separates them is not their name, it is where they came from. A
+    // PLACES lead has a Google listing by construction - a local address, a
+    // star rating, a review count, somebody who claimed it - and every one of
+    // the rating, review-floor, capacity and affordability rules in this file
+    // is written against those fields. The job-board, funding, news and
+    // for-sale lanes carry none of them, so a lead from one of those arrives
+    // unjudged by every filter that matters and is then scored as though it
+    // had been judged.
+    //
+    // Vin's decision, 2026-08-31: off by default, one tick to re-enable. They
+    // stay built and nothing about them is deleted - a lane nobody can turn
+    // on is a lane that rots, and the trigger sources are still the only
+    // thing in this pipeline that puts a CLOCK on a finding.
+    //
+    // The default is written so an ABSENT flag means Places only: a client
+    // that predates this field asks for nothing extra rather than silently
+    // buying four lanes the operator did not choose.
+    const _extraLanes = body.extraLanes === true;
+    // A THUNK, not a promise. Written the natural way - _lane(on, fn()) - the
+    // call happens before _lane is entered and the lane spends its network
+    // whatever the flag says, which is a switched-off feature billing anyway.
+    const _lane = (on, make) => (on ? make() : Promise.resolve([]));
+    if (!_extraLanes) {
+      console.log('\u{1F50E} FIND LANES: Google Places only. The job-board, funding, news and for-sale lanes are OFF \u2014 they return businesses with no Google listing, so the rating band, the review floor, the capacity class and the affordability band all have nothing to read and the lead is scored as though it had been judged. Send extraLanes:true to include them.');
+    } else {
+      console.log('\u{1F50E} FIND LANES: Places PLUS the trigger lanes (jobs, funding, news, for-sale). Those leads have no Google listing, so their ICP judgement rests on the name filters alone \u2014 read the queue before spending a contact read on one.');
+    }
     const [tsRes, adzunaRes, secRes, sbaRes, newsRes, forSaleRes, ventingRes, fbAdsRes, placesRes] = await Promise.allSettled([
       // THEIRSTACK — size-filtered at the query (10-200 employees). No whales returned.
-      searchTheirStack(theirstackKey),
+      _lane(_extraLanes, () => searchTheirStack(theirstackKey)),
 
       // ADZUNA — PULLED. It returned ~1,000 job-posters per run dominated by
       // enterprises (MetLife, Medtronic, PepsiCo…), forcing the entire size gate,
@@ -36012,13 +36062,13 @@ const runDiscovery = async (body) => {
       Promise.resolve([]), // searchAdzuna(adzunaId, adzunaKey, req.body.location),
 
       // JUST RAISED — capital allocated, board pressure, pre-CMO, founder still owns GTM
-      searchSECEdgar(),
+      _lane(_extraLanes, () => searchSECEdgar()),
 
       // SBA LOANS — main-street growth capital, best-ICP funding signal
-      searchSBALoans(),
+      _lane(_extraLanes, () => searchSBALoans()),
 
       // TRIGGER EVENTS — expansion, new location, agency fired, new sales leader
-      scrapeGoogleNews(),
+      _lane(_extraLanes, () => scrapeGoogleNews()),
 
       // ═══ GOLDEN TICKET: BUSINESSES FOR SALE ═══════════════════════════════
       // The single most motivated buyer that exists. At a 3-5x EBITDA multiple,
@@ -36030,6 +36080,10 @@ const runDiscovery = async (body) => {
       // gate checks Places only — so on a day where either ceiling is reached
       // the lane is SKIPPED with its reason logged, not run past the ceiling.
       (() => {
+        // Off with the rest of the trigger lanes, and checked BEFORE the
+        // budget: this lane spends Firecrawl and a model call, so asking the
+        // ceiling about a lane nobody wants is work bought for nothing.
+        if (!_extraLanes) return Promise.resolve({ leads: [] });
         const _c = budgetRefusal(['fc', 'anthropicUsd']);
         if (_c) { console.log(`\u{1F6D1} FOR-SALE LANE SKIPPED — ${_c.message}`); return Promise.resolve({ leads: [] }); }
         return findBusinessesForSale(firecrawlKey, apiKey);
@@ -36049,7 +36103,7 @@ const runDiscovery = async (body) => {
         : Promise.resolve({ leads: [], painLanguage: [] }),
 
       // CONFIRMED AD BUDGET (dormant until a Meta token is added)
-      searchFacebookAds(fbToken),
+      _lane(_extraLanes, () => searchFacebookAds(fbToken)),
 
       // ═══ GOOGLE PLACES — local owner-operated businesses (free tier) ═══════
       // The highest-reachability segment: the owner runs the shop and reads
@@ -36288,7 +36342,19 @@ const runDiscovery = async (body) => {
       }
 
       // ── SIZE / STRUCTURE HEURISTICS ──
-      if (name.length > 55) return false;
+      // ══ A LONG NAME IS NOT A SIZE MEASUREMENT ══════════════════════════
+      // "if (name.length > 55) return false" sat under a SIZE heading and
+      // deleted the lead outright. Character count has never measured how big
+      // a business is, and this file already records the same reasoning being
+      // rejected once: "Character count is NOT a measure of distinctiveness
+      // and never was."
+      //
+      // What it deletes is real trade names. "Southern Comfort Heating and Air
+      // Conditioning" is 47; add "LLC" and a city and any owner-operated
+      // business with a descriptive name crosses 55. The institution and scale
+      // words directly below are the actual test, and they are the ones with
+      // fixtures in both directions behind them.
+      // Removed rather than raised: a bigger number is the same guess.
       // Government / non-profit / institution
       if (/\b(university|college|school|district|county|city of|state of|department of|ministry|federal|government|hospital|health system|medical center|clinic network)\b/i.test(name)) return false;
       // Defense / aerospace
@@ -62256,10 +62322,74 @@ app.listen(PORT, () => {
       }
     }
 
+    // ── THE ONE UNCONDITIONAL NAME-DELETE IN THE PLACES LOOP ──────────────
+    // GP_FRANCHISE is the only filter in the discovery loop that DELETES a
+    // Places lead on its name alone - no demotion, no bench, gone - and it had
+    // no fixture at all: no must-catch list, no must-survive list, which is
+    // exactly the protection the brand blocklist above gets. It is also a
+    // hand-kept list of brands somebody remembered, which is the shape this
+    // file records failing most often.
+    //
+    // Two of its entries were ordinary English: "rainbow" deleted Rainbow
+    // Roofing and "one hour" deleted anything called One Hour Signs, both of
+    // them squarely in the ICP. Each is now qualified by the words that
+    // actually name the franchise, and the real franchises still die.
+    {
+      const _fLive = ['Rainbow Roofing & Siding', 'Rainbow Painting LLC',
+        'One Hour Signs', 'Midway Plumbing', 'Rooter Solutions of Tampa',
+        'Precision Concrete Cutting', 'Brothers Landscaping'];
+      for (const n of _fLive) {
+        if (GP_FRANCHISE.test(n)) _fails.push(`"${n}" is DELETED at discovery as a franchise - an ordinary word in the franchise list is deleting the owner-operated businesses this pipeline exists to find, and this delete has no bench and no second chance`);
+      }
+      const _fDie = ['Roto-Rooter Plumbing', 'Mr. Rooter of Dallas',
+        'One Hour Heating & Air Conditioning', 'Rainbow International Restoration',
+        'ServPro of North Austin', 'Molly Maid of Cincinnati', 'Aspen Dental'];
+      for (const n of _fDie) {
+        if (!GP_FRANCHISE.test(n)) _fails.push(`"${n}" is no longer recognised as a franchise outlet, so the list was loosened past the brands it exists for - the more expensive failure`);
+      }
+    }
+
+    // ── AND THE SINGLE LARGEST DELETER OF LEADS PER RUN ───────────────────
+    // reviewFloorFor decides how many jobs on record a trade needs before we
+    // will look at it, and nothing asserted a trade sat in the right set. The
+    // two directions cost opposite things: a high-ticket trade wrongly held to
+    // the base floor deletes the richest leads in the ICP (a $6m custom home
+    // builder may have nine reviews), and a high-volume trade wrongly given the
+    // low floor fills the queue with businesses that farm reviews.
+    {
+      const _base = MIN_REVIEWS_BASE;
+      for (const label of LOW_VOLUME_HIGH_TICKET) {
+        if (reviewFloorFor(label, _base) >= _base) {
+          _fails.push(`"${label}" is a high-ticket, low-review trade and is still held to the base floor of ${_base}, which deletes exactly the businesses a five-figure engagement is for`);
+          break;
+        }
+      }
+      for (const label of HIGH_VOLUME_LOW_TICKET) {
+        if (reviewFloorFor(label, _base) <= _base) {
+          _fails.push(`"${label}" earns reviews by the hundred and is held to the base floor of ${_base}, so the floor means nothing in the trade it was raised for`);
+          break;
+        }
+      }
+      // A trade in NEITHER set gets the base floor unchanged. That is the
+      // default and it must not drift, or every unclassified trade quietly
+      // changes how many leads a run deletes.
+      if (reviewFloorFor('A Trade Nobody Declared', _base) !== _base) {
+        _fails.push('an unclassified trade no longer gets the base review floor, so adding a trade silently changes how many leads every run deletes');
+      }
+      // And the two sets must not overlap, or one trade has two floors and
+      // which one applies is decided by the order of a ternary.
+      for (const label of HIGH_VOLUME_LOW_TICKET) {
+        if (LOW_VOLUME_HIGH_TICKET.has(label)) {
+          _fails.push(`"${label}" is declared as both high-volume and low-volume, so its floor is decided by the order of a ternary rather than by a judgement anybody made`);
+          break;
+        }
+      }
+    }
+
     if (_fails.length) {
       console.log(`⛔ ICP FILTER CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
     } else {
-      console.log(`✓ ICP FILTER CHECK: all 17 owner-operated names survive the size gate, including the five it wrongly blocked on the 2026-08-20 run — three builders whose legal suffix is "Construction Company" and two dermatology practices whose names contain "skin cancer center". All 17 real institutions are still refused, so the pattern was narrowed rather than gutted. Health is owned by one rule with a small-practice escape instead of two rules where the copy defeated the escape, and a verified headcount under 200 beats the name guess — that gate was right nine times out of nine while the name pattern was wrong five times out of six.`);
+      console.log(`✓ ICP FILTER CHECK: all 17 owner-operated names survive the size gate, including the five it wrongly blocked on the 2026-08-20 run — three builders whose legal suffix is "Construction Company" and two dermatology practices whose names contain "skin cancer center". All 17 real institutions are still refused, so the pattern was narrowed rather than gutted. Health is owned by one rule with a small-practice escape instead of two rules where the copy defeated the escape, and a verified headcount under 200 beats the name guess — that gate was right nine times out of nine while the name pattern was wrong five times out of six. The two biggest deleters now carry fixtures too: the franchise list, which is the only unconditional name-delete in the Places loop, and the trade review floor, which deletes more leads per run than anything else in the file.`);
     }
   } catch (e) {
     console.log(`⛔ ICP FILTER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);

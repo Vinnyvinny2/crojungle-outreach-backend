@@ -2787,6 +2787,32 @@ let findStat = null;
     if (_bare !== 1) fails.push(`${_bare} call site(s) hit the synchronous /api/discover door — exactly one is expected, the old-server fallback inside discoverViaJob`);
   }
 
+  // ---- 2b. The trigger lanes are off unless a person ticks them ----------
+  // Vin's decision, 2026-08-31. A Places lead has a Google listing by
+  // construction and every ICP rule in this system reads those fields; a
+  // job-board or funding lead has none of them, so it arrives unjudged and is
+  // then scored as though it had been judged. The default has to be OFF and it
+  // has to be a real control, not a constant somebody has to edit.
+  {
+    if (!/extraLanes:\s*pullFilters\.extraLanes === true/.test(src)) {
+      fails.push('the Find request no longer carries the lane choice, so the server falls back to its own default and the tick box decides nothing');
+    }
+    if (!/extraLanes:\s*false,/.test(src)) {
+      fails.push('extraLanes is no longer declared false in pullFilters, so the trigger lanes are back on by default and every run buys four lanes nobody chose');
+    }
+    if (!/onChange:\s*e => setPullFilters\(p => \(\{ \.\.\.p, extraLanes: e\.target\.checked \}\)\)/.test(src)) {
+      fails.push('there is no control that sets extraLanes, so the lanes can only be turned on by editing the file - a switch nobody can reach is a switch that rots');
+    }
+    // And Reset must not silently take the choice with it. It used to REPLACE
+    // the whole filter object, so any field added to pullFilters was quietly
+    // deleted by a button labelled Reset - which for a spend switch means an
+    // operator turns the lanes on, presses Reset to clear a market, and buys a
+    // different run than the screen describes.
+    if (/setPullFilters\(\{ niches:\[\]/.test(src)) {
+      fails.push('the Reset button REPLACES pullFilters rather than merging, so it silently clears every field added to that state - including the lane choice, which decides what a run spends');
+    }
+  }
+
   // ---- 3. The queue cap is ONE number ------------------------------------
   // It was 200, hand-written in the merge, the Supabase upsert and the Supabase
   // restore, so raising it meant finding all three. A run banks over a thousand
