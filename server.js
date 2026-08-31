@@ -10605,6 +10605,14 @@ const GENERIC_LOCAL = /^(info|contact|hello|hi|team|office|admin|sales|support|i
 // Deliberately NOT a CC list: a cold email CC'ing three people reads as a blast
 // and destroys the "I looked closely at your business" effect the whole pitch
 // depends on. One email, to the best available person.
+// ══ THE ONE NUMBER THAT DECIDES WHO CAN BUY ═══════════════════════════════
+// COO/GM and above. VP=50, Director=35, Manager=20. It lived inside
+// findDecisionMaker and is read at module scope now because the roster settle
+// reads it too: a title that is not good enough to buy is not good enough to
+// stop us looking for somebody who is. Two copies of "what can buy" would be
+// the two-hand-kept-copies disease pointed at the gate that decides who gets
+// emailed at all.
+const DM_AUTHORITY_FLOOR = 75;
 const TITLE_AUTHORITY = [
   { rank: 100, re: /\b(founder|co-?founder|owner|proprietor)\b/i },
   { rank: 95,  re: /\b(ceo|chief executive)\b/i },
@@ -11035,6 +11043,36 @@ const nameCorroborated = (name, companyName, corpus) => {
 // second implementation of "read the owner off pages" is the two-hand-kept-
 // copies disease pointed at the single function this system exists for, so
 // there is one, and the corpus is a parameter.
+// ══ A JOB ADVERT IS NAME-SHAPED AND TITLE-SHAPED BY CONSTRUCTION ══════════
+// parseTeamRoster reads "a capitalised name-shaped run followed by a job
+// title". That is exactly what a careers page IS - "Service Manager",
+// "Project Coordinator", one per posting - and the Find contact read fetches
+// one deliberately, because the hiring signal is one of the five the ICP score
+// is built from.
+//
+// The page's own intent was known at the moment it was fetched and thrown away
+// when the corpus was joined into one blob, so the roster parser could not
+// tell a team page from a job board. Instance twenty-eight of
+// computed-but-not-passed, and this one hands a stranger's job title to a rep
+// as the owner's name.
+//
+// ONE vocabulary, two consumers pointing in opposite directions: the page
+// picker uses it to FIND a careers page, this rule uses it to REFUSE to parse
+// one. Two copies of these words would drift, and the drift that matters is a
+// page picked as careers that is not refused as a roster.
+const CAREERS_PAGE_RE = /(careers?|jobs?|employment|join-?(our-?)?team|work-?with-?us|hiring|apply|opportunit)/i;
+// The homepage and the contact page STAY eligible on purpose. A one-page trade
+// site puts "Meet Becky, owner" on the homepage and nowhere else, and refusing
+// those would delete the owners this whole path exists to find - the recorded
+// guard-too-tight failure. Only the page whose entire content is other
+// people's job titles is refused.
+const rosterEligiblePage = (page) => {
+  const p = page || {};
+  if (String(p.intent || '').toLowerCase() === 'careers') return false;
+  let path = String(p.url || '');
+  try { path = new URL(path).pathname; } catch { /* not a URL: test what we were given */ }
+  return !CAREERS_PAGE_RE.test(path);
+};
 const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName, preFetched = null) => {
   const _pre = Array.isArray(preFetched) ? preFetched.filter(p => p && p.text && p.text.length > 200) : [];
   // fcKey is required only when we are the ones buying the pages. With a corpus
@@ -11043,15 +11081,26 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
   if (!website || !apiKey || (!fcKey && !_pre.length)) return null;
   try {
     const pages = [];
+    // The MODEL still reads everything - it is good at prose and a careers page
+    // can legitimately mention the founder. Only the ROSTER PARSER is scoped,
+    // because it is the one that reads layout as authorship.
+    const rosterPages = [];
     _setLeadershipLen(companyName, 0);
     if (homepageContent && homepageContent.length > 200) {
-      pages.push('--- HOMEPAGE ---\n' + homepageContent.slice(0, 6000));
+      const _home = '--- HOMEPAGE ---\n' + homepageContent.slice(0, 6000);
+      pages.push(_home);
+      rosterPages.push(_home);
     }
 
     if (_pre.length) {
-      for (const p of _pre) pages.push(`\n\n--- PAGE: ${p.url} ---\n` + String(p.text).slice(0, 6000));
-      console.log(`DM/brain [${companyName}]: reading ${_pre.length} page(s) somebody else already fetched \u2014 no map, no scrape, zero Firecrawl credits.`);
-      return await _ownerFromCorpus(pages.join('\n').slice(0, 22000), companyName, website, apiKey);
+      let _skipped = 0;
+      for (const p of _pre) {
+        const _block = `\n\n--- PAGE: ${p.url} ---\n` + String(p.text).slice(0, 6000);
+        pages.push(_block);
+        if (rosterEligiblePage(p)) rosterPages.push(_block); else _skipped += 1;
+      }
+      console.log(`DM/brain [${companyName}]: reading ${_pre.length} page(s) somebody else already fetched \u2014 no map, no scrape, zero Firecrawl credits.${_skipped ? ` ${_skipped} of them is a careers page: the model still reads it, the roster parser does not, because a job advert is a name-shaped line followed by a job title and that is what a roster row looks like.` : ''}`);
+      return await _ownerFromCorpus(pages.join('\n').slice(0, 22000), companyName, website, apiKey, rosterPages.join('\n').slice(0, 22000));
     }
 
     // Ask the site for its real URLs, filtered toward leadership pages
@@ -11089,11 +11138,18 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
       })
     );
     for (const { u, md } of scrapes) {
-      if (md && md.length > 200) pages.push(`\n\n--- PAGE: ${u} ---\n` + md.slice(0, 6000));
+      if (md && md.length > 200) {
+        const _block = `\n\n--- PAGE: ${u} ---\n` + md.slice(0, 6000);
+        pages.push(_block);
+        // The audit path has no intent field, only a URL - which is why the rule
+        // reads both. rankUrlsByIntent aims at leadership pages, so this rarely
+        // fires here; it is the same rule either way rather than a second one.
+        if (rosterEligiblePage({ url: u })) rosterPages.push(_block);
+      }
     }
 
     return await _ownerFromCorpus(pages.join(
-'\n').slice(0, 22000), companyName, website, apiKey);
+'\n').slice(0, 22000), companyName, website, apiKey, rosterPages.join('\n').slice(0, 22000));
   } catch(e) {
     console.log('DM/brain failed:', e.message);
     return null;
@@ -11105,7 +11161,11 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
 // paid research path run the same roster parse, the same prompt, the same
 // measured backstop and the same anti-hallucination gate. Nothing about the
 // rules moved; only where the bytes came from is now the caller's business.
-const _ownerFromCorpus = async (corpus, companyName, website, apiKey) => {
+// rosterCorpus is the subset of the corpus a ROSTER may be read from - see
+// rosterEligiblePage. It is a required argument rather than a defaulted one:
+// a default would mean a future caller silently gets the old whole-blob
+// behaviour, which is the defect this parameter exists to close.
+const _ownerFromCorpus = async (corpus, companyName, website, apiKey, rosterCorpus) => {
   try {
     // ══ THE ROSTER IS READ BEFORE THE MODEL IS ASKED ═════════════════════════
     // What a company publishes about who runs it is the best evidence that
@@ -11123,7 +11183,7 @@ const _ownerFromCorpus = async (corpus, companyName, website, apiKey) => {
     // Reading it here costs nothing and cannot hallucinate: every name and title
     // is copied out of the page verbatim or not returned at all.
     try {
-      const _roster = parseTeamRoster(corpus, companyName);
+      const _roster = parseTeamRoster(String(rosterCorpus == null ? '' : rosterCorpus), companyName);
       // ══ THE OWNER IS THE MOST SENIOR ONE, NOT THE FIRST ONE ════════════
       // This took _owners[0] - document order. On a page listing fourteen
       // people that is whoever the layout puts first, and on Alliance Animal
@@ -31666,7 +31726,14 @@ const foldFirstNameClusters = (clusters) => {
         host.score += DM_SOURCE_WEIGHT[s] || 10;
       }
     }
-    if (c.title && authorityScore(c.title) > authorityScore(host.title)) host.title = c.title;
+    // ══ THE FOLD ADDS A SOURCE; IT DOES NOT REWRITE THE TITLE ══════════
+    // This took the folded cluster's title whenever it scored higher, so a bare
+    // first name from a weak source carrying "Owner" could overwrite a full
+    // name's real title read off the company's own team page. The fold exists to
+    // recognise that a review reply signed "Rick" is the same Rick Miller the
+    // site names - that is CORROBORATION, and corroboration does not get to
+    // promote anybody. The title is filled only where there was none.
+    if (c.title && !String(host.title || '').trim()) host.title = c.title;
     if (c.evidence && !host.evidence) host.evidence = c.evidence;
     clusters.splice(i, 1);
   }
@@ -31793,8 +31860,24 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     // This does not lower the evidence bar — it recognises that the bar was
     // already cleared by the strongest source available. No third-party record
     // outranks a company stating who owns it on a page it maintains.
+    //
+    // ══ BUT IT STILL HAS TO CLEAR THE BUYING FLOOR ═════════════════════
+    // This had NO authority requirement at all - the roster's own isOwner
+    // verdict was the entire bar. So one roster row settled stage 1 and
+    // switched off the three sources that would have disagreed, which made it
+    // the amplifier under every parser defect: each of the nav labels, the
+    // headline verbs, the possessive titles and the form-field labels this
+    // file records reached a call sheet through exactly this door.
+    //
+    // The floor is not a new number. It is DM_AUTHORITY_FLOOR - the same score
+    // that decides whether the name may be shown as the buyer at all. The rule
+    // reads as one sentence: a title that is not good enough to buy is not good
+    // enough to stop us looking for somebody who is. A real "Owner" or
+    // "Founder & CEO" clears it comfortably, so the Hannah Custom Homes saving
+    // this rule was built for is untouched.
     const rosterConfident = !!(brainHit && brainHit.fromRoster
       && ranked.sources.includes('own_website_brain')
+      && ranked.authority >= DM_AUTHORITY_FLOOR
       && sameName(ranked.name, brainHit.name));
     if (rosterConfident && !(corroborated || ownSiteConfident)) {
       console.log(`DM [${companyName}]: ROSTER SETTLES IT \u2014 their own team page states ${ranked.name} is "${brainHit.title}". That is the company naming its owner on a page it maintains, which no paid search can outrank. Skipping the web, licence and registry lookups (~12 Firecrawl credits saved).`);
@@ -31936,7 +32019,11 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // For a founder-led company, the buyer is the Owner / Founder / CEO / President /
   // Managing Partner. Anything below that is a NO-SEND by default — the lead is
   // held back for a manual look rather than wasted on someone with no authority.
-  const AUTHORITY_FLOOR = 75; // COO/GM and above. VP=50, Director=35, Manager=20.
+  // One number, declared at module scope as DM_AUTHORITY_FLOOR, because the
+  // roster settle now reads the same floor. Two copies of "what can buy" is the
+  // two-hand-kept-copies disease pointed at the gate that decides who gets
+  // emailed.
+  const AUTHORITY_FLOOR = DM_AUTHORITY_FLOOR;
 
   // ══ UNKNOWN TITLE AT AN EPONYMOUS BUSINESS IS NOT A JUNIOR TITLE ═══════════
   // authorityScore() returns 30 for a bare name, which is correct as a default:
@@ -56108,6 +56195,56 @@ app.listen(PORT, () => {
       }
     }
 
+    // ══ SEVEN - A JOB ADVERT IS NOT A ROSTER ═════════════════════════════
+    // The Find contact read fetches a careers page deliberately, because the
+    // hiring signal is one of the five the ICP score is built from. Its content
+    // is other people's job titles, one per posting - which is precisely the
+    // shape parseTeamRoster reads as authorship.
+    //
+    // FIRST, the danger is demonstrated rather than asserted. If these ever stop
+    // producing an owner the exclusion below is guarding nothing and this check
+    // should say so, not go quietly green.
+    const _careersShapes = [
+      'Join Our Team\nProject Manager\nApply Now\nDana Brooks\nOwner Operator\nApply Now',
+      '<p>Open Roles</p><p>Marcus Webb</p><p>Managing Partner</p><p>Apply</p>',
+      'Careers\nWe are hiring\nAlex Rivera, Owner Operator\nSubmit your resume',
+    ];
+    const _dangerous = _careersShapes.filter(h => parseTeamRoster(h, 'Acme Roofing').some(r => r.isOwner));
+    if (_dangerous.length !== _careersShapes.length) {
+      _fails.push(`only ${_dangerous.length} of ${_careersShapes.length} careers-page shapes still yield an owner from the roster parser - the exclusion below may be guarding nothing, and a guard with nothing behind it is one somebody deletes`);
+    }
+    // SECOND, the rule that keeps that page away from the parser. Both routes:
+    // the Find path knows the intent, the audit path has only a URL.
+    for (const _p of [
+      { url: 'https://x.com/about', intent: 'careers' },
+      { url: 'https://x.com/careers' },
+      { url: 'https://x.com/join-our-team' },
+      { url: 'https://x.com/work-with-us' },
+      { url: 'https://x.com/employment' },
+    ]) {
+      if (rosterEligiblePage(_p)) _fails.push(`a careers page (${_p.intent || _p.url}) is still parsed as a roster, so a stranger's job title reaches a call sheet as the owner's`);
+    }
+    // THIRD, and the direction that costs leads if it is wrong: a one-page trade
+    // site names its owner on the HOMEPAGE and nowhere else. Refusing these is
+    // the recorded guard-too-tight failure, and it would delete the owners this
+    // whole path exists to find.
+    for (const _p of [
+      { url: 'https://x.com', intent: 'home' },
+      { url: 'https://x.com/about', intent: 'team' },
+      { url: 'https://x.com/our-team', intent: 'team' },
+      { url: 'https://x.com/contact', intent: 'contact' },
+      { url: 'https://x.com/leadership' },
+      { url: 'https://x.com/meet-the-owner' },
+    ]) {
+      if (!rosterEligiblePage(_p)) _fails.push(`${_p.url} is no longer parsed as a roster - the careers rule has widened onto the pages that actually name the owner`);
+    }
+    // FOURTH, ONE vocabulary. The picker uses it to FIND a careers page and the
+    // rule uses it to REFUSE one; two copies would drift, and the drift that
+    // matters is a page picked as careers that is not refused as a roster.
+    if (!FIND_PAGE_INTENTS.some(i => i.key === 'careers' && i.re === CAREERS_PAGE_RE)) {
+      _fails.push('the page picker no longer uses the same careers vocabulary the roster rule refuses on, so a page can be fetched as careers and still parsed as a roster');
+    }
+
     if (_fails.length) {
       console.log(`⛔ OWNER TRUTH CHECK: ${_fails.join(' | ')}.`);
     } else {
@@ -56303,8 +56440,20 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName,', ' preFetched = null) => {'))) {
       _fails.push('findOwnerViaBrain no longer accepts pre-fetched pages, so the Find read is back to buying a sitemap call plus two scrapes per lead');
     }
-    if (!_src.includes(_n("return await _ownerFromCorpus(pages.join('", "\\n').slice(0, 22000), companyName, website, apiKey);"))) {
+    if (!_src.includes(_n("return await _ownerFromCorpus(pages.join('", "\\n').slice(0, 22000), companyName, website, apiKey, rosterPages"))) {
       _fails.push('the pre-fetched branch no longer hands its corpus to the shared owner reader, so the free path and the paid path are two implementations of one rule');
+    }
+    // ══ AND THE ROSTER GETS THE SCOPED CORPUS, NOT THE WHOLE BLOB ═════════
+    // Both call sites, because the audit path builds its corpus in a different
+    // branch and a fixture supplies its own arguments to either.
+    if ((_src.match(/rosterPages\.join\(/g) || []).length < 2) {
+      _fails.push('one of the two corpus builders is not passing a scoped roster corpus, so on that path the roster parser is back to reading the careers page as a list of owners');
+    }
+    if (!_src.includes(_n('const _roster = parseTeamRoster(String(rosterCorpus ==', " null ? '' : rosterCorpus), companyName);"))) {
+      _fails.push('the roster parser is reading the whole corpus again rather than the pages a roster may be read from');
+    }
+    if (!_src.includes(_n('const interior = pages.slice(1).map(p => ({ url: p.url, text: p.text,', ' intent: p.intent }));'))) {
+      _fails.push("the page's intent is dropped on the way to the owner reader again, so nothing downstream can tell this tab's careers page from its team page");
     }
     if (!_src.includes(_n('findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName,', ' preFetchedPages)'))) {
       _fails.push('findDecisionMaker does not pass pre-fetched pages down, so supplying them changes nothing and every Find lead pays for the sitemap');
@@ -69635,6 +69784,35 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       _fails.push('sameName lost its nickname equivalence when the rule moved to module scope');
     }
 
+    // ══ THE FOLD ADDS A SOURCE; IT DOES NOT PROMOTE ANYBODY ═══════════════
+    // The fold exists so a review reply signed "Rick" can corroborate the Rick
+    // Miller their site names. It used to take the folded cluster's title
+    // whenever it scored higher, so a bare first name from a weak source
+    // carrying "Owner" overwrote a real title read off the company's own team
+    // page. Corroboration does not get to promote.
+    {
+      const _kept = foldFirstNameClusters([
+        { name: 'Rick Miller', title: 'Operations Manager', sources: ['own_website_brain'], score: 45 },
+        { name: 'Rick', title: 'Owner', sources: ['news'], score: 30 },
+      ]);
+      if (_kept.length !== 1) _fails.push(`the bare first name no longer folds into the full name (${_kept.length} cluster(s) survived), so the free review-reply source cannot corroborate again`);
+      else {
+        if (_kept[0].name !== 'Rick Miller') _fails.push('the fold kept the bare first name rather than the fuller one');
+        if (_kept[0].title !== 'Operations Manager') {
+          _fails.push(`a bare first name promoted the host to "${_kept[0].title}" - a weak source is rewriting a title read off the company's own page, and that title is what the buying floor is applied to`);
+        }
+        if (!_kept[0].sources.includes('news')) _fails.push('the fold stopped adding the folded cluster\'s source, which is the whole point of folding it');
+      }
+      // And the direction that must still work: a host with NO title takes one.
+      const _filled = foldFirstNameClusters([
+        { name: 'Rick Miller', title: '', sources: ['own_website_brain'], score: 45 },
+        { name: 'Rick', title: 'Owner', sources: ['news'], score: 30 },
+      ]);
+      if (!_filled.length || _filled[0].title !== 'Owner') {
+        _fails.push('a host with no title at all no longer takes the folded title, which is the case the promotion rule was written for');
+      }
+    }
+
     // == THE CALL SITE ========================================================
     // The fixtures above call rankOwnerCandidates directly, so they cannot see a
     // build where the fold is defined and never invoked, nor one where sameName
@@ -69642,6 +69820,22 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // halves, over comment-stripped source - the comments here quote both.
     const _src = selfSourceNoComments();
     const _n = (a, b) => a + b;
+    // ══ AND THE ROSTER SETTLE CLEARS THE BUYING FLOOR ═══════════════════
+    // settled() is a closure inside findDecisionMaker, so no fixture can call
+    // it. What CAN be executed is the arithmetic the rule now rests on, and
+    // what can be pinned is the wire. Stated as the honest pair it is.
+    if (authorityScore('Owner') < DM_AUTHORITY_FLOOR) {
+      _fails.push('a plain "Owner" no longer clears the buying floor, so the roster settle can never fire and every roster lead buys the paid wave it was built to skip');
+    }
+    if (authorityScore('Service Manager') >= DM_AUTHORITY_FLOOR) {
+      _fails.push('a manager clears the buying floor, so the floor is not separating a buyer from a member of staff at all');
+    }
+    if (!_src.includes(_n('      && ranked.authority >= ', 'DM_AUTHORITY_FLOOR'))) {
+      _fails.push('the roster settle no longer clears the buying floor, so one roster row settles stage 1 on its own again and silences every source that would have disagreed - the amplifier under every parser defect this file records');
+    }
+    if (!_src.includes(_n('  const AUTHORITY_FLOOR = ', 'DM_AUTHORITY_FLOOR;'))) {
+      _fails.push('the buying floor has grown a second copy, so the roster settle and the authority gate can disagree about who can buy');
+    }
     if (!_src.includes(_n('  foldFirstNameCluster', 's(clusters);'))) {
       _fails.push('foldFirstNameClusters is defined but never called, so every fixture above proves nothing about a live lead');
     }
@@ -71885,7 +72079,11 @@ const FIND_PAGE_INTENTS = [
   // so the second one costs nothing on the leads this is for; it costs one
   // credit only on a site that refused a plain fetch.
   { key: 'team',    re: /(team|our-?team|staff|people|leadership|management|about|our-?story|who-?we-?are|meet)/i, want: 2 },
-  { key: 'careers', re: /(careers?|jobs?|employment|join-?(our-?)?team|work-?with-?us|hiring|apply)/i, want: 1 },
+  // The SAME constant the roster rule refuses on. Two copies of these words
+  // would drift, and the drift that matters is a page picked as careers here
+  // that rosterEligiblePage does not refuse - which is the exact hole that put
+  // a job title on a call sheet as the owner's.
+  { key: 'careers', re: CAREERS_PAGE_RE, want: 1 },
 ];
 // Bounded by construction: at most one page per intent, at most FIND_MAX_PAGES
 // in total. The bound is the cost model - every page here is free on the plain
@@ -72274,7 +72472,10 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // person who can ask "who owns the place" in four seconds; buying eight
   // Firecrawl credits to answer it first is the trade this mode declines.
   const homeText = (pages[0] && pages[0].text) || '';
-  const interior = pages.slice(1).map(p => ({ url: p.url, text: p.text }));
+  // The INTENT travels. It was dropped here and the roster parser downstream
+  // then read this tab's careers page - fetched on purpose, for the hiring
+  // signal - as a list of the company's owners.
+  const interior = pages.slice(1).map(p => ({ url: p.url, text: p.text, intent: p.intent }));
   const paidOwner = opts.paidOwnerLookup !== false;
   out.paidOwnerLookup = paidOwner;
   if (apiKey && name) {
