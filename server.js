@@ -11028,10 +11028,43 @@ const wrongCompanyOverruled = (companyName, domain, content, location, phone) =>
   domainSpellsLeadName(companyName, domain)
   && (siteNamesOurMarket(content, location) || sitePrintsOurPhone(content, phone));
 
+// ══ TWO TOKENS FOUND SEPARATELY ARE NOT A NAME ════════════════════════════
+// This is the one gate between the model's JSON and a person's name on a call
+// sheet, and it could not do the job. It flattened the company name and every
+// page we read into ONE string and asked only that the first name and the
+// surname each appear SOMEWHERE in it, independently. On a four-page corpus
+// that is close to unfalsifiable: "David" in the header and "Price" in a
+// street address three thousand characters away passes "David Price", and the
+// model is then credited with having read a person off their site.
+//
+// The fix is adjacency, not a contiguous span. A real page writes the name
+// several ways - "David A. Price", "Price, David", a line break between them,
+// a photo caption - and demanding the exact string back would refuse all of
+// those, which is the recorded guard-too-tight failure. A window is what
+// separates "these two words belong together" from "both words exist on this
+// site".
+//
+// KNOWN LIMIT, left deliberately: the token test stays a SUBSTRING match, so
+// "ann" still matches inside "anderson". Tightening it to a word boundary
+// would refuse a name that appears only inside an address like
+// davidprice@x.com, which is genuine corroboration, and this round is not the
+// place to trade one for the other.
+const NAME_ADJACENCY_CHARS = 40;
 const nameCorroborated = (name, companyName, corpus) => {
   const flat = (String(companyName || '') + ' ' + String(corpus || '')).toLowerCase().replace(/\s+/g, ' ');
   const np = String(name || '').toLowerCase().split(/\s+/).filter(Boolean);
-  return np.length >= 2 && flat.includes(np[0]) && flat.includes(np[np.length - 1]);
+  if (np.length < 2) return false;
+  const first = np[0];
+  const last = np[np.length - 1];
+  if (!flat.includes(first) || !flat.includes(last)) return false;
+  // Every place the first name occurs, ask whether the surname is near it.
+  // Either order, because "Price, David" is how a directory writes it.
+  for (let i = flat.indexOf(first); i >= 0; i = flat.indexOf(first, i + 1)) {
+    const from = Math.max(0, i - NAME_ADJACENCY_CHARS);
+    const to = i + first.length + NAME_ADJACENCY_CHARS;
+    if (flat.slice(from, to).includes(last)) return true;
+  }
+  return false;
 };
 
 // preFetched: pages some OTHER reader already has in hand, as [{url, text}].
@@ -32158,8 +32191,44 @@ const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
 // whichever route produced it, and it says so loudly rather than silently
 // downgrading — a filename in the address slot means a scrape went wrong, and
 // that is worth reading in the log.
+// ══ AN UNVOUCHED NAME NEVER COMES BACK AS A SENDABLE GUESS ════════════════
+// The core has many exits and gating each one is a list somebody forgets, so
+// the downgrade happens at the ONE door every result leaves through. The split
+// is by what the tier MEANS, not by which branch produced it:
+//
+//   T1 published on their own site  - a measurement of their site. Untouched.
+//   T2 SMTP-confirmed               - a measurement of that mailbox, which is
+//                                     the strongest possible proof the name was
+//                                     right. Untouched, and deliberately so:
+//                                     TESTING an unproven name is exactly what
+//                                     this rule permits.
+//   T3/T4 constructed from the name - an assumption about a person the
+//                                     resolver refused to vouch for. Kept on
+//                                     the row, never marked sendable.
+//
+// The address is NOT deleted. A rep can still see it, and the reason it cannot
+// be sent to is on the row - deleting it would hide a real lead, and this file
+// records that a guard which eats good data is the more expensive failure.
+const _unvouchedSendGuard = (r, args) => {
+  if (!r || !r.email) return r;
+  if ((args && args.ceoVouched) !== false) return r;
+  const _tier = Number(r.tier);
+  if (!(_tier >= 3)) return r;                 // T1/T2 are measurements, not guesses
+  if (r.smtpVerified === true) return r;       // proven by the mailbox itself
+  if (r.sendable !== true) return r;           // already not sendable; say nothing twice
+  // leadDiag, not console.log: this is a diagnostic about a LEAD, and the boot
+  // checks run the guard over fixtures. Section 51 records the same class - a clean
+  // boot printing real diagnostics about imaginary businesses - and the glyph
+  // would also be counted by the verdict recorder as a failed check.
+  leadDiag(`\u26d4 EMAIL [${r.email}]: built from ${r.name || 'a name'}, whom the authority gate HELD BACK. Kept on the row and NOT sendable \u2014 a constructed address on an unproven name is how an invented person becomes a hard bounce, and the bounce is charged to the sending domain rather than to the lead.`);
+  return Object.assign({}, r, {
+    sendable: false,
+    blockReason: r.blockReason
+      || `built from ${r.name || 'a name'}, who was held back by the authority gate \u2014 confirm the person before sending`,
+  });
+};
 const findEmailFireproof = async (_args) => {
-  const _r = await _findEmailFireproofCore(_args || {});
+  const _r = _unvouchedSendGuard(await _findEmailFireproofCore(_args || {}), _args || {});
   if (_r && _r.email && !isMailboxShape(_r.email)) {
     console.log(`\u26d4 EMAIL REJECTED [${_r.email}]: this is not a mailbox \u2014 it is shaped like a file (a retina image asset such as logo@2x.png reads as an address to every regex). Live, team-dr-vargas@2x.jpg was scored 100/100 and marked sendable. The lead now carries no address instead of a JPEG, and the bounce is not charged to the sending domain.`);
     return { email: '', ...EMAIL_TIERS.NONE, name: _r.name || '', pattern: null, lookupBlocked: _r.lookupBlocked || null };
@@ -32167,9 +32236,42 @@ const findEmailFireproof = async (_args) => {
   return _r;
 };
 
-const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, siteIsDown = false, industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '', freePages = [] }) => {
+// ══ A NAME WE REFUSED TO VOUCH FOR MAY BE TESTED, NEVER ASSUMED ═══════════
+// The resolver's authority gate decides whether a name may be shown as the
+// buyer, and it hands back canBuy plus a blockReason when it refuses. That
+// verdict stopped at the sheet: the same held-back name was passed straight
+// into this engine as ceoName, where it built a personal address, taught a
+// house pattern for the whole domain, and came back marked sendable.
+//
+// That is the path from an invented person to a HARD BOUNCE, and a bounce is
+// charged to the sending domain - the one asset here that cannot be rebuilt in
+// an afternoon. Both of this project's bounces came from addresses it had
+// itself labelled "pattern-built, not confirmed".
+//
+// THE RULE IS NOT "REFUSE THE LEAD", and that distinction is the whole design.
+// A name is usually held back because no TITLE was found, not because the name
+// is wrong - Michael's Flooring returned "Daniel Meadows, no title found" and
+// Daniel Meadows is almost certainly real. Refusing to look for his address at
+// all would delete the owner emails this round exists to find, which is the
+// recorded guard-too-tight failure.
+//
+// So: an unvouched name may still be TESTED and never ASSUMED. A published
+// address (T1) is a measurement of their site. An SMTP-verified address (T2)
+// is a measurement of that mailbox - it proves the name was right. Neither is
+// touched. What is refused is the half that ASSUMES: teaching a house pattern
+// from an unproven name, and returning a constructed guess as sendable.
+//
+// Defaults to true so every existing caller behaves exactly as before; only a
+// caller that has a canBuy verdict in hand passes it.
+const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched = true, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, siteIsDown = false, industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '', freePages = [] }) => {
   const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '').toLowerCase();
   const name = ceoName || hunterName || '';
+  // One predicate, read by every gate below, so the three of them cannot
+  // disagree about whether this name is good enough to build on.
+  const _vouched = ceoVouched !== false;
+  if (name && !_vouched) {
+    leadDiag(`EMAIL [${(String(website || '').replace(/^https?:\/\//, '').split('/')[0]) || 'site'}]: \u26a0 ${name} was HELD BACK by the authority gate, so this lookup may test that name but never assume it \u2014 no house pattern is learned from it and no constructed guess comes back sendable. A published or SMTP-confirmed address is unaffected, because both of those are measurements rather than guesses.`);
+  }
   // Set when a PAID lookup was refused (spent quota / dead key) rather than
   // returning empty. Travels out on the failure object so the caller can label the
   // result "not checked" instead of asserting the prospect has no address.
@@ -32343,10 +32445,18 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, employees, 
   // ── TIER 1: published on their own website ────────────────────────────────
   const scraped = await scrapeEmailsFromSite(website, fcKey, homepageContent, siteConfirmed, siteIsDown, freePages);
   if (scraped.emails.length > 0) {
-    // Learn the company's convention from every address we found
-    for (const e of scraped.emails) {
-      const p = inferPattern(e, name);
-      if (p) { domainPatternMemory.set(domain, p); break; }
+    // Learn the company's convention from every address we found.
+    //
+    // inferPattern derives the convention by matching a REAL scraped address
+    // against the name we believe is the owner's - so a wrong name plus a real
+    // address teaches a wrong convention, and domainPatternMemory is
+    // process-lifetime with no TTL. That poisoning outlives the lead and
+    // applies to every later lead on the same domain.
+    if (_vouched) {
+      for (const e of scraped.emails) {
+        const p = inferPattern(e, name);
+        if (p) { domainPatternMemory.set(domain, p); break; }
+      }
     }
     // Prefer an address matching our decision-maker, then any personal address,
     // then a generic one (at a 15-person company, info@ often IS the owner).
@@ -56487,6 +56597,48 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('const _opts = { paidOwnerLookup:', ' b.paidOwnerLookup !== false };'))) {
       _fails.push('the find-contact route no longer defaults the paid owner lookup ON, so a client that predates the Settings field silently stops finding owners');
     }
+
+    // ══ EIGHT - A HELD-BACK NAME MAY BE TESTED, NEVER ASSUMED ═════════════
+    // The authority gate's canBuy verdict stopped at the sheet while the same
+    // held-back name was passed into the email engine, where it built an
+    // address, taught a house pattern for the whole domain, and came back
+    // marked sendable. That is the path from an invented person to a hard
+    // bounce, and a bounce is charged to the sending DOMAIN.
+    //
+    // The split is by what the tier MEANS. A published address and an
+    // SMTP-confirmed one are measurements - the second is the strongest
+    // possible proof the name was right, and testing an unproven name is
+    // exactly what this rule permits. Only the constructed guess is refused.
+    {
+      const _un = { ceoVouched: false };
+      const _ok = { ceoVouched: true };
+      const _guess = (t) => ({ email: 'dana@x.com', tier: t, sendable: true, name: 'Dana Brooks' });
+      for (const _t of [3, 4]) {
+        const _r = _unvouchedSendGuard(_guess(_t), _un);
+        if (_r.sendable !== false) _fails.push(`a tier-${_t} address CONSTRUCTED from a held-back name still comes back sendable, which is how an unproven person becomes a hard bounce charged to our own sending domain`);
+        if (!_r.blockReason) _fails.push(`a tier-${_t} address built on a held-back name is refused with no reason on the row, so the rep cannot tell it from a real block`);
+        if (_r.email !== 'dana@x.com') _fails.push('the guard is DELETING the address rather than marking it unsendable - a rep can still use it on a call, and eating good data is the more expensive failure');
+      }
+      // The three that must pass through untouched.
+      if (_unvouchedSendGuard(_guess(1), _un).sendable !== true) _fails.push('a published address is being refused because the owner name was held back - the address was read off their own site and has nothing to do with the name');
+      if (_unvouchedSendGuard(_guess(2), _un).sendable !== true) _fails.push('an SMTP-CONFIRMED address is being refused on a held-back name - the mailbox answering is the strongest proof the name was right, and testing an unproven name is exactly what this rule permits');
+      if (_unvouchedSendGuard(Object.assign(_guess(3), { smtpVerified: true }), _un).sendable !== true) _fails.push('a tier-3 address that was SMTP-verified anyway is being refused - it was tested, not assumed');
+      if (_unvouchedSendGuard(_guess(3), _ok).sendable !== true) _fails.push('a vouched owner can no longer produce a sendable pattern address at all, so the guard has widened onto every lead');
+      if (_unvouchedSendGuard(_guess(3), {}).sendable !== true) _fails.push('a caller that passes no verdict is treated as held back, so every path that predates this parameter silently stops sending');
+    }
+    // The call sites, because the fixtures above supply their own arguments.
+    if (!_src.includes(_n('const _r = _unvouchedSendGuard(await ', '_findEmailFireproofCore(_args || {}), _args || {});'))) {
+      _fails.push('the email engine no longer passes its result through the held-back guard, so the core\'s many exits are each free to return a constructed guess as sendable');
+    }
+    if (!_src.includes(_n('        ceoVouched: !!(out.owner && ', 'out.owner.canBuy === true),'))) {
+      _fails.push("the Find contact read no longer carries the authority gate's verdict into the email engine, so a name it refused to vouch for builds an address again");
+    }
+    // Eight spaces of indent: the learn sits INSIDE the vouched guard. A wrong
+    // name plus a real scraped address teaches a wrong house pattern into a
+    // process-lifetime map with no TTL, and that poisoning outlives the lead.
+    if (!_src.includes(_n('        const p = inferPattern(e, ', 'name);'))) {
+      _fails.push('the house pattern is learned from an unvouched name again - domainPatternMemory has no TTL, so one wrong name poisons every later lead on that domain');
+    }
     // The render must still be bought on the AUDIT path. A cost fix that
     // quietly removes a measurement from the other caller is not a cost fix.
     if (!_src.includes(_n('const _shot = !(opts && opts.shot ===', ' false);'))) _fails.push('firecrawlScrape lost its render flag, so the two callers can no longer ask for different shapes');
@@ -69711,10 +69863,40 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (nameCorroborated('Chad', 'Dr. Chad Robbins', '')) {
       _fails.push('a single-token name passes — two tokens were always required');
     }
+    // ══ AND THE TWO TOKENS HAVE TO BELONG TOGETHER ═════════════════════
+    // The gate used to ask only that each token appear SOMEWHERE in the
+    // company name plus all four pages joined together. On a four-page corpus
+    // that is close to unfalsifiable: a first name in the header and a surname
+    // in a street address hundreds of characters away licensed the model's
+    // person onto a call sheet. The window is what separates "these two words
+    // belong together" from "both words exist on this site".
+    {
+      const _far = 'David runs the crew. ' + 'x'.repeat(60) + ' 12 Price Street, Dallas';
+      if (nameCorroborated('David Price', '', _far)) {
+        _fails.push('a first name and a surname found FAR APART still corroborate, so the one gate between the model\'s JSON and a person\'s name on a call sheet is passing on coincidence');
+      }
+      // The four real shapes a page writes a name in, none of which is the
+      // exact string back — demanding that would be the guard-too-tight failure.
+      for (const [_why, _c] of [
+        ['a middle initial', 'David A. Price founded the company'],
+        ['a directory listing', 'Price, David — Owner'],
+        ['a line break between the two', 'Meet David\nPrice, our owner'],
+        ['an address that spells it', 'contact davidprice@acme.com'],
+      ]) {
+        if (!nameCorroborated('David Price', '', _c)) {
+          _fails.push(`a real name written with ${_why} is refused, which deletes the owners this gate exists to let through`);
+        }
+      }
+      // A ceiling, because the cheap way to "fix" a refusal is to inflate the
+      // window until it is the whole document again — which is the defect.
+      if (!(NAME_ADJACENCY_CHARS > 0 && NAME_ADJACENCY_CHARS <= 80)) {
+        _fails.push(`the adjacency window is ${NAME_ADJACENCY_CHARS} characters — wide enough that the two tokens no longer have to belong to each other`);
+      }
+    }
     if (_fails.length) {
       console.log(`⛔ DM SPEND CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ DM SPEND CHECK: a hint word buried mid-slug no longer buys a scrape — the hint must LEAD the slug (or follow our/the/my) — while all seven real leadership shapes still match; and an owner the business is named after corroborates without a paid search, while an invented name is still refused. Both from the 2026-08-17 run: a Latisse FAQ scraped as a leadership page, and "Chad Robbins" rejected by "Dr. Chad Robbins".`);
+      console.log(`✓ DM SPEND CHECK: a hint word buried mid-slug no longer buys a scrape — the hint must LEAD the slug (or follow our/the/my) — while all seven real leadership shapes still match; and an owner the business is named after corroborates without a paid search, while an invented name is still refused. Both from the 2026-08-17 run: a Latisse FAQ scraped as a leadership page, and "Chad Robbins" rejected by "Dr. Chad Robbins". And the two tokens must now be found NEAR each other rather than anywhere in the corpus, while a middle initial, a directory listing, a line break and an address all still corroborate.`);
     }
   } catch (e) {
     console.log(`⛔ DM SPEND CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -72520,6 +72702,10 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         website,
         ceoName: (out.owner && out.owner.name) || '',
         ceoTitle: (out.owner && out.owner.title) || '',
+        // The authority gate's verdict, carried rather than discarded. It used
+        // to stop at the sheet while the same held-back name built an address
+        // here, taught a house pattern for the domain, and came back sendable.
+        ceoVouched: !!(out.owner && out.owner.canBuy === true),
         fcKey: allowBuy ? fcKey : '',
         homepageContent: homeText,
         verifierKey,
