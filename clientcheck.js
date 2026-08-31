@@ -2343,7 +2343,10 @@ let contactTally = null;
                  // hand after every paste, so the lean set is the default and
                  // the full set is a tick box - and both destinations have to
                  // read the same chooser or the CSV and the sheet drift.
-                 'FIND_CSV_ESSENTIAL', 'findCsvColumns', 'FIND_SHEET_SCRIPT'];
+                 'FIND_CSV_ESSENTIAL', 'findCsvColumns', 'FIND_SHEET_SCRIPT',
+                 // A front-desk mailbox is kept on the sheet and marked, and the
+                 // resolver's source ids are said the way a rep would say them.
+                 'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN'];
   const got2 = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED2.includes(n.id.name) && n.init) {
@@ -2360,7 +2363,8 @@ let contactTally = null;
         + '\nreturn { cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
         + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
-        + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT };')();
+        + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT,'
+        + ' generic: isGenericMailbox };')();
     } catch (e) {
       fails.push('the contact list no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -2462,6 +2466,46 @@ let contactTally = null;
       const blind = M.rows([{ name: 'X', contactEmail: 'a@b.com' }])[0];
       if (blind.payingForAds !== 'not checked' || blind.hiringMarketing !== 'not checked' || blind.teamSize !== 'not published') {
         fails.push('a lead whose site could not be read reports definite NOs for ads, hiring and team size — that is a claim about their business made from our own blindness');
+      }
+
+      // FOUR-b — A FRONT-DESK MAILBOX SAYS SO, AND A REAL ONE DOES NOT.
+      // Vin's decision: keep it on the sheet, mark it clearly. The tier already
+      // distinguishes it internally; the row never said it in words a rep reads
+      // at a glance, so a caller opened with the owner's first name into a
+      // mailbox the office manager reads first.
+      for (const g of ['info@x.com', 'office@x.com', 'sales-team@x.com', 'no-reply@x.com', 'Contact@X.com']) {
+        if (!M.generic(g)) fails.push(`"${g}" is not marked as a shared front-desk mailbox, so a rep opens with the owner's name into an inbox somebody else reads`);
+      }
+      // A guard that eats real addresses is the more expensive failure: a name
+      // that merely CONTAINS one of these words is a person's mailbox.
+      for (const r of ['dave@x.com', 'infosystems@x.com', 'billsales@x.com', 'j.helms@x.com', 'teamers@x.com']) {
+        if (M.generic(r)) fails.push(`"${r}" is being called a shared mailbox, so a real personal address is marked as a front desk and the rep opens the wrong way`);
+      }
+      {
+        const _rows = M.rows([
+          { name: 'A Co', contactReadOk: true, contactEmail: 'info@a.com', contactOwner: 'Dana Reed' },
+          { name: 'B Co', contactReadOk: true, contactEmail: 'dana@b.com', contactOwner: 'Dana Reed' },
+        ]);
+        if (!/front-desk/i.test(String(_rows[0].emailGoesTo || ''))) fails.push('the row does not say a published address is a shared front-desk mailbox');
+        if (/front-desk/i.test(String(_rows[1].emailGoesTo || ''))) fails.push('a personal address is described as a front-desk mailbox on the row');
+      }
+
+      // FOUR-c — THREE FIELDS COMPUTED ON EVERY READ AND RENDERED NOWHERE.
+      // contactOwnerSources, contactAdsWhy and the phone check were all
+      // measured, stored, and read by nothing at all - the recorded
+      // computed-but-not-passed class, three instances in one artefact.
+      {
+        const _r = M.rows([{
+          name: 'C Co', contactReadOk: true,
+          contactOwner: 'Dana Reed', contactOwnerSources: ['own_website_brain', 'business_name'],
+          contactAdsCode: null, contactAdsWhy: 'a tag container could be hiding a tag we cannot see',
+          contactPhone: '555-0100', contactPhoneOnSite: false,
+        }])[0];
+        if (!/own website/i.test(String(_r.ownerFrom || ''))) fails.push('the row does not say WHERE the owner was found, so a name read off a team page and one a model proposed look identical to the rep saying it out loud');
+        if (!/tag container/i.test(String(_r.adsWhy || ''))) fails.push('the four phrasings behind the ads yes-or-no are still rendered nowhere, including the one that says a container could be hiding a tag');
+        if (!/worth confirming/i.test(String(_r.phoneOnSite || ''))) fails.push('the row does not say their own site never printed this number, so an unchecked number reads exactly like a confirmed one');
+        const _un = M.rows([{ name: 'D Co', contactReadOk: true, contactPhone: '555-0100' }])[0];
+        if (String(_un.phoneOnSite || '') !== 'not checked') fails.push('a number nobody checked against their site is reported as agreeing or disagreeing rather than as unchecked');
       }
 
       // FIVE — the merge from the server. null must SURVIVE as null.
@@ -2908,6 +2952,77 @@ let findStat = null;
     }
   }
 }
+// ══ THE DO-NOT-SEND FLAG MUST SURVIVE THE PROMOTION ═══════════════════════
+// leadFromCompany carries the contact read onto a pipeline lead, and it carried
+// thirteen fields with contactEmailSendable not among them - so a lead promoted
+// out of Find arrived WITH the address and WITHOUT the flag the card refuses to
+// send on and the CSV prints "NO - do not send" for. Executed, because a source
+// read cannot tell a missing key from one spelled differently.
+{
+  const _need = ['leadFromCompany'];
+  const _got = {};
+  walk(ast, (n) => {
+    if (n.type === 'VariableDeclarator' && n.id && _need.includes(n.id.name) && n.init) {
+      _got[n.id.name] = 'const ' + n.id.name + ' = ' + src.slice(n.init.start, n.init.end) + ';';
+    }
+  });
+  if (!_got.leadFromCompany) {
+    fails.push('leadFromCompany is no longer at module scope, so promoting a Find lead into the pipeline cannot be executed and the thirteen-field drop that lost the do-not-send flag can come straight back');
+  } else {
+    let _mk = null;
+    try {
+      _mk = new Function(
+        'const uid = () => "id1"; const today = () => "2026-01-01";'
+        + ' const daysFromNow = (n) => "2026-01-0" + n;\n'
+        + _got.leadFromCompany + '\nreturn leadFromCompany;')();
+    } catch (e) { fails.push('leadFromCompany does not compile standalone: ' + e.message); }
+    if (_mk) {
+      const _lead = _mk({
+        name: 'A Co', website: 'https://a.com',
+        contactReadOk: true, contactOwner: 'Dana Reed', contactOwnerTitle: 'Owner',
+        contactOwnerCanBuy: true, contactOwnerSources: ['own_website_brain'],
+        contactEmail: 'dana@a.com', contactEmailTier: 3, contactEmailSendable: false,
+        contactEmailBlockReason: 'built from a name the authority gate held back',
+        contactPhone: '555-0100', contactPhoneOnSite: false,
+      });
+      if (_lead.contactEmailSendable !== false) {
+        fails.push('a promoted lead arrives with the address and WITHOUT the do-not-send flag - the one field the card and the CSV both refuse to send on, separated from the address it belongs to');
+      }
+      if (!_lead.contactEmailBlockReason) {
+        fails.push('the reason the address cannot be sent to is dropped on promotion, so a block with no reason on it reads as a bug rather than a judgement');
+      }
+      if (!Array.isArray(_lead.contactOwnerSources) || !_lead.contactOwnerSources.length) {
+        fails.push('where the owner came from is dropped on promotion, so a name read off a team page and one a model guessed are indistinguishable in the pipeline');
+      }
+      if (_lead.contactOwnerCanBuy !== true) {
+        fails.push("the authority gate's verdict is dropped on promotion, so a held-back name and a confirmed buyer look the same downstream");
+      }
+      if (_lead.contactPhoneOnSite !== false) {
+        fails.push('whether their own site prints the number is dropped on promotion');
+      }
+      // And the direction that must not drift: a company with NO contact read
+      // must not arrive claiming one.
+      const _bare = _mk({ name: 'B Co' });
+      if (_bare.contactReadOk !== false || _bare.contactEmailSendable !== false) {
+        fails.push('a lead that was never contact-read arrives claiming it was, which is the stamp-says-done failure this file already records');
+      }
+    }
+  }
+}
+
+// ══ A STALE LOCAL QUEUE MUST NOT PERMANENTLY SHADOW THE CLOUD ═════════════
+// The Find queue restore returned the moment localStorage held anything, so
+// once a browser had ONE queued company the Supabase queue could never load in
+// it again. Same class as the leads loader this file already guards.
+{
+  if (/const local = loadDiscovered\(\);\s*\r?\n\s*if \(local\.length > 0\) return;/.test(src)) {
+    fails.push('the Find queue restore still returns early whenever localStorage holds anything, so a run banked on another machine is invisible in this browser forever');
+  }
+  if (!/const merged = Array\.from\(_byName\.values\(\)\)/.test(src)) {
+    fails.push('the Find queue restore no longer MERGES the cloud with local work - replacing would delete a company queued in this tab and not yet pushed, which is the guard pointed the other way');
+  }
+}
+
 Promise.all(PENDING).then(() => {
   if (fails.length) {
     console.log(`\n✗ index.html: ${fails.length} research-request defect(s)`);

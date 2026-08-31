@@ -1305,7 +1305,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260917;
+const CLIENT_CONTRACT = 20260918;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5591,12 +5591,16 @@ const FIND_CSV_COLUMNS = [
   ['owner', 'Decision-maker'],
   ['ownerTitle', 'Their title'],
   ['ownerCanBuy', 'Can they authorise a purchase'],
+  ['ownerFrom', 'Where we found them'],
   ['email', 'Email'],
   ['emailConfidence', 'How confident we are in that address'],
   ['emailSafeToSend', 'Safe to send'],
+  ['emailGoesTo', 'Who opens it'],
   ['phone', 'Phone'],
+  ['phoneOnSite', 'Does their own site print this number'],
   ['affordTier', 'What they can afford'],
   ['payingForAds', 'Already paying for ads'],
+  ['adsWhy', 'What we saw on their site'],
   ['teamSize', 'People on their team page (a floor, not a headcount)'],
   ['hiringMarketing', 'Hiring for marketing'],
   ['hiringRoles', 'Roles they are hiring for'],
@@ -5696,6 +5700,37 @@ const findTallyLine = (t) => {
   if (!t.readable) s += ' Under 12 reads, so these are counts and not rates.';
   return s;
 };
+// ══ A FRONT-DESK MAILBOX IS NOT THE OWNER'S ══════════════════════════════
+// Vin's decision, 2026-08-31: keep it on the sheet, mark it clearly. The tier
+// already distinguishes it internally and the row never said it in words a rep
+// reads at a glance - so a caller opened with the owner's name into a mailbox
+// the office manager reads first, which is a different conversation and needs a
+// different opening line.
+//
+// The local part is the whole test, and the list is deliberately SHORT: these
+// are the addresses a business publishes for anybody, and a name that merely
+// contains one of them ("infosystems@", "billsales@") is a real mailbox. Whole
+// local part only, and a hyphen or dot separator counts (sales-team@, info.us@).
+const GENERIC_MAILBOX_RE = /^(info|office|admin|hello|contact|enquir(y|ies)|inquir(y|ies)|sales|support|help|service|team|mail|reception|frontdesk|front-?desk|accounts|billing|hr|jobs|careers|marketing|webmaster|noreply|no-?reply)([.\-_](?:us|uk|team|desk|dept|group))?$/i;
+const isGenericMailbox = (addr) => {
+  const local = String(addr || '').split('@')[0].trim();
+  if (!local) return false;
+  return GENERIC_MAILBOX_RE.test(local);
+};
+// The resolver's source ids, said the way a rep would say them. An id nobody
+// declared falls back to its own name with the underscores taken out, so a
+// source added on the server appears rather than disappearing.
+const OWNER_SOURCE_PLAIN = {
+  own_website_brain: 'their own website',
+  business_name: 'the business is named after them',
+  google_review_replies: 'they sign their review replies',
+  news: 'a news mention',
+  licence: 'a state licence record',
+  license: 'a state licence record',
+  websearch: 'a web search',
+  hunter: 'a contact database',
+  roster: 'their own team page',
+};
 const findContactRows = (companies) => {
   const list = (Array.isArray(companies) ? companies : []).filter(hasContactData);
   const rows = list.map(c => ({
@@ -5705,6 +5740,12 @@ const findContactRows = (companies) => {
     owner: c.contactOwner || '',
     ownerTitle: c.contactOwnerTitle || (c.contactOwner ? 'no title found' : ''),
     ownerCanBuy: c.contactOwner ? (c.contactOwnerCanBuy ? 'yes' : 'not established') : '',
+    // Which sources named them. Computed on every read and rendered nowhere,
+    // so a name read verbatim off a team page and a name a model proposed
+    // looked identical to a rep about to say it out loud.
+    ownerFrom: !c.contactOwner ? '' : (Array.isArray(c.contactOwnerSources) && c.contactOwnerSources.length
+      ? c.contactOwnerSources.map(x => OWNER_SOURCE_PLAIN[x] || String(x).replace(/_/g, ' ')).join(', ')
+      : 'source not recorded'),
     email: c.contactEmail || '',
     // The tier IS the confidence. Deriving it by regex over a human-readable
     // label is how four materially different states collapse into one sentence.
@@ -5715,12 +5756,28 @@ const findContactRows = (companies) => {
       : c.contactEmailTier === 4 ? 'a guess from a common pattern, nothing confirmed it'
       : (c.contactEmailLabel || 'unknown'),
     emailSafeToSend: !c.contactEmail ? '' : (c.contactEmailSendable ? 'yes' : 'NO - do not send'),
+    // Who actually opens it. A front-desk mailbox is kept - it is often the
+    // only published address and a rep can still work it - but a caller has to
+    // know before he opens with the owner's first name.
+    emailGoesTo: !c.contactEmail ? ''
+      : isGenericMailbox(c.contactEmail) ? 'a shared front-desk mailbox, not their own'
+      : c.contactOwner ? 'looks like a personal mailbox' : 'a mailbox at their domain',
     phone: c.contactPhone || c.phone || '',
+    // Whether their own site prints this number. Three states, and "we never
+    // read a page" is not the same as "their site disagrees".
+    phoneOnSite: !(c.contactPhone || c.phone) ? ''
+      : c.contactPhoneOnSite === true ? 'yes, on their own site too'
+      : c.contactPhoneOnSite === false ? 'not on any page we read - worth confirming'
+      : 'not checked',
     // Read from the server's band. Never a dollar figure and never re-derived
     // here: an empty cell means nobody measured enough to say, which is a
     // different thing from a business that cannot pay.
     affordTier: affordLabel(c) || 'not enough measured to say',
     payingForAds: contactYesNo(c.contactAdsCode, 'yes', 'none found'),
+    // The four phrasings behind that yes or no, including the one that says a
+    // tag container could be hiding a tag we cannot see. Computed on every
+    // contact read since the day it shipped and rendered nowhere at all.
+    adsWhy: c.contactAdsWhy || '',
     teamSize: (typeof c.contactTeamCount === 'number') ? String(c.contactTeamCount) : 'not published',
     hiringMarketing: contactYesNo(c.contactHiringMarketing, 'yes', 'no'),
     hiringRoles: (c.contactHiringTitles || []).join('; '),
@@ -6162,10 +6219,19 @@ function FindView({
     } catch(e) {}
   };
 
-  // On mount, try to restore queue from Supabase if localStorage is empty
+  // ══ A STALE CACHE MUST NOT PERMANENTLY SHADOW THE CLOUD ══════════════════
+  // This returned the moment localStorage held anything at all, so once a
+  // browser had ONE queued company the Supabase queue could never load in it
+  // again - a run banked on another machine, or after a cache the user never
+  // clears, was invisible forever. Same class as the leads loader, which this
+  // file already records: "once the cloud has answered it is the truth."
+  //
+  // The cloud is still not allowed to DELETE local work, because a company
+  // queued in this tab and not yet pushed is real. So both are read and MERGED
+  // by name, the cloud winning on a collision (it is the durable copy and
+  // carries the newer score), and local-only rows surviving.
   React.useEffect(() => {
     const local = loadDiscovered();
-    if (local.length > 0) return; // already have data, nothing to restore
     fetch(SB_URL + '/rest/v1/discovered_queue?order=icp_score.desc&limit=' + FIND_QUEUE_MAX, {
       headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY, 'Accept': 'application/json' }
     })
@@ -6186,12 +6252,24 @@ function FindView({
           } catch { return null; }
         }).filter(Boolean);
         if (restored.length > 0) {
+          // MERGE, not replace. A row queued in this tab and not yet pushed is
+          // real work; a row in the cloud is the durable copy. The cloud wins a
+          // name collision because its score is the newer one.
+          const _key = (c) => String((c && c.name) || '').trim().toLowerCase();
+          const _byName = new Map();
+          for (const c of local) { const k = _key(c); if (k) _byName.set(k, c); }
+          let _fresh = 0;
+          for (const c of restored) { const k = _key(c); if (!k) continue; if (!_byName.has(k)) _fresh++; _byName.set(k, c); }
+          const merged = Array.from(_byName.values())
+            .sort((a, b) => (b.icpScore || 0) - (a.icpScore || 0))
+            .slice(0, FIND_QUEUE_MAX);
+          if (merged.length === local.length && _fresh === 0) return;   // nothing new to show
           // Cache after render, wrapped — a quota throw here was eaten by the
           // .catch below WITH setDiscovered unreached, so a successfully
           // restored queue rendered as empty.
-          setDiscovered(restored);
-          try { localStorage.setItem(DB_KEY, JSON.stringify(restored)); } catch (e) { console.warn('Queue cache write failed:', e.message); }
-          console.log('Queue restored from Supabase:', restored.length, 'companies');
+          setDiscovered(merged);
+          try { localStorage.setItem(DB_KEY, JSON.stringify(merged)); } catch (e) { console.warn('Queue cache write failed:', e.message); }
+          console.log('Queue merged with Supabase: ' + merged.length + ' companies (' + _fresh + ' the cloud had and this browser did not).');
         }
       })
       .catch(() => {});

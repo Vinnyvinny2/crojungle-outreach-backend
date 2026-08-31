@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260917;
+const CONTRACT_VERSION = 20260918;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -62384,6 +62384,45 @@ app.listen(PORT, () => {
           break;
         }
       }
+    }
+
+    // ── AND A SWITCHED-OFF LANE MUST NOT SPEND ANYWAY ─────────────────────
+    // The trigger lanes are off by default because their leads have no Google
+    // listing and arrive unjudged by every ICP rule in this file. The gate is
+    // one line, and written the natural way - _lane(on, fn()) - the call is
+    // evaluated BEFORE the gate is entered, so every lane spends its network
+    // whatever the flag says and the whole switch is decoration. Nothing at
+    // boot could see that: the lanes are never run here, so a promise-taking
+    // gate boots exactly as green as a thunk-taking one. Found by reverting
+    // it, which is the only thing that could have found it.
+    //
+    // Executed, not read: the helper is lifted out of runDiscovery's own
+    // source and called with a thunk that records whether it ran.
+    {
+      const _rd = String(runDiscovery);
+      const _i = _rd.indexOf('const _lane = ');
+      const _j = _rd.indexOf(';', _i);
+      if (_i < 0 || _j < 0) {
+        _fails.push('the discovery lane gate could not be found in runDiscovery at all, so nothing here is being checked');
+      } else {
+        const _fn = new Function('return (' + _rd.slice(_i + 'const _lane = '.length, _j) + ')')();
+        let _ran = 0;
+        _fn(false, () => { _ran += 1; return Promise.resolve([]); });
+        if (_ran !== 0) {
+          _fails.push('a lane that is switched OFF still runs - the gate takes a promise rather than a thunk, so every trigger lane spends its network on every run and the tick box decides nothing');
+        }
+        let _on = 0;
+        _fn(true, () => { _on += 1; return Promise.resolve([]); });
+        if (_on !== 1) {
+          _fails.push('a lane that is switched ON does not run, so ticking the box buys nothing - the guard was tightened until the feature stopped working');
+        }
+      }
+      // And every call site has to pass a THUNK. The helper being lazy is
+      // worth nothing if one caller hands it an already-started promise.
+      const _sites = (_src.match(/_lane\(_extraLanes, \(\) =>/g) || []).length;
+      const _all = (_src.match(/_lane\(_extraLanes,/g) || []).length;
+      if (_all < 5) _fails.push(`only ${_all} discovery lane(s) go through the gate - the trigger lanes are jobs, funding, SBA, news and Facebook ads, and one that skips the gate is on for every run`);
+      if (_sites !== _all) _fails.push(`${_all - _sites} lane call site(s) hand the gate an already-started promise rather than a thunk, so those lanes spend whether the operator asked for them or not`);
     }
 
     if (_fails.length) {
