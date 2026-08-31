@@ -1299,7 +1299,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260916;
+const CLIENT_CONTRACT = 20260917;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5469,6 +5469,16 @@ const contactRequestBody = (company, settings) => {
     keys: {
       anthropicKey: S.apiKey, firecrawlKey: S.firecrawlKey, verifierKey: S.verifierKey,
     },
+    // ══ ONLY AN EXPLICIT OFF STANDS THE PAID OWNER LOOKUP DOWN ═════════════
+    // The free stage of the owner ladder settles about half of leads; the paid
+    // web and licence search is what finds the rest, and it was hard-coded off
+    // for this list. Vin, 2026-08-28: "if its that cheap then yes always have
+    // it on make it so i can swtich it off within the settings though".
+    //
+    // === false on both sides, and the setting is stored as false rather than
+    // absent when it is off - so an unset setting on a fresh browser BUYS the
+    // owner, which is the behaviour the operator asked for.
+    paidOwnerLookup: S.findPaidOwner !== false,
   };
 };
 
@@ -5576,6 +5586,23 @@ const FIND_CSV_COLUMNS = [
   ['readVia', 'How their site was read'],
   ['notes', 'What we could not do'],
 ];
+// ══ TWENTY-ONE COLUMNS, MOST OF THEM DELETED BY HAND EVERY TIME ═══════════
+// Vin, 2026-08-28: "we are getting coloumns that are not needed when pasting to
+// cvs we dont need all of that for now just the most improtnnat info i have to
+// dekete a bunch of coloumns everytime i paste stuff in."
+//
+// The set he chose is the one he specified when this list was first asked for:
+// the decision-maker, the phone, the email, the ICP score, are they already
+// paying for ads, are they hiring for marketing. Nothing here is DELETED - the
+// full set is one tick box away and the columns themselves are unchanged. What
+// changed is which of them a press produces by default.
+//
+// Keys only, in the order the table above declares them, so a column can never
+// appear here under a heading that does not exist. The build fails if it does.
+const FIND_CSV_ESSENTIAL = ['company', 'owner', 'ownerTitle', 'email', 'phone',
+  'icp', 'payingForAds', 'hiringMarketing'];
+const findCsvColumns = (full) => (full === true ? FIND_CSV_COLUMNS
+  : FIND_CSV_COLUMNS.filter(c => FIND_CSV_ESSENTIAL.indexOf(c[0]) >= 0));
 // ══ THE FIRST MEASUREMENT OF WHETHER ANY OF THIS WORKS ══════════════════════
 // Vin, 2026-08-28: "i want u to double check on how well decision maker finding
 // is and how well our email finding is because we have been running without
@@ -5691,10 +5718,11 @@ const findContactRows = (companies) => {
     return B - A || String(a.company).localeCompare(String(b.company));
   });
 };
-const findContactCsv = (companies) => {
+const findContactCsv = (companies, full) => {
   const rows = findContactRows(companies);
-  const head = FIND_CSV_COLUMNS.map(c => findCsvCell(c[1])).join(',');
-  const body = rows.map(r => FIND_CSV_COLUMNS.map(c => findCsvCell(r[c[0]])).join(','));
+  const cols = findCsvColumns(full);
+  const head = cols.map(c => findCsvCell(c[1])).join(',');
+  const body = rows.map(r => cols.map(c => findCsvCell(r[c[0]])).join(','));
   // The byte-order mark is not decoration: without it Excel reads the file as
   // Latin-1 and mangles every accented name in it.
   return '﻿' + [head].concat(body).join('\r\n') + '\r\n';
@@ -5704,14 +5732,15 @@ const findContactCsv = (companies) => {
 // builder and the same declared columns. A second row-shaping function for the
 // sheet is the two-hand-kept-copies disease this file records more than any
 // other, and the copy that rots is always the one nobody opens.
-const findSheetPayload = (companies) => {
+const findSheetPayload = (companies, full) => {
   const rows = findContactRows(companies);
+  const cols = findCsvColumns(full);
   return {
-    header: FIND_CSV_COLUMNS.map(c => String(c[1])),
+    header: cols.map(c => String(c[1])),
     // Values as strings in declared column order, and a cell never carries a
     // line break: the CSV learned that on 2026-08-28 when a 4KB file downloaded
     // and would not open, and a spreadsheet cell is no better a place for one.
-    rows: rows.map(r => FIND_CSV_COLUMNS.map(c => {
+    rows: rows.map(r => cols.map(c => {
       const v = r[c[0]];
       return (v === null || v === undefined ? '' : String(v)).replace(/\r\n|\r|\n/g, ' ');
     })),
@@ -5719,16 +5748,27 @@ const findSheetPayload = (companies) => {
 };
 
 // The Apps Script the operator pastes into his own sheet. It lives here, next
-// to the payload it consumes, so the two shapes cannot drift: it reads
-// b.header and b.rows, and it dedupes on column 3, which is the company
-// name in FIND_CSV_COLUMNS. Change the column order and this comment is
-// the thing that has to change with it.
-const FIND_SHEET_SCRIPT = 'function doPost(e) {\n  var s = SpreadsheetApp.getActiveSheet();\n  var b = JSON.parse(e.postData.contents);\n  if (s.getLastRow() === 0) s.appendRow(b.header);\n  var have = {}, n = s.getLastRow();\n  if (n > 1) s.getRange(2, 3, n - 1, 1).getValues().forEach(function (r) { have[String(r[0]).trim()] = 1; });\n  var written = 0, skipped = 0;\n  b.rows.forEach(function (r) {\n    if (have[String(r[2]).trim()]) { skipped++; return; }\n    s.appendRow(r); written++;\n  });\n  return ContentService.createTextOutput(JSON.stringify({ written: written, skipped: skipped, sheet: s.getName() }))\n    .setMimeType(ContentService.MimeType.JSON);\n}';
+// to the payload it consumes, so the two shapes cannot drift.
+//
+// ══ IT FINDS THE COMPANY COLUMN; IT DOES NOT COUNT TO THREE ═══════════════
+// It used to dedupe on column 3, because 'company' was the third entry in
+// FIND_CSV_COLUMNS, and the only thing holding the two in step was a comment
+// saying so. The lean column set makes company the FIRST column, which would
+// have silently deduped a whole sheet against the decision-maker's name -
+// two-hand-kept-copies, with one of the copies living in a script pasted into
+// a spreadsheet where nobody would ever look for it.
+//
+// It reads the header row instead. Now the column order can change as often as
+// the operator likes and the dedupe follows it, in a sheet that was set up
+// before the change. If the header is ever missing 'Company' it appends
+// without deduping rather than deduping on the wrong column: a duplicate row
+// is a nuisance, and merging two businesses is a lost lead.
+const FIND_SHEET_SCRIPT = 'function doPost(e) {\n  var s = SpreadsheetApp.getActiveSheet();\n  var b = JSON.parse(e.postData.contents);\n  if (s.getLastRow() === 0) s.appendRow(b.header);\n  var head = s.getRange(1, 1, 1, s.getLastColumn()).getValues()[0];\n  var col = 0;\n  for (var i = 0; i < head.length; i++) if (String(head[i]).trim() === \'Company\') { col = i + 1; break; }\n  var have = {}, n = s.getLastRow();\n  if (col && n > 1) s.getRange(2, col, n - 1, 1).getValues().forEach(function (r) { have[String(r[0]).trim()] = 1; });\n  var bi = b.header.indexOf(\'Company\');\n  var written = 0, skipped = 0;\n  b.rows.forEach(function (r) {\n    if (col && bi >= 0 && have[String(r[bi]).trim()]) { skipped++; return; }\n    s.appendRow(r); written++;\n  });\n  return ContentService.createTextOutput(JSON.stringify({ written: written, skipped: skipped, sheet: s.getName() }))\n    .setMimeType(ContentService.MimeType.JSON);\n}';
 
-const downloadFindContacts = (companies) => {
+const downloadFindContacts = (companies, full) => {
   const rows = findContactRows(companies);
   if (!rows.length) return 0;
-  const blob = new Blob([findContactCsv(companies)], { type: 'text/csv;charset=utf-8;' });
+  const blob = new Blob([findContactCsv(companies, full)], { type: 'text/csv;charset=utf-8;' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = 'crojungle-contacts-' + new Date().toISOString().slice(0, 10) + '.csv';
@@ -5877,6 +5917,8 @@ function FindView({
   // lanes have none of that, and every one of tonight's wasted reads came from
   // them. So the scope is the measurement, not a guess about the words.
   const [contactPlacesOnly, setContactPlacesOnly] = React.useState(true);
+  // The lean column set is the default; the full twenty-one is a tick box.
+  const [csvFull, setCsvFull] = React.useState(false);
   const contactStop = React.useRef(false);
   // Stop sets a flag the worker loop reads BETWEEN leads, and a lead can take
   // 155 seconds - live, Lodging Dynamics. So Stop appeared not to work: it had
@@ -7722,8 +7764,23 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
           }, 'All ' + _cUnread.length) : null,
           _cExportable.length ? React.createElement('button', {
             className:'btn btn-g btn-sm',
-            onClick: () => { const n = downloadFindContacts(_cExportable); if (!n) setContactErr('Nothing to export yet.'); },
+            title: csvFull
+              ? 'All ' + FIND_CSV_COLUMNS.length + ' columns.'
+              : 'The ' + FIND_CSV_ESSENTIAL.length + ' columns you dial and send from. Tick "every column" for the rest.',
+            onClick: () => { const n = downloadFindContacts(_cExportable, csvFull); if (!n) setContactErr('Nothing to export yet.'); },
           }, 'Download CSV (' + _cExportable.length + ')') : null,
+          // ══ THE COLUMNS, BESIDE THE BUTTON THAT WRITES THEM ══════════════
+          // Same rule as the scope tick box above it. He was deleting most of
+          // twenty-one columns by hand after every paste, so the default is the
+          // set he asked for and the rest is one tick away rather than gone.
+          _cExportable.length ? React.createElement('label', {
+            style:{ display:'flex', alignItems:'center', gap:7, fontSize:12, color:'var(--t)', cursor:'pointer' },
+          },
+            React.createElement('input', {
+              type:'checkbox', checked: csvFull,
+              onChange: e => setCsvFull(!!e.target.checked),
+            }),
+            React.createElement('span', null, 'every column (' + FIND_CSV_COLUMNS.length + ' instead of ' + FIND_CSV_ESSENTIAL.length + ')')) : null,
           // ══ THE SAME LIST, STRAIGHT INTO HIS SHEET ═══════════════════════
           // Same population as the CSV button beside it, same rows, same
           // columns. If the two ever disagreed the operator would have no way
@@ -7738,7 +7795,7 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
               if (!url) { setSheetHelp(true); setSheetNote(''); return; }
               setSheetBusy(true); setSheetNote(''); setContactErr('');
               try {
-                const payload = findSheetPayload(_cExportable);
+                const payload = findSheetPayload(_cExportable, csvFull);
                 const r = await fetch(BACKEND + '/api/export-sheet', {
                   method:'POST', headers:{ 'Content-Type':'application/json' },
                   body: JSON.stringify(Object.assign({ url }, payload)),
@@ -15533,6 +15590,49 @@ function SettingsView({
       color: 'var(--m)'
     }
   }, hint));
+  // ══ A SETTING THAT IS A YES OR A NO ══════════════════════════════════
+  // Fld above is an input box, and a switch pretending to be one would be a
+  // text field an operator has to know the magic word for. Same label, hint
+  // and form plumbing; a checkbox instead of a box to type in.
+  //
+  // `def` is what an UNSET setting means, and it is not decoration: a fresh
+  // browser has never written this key, and the honest reading of that is the
+  // default the feature ships with rather than "off".
+  const Sw = ({
+    label,
+    k,
+    hint,
+    def
+  }) => React.createElement('div', {
+    style: {
+      marginBottom: 14
+    }
+  }, React.createElement('label', {
+    style: {
+      display: 'flex',
+      alignItems: 'center',
+      gap: 8,
+      cursor: 'pointer'
+    }
+  }, React.createElement('input', {
+    type: 'checkbox',
+    checked: form[k] === undefined ? def !== false : form[k] !== false,
+    onChange: e => setForm(p => ({
+      ...p,
+      [k]: !!e.target.checked
+    }))
+  }), React.createElement('span', {
+    className: 'lbl',
+    style: {
+      marginBottom: 0
+    }
+  }, label)), hint && React.createElement('div', {
+    style: {
+      marginTop: 5,
+      fontSize: 11,
+      color: 'var(--m)'
+    }
+  }, hint));
   const Card = ({
     title,
     children
@@ -15623,6 +15723,11 @@ function SettingsView({
     type: 'text',
     ph: 'https://script.google.com/macros/s/.../exec',
     hint: 'Where "Send to Google Sheet" on the Find tab puts the contact list. This is the web-app URL of an Apps Script inside your own spreadsheet, not the sheet address itself — press the button with this blank and the Find tab shows the eight lines to paste and the four steps to deploy them. A webhook rather than a Google login on purpose: no OAuth, no key to manage, and you can repoint it at a different sheet without a deploy. Only script.google.com URLs are accepted, because this endpoint posts your contact list to whatever address it is given.'
+  }), React.createElement(Sw, {
+    label: 'Buy the paid owner lookup on the Find contact list',
+    k: 'findPaidOwner',
+    def: true,
+    hint: 'ON by default. Reading their own site finds the owner on roughly half of leads; for the other half this buys a web search and a licence-record search, which is what puts a name and a direct email on the rest. Measured on the 2026-08-28 run: about eight Firecrawl credits and two cheap model calls per lead the free read could not settle, so roughly 200 credits across a fifty-lead press. Untick it and a press costs nothing beyond the free read, and those rows come back with the company mailbox and no name.'
   }), React.createElement(Fld, {
     label: 'SDR Booking Link',
     k: 'bookingLink',

@@ -2338,7 +2338,12 @@ let contactTally = null;
                  'AFFORD_LABEL', 'affordLabel',
                  // The run tally - the first thing in this project that has ever
                  // counted whether the owner resolver and the email engine work.
-                 'findRunTally', 'findTallyLine'];
+                 'findRunTally', 'findTallyLine',
+                 // The column CHOICE. Twenty-one columns were being deleted by
+                 // hand after every paste, so the lean set is the default and
+                 // the full set is a tick box - and both destinations have to
+                 // read the same chooser or the CSV and the sheet drift.
+                 'FIND_CSV_ESSENTIAL', 'findCsvColumns', 'FIND_SHEET_SCRIPT'];
   const got2 = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED2.includes(n.id.name) && n.init) {
@@ -2353,8 +2358,9 @@ let contactTally = null;
     try {
       M = new Function(NEED2.map(k => got2[k]).join('\n')
         + '\nreturn { cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
+        + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
         + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
-        + ' tally: findRunTally, tallyLine: findTallyLine };')();
+        + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT };')();
     } catch (e) {
       fails.push('the contact list no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -2385,9 +2391,41 @@ let contactTally = null;
         const _rows = _f.split('\r\n').filter(Boolean);
         if (_rows.length !== 3) fails.push(`the contact CSV produced ${_rows.length} row(s) for a header plus two leads - a cell is breaking the row structure`);
         const _cells = (r) => r.split('","').length;
+        const _want = M.pick(false).length;
         for (const r of _rows) {
-          if (_cells(r) !== M.cols.length) { fails.push(`a contact CSV row has ${_cells(r)} cells against ${M.cols.length} columns - the file will not open as a table`); break; }
+          if (_cells(r) !== _want) { fails.push(`a contact CSV row has ${_cells(r)} cells against ${_want} columns - the file will not open as a table`); break; }
         }
+      }
+
+      // ══ THE COLUMN CHOICE, AND THE THING IT NEARLY BROKE ═══════════════
+      // Vin was deleting most of twenty-one columns after every paste, so the
+      // default is the eight he asked for. Three properties, all executed:
+      //   1. lean is genuinely fewer, and full is genuinely all of them;
+      //   2. every essential KEY exists in the declared table - a key with no
+      //      row would silently export a blank column under no heading;
+      //   3. the CSV and the SHEET agree, because two destinations reading two
+      //      column lists is how an operator gets a file he cannot reconcile.
+      {
+        const _lean = M.pick(false), _full = M.pick(true);
+        if (_full.length !== M.cols.length) fails.push('the full CSV column set is no longer the whole declared table');
+        if (_lean.length !== M.lean.length) {
+          fails.push(`the lean CSV set produced ${_lean.length} column(s) for ${M.lean.length} declared key(s) - a key here does not exist in FIND_CSV_COLUMNS, so a column is silently missing`);
+        }
+        if (!(_lean.length < _full.length)) fails.push('the lean CSV set is not smaller than the full one, so the tick box changes nothing');
+        const _co = [{ name: 'A Co', contactOwner: 'Jo Blogs', contactEmail: 'a@a.com' }];
+        const _h = (M.csv(_co, false).replace(/^\uFEFF/, '').split('\r\n')[0].match(/","/g) || []).length + 1;
+        if (_h !== _lean.length) fails.push(`the lean CSV wrote ${_h} column(s) where the chooser says ${_lean.length} - findContactCsv is not reading the chooser`);
+        if (M.sheet(_co, false).header.length !== _lean.length) fails.push('the Google Sheet export ignores the column choice, so the sheet and the CSV are two different files');
+        if (M.sheet(_co, true).header.length !== _full.length) fails.push('the Google Sheet export cannot be asked for every column');
+        // ══ THE APPS SCRIPT MUST NOT COUNT TO THREE ══════════════════════
+        // It deduped on column 3 because 'company' was the third declared
+        // column. In the lean set company is FIRST, so a hard-coded 3 would
+        // have deduped a whole sheet against the decision-maker's name - and
+        // the only thing holding the two in step was a comment, inside a
+        // script pasted into a spreadsheet where nobody would look for it.
+        const _script = String(M.script || '');
+        if (_script && /getRange\(2,\s*3,/.test(_script)) fails.push('the Apps Script still dedupes on a hard-coded column 3, which is the decision-maker in the lean column set');
+        if (_script && _script.indexOf("indexOf('Company')") < 0) fails.push('the Apps Script no longer finds the Company column from the header, so the column order and the dedupe can drift apart again');
       }
 
       // TWO — the ORDER, with the trap that matters. A MEASURED zero must sort
@@ -2449,6 +2487,16 @@ let contactTally = null;
       }
       if (!b.keys.anthropicKey) fails.push('the contact request does not send the Anthropic key, so every lead is refused at preflight');
       if (M.body({ name: 'X', reviewCount: '40' }, {}).company.reviewCount !== null) fails.push('the contact request sends a review count that is not a number, which the score then treats as a measurement');
+      // ══ THE PAID OWNER LOOKUP DEFAULTS ON ══════════════════════════════
+      // The free stage of the owner ladder settles about half of leads and
+      // this list is dialled AND emailed, so the paid stage is the default and
+      // OFF is a Settings choice. The direction of the default is the whole
+      // point: a browser that has never written the setting must still buy the
+      // owner, because an absent setting means "nobody has chosen", never
+      // "they asked us to save money". Both directions executed.
+      if (M.body({ name: 'X' }, {}).paidOwnerLookup !== true) fails.push('an unset Settings switch stops the Find list buying the paid owner lookup, so a fresh browser silently gets no decision-maker on half the rows');
+      if (M.body({ name: 'X' }, { findPaidOwner: true }).paidOwnerLookup !== true) fails.push('the paid owner lookup does not travel when it is switched ON');
+      if (M.body({ name: 'X' }, { findPaidOwner: false }).paidOwnerLookup !== false) fails.push('switching the paid owner lookup OFF in Settings does not reach the server, so the operator cannot stop the spend');
 
       // SEVEN — the file shape. One header, one row per lead, and a BOM,
       // without which Excel reads it as Latin-1 and mangles every accented name.
@@ -2456,7 +2504,7 @@ let contactTally = null;
       if (csv.charCodeAt(0) !== 0xFEFF) fails.push('the contact CSV has no byte-order mark, so Excel mangles every accented name in it');
       const lines = csv.replace(/^﻿/, '').split('\r\n');
       if (lines.length !== 4 || lines[3] !== '') fails.push(`the contact CSV emitted ${lines.length} line(s) for two leads plus a header`);
-      if (lines[0].split('","').length !== M.cols.length) fails.push('the contact CSV header does not have one cell per declared column');
+      if (lines[0].split('","').length !== M.pick(false).length) fails.push('the contact CSV header does not have one cell per column the caller asked for');
       // "rank"/"score" means a SEARCH POSITION nearly everywhere else in this
       // app, so the column has to say which one it is.
       const head = (M.cols.find(c => c[0] === 'icp') || [])[1] || '';
@@ -2476,7 +2524,8 @@ let contactTally = null;
           { name: 'Beta Co', contactPhone: '(317) 555-0134', contactIcp: 12,
             contactIcpWhy: 'scored on 3 of 5 signals\nthe rest are left out' },
         ];
-        const _p = M.sheet(_leads);
+        // Asked for EVERY column, so this block keeps testing the widest shape.
+        const _p = M.sheet(_leads, true);
         const _r = M.rows(_leads);
         if (!_p || !Array.isArray(_p.header) || !Array.isArray(_p.rows)) {
           fails.push('the Google Sheet payload is not a header plus rows, so the export script has nothing to append');
@@ -2493,14 +2542,14 @@ let contactTally = null;
           }
           // The ORDER must be the ranked order, not queue order: the whole point
           // of the score is that the rep works the top of the list first.
-          if (_p.rows.length === 2 && _p.rows[0][2] !== 'Alpha Co') {
+          // Read the company column from the HEADER rather than counting to
+          // three, for the same reason the Apps Script now does: the lean set
+          // makes company the first column, and an index typed into a check is
+          // a second hand-kept copy of the column order.
+          const _ci = _p.header.indexOf('Company');
+          if (_ci < 0) fails.push('the sheet header has no Company column, so the Apps Script has nothing to dedupe on and every re-send duplicates the whole list');
+          else if (_p.rows.length === 2 && _p.rows[0][_ci] !== 'Alpha Co') {
             fails.push('the sheet rows are not in the ranked order the CSV uses');
-          }
-          // The script pasted into the sheet dedupes on column 3. If the company
-          // name ever stops being column 3, the script silently dedupes on the
-          // wrong field and starts dropping real rows.
-          if (String((M.cols[2] || [])[0]) !== 'company') {
-            fails.push('the company name is no longer the third column, but the Apps Script shown to the operator dedupes on the third column — it would drop rows by matching the wrong field');
           }
         }
       }
@@ -2572,7 +2621,7 @@ let contactTally = null;
         }
         contactTally = M.tallyLine(t);
       }
-      contactStat = { cols: M.cols.length };
+      contactStat = { cols: M.cols.length, lean: M.pick(false).length };
     }
   }
 
@@ -2601,7 +2650,7 @@ let contactTally = null;
   if (html.indexOf(_nn("if (e && (e.name === 'AbortError' ||", ' contactStop.current)) {')) < 0) {
     fails.push('a cancelled request is being recorded as a failed read, so pressing Stop marks leads as tried');
   }
-  if (html.indexOf(_nn('const n = downloadFindContacts(_cExport', 'able);')) < 0) {
+  if (html.indexOf(_nn('const n = downloadFindContacts(_cExport', 'able, csvFull);')) < 0) {
     fails.push('the Download CSV button is not wired to the contact export');
   }
   // ONE POPULATION. "14 read" counted the leads ON SCREEN and "Download CSV (8)"
@@ -2845,6 +2894,6 @@ Promise.all(PENDING).then(() => {
   notes.forEach(n => console.log(n));
   if (findStat) console.log(`\u2713 index.html: the Find run's clock, queue cap and card were EXECUTED, not read \u2014 the browser's wall sits above the server's own sweep so a healthy run is never killed by the wrong file, the submit goes through the poller and exactly one call site still touches the synchronous door as the old-server fallback, the queue cap is one number rather than three, and a lead we have actually read stops showing the name-based guess beside the owner, email and phone we measured. A demoted lead now says why it was sorted last: "${findStat.demoted}". And the card answers what a business can afford instead of inventing a revenue band from its review count: "${findStat.prem}".`);
   if (contactTally) console.log(`\u2713 index.html: the contact run TALLY was executed \u2014 the first thing in this project that has ever counted whether the owner resolver and the email engine work. Rates are over leads actually READ, the email tier split is reported rather than one "found" number because a published address and a guess are not the same thing, a run under twelve reads says its numbers are counts and not rates, and a run made while the verifier was down says so. On the fixture queue: ${contactTally}`);
-  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the ${contactStat.cols}-column CSV neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, gives each email tier its own confidence sentence, and reports an unmeasured signal as "not checked" rather than as a definite no. Every call site is pinned too: the panel starts the run, the run posts to /api/find-contact, it saves after every lead so a Stop keeps what was paid for, the card strip renders only on a lead that was read, and the Research batch cannot reach any of it.`);
+  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the CSV writes the ${contactStat.lean} columns a rep dials and sends from, with all ${contactStat.cols} one tick away and the Google Sheet reading the same choice. It neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, gives each email tier its own confidence sentence, and reports an unmeasured signal as "not checked" rather than as a definite no. Every call site is pinned too: the panel starts the run, the run posts to /api/find-contact, it saves after every lead so a Stop keeps what was paid for, the card strip renders only on a lead that was read, and the Research batch cannot reach any of it.`);
   if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
 }).catch((e) => { console.log('\n\u2717 index.html: the checks could not finish \u2014 ' + (e && e.message)); process.exit(1); });
