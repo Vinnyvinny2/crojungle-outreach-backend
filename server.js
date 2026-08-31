@@ -10900,15 +10900,41 @@ const looksLikeRealName = (n) => {
 // Keyed BY COMPANY, not a single slot. Two leads research concurrently, and a
 // single module-level number meant lead A's gate could read lead B's page
 // length — the same disease, one instance smaller, as the audit cache that
-// served Donna Krummen John Peters Roofing's audit. The duplicate-run guard
-// already prevents the same company running twice at once, so the company name
-// is a safe key here.
+// served Donna Krummen John Peters Roofing's audit.
+//
+// ══ AND THE COMPANY NAME ALONE IS NOT AN IDENTITY ═════════════════════════
+// The reasoning that made the name safe was that the duplicate-run guard
+// stops one company running twice at once. That guard keys on the PLACE ID
+// first, so two genuinely different businesses that share a name get two job
+// ids and run concurrently by design - and then collide here. A blank name
+// was worse still: every nameless lead shared one slot.
+//
+// The website is what was actually READ, so it belongs in the key, and an
+// entry with neither is not stored at all - a key that identifies nothing
+// cannot be safer than no entry, and 0 is what an absent entry already means.
+//
+// The TTL is the other half. The reset only runs when the leadership read
+// runs, so a lead that never reaches it read whatever the last run of that
+// same business left behind, with no way to tell a fresh 0 from a stale one.
+const LEADERSHIP_LEN_TTL_MS = 30 * 60 * 1000;
 const _leadershipTextLen = new Map();
-const _setLeadershipLen = (companyName, n) => {
-  if (_leadershipTextLen.size > 200) _leadershipTextLen.clear();
-  _leadershipTextLen.set(String(companyName || ''), Number(n) || 0);
+const _leadershipLenKey = (companyName, website) => {
+  const c = String(companyName || '').trim().toLowerCase();
+  const w = String(website || '').toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+  return (c || w) ? `${c}|${w}` : '';
 };
-const _getLeadershipLen = (companyName) => _leadershipTextLen.get(String(companyName || '')) || 0;
+const _setLeadershipLen = (companyName, n, website) => {
+  const k = _leadershipLenKey(companyName, website);
+  if (!k) return;
+  if (_leadershipTextLen.size > 200) _leadershipTextLen.clear();
+  _leadershipTextLen.set(k, { len: Number(n) || 0, at: Date.now() });
+};
+const _getLeadershipLen = (companyName, website) => {
+  const k = _leadershipLenKey(companyName, website);
+  const e = k ? _leadershipTextLen.get(k) : null;
+  if (!e || (Date.now() - e.at) > LEADERSHIP_LEN_TTL_MS) return 0;
+  return e.len;
+};
 // Pure so the boot check can execute it. True when both name tokens appear in
 // the corroboration text — which INCLUDES the business name, because a business
 // named after its owner corroborates that owner all by itself and Places gave
@@ -11146,7 +11172,7 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
     // can legitimately mention the founder. Only the ROSTER PARSER is scoped,
     // because it is the one that reads layout as authorship.
     const rosterPages = [];
-    _setLeadershipLen(companyName, 0);
+    _setLeadershipLen(companyName, 0, website);
     if (homepageContent && homepageContent.length > 200) {
       const _home = '--- HOMEPAGE ---\n' + homepageContent.slice(0, 6000);
       pages.push(_home);
@@ -11296,7 +11322,7 @@ const _ownerFromCorpus = async (corpus, companyName, website, apiKey, rosterCorp
     // nothing" and only ever looked at the homepage \u2014 so Hawk Crawlspace, whose
     // about page carries the whole team and whose footer carries info@hawkva.com,
     // was declared dead six seconds after we successfully scraped both pages.
-    _setLeadershipLen(companyName, corpus.trim().length);
+    _setLeadershipLen(companyName, corpus.trim().length, website);
     if (corpus.trim().length < 300) {
       console.log(`DM/brain [${companyName}]: no readable content (homepage empty AND no leadership pages mapped)`);
       return null;
@@ -11864,7 +11890,22 @@ const parseTeamRoster = (html, companyName = '') => {
       const t = runs[j];
       if (!t) break;
       const kind = titleKind(t);
-      if (!kind && personFromRun(t, companyName)) break;   // the next person, no title
+      // ══ THE NEXT PERSON ENDS IT, WHETHER OR NOT HE CARRIES A TITLE ══
+      // This broke only on a person with NO title, so on a card layout the
+      // run "Jane Doe, CFO" satisfied the title test and became the title of
+      // the person ABOVE her. Two people, one of them handed the other's job,
+      // and the output still looks like a plausible roster - which is the
+      // worst way for a parser to fail.
+      //
+      // The reason the old test could not simply be "is this a person" is
+      // that a bare job title satisfies every name pattern: "Managing
+      // Partner" is two capitalised words. So the question is which of the
+      // two this run is. A run that names a person AND states his job is
+      // unambiguously the next entry; a run that names a person and states
+      // nothing is the next entry too. Only a run whose title reading is the
+      // ONLY reading - a bare title - belongs to the person we are building.
+      const _next = personFromRun(t, companyName);
+      if (_next && (_next.inlineTitle || !kind)) break;   // the next person
       if (t.length > 70) continue;
       // ══ AN OWNER TOKEN WINS OVER A C-SUITE ONE ═══════════════════════
       // "CO-OWNER/CFO" is Misty Pyle at Hannah Custom Homes. Checking the
@@ -32055,7 +32096,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   //
   // The question the gate is trying to ask is "can we produce an audit" \u2014 and we
   // can, from any readable page. Ask that instead.
-  const _ownLeadershipLen = _getLeadershipLen(companyName);
+  const _ownLeadershipLen = _getLeadershipLen(companyName, website);
   const _readableSiteText = Math.max(String(homepageContent || '').trim().length, _ownLeadershipLen);
   const _siteIsDead = _readableSiteText < 300;
   if (_siteIsDead && _ownLeadershipLen > 0) {
@@ -56745,6 +56786,56 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('if (_findInFlight >=', ' FIND_CONTACT_CONCURRENCY) {'))) _fails.push('the find-contact route has no concurrency ceiling, so a second tab doubles the spend rate');
     if (!bootGateRefuses('POST', '/api/find-contact', 'checking')) _fails.push('the find-contact route is not held during the boot window, so a lead worked before the checks settle can flip the build verdict');
 
+    // ══ NINE - THE PHONE IS CHECKED, NOT JUST ASSERTED ═══════════════════
+    // The number was copied off the Google listing and stamped "their Google
+    // listing" unconditionally, which is true about where we got it and
+    // silent about whether it is the number they answer. We hold their pages
+    // by then, so it costs nothing to look.
+    if (sitePrintsOurPhone('call us on (913) 451-3722 today', '913-451-3722') !== true) {
+      _fails.push('their own site printing the same number is not recognised, so the check can never confirm a listing number');
+    }
+    if (sitePrintsOurPhone('call us on (913) 451-3722 today', '816-000-1111') !== false) {
+      _fails.push('a DIFFERENT number on their site reads as a match, so the confirmation means nothing');
+    }
+    if (!_src.includes(_n('    out.phoneOnSite = sitePrintsOurPhone(', '_pageText, out.phone);'))) {
+      _fails.push('the Find contact read no longer checks the listing number against the pages it just read, so the row asserts a number nothing confirmed');
+    }
+    if (!_src.includes(_n('    phoneOnSite:', ' null,'))) {
+      _fails.push('phoneOnSite no longer starts as null, so a lead whose site we never read reports a verdict about a number nobody looked for');
+    }
+
+    // ══ TEN - ONE LEAD'S PAGE LENGTH MUST NOT BE READ BY ANOTHER ═════════
+    // The key was the company name alone. The duplicate-run guard keys on the
+    // PLACE ID first, so two genuinely different businesses sharing a name run
+    // concurrently by design and then collide here - and a blank name gave
+    // every nameless lead one shared slot.
+    {
+      const _k1 = _leadershipLenKey('Precision Plumbing', 'https://precision-kc.com/');
+      const _k2 = _leadershipLenKey('Precision Plumbing', 'https://precisionplumbingtx.com/about');
+      if (!_k1 || _k1 === _k2) {
+        _fails.push('two different businesses that share a name get the same cache key, so one lead reads the other lead\'s page length - the audit-cache collision, one instance smaller');
+      }
+      if (_leadershipLenKey('', '')) {
+        _fails.push('a lead with neither a name nor a website still gets a key, so every nameless lead shares one slot');
+      }
+      _setLeadershipLen('', 0, '');
+      if (_getLeadershipLen('Anything At All', '')) {
+        _fails.push('a keyless write landed somewhere and is being read back, which is worse than not storing it at all');
+      }
+      // Stored, read back, and then aged out. The reset only runs when the
+      // leadership read runs, so without a TTL a lead that never reaches it
+      // reads whatever the last run of that same business left behind.
+      _setLeadershipLen('TTL Fixture Co', 4321, 'https://ttlfixture.example/');
+      if (_getLeadershipLen('TTL Fixture Co', 'https://ttlfixture.example/x') !== 4321) {
+        _fails.push('a length written for this business cannot be read back, so the gate below it can never see what was read');
+      }
+      const _e = _leadershipTextLen.get(_leadershipLenKey('TTL Fixture Co', 'https://ttlfixture.example/'));
+      if (_e) _e.at = Date.now() - (LEADERSHIP_LEN_TTL_MS + 1000);
+      if (_getLeadershipLen('TTL Fixture Co', 'https://ttlfixture.example/')) {
+        _fails.push('a stale entry is still returned, so a lead that never reached the leadership read is handed a page length from a previous run with no way to tell it apart from a fresh one');
+      }
+      _leadershipTextLen.delete(_leadershipLenKey('TTL Fixture Co', 'https://ttlfixture.example/'));
+    }
     if (_fails.length) {
       console.log(`⛔ FIND CONTACT CHECK: ${_fails.join(' | ')}.`);
     } else {
@@ -59564,6 +59655,29 @@ app.listen(PORT, () => {
     if (_meet.some(r => /Our Team|The Team/i.test(r.name))) {
       _inlineBad.push('stripping the heading verb turned "Meet Our Team" into a person');
     }
+    // ── A NEIGHBOUR'S JOB IS NOT THIS PERSON'S JOB ───────────────────────
+    // The lookahead stopped at the next person only when that person carried
+    // NO title, so on a card layout "Jane Doe, CFO" satisfied the title test
+    // and became the title of the person above her. Both people wrong, and the
+    // output still reads as a plausible roster.
+    //
+    // The first name here has no title of its own, which is the only shape
+    // that reaches the lookahead at all.
+    const _nbr = parseTeamRoster('<h3>Paul Grant</h3><h3>Jane Doe, CFO</h3>', 'Grant Roofing');
+    if (_nbr.some(r => r.name === 'Paul Grant')) {
+      const _pg = _nbr.find(r => r.name === 'Paul Grant');
+      _inlineBad.push(`the person above took his neighbour's job \u2014 Paul Grant came back as "${_pg.title}", which belongs to Jane Doe on the next card`);
+    }
+    if (!_nbr.some(r => r.name === 'Jane Doe')) {
+      _inlineBad.push('the neighbour whose own line carries her title was lost entirely, so the guard was widened until it eats real people');
+    }
+    // And the shape the old rule existed for must still work: a BARE title on
+    // the next line satisfies every name pattern, and it belongs to the person
+    // above it rather than being the next person.
+    const _bare = parseTeamRoster('<h3>Paul Grant</h3><p>Managing Partner</p>', 'Grant Roofing');
+    if (!_bare.some(r => r.name === 'Paul Grant' && /Managing Partner/.test(r.title))) {
+      _inlineBad.push('a bare job title on the next line is no longer read as this person\'s title, which loses the commonest roster shape there is');
+    }
     if (_inlineBad.length) {
       console.log(`\u26d4 ROSTER CHECK: ${_inlineBad.join(' | ')}.`);
     } else if (_missing.length) {
@@ -59571,7 +59685,7 @@ app.listen(PORT, () => {
     } else if (_wrong.length) {
       console.log(`\u26d4 ROSTER CHECK: ${_wrong.length} title(s) classified wrongly \u2014 ${_wrong[0]}. An owner misread as staff loses the lead; staff misread as the owner sends an owner-level email to somebody who forwards it.`);
     } else {
-      console.log(`\u2713 ROSTER CHECK: all ${_page.length} people on a mixed team page were read and every title classified correctly \u2014 co-owner beats CFO, a vice president is not a president, "Dr." and ", D.D.S." are stripped without inventing anybody, a name and title on ONE line is read as both, and the practice's own name is not returned as its owner.`);
+      console.log(`\u2713 ROSTER CHECK: all ${_page.length} people on a mixed team page were read and every title classified correctly \u2014 co-owner beats CFO, a vice president is not a president, "Dr." and ", D.D.S." are stripped without inventing anybody, a name and title on ONE line is read as both, the practice's own name is not returned as its owner, and nobody takes the job of the person on the next card while a bare title on the next line still belongs to the person above it.`);
     }
   } catch (e) {
     console.log(`\u26d4 ROSTER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
@@ -72757,6 +72871,11 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     website,
     phone: (company && company.phone) || '',
     phoneSource: phoneDigits ? 'their Google listing' : '',
+    // Whether their own site prints the same number. null until we have
+    // read a page - "we did not look" has never meant "it disagrees", and
+    // the number is never deleted either way: a rep dials it, and a
+    // disagreement is a note rather than a deletion.
+    phoneOnSite: null,
     readVia: 'nothing read',
     readWhy: '',
     pagesRead: [],
@@ -72816,6 +72935,24 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     console.log(`\u{1F50E} FIND READ [${name}]: ${pages.length} page(s) via ${out.readVia} — ${pages.map(p => p.intent).join(', ')}. ${links.length} same-host link(s) came off their own navigation, so no sitemap call was bought.`);
   }
   out.pagesRead = pages.map(p => ({ url: p.url, intent: p.intent, chars: (p.text || '').length }));
+
+  // ── DOES THEIR OWN SITE PRINT THE SAME NUMBER? ──────────────────────────
+  // The number was copied off the Google listing and stamped "their Google
+  // listing" unconditionally - true about where we got it, and silent about
+  // whether it is still the number they answer. We are already holding their
+  // pages by this point and sitePrintsOurPhone already exists, so this costs
+  // nothing. A disagreement is worth a rep's attention (a moved office, a
+  // tracking number, a listing nobody has updated) and is never proof the
+  // number is dead, so it stays on the row.
+  if (phoneDigits && pages.length) {
+    const _pageText = pages.map(p => `${p.text || ''} ${p.html || ''}`).join(' ');
+    out.phoneOnSite = sitePrintsOurPhone(_pageText, out.phone);
+    if (out.phoneOnSite) {
+      out.phoneSource = 'their Google listing, and the same number is on their own site';
+    } else {
+      notes.push('the number on their Google listing does not appear on any page we read \u2014 still worth dialling, but it may be a tracking number or a listing nobody has updated');
+    }
+  }
 
   // ── THE THREE SIGNALS ────────────────────────────────────────────────────
   const signals = readFindIcpSignals(pages);
