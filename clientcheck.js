@@ -2333,6 +2333,10 @@ let contactTally = null;
 {
   const NEED2 = ['findCsvCell', 'FIND_CSV_CTRL', 'FIND_CSV_COLUMNS', 'findContactRows', 'findContactCsv', 'findSheetPayload',
                  'contactFieldsFrom', 'contactRequestBody', 'contactYesNo', 'hasContactData',
+                 // A contact read stamps the build that produced it, so the panel
+                 // can say which rows predate a parser fix instead of re-exporting
+                 // them forever. contactFieldsFrom reads the constant directly.
+                 'CLIENT_CONTRACT',
                  // The CSV's affordability column reads the same labeller the card
                  // reads, so it has to be lifted with it.
                  'AFFORD_LABEL', 'affordLabel',
@@ -2676,10 +2680,15 @@ let contactTally = null;
   if (html.indexOf(_nn("BACKEND + '/api/find", "-contact'")) < 0) {
     fails.push('nothing in the client calls /api/find-contact — the Find tab button cannot produce a contact');
   }
-  // The button reads how many to run from the operator's own number now, so the
-  // needle pins the WIRE rather than the literal 50 it used to carry.
-  if (html.indexOf(_nn('onClick: () => runContactBatch(_cUnread.slice(0, Math.max(1,', ' contactHowMany))),')) < 0) {
-    fails.push('the contact panel button no longer starts a contact run for the number the operator chose');
+  // The button reads how many to run from the operator's own number, and the
+  // runner takes a POOL plus that number rather than a pre-cut slice - because a
+  // lead the server refuses as a chain must not consume one of the five the
+  // operator asked for. Slicing first is what made a refusal cost a slot.
+  if (html.indexOf(_nn('onClick: () => runContactBatch(_cUnread, Math.max(1,', ' contactHowMany)),')) < 0) {
+    fails.push('the contact panel button no longer starts a contact run for the number the operator chose, or it is pre-slicing the pool so a refused lead costs a slot');
+  }
+  if (html.indexOf(_nn('if (kept >= want)', ' return;')) < 0) {
+    fails.push('the runner no longer stops at the number of GOOD leads asked for, so a run of five that hits two chains comes back with three');
   }
   // Stop has to abort what is IN FLIGHT. The flag alone is read between leads,
   // and a lead ran for 155 seconds live - which is why Stop read as broken.
@@ -2700,8 +2709,21 @@ let contactTally = null;
   // ONE POPULATION. "14 read" counted the leads ON SCREEN and "Download CSV (8)"
   // counted the WHOLE QUEUE, so two numbers about the same thing disagreed on
   // one panel and the operator could not tell which was wrong. Live, 2026-08-28.
-  if (html.indexOf(_nn('const _cExportable = _cShown.filter', '(hasContactData);')) < 0) {
+  // _scoped is that one population: the whole filtered queue, or just the leads
+  // the last press read when the operator is looking at a run.
+  if (html.indexOf(_nn('const _cExportable = _scoped.filter', '(hasContactData);')) < 0
+      || html.indexOf(_nn('const _cRead = _scoped.filter', "(c => c && c.contactReadOk === true);")) < 0) {
     fails.push('the CSV count is taken from a different population than the read count beside it, so the two numbers on the panel contradict each other');
+  }
+  // And the run-scoped view has to exist at all: contactAt was stamped on every
+  // read and consumed by nothing, so "where did the five I just ran go" had no
+  // answer anywhere in the app.
+  if (html.indexOf(_nn('const _cRunSet = _cShown.filter(c => c &&', ' _runNames.has(c.name));')) < 0) {
+    fails.push('there is no run-scoped view of a contact press, so every number on the panel is a cumulative queue total again');
+  }
+  // And the leads just read have to be movable into Research in one press.
+  if (html.indexOf(_nn('const n = addManyToPipeline(', '_runMovable);')) < 0) {
+    fails.push('the leads a press just read cannot be moved to the pipeline, so a contact run still has no route into an audit');
   }
   // The two can still legitimately differ - a lead can be read and carry no
   // owner, no address and no number - so the panel has to SAY so rather than

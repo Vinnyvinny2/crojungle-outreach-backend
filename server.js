@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260918;
+const CONTRACT_VERSION = 20260919;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -6109,7 +6109,19 @@ const GP_CITIES = [
 ];
 // National franchises / DSOs / chains — the local operator does NOT own the marketing,
 // so they are not our ICP no matter how reachable the branch is.
-const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour (heating|air|hvac|plumbing|electric|smile)|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow (international|restoration)|chemdry|chem-?dry|brookdale|atria senior|sunrise senior|five star senior|holiday retirement|erickson living|watermark retirement|discovery senior|enlivant|pacifica senior|belmont village|silverado senior|oakmont senior|morningstar senior|merrill gardens|aegis living|bickford|legend senior|allegro (senior|living)|life care services|davey tree|bartlett tree|sav-?a-?tree|monster tree|brightview|yellowstone landscape|landcare|ruppert landscape|us lawns|weed ?man|scotts lawn|naturalawn|spring-?green|joshua tree experts)\b/i;
+// truly nolen / ram jack / window nation / america's home place were added
+// 2026-08-31 from a live contact run that paid to read all four. Every one is
+// a national franchise or multi-state operator, and every one is multi-word
+// and distinctive, so none can collide with an owner-operated name the way a
+// bare 'rainbow' or 'one hour' did. Ram Jack is the franchise section 24 is an
+// entire entry about, and it was still third from the top of the live list.
+//
+// Stated plainly because this file records the trap: a list of names somebody
+// remembered is NOT the mechanism. It catches the franchise that has already
+// cost money and misses the next one. readFindChainSignals is the mechanism,
+// because it reads the business's own pages instead of our memory.
+
+const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour (heating|air|hvac|plumbing|electric|smile)|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow (international|restoration)|chemdry|chem-?dry|brookdale|atria senior|sunrise senior|five star senior|holiday retirement|erickson living|watermark retirement|discovery senior|enlivant|pacifica senior|belmont village|silverado senior|oakmont senior|morningstar senior|merrill gardens|aegis living|bickford|legend senior|allegro (senior|living)|life care services|davey tree|bartlett tree|sav-?a-?tree|monster tree|brightview|yellowstone landscape|landcare|ruppert landscape|us lawns|weed ?man|scotts lawn|naturalawn|spring-?green|truly nolen|ram jack|window nation|america.?s home place)\b/i;
 // ══ THE FRANCHISE LIST IS A LIST OF BRANDS SOMEBODY REMEMBERED ══════════════
 // Vin: "ive ran an audit on ram jack like 6 times it always pops up in the find
 // section". Ram Jack is a national foundation-repair franchise with dozens of
@@ -7047,7 +7059,20 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   // business is genuinely not our ICP rather than merely sorted lower.
   let skippedChain = 0;
   {
-    const _chains = detectChainOutlets([...out, ...benched], GP_CHAIN_MIN_METROS);
+    // ══ AND THE MEMORY IT NEVER HAD ══════════════════════════════════
+    // The rule needs three metros and three distinct names, and it was fed
+    // ONE RUN's results. A franchise that surfaces once per run is therefore
+    // invisible to it forever, however many runs go by - which is exactly how
+    // Ram Jack, the franchise section 24 is an entire entry about, was still
+    // third from the top of the live list.
+    //
+    // The memory already existed and was not being read: the bench is loaded
+    // before this search runs and every row on it IS a lead, restored whole,
+    // carrying its own marketsSeen. Passing it in costs nothing, needs no new
+    // table and no SQL, and it only ever adds EVIDENCE - the bar is unchanged
+    // and the filtering still applies to this run's own results.
+    const _priorLeads = Array.isArray(filters.priorLeads) ? filters.priorLeads : [];
+    const _chains = detectChainOutlets([...out, ...benched, ..._priorLeads], GP_CHAIN_MIN_METROS);
     if (_chains.hosts.size || _chains.brands.size) {
       const _why = new Map();
       const _keep = (arr) => arr.filter(l => {
@@ -10403,11 +10428,63 @@ const isMailboxShape = (e) => {
   return true;
 };
 
+// ══ ONE ANSWER TO "IS THIS A PERSON'S MAILBOX" ════════════════════
+// SIX lists in this project answered that question and disagreed with each
+// other: JUNK_LOCAL (17 words), ROLE_LOCAL_S (24), GENERIC_LOCAL (13),
+// ROLE_INBOX (30), ROLE_RE_M (45) and index.html's own GENERIC_MAILBOX_RE.
+// The word "recruiting" was in NONE of them, which is how
+// recruiting@windownation.com - scraped off their CAREERS page - shipped as a
+// tier-1 "Published on their site" address, sendable, score 100, to cold-pitch
+// marketing services at. The two-hand-kept-copies disease, six copies deep.
+//
+// TWO GRADES, because they do different jobs:
+//   junk    not a human at all - a bounce address, a postmaster, a form
+//           placeholder. Never worth having.
+//   role    a real mailbox a DEPARTMENT reads. Still worth having - Vin's
+//           ruling is that a front-desk address stays on the sheet, marked -
+//           it is simply never the owner, and it must never be scored as
+//           though it were.
+//
+// And 'person' is the honest name for the third answer: NOT RECOGNISABLY a
+// department mailbox. It has never meant "we know a human reads this", and no
+// caller may treat it that way - jacksonville@ is a location mailbox and this
+// cannot tell, because there is no list of every city in it.
+const MAILBOX_SUFFIX_RE = /[._-](?:us|usa|uk|ca|team|desk|dept|department|group|inbox|mail)$/;
+const MAILBOX_JUNK_RE = /^(?:noreply|donotreply|postmaster|hostmaster|maildaemon|mailerdaemon|bounce|bounces|abuse|webmaster|dmca|unsubscribe|privacy|legal|test|testing|example|user|username|name|email|youremail|your|sentry)$/;
+const MAILBOX_ROLE_RE = /^(?:info|contact|hello|hi|hey|ask|team|office|admin|administration|sales|support|help|helpdesk|service|services|customer|customers|customerservice|customercare|care|enquiry|enquiries|inquiry|inquiries|mail|general|reception|frontdesk|frontoffice|mainoffice|account|accounts|accounting|billing|invoice|invoices|payment|payments|finance|hr|humanresources|jobs|job|careers|career|recruit|recruiting|recruitment|recruiter|hiring|talent|apply|application|applications|employment|press|media|marketing|compliance|order|orders|shop|store|studio|book|booking|bookings|schedule|scheduling|appointment|appointments|estimate|estimates|quote|quotes|dispatch|newpatient|newpatients|patient|patients|client|clients|connect|talk|reach|getstarted|contactus|emailus|callus|getintouch|letstalk|scheduler|estimator|requestaquote|getaquote|freequote|freeestimate)$/;
+// Takes a whole address OR a bare local part, because the five call sites this
+// replaces had already split it three different ways.
+const mailboxKind = (addressOrLocal) => {
+  const raw = String(addressOrLocal || '').trim().toLowerCase();
+  if (!raw) return 'unknown';
+  const at = raw.indexOf('@');
+  if (at === 0) return 'unknown';
+  let local = at > 0 ? raw.slice(0, at) : raw;
+  // plus-addressing is a TAG on a mailbox, not the mailbox - bob.smith+jobs@
+  // is Bob's box and careers+eu@ is still the careers box.
+  local = local.replace(/\+.*$/, '');
+  // The WHOLE local part first, the suffix-trimmed one second, so trimming can
+  // only ever ADD a match and never take one away. Written the other way round
+  // it stripped "-desk" off front-desk@ and read the result as a person, which
+  // is the whole class this function exists to close - found by executing it.
+  const flat = local.replace(/[^a-z0-9]/g, '');
+  const trimmed = local.replace(MAILBOX_SUFFIX_RE, '').replace(/[^a-z0-9]/g, '');
+  const cands = flat === trimmed ? [flat] : [flat, trimmed];
+  if (!cands.some(Boolean)) return 'unknown';
+  if (cands.some(c => c && MAILBOX_JUNK_RE.test(c))) return 'junk';
+  if (cands.some(c => c && MAILBOX_ROLE_RE.test(c))) return 'role';
+  return 'person';
+};
+
 // ── WEBSITE EMAIL SCRAPER — Tier 1 evidence ────────────────────────────────
 // An address published on their own site is the strongest evidence there is.
 // Also harvests EVERY address found, which feeds the pattern-learning corpus.
 const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirmed = false, siteIsDown = false, freePages = []) => {
-  const out = { emails: [], source: '' };
+  // offDomain and fromCareers travel with the address. A rep about to type a
+  // first name into a mailbox deserves to know it is a recruiting inbox on
+  // somebody else's domain, and neither fact reached the row before.
+  const out = { emails: [], source: '', offDomain: false, fromCareers: false };
+  let offDomainUsed = false;
   if (!website) return out;
   // ══ DO NOT SCRAPE A SITE WE HAVE ALREADY PROVEN IS DOWN ═══════════════════
   // Dr. Mae Yang, live: "\u26d4 SITE IS GENUINELY DOWN" at 00:53:36 \u2014 two independent
@@ -10424,8 +10501,7 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
   if (!domain) return out;
 
   const JUNK_DOMAIN = /@(sentry|wixpress|example|domain|email|yourcompany|squarespace|godaddy|shopify|wordpress|gravatar|schema|w3|cloudflare|placeholder)\./i;
-  const JUNK_LOCAL  = /^(noreply|no-reply|donotreply|postmaster|abuse|webmaster|privacy|legal|dmca|unsubscribe|mailer-daemon|bounce|test|user|name|email|your)@/i;
-  const ROLE_LOCAL_S = /^(info|sales|contact|office|admin|hello|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media)@/i;
+  // JUNK_LOCAL and ROLE_LOCAL_S were two of the six lists; both are mailboxKind now.
   const FREE_PROVIDER = /@(gmail|yahoo|outlook|hotmail|aol|icloud|proton|live|msn)\./i;
   const domainRoot = domain.split('.')[0];
   // Does a different email domain plausibly belong to the SAME company? (shortened /
@@ -10512,7 +10588,7 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
       .forEach(e => found.add(e.toLowerCase()));
     // isMailboxShape FIRST: the junk lists only know bad ADDRESSES, and
     // realself@2x.png is not a bad address, it is not an address.
-    const clean = [...found].filter(e => isMailboxShape(e) && !JUNK_DOMAIN.test(e) && !JUNK_LOCAL.test(e) && e.length < 60);
+    const clean = [...found].filter(e => isMailboxShape(e) && !JUNK_DOMAIN.test(e) && mailboxKind(e) !== 'junk' && e.length < 60);
     const same = clean.filter(e => e.endsWith('@' + domain));
     if (same.length) return same;
     if (!allowOffDomain) return [];
@@ -10522,7 +10598,7 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
     // plausibly theirs (shares a chunk with the company domain) or a free provider.
     const off = clean.filter(e => {
       const [local, edom] = e.split('@');
-      const personal = /^[a-z]+([._][a-z]+)?$/.test(local) && !ROLE_LOCAL_S.test(e);
+      const personal = /^[a-z]+([._][a-z]+)?$/.test(local) && mailboxKind(e) === 'person';
       // If we CONFIRMED this homepage belongs to the target company, any personal
       // address published on it is theirs — no domain-shape guessing needed. That
       // confirmation is stronger evidence than any string heuristic.
@@ -10537,17 +10613,28 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
       // owner, which the reachability scorer already models. Rejecting it loses
       // the lead entirely; accepting it loses nothing, because the scorer grades
       // a shared inbox lower than a personal one anyway.
-      if (siteConfirmed) return personal || !JUNK_LOCAL.test(e);
+      if (siteConfirmed) return personal || mailboxKind(e) !== 'junk';
       return personal && (relatedDomain(edom) || FREE_PROVIDER.test(e));
     });
-    if (off.length) console.log(`EMAIL scrape [${domain}]: no same-domain address; using personal off-domain email ${off[0]} from homepage`);
+    // ══ IT CALLED EVERY ONE OF THESE "PERSONAL" ══════════════════════
+    // Unconditionally, including the ones admitted by the siteConfirmed
+    // fallback below, which passes an address precisely BECAUSE it is not
+    // junk rather than because it is a person. Live: service@hspools.com and
+    // jacksonville@trulynolen.net both printed as "personal off-domain".
+    // Third recorded instance of a message naming the wrong cause.
+    if (off.length) {
+      const _k = mailboxKind(off[0]);
+      const _what = _k === 'person' ? 'a personal-looking' : `a ${_k}`;
+      console.log(`EMAIL scrape [${domain}]: nothing on their own domain, so using ${_what} address ${off[0]} from the homepage. It is on a DIFFERENT domain from their website, and the row says so.`);
+      offDomainUsed = true;
+    }
     return off;
   };
 
   // Pass 1: homepage content we already have — costs nothing extra. Homepage header
   // emails are theirs, so off-domain personal addresses are allowed here.
   let emails = extract(homepageContent, true);
-  if (emails.length > 0) return { emails, source: 'homepage' };
+  if (emails.length > 0) return { emails, source: 'homepage', offDomain: offDomainUsed, fromCareers: false };
 
   // Pass 1.5: pages a caller ALREADY HAS. The Find tab reads the homepage and
   // its own nav-linked contact/about/team pages with a plain fetch, for nothing.
@@ -10555,13 +10642,32 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
   // on a contact page - costs zero Firecrawl credits, and it costs zero quality
   // because these run through the exact same extractor with the exact same
   // same-domain strictness as a page we paid for.
-  for (const p of (Array.isArray(freePages) ? freePages : [])) {
+  //
+  // ══ AND THE CAREERS PAGE IS READ LAST ════════════════════════════
+  // The page's INTENT was known when it was fetched and dropped one line
+  // before it got here: the owner path keeps `intent`, this one mapped to
+  // { url, text } and threw it away. So the address extractor was handed a
+  // page fetched ON PURPOSE because it is a careers page, with no way to know
+  // that, and recruiting@windownation.com came back as the address to pitch
+  // marketing services to. This is the SAME fix already made for the roster
+  // reader and never applied to its sibling.
+  //
+  // Read last rather than skipped: a small business whose only published
+  // address happens to sit on its careers page is still reachable, and
+  // refusing it outright would lose a real lead. What changes is the ORDER,
+  // and that the row is told where the address came from.
+  const _free = (Array.isArray(freePages) ? freePages : []).slice();
+  const _isCareers = (p) => String((p && p.intent) || '') === 'careers'
+    || CAREERS_PAGE_RE.test(String((p && p.url) || ''));
+  _free.sort((a, b) => (_isCareers(a) ? 1 : 0) - (_isCareers(b) ? 1 : 0));
+  for (const p of _free) {
     const body = p && (p.text || p.html);
     if (!body || String(body).length < 100) continue;
     const got = extract(String(body), false);
     if (got.length > 0) {
-      console.log(`EMAIL free [${domain}]: found ${got.length} address(es) on ${p.url || 'a page already in hand'} \u2014 no Firecrawl credit spent.`);
-      return { emails: got, source: 'free_page' };
+      const _careers = _isCareers(p);
+      console.log(`EMAIL free [${domain}]: found ${got.length} address(es) on ${p.url || 'a page already in hand'}${_careers ? ' \u2014 their CAREERS page, so this is a recruiting inbox and the row says so' : ''} \u2014 no Firecrawl credit spent.`);
+      return { emails: got, source: _careers ? 'careers_page' : 'free_page', offDomain: offDomainUsed, fromCareers: _careers };
     }
   }
 
@@ -10606,7 +10712,8 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
   return out;
 };
 
-const GENERIC_LOCAL = /^(info|contact|hello|hi|team|office|admin|sales|support|inquiries|enquiries|mail|general)@/i;
+// GENERIC_LOCAL was the narrowest of the six lists and it decided the LABEL an
+// address ships with. mailboxKind is the vocabulary now.
 
 // ═══ THE ORCHESTRATOR — runs the full waterfall, returns a scored result ════
 // ═══ DECISION-MAKER AUTHORITY RANKING ══════════════════════════════════════
@@ -11966,6 +12073,61 @@ const parseTeamRoster = (html, companyName = '') => {
   // to the model. Keeping the rejects would be the guard-too-tight failure
   // pointed the other way.
   out = out.filter(r => looksLikeJobTitle(r.title));
+
+  // ══ A ROSTER THAT NAMES ITS PEOPLE BY FIRST NAME ONLY ═════════════
+  // Aqua Blue Pools, live: their page reads "Jerry Owner Kyle General Manager
+  // Jim Operations Manager". ROSTER_NAME_RE structurally requires two
+  // capitalised tokens, so Jerry was discarded before the title lookahead ran,
+  // and the run then spent about fourteen Firecrawl credits on paid search and
+  // came back with a name off a licence record instead. The log even said so:
+  // "An ownership word IS in the text, so the page is here and the layout is
+  // what we cannot read."
+  //
+  // Bounded four ways, because a single capitalised word is the weakest name
+  // shape there is and the must-refuse fixtures in OWNER TRUTH CHECK exist for
+  // exactly this looseness:
+  //   - only when the main pass found NO owner at all
+  //   - the very next run must be an UNAMBIGUOUS ownership title
+  //   - the word must not itself be a title, a nav label or a heading
+  //   - it is marked `mononym`, so nothing downstream may treat one first name
+  //     as a settled identity. It is a candidate to be corroborated, and
+  //     foldFirstNameClusters is already the mechanism that corroborates it.
+  const MONONYM_RE = /^[A-Z][a-z'\u2019-]{2,15}$/;
+  // A single capitalised word sits in exactly the same position as a section
+  // heading, and there is no dictionary in this process that can tell "Jerry"
+  // from "Careers". The check caught that on its first boot: "Careers" above an
+  // ownership word parsed as a person. So the words a website uses as its own
+  // headings are DECLARED, the way STEM_COMPLETE_WORDS and the chain stoplist
+  // are, and both directions are fixtured - a name that must survive and a
+  // heading that must not.
+  const NOT_A_MONONYM = new Set([
+    'about', 'careers', 'career', 'contact', 'team', 'staff', 'people', 'crew',
+    'leadership', 'management', 'services', 'service', 'products', 'shop', 'store',
+    'menu', 'blog', 'news', 'events', 'gallery', 'photos', 'videos', 'reviews',
+    'testimonials', 'pricing', 'prices', 'faq', 'faqs', 'home', 'locations',
+    'location', 'projects', 'portfolio', 'work', 'history', 'values', 'mission',
+    'vision', 'story', 'info', 'support', 'help', 'login', 'search', 'more',
+    'details', 'overview', 'summary', 'profile', 'company', 'business', 'hiring',
+    'jobs', 'apply', 'join', 'welcome', 'financing', 'warranty', 'specials',
+    'offers', 'coupons', 'estimate', 'quote', 'book', 'schedule', 'emergency',
+    'residential', 'commercial', 'maintenance', 'repair', 'installation',
+    'inspection', 'training', 'resources', 'downloads', 'privacy', 'terms',
+    'blogs', 'articles', 'press', 'media', 'awards', 'partners', 'clients',
+  ]);
+  if (!out.some(r => r.isOwner)) {
+    for (let i = 0; i < runs.length - 1; i++) {
+      const head = String(runs[i] || '').trim();
+      if (!MONONYM_RE.test(head)) continue;
+      if (NOT_A_NAME.has(head.toLowerCase()) || NOT_A_MONONYM.has(head.toLowerCase())) continue;
+      if (titleKind(head) || NON_OWNER_TITLE_RE.test(head)) continue;
+      if (!looksLikeJobTitle(head)) continue;
+      const t = String(runs[i + 1] || '').trim();
+      if (!t || titleKind(t) !== 'owner' || !looksLikeJobTitle(t)) continue;
+      out.push({ name: head, title: t.replace(/\s+/g, ' '), isOwner: true, mononym: true });
+      console.log(`\u{1F464} ROSTER: their page names people by first name only \u2014 "${head}" is listed directly above "${t}". Kept as a candidate to be corroborated, never as a settled identity: one first name is the weakest name shape there is.`);
+      break;
+    }
+  }
 
   // Deduplicate by name, preferring the entry we read as an owner.
   const byName = new Map();
@@ -31546,7 +31708,24 @@ ${corpus}` }]
       return null;
     }
     console.log(`DM/license [${clean}]: \u2713 ${parsed.name} (${parsed.title || 'owner'}) via licence/chamber records \u2014 "${String(parsed.evidence||'').slice(0,70)}"`);
-    return { name: parsed.name, title: parsed.title || 'Owner', confidence: parsed.confidence || 'medium', source: 'license_or_chamber' };
+    // ══ A LICENCE QUALIFIER IS NOT THE BUYER ═════════════════════════
+    // The query this search runs asks for `"license holder" OR qualifier OR
+    // owner`, and the prompt lists all three as acceptable answers - so the
+    // name that comes back is routinely the tradesman a company EMPLOYS to
+    // hold its state licence, who owns nothing. Then `|| 'Owner'` stamped the
+    // word Owner onto it whenever the model returned no title, which is the
+    // exact `|| 'Owner'` default section 41 removed from the merge and which
+    // came straight back here.
+    //
+    // No title is invented. A qualifier is real intelligence for a call and is
+    // not the person who can buy, so it is labelled as what the record says
+    // and the authority gate decides the rest.
+    const _lic = String(parsed.title || '');
+    const _isQualifier = /\b(?:qualifier|qualifying\s+(?:agent|party|individual)|licen[sc]e\s+holder|licen[sc]ed\s+qualifier|responsible\s+managing)\b/i.test(_lic);
+    if (_isQualifier) {
+      console.log(`DM/license [${companyName}]: ${parsed.name} is named as the LICENCE QUALIFIER, not as an owner. That is the tradesman who holds the company's state licence and it is often not the person who owns it, so it is not treated as the buyer.`);
+    }
+    return { name: parsed.name, title: _lic, licenseQualifier: _isQualifier, confidence: parsed.confidence || 'medium', source: 'license_or_chamber' };
   };
 
   try {
@@ -32563,7 +32742,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
   // prior address is generic AND we know who the owner is, fall through: the
   // published address is on their site and will be found again a few lines
   // below, so nothing is lost, and the owner's mailbox gets its chance first.
-  const _priorIsShared = priorEmail && GENERIC_LOCAL.test(priorEmail) && !!ceoName;
+  const _priorIsShared = priorEmail && mailboxKind(priorEmail) === 'role' && !!ceoName;
   if (_priorIsShared) {
     console.log(`EMAIL [${domain}]: ${priorEmail} was proven on an earlier run, but it is a shared inbox and we know the owner is ${ceoName}. Not locking onto it — the published address is still on their site and will be found again if nothing better verifies.`);
   }
@@ -32604,9 +32783,9 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // then a generic one (at a 15-person company, info@ often IS the owner).
     const nameParts = name.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 2);
     const nameMatch = scraped.emails.find(e => nameParts.some(p => e.split('@')[0].includes(p)));
-    const personal  = scraped.emails.find(e => !GENERIC_LOCAL.test(e));
+    const personal  = scraped.emails.find(e => mailboxKind(e) === 'person');
     let best = nameMatch || personal || scraped.emails[0];
-    let isGeneric = GENERIC_LOCAL.test(best);
+    let isGeneric = mailboxKind(best) === 'role';
 
     // ══ A SHARED INBOX IS NOT THE OWNER ══════════════════════════════════════
     // When the only address a site publishes is info@, this returned it and
@@ -32649,11 +32828,32 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
         console.log(`EMAIL [${domain}]: could not test a personal mailbox (${e && e.message}) \u2014 keeping the published address.`);
       }
     }
-    console.log(`✓ EMAIL [${domain}] T1 scraped from ${scraped.source}: ${best}${isGeneric ? ' (generic)' : ''}`);
+    // ══ TIER 1 WAS UNCONDITIONAL ═════════════════════════════════════
+    // Anything the scraper returned became "Published on their site", score
+    // 100, sendable, with no penalty for a role inbox, a careers page or a
+    // different domain. The TIER is right - it really is published on their
+    // site - and the LABEL was not, so the label is what changes. A rep
+    // reading the row now knows who the address reaches before he types a
+    // first name into it.
+    const _kind = mailboxKind(best);
+    const _fromCareers = scraped.source === 'careers_page';
+    const _offDomain = scraped.offDomain === true || !String(best).endsWith('@' + domain);
+    const _marks = [];
+    if (_fromCareers) _marks.push('their careers page, so a recruiter reads it');
+    else if (isGeneric) _marks.push('a shared inbox, not a person');
+    if (_offDomain) _marks.push('on a different domain from their website');
+    const _label = _marks.length
+      ? `Published on their site (${_marks.join('; ')})`
+      : 'Published on their site';
+    // Score, not tier: a role inbox found on a careers page is the weakest
+    // thing this branch can return and it was scoring 100.
+    const _score = _fromCareers ? 70 : (isGeneric ? 85 : (_offDomain ? 90 : 100));
+    console.log(`✓ EMAIL [${domain}] T1 scraped from ${scraped.source}: ${best} [${_kind}${_marks.length ? ' \u2014 ' + _marks.join('; ') : ''}]`);
     return {
       email: best, ...EMAIL_TIERS.CONFIRMED_SCRAPED,
-      label: isGeneric ? 'Published on their site (generic inbox)' : 'Published on their site',
-      score: isGeneric ? 85 : 100,
+      label: _label,
+      score: _score,
+      mailboxKind: _kind, offDomain: _offDomain, fromCareersPage: _fromCareers,
       name, pattern: domainPatternMemory.get(domain) || null,
     };
   }
@@ -34257,8 +34457,9 @@ const scoreReachability = (c) => {
   const emailSendable = !!(c.emailResult && c.emailResult.sendable === true);
   const deliverable = emailSendable && (tier === 1 || tier === 2);   // verified real mailbox
   const patternEmail = emailSendable && tier === 3;                  // sendable, not SMTP-proven
-  const ROLE_INBOX = /^(info|sales|contact|office|admin|hello|hi|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media|noreply|no-?reply|donotreply|webmaster|postmaster)/;
-  const isRoleInbox = !!local && ROLE_INBOX.test(local);
+  // ROLE_INBOX was the fourth of six copies of this vocabulary.
+  const _mk = local ? mailboxKind(local) : 'unknown';
+  const isRoleInbox = _mk === 'role' || _mk === 'junk';
   // Shape of the mailbox, NOT evidence that it exists. Only ever used to decide how
   // GOOD a sendable address is — never to decide that we have one. Gated on
   // sendability for exactly that reason.
@@ -35752,6 +35953,144 @@ const brandNameHit = (rawName, set) => {
 // Cheap name-only enterprise/staffing/health screen. Lets us SKIP paying The
 // Companies API to "confirm" what a name pattern already rejects for free — so a
 // credit is only ever spent on a lead that could plausibly be our ICP.
+
+// ══ THE BRAND LISTS, AT MODULE SCOPE SO EVERY ROUTE CAN READ THEM ═════
+// All four of these were declared with const INSIDE the discovery handler, so
+// /api/find-contact — the route that builds the list somebody actually dials
+// — could reach none of them. A guard in the wrong function, which is a named
+// class in this file, applied to the four biggest name filters it owns.
+//
+// Moved verbatim. Discovery reads exactly the same sets through exactly the
+// same brandNameHit matcher, so its behaviour is unchanged by construction.
+
+const BLOCKED_COMPANIES = new Set([
+  // Big tech + enterprises
+  'google','amazon','apple','microsoft','meta','facebook','netflix','tesla','nvidia',
+  'openai','anthropic','stripe','shopify','salesforce','hubspot','oracle','sap',
+  'ibm','intel','qualcomm','adobe','zoom','slack','twitter','linkedin','uber',
+  'airbnb','lyft','doordash','instacart','coinbase','robinhood','palantir',
+  'snowflake','databricks','mongodb','twilio','okta','cloudflare','datadog',
+  'new relic','zendesk','freshworks','servicenow','workday','paycom','paychex',
+  'adp','square','block','paypal','visa','mastercard','amex','goldman sachs',
+  'jpmorgan','bank of america','wells fargo','citibank','walmart','target',
+  'costco','home depot','lowes','mcdonalds','starbucks','coca cola','pepsi',
+  'johnson johnson','pfizer','merck','abbvie','unitedhealth','cvs','walgreens',
+  'the new york times','washington post','cnn','fox','disney','warner','comcast',
+  // Staffing agencies — they hire manual workers FOR others, not an ICP fit
+  'robert half','aston carter','aerotek','teksystems','ttec','michael page',
+  'manpower','adecco','randstad','kelly services','kelly','spherion','staffmark',
+  'insight global','kforce','modis','apex group','cielo','hays','allegis',
+  'volt','chs recruiting','staffworks','recruiting solutions',
+  'actalent','lhh','lhh us','stride inc','stride, inc',
+  // Large enterprises that keep slipping through
+  'cvs','cvs health','spectrum','charter communications',
+  'dollar general','dollar tree','amazon logistics','fedex','ups','usps',
+  'aramark','sodexo','sysco','cintas','waste management',
+  // Too large or wrong ICP caught in first run
+  'honeywell','kroger','compass group','christus health','adventist health',
+  'norwegian cruise line','canva','spacex','locumtenens','qureos',
+  'mission healthcare','healthright 360','quadmed','gtangible',
+  // Confirmed leakers from test runs
+  'uline','thales','fujifilm','trinity health','berkshire hathaway',
+  'entegris','sprague pest','quipt home medical',
+  'mclarty','mclarty automotive','border states',
+  'helen ross mcnabb','ymca','collabera',
+  'state farm','circle k','social security',
+  'renewal by andersen','renewal','bjs restaurants','bj restaurants',
+  'green worldwide shipping','enersys',
+  // Government / nonprofits / utilities
+  'social security administration','social security','ymca','ywca',
+  'red cross','salvation army','habitat for humanity','united way',
+  // Large franchise/retail chains
+  'circle k','state farm','allstate','progressive insurance',
+  'dominos','dominos pizza','subway','mcdonalds','chick-fil-a','chipotle',
+  'dollar general','dollar tree','family dollar','7-eleven',
+  // Large staffing firms often in Adzuna
+  'collabera','cybercoders','jobot','ampcus','aasritha',
+  'viaplus','vinci','ao globe life','globe life',
+  'kaiser','kaiser permanente','permanente','banner health','providence health',
+  'ascension','commonspirit','hca healthcare','tenet healthcare','community health',
+  'dignity health','advocate aurora','sutter health','northwell','mayo clinic',
+  'cleveland clinic','johns hopkins','geisinger','spectrum health','intermountain',
+  // Fortune 500 / large enterprises that slipped through
+  'anduril','anduril industries','cigna','the cigna group','cigna group',
+  'tag','schneider','schneider national','schneider electric',
+  'humana','aetna','centene','molina healthcare','kaiser','kaiser permanente',
+  'lockheed','lockheed martin','raytheon','northrop','northrop grumman',
+  'boeing','general dynamics','l3harris','booz allen','leidos','saic',
+  'mantech','caci','peraton','deloitte','kpmg','pwc','ernst young','accenture',
+  'mckesson','cardinal health','amerisourcebergen','trellix','mandiant',
+  'ttec','concentrix','teleperformance','conduent','cognizant','infosys','wipro',
+  'tcs','tata','capgemini','dxc','ntt data','hcl','genpact',
+  'marriott','hilton','hyatt','wyndham','ihg','choice hotels',
+  'nfp','aon','marsh','willis towers','gallagher','brown brown',
+  'grunley','vast data','chandra technologies','cybercoders','telex',
+  'weisiger','kokosing','merrill gardens','ernest health','waterbox',
+  'united heritage','nhrg','purple brand','soligo','harvey','bmb','atominvest',
+  'aryon security','trophy games','al masraf','hardie grant',
+]);
+const STAFFING_BRANDS = new Set([
+  'manpower','manpowergroup','vaco','talentrust','talent trust','aerotek','adecco',
+  'randstad','kelly services','kforce','insight global','teksystems','robert half',
+  'aston carter','collabera','cybercoders','jobot','apex systems','apex group',
+  'the contractor consultants','contractor consultants','tandym','beacon hill',
+  'addison group','on assignment','asgn','lhh','hays','spherion','staffmark',
+  'volt','modis','allegis','cielo','nesco resource','pridestaff','express employment',
+  'trueblue','peoplecaddy','integrity staffing','elwood staffing','snelling',
+  'gpac','gqr','the judge group','judge group','system one','yoh','actalent',
+  'medical solutions','cross country','crosscountry','host healthcare','aya healthcare',
+  'trustaff','triage staffing','amn healthcare','favorite healthcare',
+  'peopleready','trueblue','lvi associates','salesroads','perm staff jobs','ccs facility services',
+]);
+const ENTERPRISE_BRANDS = new Set([
+  'skanska','skanska constructions','avalonbay','avalonbay communities','reece',
+  'lincoln property','lincoln property company','village green','equity residential',
+  'greystar','camden property','mid-america apartment','udr','essex property',
+  'aimco','invitation homes','american homes','bituminous roadways','vinci',
+  'turner construction','dpr construction','mortenson','clark construction',
+  'suffolk construction','hensel phelps','kiewit','fluor','jacobs','aecom',
+  'brasfield gorrie','pcl construction','gilbane','balfour beatty','webcor',
+  'msccn','path','avalonbay','ferguson','wesco','grainger','hd supply',
+]);
+const NATIONAL_BRANDS = new Set([
+  'us foods','united rentals','aecom','ryder','ryder system','u-haul','uhaul','carvana',
+  'albertsons','medtronic','abbott','penn medicine','bmw','bmw dealer careers','amentum',
+  'system one','tic','tic - the industrial company','cdm smith','david weekley homes',
+  'f.h. paschen','fh paschen','garney construction','faulconer construction','unifirst',
+  'unifirst corporation','rain for rent','cushman & wakefield','cushman wakefield',
+  'national automotive training academy','amn healthcare','amn healthcare allied',
+  'asset living','real property management','roers companies','lincoln property',
+  'greystar','cbre','jll','jones lang lasalle','colliers','marcus & millichap',
+  'us xpress','u.s. xpress','us xpress - dedicated','mtc','glc on-the-go','glc on the go',
+  'ace handyman services','ace handyman','capital one','abbott','solaris healthcare',
+  'legacy professional services','trc','trc companies','mri network','mrinetwork',
+  'goodyear','the goodyear tire & rubber company','goodyear tire','morgan stanley','pnc',
+  'fresenius','fresenius medical care','highmark','highmark health','amcor','logitech',
+  'lithia','lithia & driveway','lithia motors','rust-oleum','rust-oleum corporation',
+  'barnes & noble','barnes & noble education','the washington post','washington post',
+  'liberty mutual','ocean spray','maersk','dover corporation','sharkninja',
+  'kaiser permanente','kaiser','cross country nurses','cross country healthcare',
+  // BizBuySell listing CATEGORIES (not companies — scraper noise)
+  'education & children','building & construction','automotive & boat',
+  'pet services','value a business','how to buy a business',
+  'home based businesses','my business profile',
+  'scale ai','bigcommerce','ingersoll rand','panda express','hub international',
+  'digitas','leonardo drs','tradesmen international','shift digital',
+  'sage hospitality','snapchat','hy-vee','bayada','brightspring',
+  'norwegian cruise line','west shore home','perkins+will','perkinswill',
+  'standardaero','lifetime brands','jpmorgan chase','jp morgan',
+  'granite construction','republic services','herc rentals','four seasons','elevance',
+  'elevance health','acxiom','lumen','medline','medline industries','flowserve',
+  'caterpillar','bechtel','expeditors','eaton','kuehne+nagel','brinks','waste connections',
+  'first student','penske','rush enterprises','ballard spahr','baptist health care',
+  'roper st. francis','pruitthealth','fresenius medical','cross country healthcare',
+  'american bureau of shipping','hersha hospitality management','isc2','flash appliance repair',
+  // Leaked in the 2026-07-17 run — Fortune 500 / enterprise / competitor / health system
+  'metlife','wabtec','md anderson','md anderson cancer center','ssm health','page group',
+  'michael page','amsive','hungrypanda','iqvia','bloomberg','houston methodist','georgia-pacific',
+  'carrier','owens & minor','owens and minor','sephora','idexx','sandisk','rippling','pvh',
+  'pvh corp','tidelands health','hawaii pacific health','centerwell','relias','select sires',
+]);
 const looksLikeEnterpriseByName = (rawName) => {
   const n = (rawName || '').toLowerCase();
   if (!n) return false;
@@ -35760,6 +36099,44 @@ const looksLikeEnterpriseByName = (rawName) => {
   if (ICP_BIG_HEALTH.test(n) && !ICP_SMALL_PRACTICE.test(n)) return true;
   return false;
 };
+
+// ══ ONE NAME-LEVEL ICP REFUSAL ══════════════════════════════════
+// Returns a REASON when a name is provably not an owner-operated business in
+// our range, and null otherwise. Positive evidence only: there is no branch
+// that concludes "this name looks independent", because a name cannot prove
+// that. So it can refuse and it can never promote.
+//
+// HONEST SHAPE, because the comment this replaces overstated itself and cost a
+// live run: looksLikeEnterpriseByName catches institutions, staffing firms and
+// hospital systems by NAME PATTERN. Executed against the six businesses the
+// old comment claimed it was added to catch — The Washington Post, Herc
+// Rentals, Lodging Dynamics, Penske Truck Leasing, Highmark Health and the
+// American Heart Association — it returns false for all six. It is worth
+// having and it was never the mechanism. Neither is the brand list below: a
+// hand-kept list of names somebody remembered catches the franchise that has
+// already burned money and misses the next one. The mechanism is
+// readFindChainSignals, which reads the business's OWN pages.
+const nameIsOutOfIcp = (rawName) => {
+  const name = String(rawName || '').toLowerCase().trim();
+  if (!name || name.length < 2) return null;
+  if (GP_FRANCHISE.test(name)) {
+    return { kind: 'franchise', why: 'the name is a national franchise brand, and a branch manager does not own the marketing' };
+  }
+  if (brandNameHit(name, BLOCKED_COMPANIES) || brandNameHit(name, ENTERPRISE_BRANDS)) {
+    return { kind: 'enterprise', why: 'the name is a national brand or a large enterprise' };
+  }
+  if (brandNameHit(name, STAFFING_BRANDS)) {
+    return { kind: 'staffing', why: 'the name is a staffing or recruiting firm, which sells the labour it posts' };
+  }
+  if (brandNameHit(name, NATIONAL_BRANDS)) {
+    return { kind: 'national', why: 'the name is a national operator' };
+  }
+  if (looksLikeEnterpriseByName(name)) {
+    return { kind: 'institution', why: 'the name reads as an institution, a staffing firm or a hospital system' };
+  }
+  return null;
+};
+
 
 // Map a discovered company to a discovered_queue row (mirrors the frontend shape)
 const companyToQueueRow = (c) => ({
@@ -36129,6 +36506,9 @@ const runDiscovery = async (body) => {
           // lands: a run that has 400 paid-for leads waiting does not need to
           // buy a hundred more searches to fill a queue of 120.
           runCap: _placesBudget,
+          // Evidence for the chain detector, never results. See the CHAIN
+          // OUTLETS block: the bench is the cross-run memory that rule needs.
+          priorLeads: _bench,
           queryState: _pqState,
           onClaim: (pairs) => claimPlacesQueries(pairs, _pqState),
           onQuery: (o) => _pqOutcomes.push(o),
@@ -36177,72 +36557,9 @@ const runDiscovery = async (body) => {
     console.log('Source volumes BEFORE filter:', sourceVolume);
 
     // ── ICP FILTER — remove companies that are clearly too large ──
-    const BLOCKED_COMPANIES = new Set([
-      // Big tech + enterprises
-      'google','amazon','apple','microsoft','meta','facebook','netflix','tesla','nvidia',
-      'openai','anthropic','stripe','shopify','salesforce','hubspot','oracle','sap',
-      'ibm','intel','qualcomm','adobe','zoom','slack','twitter','linkedin','uber',
-      'airbnb','lyft','doordash','instacart','coinbase','robinhood','palantir',
-      'snowflake','databricks','mongodb','twilio','okta','cloudflare','datadog',
-      'new relic','zendesk','freshworks','servicenow','workday','paycom','paychex',
-      'adp','square','block','paypal','visa','mastercard','amex','goldman sachs',
-      'jpmorgan','bank of america','wells fargo','citibank','walmart','target',
-      'costco','home depot','lowes','mcdonalds','starbucks','coca cola','pepsi',
-      'johnson johnson','pfizer','merck','abbvie','unitedhealth','cvs','walgreens',
-      'the new york times','washington post','cnn','fox','disney','warner','comcast',
-      // Staffing agencies — they hire manual workers FOR others, not an ICP fit
-      'robert half','aston carter','aerotek','teksystems','ttec','michael page',
-      'manpower','adecco','randstad','kelly services','kelly','spherion','staffmark',
-      'insight global','kforce','modis','apex group','cielo','hays','allegis',
-      'volt','chs recruiting','staffworks','recruiting solutions',
-      'actalent','lhh','lhh us','stride inc','stride, inc',
-      // Large enterprises that keep slipping through
-      'cvs','cvs health','spectrum','charter communications',
-      'dollar general','dollar tree','amazon logistics','fedex','ups','usps',
-      'aramark','sodexo','sysco','cintas','waste management',
-      // Too large or wrong ICP caught in first run
-      'honeywell','kroger','compass group','christus health','adventist health',
-      'norwegian cruise line','canva','spacex','locumtenens','qureos',
-      'mission healthcare','healthright 360','quadmed','gtangible',
-      // Confirmed leakers from test runs
-      'uline','thales','fujifilm','trinity health','berkshire hathaway',
-      'entegris','sprague pest','quipt home medical',
-      'mclarty','mclarty automotive','border states',
-      'helen ross mcnabb','ymca','collabera',
-      'state farm','circle k','social security',
-      'renewal by andersen','renewal','bjs restaurants','bj restaurants',
-      'green worldwide shipping','enersys',
-      // Government / nonprofits / utilities
-      'social security administration','social security','ymca','ywca',
-      'red cross','salvation army','habitat for humanity','united way',
-      // Large franchise/retail chains
-      'circle k','state farm','allstate','progressive insurance',
-      'dominos','dominos pizza','subway','mcdonalds','chick-fil-a','chipotle',
-      'dollar general','dollar tree','family dollar','7-eleven',
-      // Large staffing firms often in Adzuna
-      'collabera','cybercoders','jobot','ampcus','aasritha',
-      'viaplus','vinci','ao globe life','globe life',
-      'kaiser','kaiser permanente','permanente','banner health','providence health',
-      'ascension','commonspirit','hca healthcare','tenet healthcare','community health',
-      'dignity health','advocate aurora','sutter health','northwell','mayo clinic',
-      'cleveland clinic','johns hopkins','geisinger','spectrum health','intermountain',
-      // Fortune 500 / large enterprises that slipped through
-      'anduril','anduril industries','cigna','the cigna group','cigna group',
-      'tag','schneider','schneider national','schneider electric',
-      'humana','aetna','centene','molina healthcare','kaiser','kaiser permanente',
-      'lockheed','lockheed martin','raytheon','northrop','northrop grumman',
-      'boeing','general dynamics','l3harris','booz allen','leidos','saic',
-      'mantech','caci','peraton','deloitte','kpmg','pwc','ernst young','accenture',
-      'mckesson','cardinal health','amerisourcebergen','trellix','mandiant',
-      'ttec','concentrix','teleperformance','conduent','cognizant','infosys','wipro',
-      'tcs','tata','capgemini','dxc','ntt data','hcl','genpact',
-      'marriott','hilton','hyatt','wyndham','ihg','choice hotels',
-      'nfp','aon','marsh','willis towers','gallagher','brown brown',
-      'grunley','vast data','chandra technologies','cybercoders','telex',
-      'weisiger','kokosing','merrill gardens','ernest health','waterbox',
-      'united heritage','nhrg','purple brand','soligo','harvey','bmb','atominvest',
-      'aryon security','trophy games','al masraf','hardie grant',
-    ]);
+    // BLOCKED_COMPANIES moved to module scope so every route can reach it; see
+    // nameIsOutOfIcp. It was declared here, inside this handler, which is
+    // why the contact list had no brand filter on it at all.
 
     // Known enterprise substrings — if the company name CONTAINS any of these, block it
     const ENTERPRISE_SUBSTRINGS = ['industries','national','international','group','holdings','enterprises','corporation','systems inc','technologies inc','solutions inc','health system','healthcare system','medical center','regional','university','federal','national'];
@@ -36255,30 +36572,13 @@ const runDiscovery = async (body) => {
     // A staffing firm's job posts are their PRODUCT, not a signal about their own
     // operations. They'd never buy AI to replace the workers they rent out. These
     // flood the queue with "hiring manual roles" noise. Block by name AND pattern.
-    const STAFFING_BRANDS = new Set([
-      'manpower','manpowergroup','vaco','talentrust','talent trust','aerotek','adecco',
-      'randstad','kelly services','kforce','insight global','teksystems','robert half',
-      'aston carter','collabera','cybercoders','jobot','apex systems','apex group',
-      'the contractor consultants','contractor consultants','tandym','beacon hill',
-      'addison group','on assignment','asgn','lhh','hays','spherion','staffmark',
-      'volt','modis','allegis','cielo','nesco resource','pridestaff','express employment',
-      'trueblue','peoplecaddy','integrity staffing','elwood staffing','snelling',
-      'gpac','gqr','the judge group','judge group','system one','yoh','actalent',
-      'medical solutions','cross country','crosscountry','host healthcare','aya healthcare',
-      'trustaff','triage staffing','amn healthcare','favorite healthcare',
-      'peopleready','trueblue','lvi associates','salesroads','perm staff jobs','ccs facility services',
-    ]);
+    // STAFFING_BRANDS moved to module scope so every route can reach it; see
+    // nameIsOutOfIcp. It was declared here, inside this handler, which is
+    // why the contact list had no brand filter on it at all.
     // ── KNOWN ENTERPRISES / REITs / DISTRIBUTORS (too big — owner unreachable) ──
-    const ENTERPRISE_BRANDS = new Set([
-      'skanska','skanska constructions','avalonbay','avalonbay communities','reece',
-      'lincoln property','lincoln property company','village green','equity residential',
-      'greystar','camden property','mid-america apartment','udr','essex property',
-      'aimco','invitation homes','american homes','bituminous roadways','vinci',
-      'turner construction','dpr construction','mortenson','clark construction',
-      'suffolk construction','hensel phelps','kiewit','fluor','jacobs','aecom',
-      'brasfield gorrie','pcl construction','gilbane','balfour beatty','webcor',
-      'msccn','path','avalonbay','ferguson','wesco','grainger','hd supply',
-    ]);
+    // ENTERPRISE_BRANDS moved to module scope so every route can reach it; see
+    // nameIsOutOfIcp. It was declared here, inside this handler, which is
+    // why the contact list had no brand filter on it at all.
 
     const icpFiltered = allCompanies.filter(c => {
       const name = (c.name||'').toLowerCase().trim();
@@ -36302,18 +36602,19 @@ const runDiscovery = async (body) => {
       // A MULTI-WORD entry keeps every position it had, because "robert half",
       // "bank of america" and "waste management" are phrases nobody names a
       // two-truck plumbing company after.
-      if (brandNameHit(name, BLOCKED_COMPANIES)) return false;
-
-      // ── STAFFING + ENTERPRISE BRAND SETS ─────────────────────────────
-      // Through the SAME matcher, because these two sets carry the same
-      // hazard: 35 of the 64 staffing entries and 20 of the 41 enterprise
-      // entries are single words, and among them are jacobs, reece, hays,
-      // path and volt - surnames and ordinary words that owner-operated
-      // businesses are named after. "Jacobs Roofing" and "Hays Plumbing"
-      // are exactly the leads this pipeline exists to find, and matching a
-      // one-word brand at the FRONT of a name deleted both.
-      if (brandNameHit(name, STAFFING_BRANDS)) return false;
-      if (brandNameHit(name, ENTERPRISE_BRANDS)) return false;
+      // ── ONE NAME GATE, FOR EVERY SOURCE ──────────────────────────────
+      // This was three separate brandNameHit calls against three of the five
+      // lists, and it is the only place a BENCHED lead is re-filtered - a
+      // lead banked under last month's rules re-enters the pipeline right
+      // here. GP_FRANCHISE ran only inside searchGooglePlaces, so a franchise
+      // served off the bench walked straight past it, which is one of the two
+      // ways Ram Jack kept arriving at the top of the queue.
+      //
+      // nameIsOutOfIcp is the one door: the franchise brands, all four brand
+      // sets and the institution pattern, through the same brandNameHit
+      // matcher with the same single-word rule that keeps Kelly Roofing and
+      // Fox Plumbing alive.
+      if (nameIsOutOfIcp(name)) return false;
 
       // ── PATTERN-BASED STAFFING DETECTION (catches variants we've never seen) ──
       // These words in a company NAME almost always mean "we rent out labor."
@@ -36654,45 +36955,9 @@ const WEIGHTS = {
     // KNOWN NATIONAL BRANDS that keep slipping through with no size data. These are
     // household-name enterprises Adzuna surfaces constantly. A hard name-block is the
     // only reliable stop when their headcount isn't in the free API tier.
-    const NATIONAL_BRANDS = new Set([
-      'us foods','united rentals','aecom','ryder','ryder system','u-haul','uhaul','carvana',
-      'albertsons','medtronic','abbott','penn medicine','bmw','bmw dealer careers','amentum',
-      'system one','tic','tic - the industrial company','cdm smith','david weekley homes',
-      'f.h. paschen','fh paschen','garney construction','faulconer construction','unifirst',
-      'unifirst corporation','rain for rent','cushman & wakefield','cushman wakefield',
-      'national automotive training academy','amn healthcare','amn healthcare allied',
-      'asset living','real property management','roers companies','lincoln property',
-      'greystar','cbre','jll','jones lang lasalle','colliers','marcus & millichap',
-      'us xpress','u.s. xpress','us xpress - dedicated','mtc','glc on-the-go','glc on the go',
-      'ace handyman services','ace handyman','capital one','abbott','solaris healthcare',
-      'legacy professional services','trc','trc companies','mri network','mrinetwork',
-      'goodyear','the goodyear tire & rubber company','goodyear tire','morgan stanley','pnc',
-      'fresenius','fresenius medical care','highmark','highmark health','amcor','logitech',
-      'lithia','lithia & driveway','lithia motors','rust-oleum','rust-oleum corporation',
-      'barnes & noble','barnes & noble education','the washington post','washington post',
-      'liberty mutual','ocean spray','maersk','dover corporation','sharkninja',
-      'kaiser permanente','kaiser','cross country nurses','cross country healthcare',
-      // BizBuySell listing CATEGORIES (not companies — scraper noise)
-      'education & children','building & construction','automotive & boat',
-      'pet services','value a business','how to buy a business',
-      'home based businesses','my business profile',
-      'scale ai','bigcommerce','ingersoll rand','panda express','hub international',
-      'digitas','leonardo drs','tradesmen international','shift digital',
-      'sage hospitality','snapchat','hy-vee','bayada','brightspring',
-      'norwegian cruise line','west shore home','perkins+will','perkinswill',
-      'standardaero','lifetime brands','jpmorgan chase','jp morgan',
-      'granite construction','republic services','herc rentals','four seasons','elevance',
-      'elevance health','acxiom','lumen','medline','medline industries','flowserve',
-      'caterpillar','bechtel','expeditors','eaton','kuehne+nagel','brinks','waste connections',
-      'first student','penske','rush enterprises','ballard spahr','baptist health care',
-      'roper st. francis','pruitthealth','fresenius medical','cross country healthcare',
-      'american bureau of shipping','hersha hospitality management','isc2','flash appliance repair',
-      // Leaked in the 2026-07-17 run — Fortune 500 / enterprise / competitor / health system
-      'metlife','wabtec','md anderson','md anderson cancer center','ssm health','page group',
-      'michael page','amsive','hungrypanda','iqvia','bloomberg','houston methodist','georgia-pacific',
-      'carrier','owens & minor','owens and minor','sephora','idexx','sandisk','rippling','pvh',
-      'pvh corp','tidelands health','hawaii pacific health','centerwell','relias','select sires',
-    ]);
+    // NATIONAL_BRANDS moved to module scope so every route can reach it; see
+    // nameIsOutOfIcp. It was declared here, inside this handler, which is
+    // why the contact list had no brand filter on it at all.
 
     let blockedCount = 0, blockReasons = {};
     const sizeGated = icpFiltered.filter(c => {
@@ -49308,7 +49573,8 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // schedule@, booking@, estimates@, dispatch@, quotes@. Joe Schmo Electrical's
     // schedule@joe-schmo.co fell through this list and got flagged "appears to belong
     // to a DIFFERENT person" — a false alarm on a lead that scored 98/100.
-    const ROLE_RE_M = /^(info|sales|contact|office|admin|hello|team|support|help|enquir|inquir|marketing|general|mail|reception|account|billing|service|customer|hr|jobs|careers|press|media|noreply|schedul|book|appoint|estimat|quote|dispatch|frontdesk|front-desk|newpatient|new-patient|patients?|clients?|orders?|shop|studio|hi|hey|ask|connect|talk|reach|getstarted|get-started)/;
+    // ROLE_RE_M was the fifth of six copies of this vocabulary, and the widest;
+    // everything it knew is in mailboxKind, so nothing here got narrower.
     // Is the mailbox just the COMPANY's name? "careelectricllc@gmail.com",
     // "geekgaragedoor@gmail.com". Compare the mailbox against the company name with
     // corporate furniture stripped — if the distinctive words line up, this is the
@@ -49324,7 +49590,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     if (ownerTokensM.length && emailLocalM) {
       if (localMatchesName(emailLocalM, ownerTokensM)) {
         ownerEmailMatch = 'match'; ownerEmailMatchReason = `Email (${emailLocalM}@\u2026) matches ${decisionMaker?.name || verifiedCEO} — reaching the right person`;
-      } else if (ROLE_RE_M.test(emailLocalM)) {
+      } else if (mailboxKind(emailLocalM) === 'role' || mailboxKind(emailLocalM) === 'junk') {
         // At a genuinely small company there IS no gatekeeper. info@ lands in the
         // owner's own inbox — he is the one who answers it. Treating that the same
         // as info@ at a 200-person firm was throwing away perfectly reachable owners.
@@ -56556,6 +56822,141 @@ app.listen(PORT, () => {
     console.log(`⛔ OWNER TRUTH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ---- GOOD LEADS IN --------------------------------------------------
+  // Mike's brief, 2026-08-31: "we just need to focus on getting good quality
+  // leads in our ICP." Everything below is executed against the exact strings a
+  // live five-lead run produced, in BOTH directions, because Vin's ruling is
+  // that a chain is DROPPED - so a false positive here deletes a real lead,
+  // which is section 14's guard-too-tight failure and the expensive one.
+  try {
+    const _fails = [];
+
+    // ── 1. THE NAME GATE, ON THE ROUTE THAT BUILDS THE LIST ────────────
+    const _mustDie = [
+      'Truly Nolen Pest & Termite Control - Jacksonville',
+      'Ram Jack, by American Leveling',
+      'Window Nation',
+      "America's Home Place - Sunbury, OH",      'Robert Half Technology',
+      'Aspen Dental',
+    ];
+    const _mustLive = [
+      'Aqua Blue Pools', 'Hot Springs Pools & Spas', 'DFW Improved',
+      'Michael Law MD Aesthetic Plastic Surgery', 'Bob Webb Homes',
+      'Bryan Casey Construction LLC', 'Darley\u2019s Plumbing Inc',
+      // The two names section 94 records as near-misses of the franchise list,
+      // and one that shares a word with a brand added this round.
+      'Rainbow Roofing', 'One Hour Signs', 'Nolen Plumbing',
+      'Kelly Roofing', 'Fox Plumbing', 'Block Electric Company',
+    ];
+    for (const n of _mustDie) {
+      if (!nameIsOutOfIcp(n)) _fails.push(`"${n}" is not refused by name, and it is a national brand that has already cost a paid read`);
+    }
+    for (const n of _mustLive) {
+      const r = nameIsOutOfIcp(n);
+      if (r) _fails.push(`"${n}" is REFUSED by name (${r.kind}) and it is exactly the kind of business this pipeline exists to find`);
+    }
+
+    // ── 2. THE MECHANISM: WHAT THE BUSINESS SAYS ABOUT ITSELF ──────────
+    const _pg = (url, text) => ({ url, text, html: text });
+    const _chainCases = [
+      ['a team page naming a Franchise Owner', { pages: [_pg('https://trulynolen.com/', 'Pest control since 1938.')], rosterTitles: ['Majority Franchise Owner', 'Operations Manager'], links: [] }, true],
+      ['a per-state locations URL we read', { pages: [_pg('https://www.windownation.com/locations/north-carolina/charlotte', 'Windows.')], rosterTitles: [], links: [] }, true],
+      ['a per-state locations URL in their own nav', { pages: [_pg('https://x.com/', 'Windows.')], rosterTitles: [], links: ['https://x.com/locations/texas/austin'] }, true],
+      ['a page selling franchises', { pages: [_pg('https://x.com/', 'Own a franchise in your area.')], rosterTitles: [], links: [] }, true],
+      ['an ordinary pool company', { pages: [_pg('https://aquabluepools.com/', 'Jerry Owner Kyle General Manager')], rosterTitles: ['Spa Sales Consultant'], links: [] }, false],
+      // Two cases, because they exercise different rules. The first proves
+      // CHAIN_SELF_RE is narrow enough that an ordinary denial never trips it.
+      // The second is the only shape that can REACH the denial guard - a page
+      // that uses the franchise-selling vocabulary and then denies being one -
+      // and reverting that guard left the boot green until this case existed.
+      ['an independent DENYING it is a franchise', { pages: [_pg('https://x.com/', 'We are locally owned and operated. We are not a franchise.')], rosterTitles: [], links: [] }, false],
+      ['a page that uses the franchise vocabulary to DENY it', { pages: [_pg('https://x.com/', 'We get asked about franchise opportunities all the time. We are not a franchise - every location here is locally owned.')], rosterTitles: [], links: [] }, false],
+      ['two branches in one city', { pages: [_pg('https://x.com/locations/downtown', 'Two shops.')], rosterTitles: [], links: ['https://x.com/locations/westside'] }, false],
+      ['three branches in one state', { pages: [_pg('https://x.com/locations/austin', 'Branches.')], rosterTitles: [], links: ['https://x.com/locations/dallas'] }, false],
+      ['a service category under /locations', { pages: [_pg('https://x.com/locations/residential/roofing', 'Roofing.')], rosterTitles: [], links: [] }, false],
+      ['"corporate office" and "all locations" wording alone', { pages: [_pg('https://x.com/', 'Visit our corporate office. See all locations near you.')], rosterTitles: [], links: [] }, false],
+      ['a franchise LAWYER', { pages: [_pg('https://x.com/', 'We handle franchise agreements and franchise litigation.')], rosterTitles: ['Managing Partner'], links: [] }, false],
+      ['nothing read at all', { pages: [], rosterTitles: [], links: [] }, false],
+    ];
+    for (const [what, args, want] of _chainCases) {
+      const got = readChainEvidence(args);
+      if (got.isChain !== want) {
+        _fails.push(want
+          ? `${what} is not read as a chain, and that is a franchise bought at full price`
+          : `${what} is read as a CHAIN, and on the drop rule that deletes a real lead`);
+      }
+    }
+
+    // ── 3. ONE MAILBOX VOCABULARY ──────────────────────────────────────
+    // The three addresses the live run shipped as tier-1 "Published on their
+    // site", score 100, and the ones that must stay personal.
+    const _mail = {
+      'recruiting@windownation.com': 'role', 'service@hspools.com': 'role',
+      'info@aquabluepools.com': 'role', 'office@onthemarksprayfoam.net': 'role',
+      'careers@x.com': 'role', 'talent@x.com': 'role', 'hiring@x.com': 'role',
+      'front-desk@x.com': 'role', 'contactus@x.com': 'role', 'sales.uk@x.com': 'role',
+      'schedule@x.com': 'role', 'dispatch@x.com': 'role', 'new.patient@x.com': 'role',
+      'noreply@x.com': 'junk', 'mailer-daemon@x.com': 'junk', 'postmaster@x.com': 'junk',
+      'gary@dfwimproved.com': 'person', 'bob@bobwebb.com': 'person',
+      'kent.moore@charlotteoralsurgery.com': 'person', 'tony@tonyconforticpa.com': 'person',
+      'bob.smith+jobs@x.com': 'person', 'billy@x.com': 'person', 'carey@x.com': 'person',
+    };
+    for (const [addr, want] of Object.entries(_mail)) {
+      const got = mailboxKind(addr);
+      if (got !== want) _fails.push(`mailboxKind("${addr}") is "${got}" and should be "${want}"`);
+    }
+    // A bare local part, because three of the five call sites this replaced had
+    // already split the address themselves.
+    if (mailboxKind('careers') !== 'role') _fails.push('mailboxKind cannot read a bare local part, which is what three of its five call sites hand it');
+
+    // ── 4. A ROSTER THAT NAMES PEOPLE BY FIRST NAME ONLY ───────────────
+    const _mono = parseTeamRoster('<h4>Jerry</h4><p>Owner</p><h4>Kyle</h4><p>General Manager</p><h4>Jim</h4><p>Operations Manager</p>', 'Aqua Blue Pools');
+    const _jerry = _mono.find(r => r.name === 'Jerry');
+    if (!_jerry || !_jerry.isOwner) {
+      _fails.push(`the live "Jerry / Owner" roster shape yields ${_mono.length} row(s) and no owner - the page states who owns the business and we buy a paid search to rediscover it`);
+    } else if (!_jerry.mononym) {
+      _fails.push('a one-word roster name is not marked as a mononym, so something downstream may treat one first name as a settled identity');
+    }
+    // And it must still refuse the shapes that made a nav label an owner.
+    const _bad = parseTeamRoster('<h4>Careers</h4><p>Owner</p>', 'X Co');
+    if (_bad.some(r => r.name === 'Careers')) _fails.push('"Careers" above an ownership word is read as a person - the mononym pass is not refusing nav labels');
+    const _two = parseTeamRoster('<h4>Dusty Hannah</h4><p>CO-OWNER/CEO</p>', 'Hannah Custom Homes');
+    if (!_two.some(r => r.name === 'Dusty Hannah' && r.isOwner)) _fails.push('an ordinary two-word roster entry stopped resolving, so the mononym pass has broken the main pass');
+    if (_two.some(r => r.mononym)) _fails.push('a two-word name is being marked as a mononym');
+
+    // ── 5. THE CALL SITES ──────────────────────────────────────────────
+    // A fixture supplies its own arguments and therefore cannot see a caller.
+    const _src = selfSourceNoCommentsLF();
+    const _nd = (a, b) => a + b;
+    const _sites = [
+      [_nd('const _outOfIcp = nameIsOutOfIcp(', 'company.name);'), 'the contact route no longer refuses a lead by name before it spends'],
+      [_nd('if (nameIsOutOfIcp(name))', ' return false;'), 'discovery no longer runs the one name gate, so a benched franchise walks back in'],
+      [_nd('out.chain = readChainEvidence({ pages,', ' rosterTitles: signals.teamTitles, links });'), 'the contact read no longer looks for chain evidence at all'],
+      [_nd('if (apiKey && name &&', ' !out.notIcp) {'), 'a chain outlet still buys the paid owner wave'],
+      [_nd('if (website &&', ' !out.notIcp) {'), 'a chain outlet still buys the address lookup'],
+      [_nd('freePages: pages.map(p => ({ url: p.url, text: p.text,', ' intent: p.intent })),'), 'the page intent is dropped again, so the extractor cannot tell a careers page from a contact page'],
+      [_nd('priorLeads:', ' _bench,'), 'the chain detector lost the cross-run memory the bench already holds'],
+      [_nd('licenseQualifier:', ' _isQualifier,'), 'the licence search stopped telling a QUALIFIER from an owner - that is the tradesman who holds the company licence, and it used to come back stamped "Owner"'],
+      [_nd('const _kind =', ' mailboxKind(best);'), 'a tier-1 address no longer says who it reaches, so a recruiting inbox ships as "Published on their site" at score 100 again'],
+      // Reverting THIS line to the old thirteen-word list left every mailbox
+      // fixture green: they exercise mailboxKind and this is the call site.
+      // Tenth recorded instance of a check that does not assert its call site.
+      [_nd('let isGeneric = mailboxKind(best)', " === 'role';"), 'the tier-1 generic decision is back on its own private word list, so the six lists have become two again'],
+      [_nd("const personal  = scraped.emails.find(e => mailboxKind(e)", " === 'person');"), 'the pick of which scraped address to prefer is back on its own private word list'],
+    ];
+    for (const [needle, why] of _sites) {
+      if (!_src.includes(needle)) _fails.push(why);
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ FIND ICP GATE CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
+    } else {
+      console.log(`✓ FIND ICP GATE CHECK: ${_mustDie.length} national brands are refused by name before a byte moves and ${_mustLive.length} owner-operated names beside them survive; ${_chainCases.length} chain cases are read from the business's OWN pages in both directions, including an independent that prints "not a franchise", a two-branch operator and a franchise lawyer; ${Object.keys(_mail).length} addresses resolve through ONE mailbox vocabulary where six disagreeing lists used to sit, so recruiting@ off a careers page can no longer ship as a tier-1 published address at score 100; and a roster that names its people by first name only finally yields the owner it states, marked as a candidate to corroborate rather than as a settled identity. Every call site is pinned, because a fixture supplies its own arguments and cannot see a caller.`);
+    }
+  } catch (e) {
+    console.log(`⛔ FIND ICP GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ---- THE SHEET EXPORT TAKES ITS DESTINATION FROM THE REQUEST ----------
   // Which makes it the one endpoint here that would post a rep's contact list
   // to whatever address somebody names. On a public server an unbounded URL
@@ -56840,11 +57241,16 @@ app.listen(PORT, () => {
     // ceiling refuses BEFORE anything is spent, and a website that cannot be a
     // URL is refused rather than discovered after the money moved.
     // A fixture supplies its own arguments and therefore cannot see a caller,
-    // so the name filter is asserted where it RUNS. It is falsified against
-    // seventeen real owner-operated names in ICP FILTER CHECK; what is new is
-    // that this route reads it at all, and that it reads it BEFORE the ceiling
-    // - a refusal that happens after the money moved is not a refusal.
-    const _entI = _src.indexOf(_n('if (looksLikeEnterpriseByName(', 'company.name)) {'));
+    // so the name filter is asserted where it RUNS, and that it runs BEFORE the
+    // ceiling - a refusal that happens after the money moved is not a refusal.
+    //
+    // The door WIDENED on 2026-08-31 and this needle followed it rather than
+    // being worked around. It used to pin looksLikeEnterpriseByName, which is
+    // an institution and scale-word pattern and catches none of the national
+    // brands that were costing paid reads. nameIsOutOfIcp is the one door now:
+    // the franchise list, all four brand sets and that same pattern. The rule
+    // being guarded has not moved at all.
+    const _entI = _src.indexOf(_n('const _outOfIcp = nameIsOutOfIcp(', 'company.name);'));
     const _ceilI = _src.indexOf(_n("const ceiling = budgetRefusal(['fc',", " 'anthropicUsd']);"));
     if (_entI < 0) _fails.push('the find-contact route no longer refuses an obvious institution by name, so a university or a national brand is read in full before anybody notices');
     else if (_ceilI >= 0 && _entI > _ceilI) _fails.push('the enterprise refusal now sits below the ceiling check, which is the wrong end of the route to notice a lead is not a lead');
@@ -72784,6 +73190,82 @@ const titlesFromCareersText = (text) => {
   return out;
 };
 
+// ══ A CHAIN OUTLET SAYS SO ON ITS OWN PAGES ═══════════════════
+// Mike's brief, 2026-08-31: "we just need to focus on getting good quality
+// leads in our ICP." The live five-lead run before it returned a national pest
+// franchise and a multi-state window company, and both were read at full price.
+//
+// Every franchise filter this file owns is a list of names somebody remembered,
+// and section 24 already recorded why that cannot hold: adding one name is the
+// band-aid and the next franchise repeats the whole thing. The measured
+// alternative it built - three metros in one run - cannot see a franchise that
+// surfaces once.
+//
+// The evidence was in hand and free. Truly Nolen's own team page told us
+// John Sanders is "Majority Franchise Owner"; titleKind read that string,
+// matched "Owner" and returned owner, and the word FRANCHISE sitting in the
+// middle of it was read by nothing, anywhere. Window Nation's own URL is
+// /locations/north-carolina/charlotte. We fetched both and read neither.
+//
+// TWO SIGNALS, both unambiguous BY CONSTRUCTION, because Vin's ruling is that a
+// chain is DROPPED - so a false positive here deletes a real lead, which is
+// section 14's guard-too-tight failure and the expensive one:
+//
+//   ROLE   a roster title naming the franchise relationship itself. A business
+//          whose own leadership page says "Franchise Owner" is a franchise.
+//          There is no second reading of that sentence.
+//   PLACE  a locations URL scoped to a STATE and then a city. Two segments,
+//          the first a US state, is a multi-market operator by construction. A
+//          two-branch independent publishes /locations/downtown, which this
+//          cannot match, and a single-state operator with three branches
+//          publishes /locations/austin.
+//
+// DELIBERATELY NOT signals: "corporate office", "all locations", "find a
+// location near you". Every one of them appears on independents with two
+// branches, and on Vin's ruling each of those would delete a real lead.
+//
+// And the word cuts both ways: "locally owned, NOT a franchise" is a selling
+// point independents print on their own homepage, so a negated mention can
+// never fire. Absence of all of this proves nothing and is never scored as
+// independence - this can refuse and it can never promote.
+const CHAIN_ROLE_RE = /\b(?:franchise\s+(?:owner|partner|principal|operator)|franchisee|area\s+developer|multi-?unit\s+(?:owner|operator|franchisee))\b/i;
+const CHAIN_SELF_RE = /\b(?:own\s+(?:a|your\s+own)\s+franchise|become\s+a\s+franchisee|franchise\s+(?:opportunit\w+|with\s+us|inquir\w+|information\s+request)|our\s+franchisees|franchising\s+opportunit\w+)\b/i;
+// A business that prints the word to DENY it is the opposite of a franchise.
+const CHAIN_DENIAL_RE = /\b(?:not\s+a\s+franchise|never\s+(?:been\s+)?a\s+franchise|no\s+franchise\s+fees|non-?franchise)\b/i;
+const CHAIN_STATE_SLUGS = new Set(Object.values(US_STATE_NAMES).map(s => s.toLowerCase().replace(/\s+/g, '-')));
+// /locations/<state>/<city>, on their own domain. The state segment has to be a
+// real state name, so /locations/residential/roofing cannot match it.
+const chainLocationPath = (url) => {
+  const m = String(url || '').toLowerCase().match(/\/locations?\/([a-z-]{3,})\/([a-z0-9-]{2,})/);
+  if (!m) return '';
+  return CHAIN_STATE_SLUGS.has(m[1]) ? `${m[1]}/${m[2]}` : '';
+};
+// PURE, so the boot check runs the real rule over the real strings rather than
+// reading the source and hoping.
+const readChainEvidence = ({ pages, rosterTitles, links } = {}) => {
+  const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
+  const titles = (Array.isArray(rosterTitles) ? rosterTitles : []).map(t => String(t || ''));
+  const urls = read.map(p => String(p.url || '')).concat((Array.isArray(links) ? links : []).map(String));
+  const text = read.map(p => String(p.text || '')).join(' ');
+  const why = [];
+  const role = titles.find(t => CHAIN_ROLE_RE.test(t)) || '';
+  if (role) why.push(`their own team page gives somebody the title "${role.trim().slice(0, 60)}"`);
+  const place = urls.map(chainLocationPath).find(Boolean) || '';
+  if (place) why.push(`their own site publishes a per-state location page (/locations/${place})`);
+  const denied = CHAIN_DENIAL_RE.test(text);
+  const self = (!denied && CHAIN_SELF_RE.test(text)) ? (text.match(CHAIN_SELF_RE) || [''])[0] : '';
+  if (self) why.push(`their own pages sell franchises ("${self.trim().slice(0, 40)}")`);
+  // Nothing read is not evidence of anything. A lead whose site we could not
+  // open is unmeasured, never independent and never a chain.
+  const measured = read.length > 0 || titles.length > 0;
+  return {
+    measured,
+    isChain: why.length > 0,
+    why: why.join('; '),
+    role, place, deniedFranchise: denied,
+  };
+};
+
 // pages: [{ url, intent, html, text }] - whatever we managed to read, however.
 const readFindIcpSignals = (pages, now = Date.now()) => {
   const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
@@ -72820,12 +73302,18 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
   let teamNames = [];
   let teamPageUrl = '';
   let execTitles = [];
+  // Every title the roster read, not only the ones that matched the exec
+  // pattern. readChainEvidence needs them and re-parsing the roster to get
+  // them would be a second answer to a question this function has already
+  // answered - which is the two-hand-kept-copies disease in miniature.
+  let teamTitles = [];
   for (const p of read) {
     if (p.intent !== 'team') continue;
     const roster = parseTeamRoster(p.html || p.text, '');
     if (roster.length >= 1) {
       teamCount = roster.length;
       teamNames = roster.map(r => r.name);
+      teamTitles = roster.map(r => String(r.title || '')).filter(Boolean);
       teamPageUrl = p.url;
       // ══ A LEADERSHIP PAGE IS NOT A HEADCOUNT ═════════════════════════
       // Live, 2026-08-28: Alliance Animal Health scored 75/100 - the HIGHEST
@@ -72841,7 +73329,19 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
       // evidence of SCALE, and a company carrying them is scored as what it
       // is: bigger than the ones we sell to.
       execTitles = roster.map(r => r.title).filter(t =>
-        /\b(?:senior\s+vice\s+president|executive\s+vice\s+president|evp|svp|vice[- ]president|\bvp\b|chief\s+\w+\s+officer|\bc[foti]o\b|general\s+counsel|chief\s+of\s+staff)\b/i.test(String(t || '')));
+        // ══ ORG DEPTH IS NOT ONLY A C-SUITE ═══════════════════════
+        // This knew SVP/VP/C-suite and nothing else, so a 200-person regional
+        // operator staffing Regional Directors and Division Managers - and no
+        // VPs at all - scored the full 35 as though it were a ten-person crew.
+        // Franchise and multi-unit titles are here as the belt to the brace: a
+        // chain is dropped outright now, and this still catches one whose
+        // pages we could not read well enough for that.
+        //
+        // Deliberately NOT here: 'director of operations', 'general manager',
+        // 'office manager'. Every one of them is an ordinary title at a
+        // thirty-person contractor, and two of them would demote exactly the
+        // businesses we sell to - section 14's guard-too-tight failure.
+        /\b(?:senior\s+vice\s+president|executive\s+vice\s+president|evp|svp|vice[- ]president|\bvp\b|chief\s+\w+\s+officer|\bc[foti]o\b|general\s+counsel|chief\s+of\s+staff|regional\s+(?:director|president|manager)|division\s+(?:director|manager|president)|franchise\s+(?:owner|partner|principal|operator)|franchisee|area\s+developer)\b/i.test(String(t || '')));
       break;
     }
   }
@@ -72874,7 +73374,7 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
     pagesRead: read.length,
     markupRead: anyMarkup,
     adsCode, adPlatforms, tagManager, adsWhy,
-    teamCount, teamNames, teamPageUrl, execTitles,
+    teamCount, teamNames, teamPageUrl, execTitles, teamTitles,
     hiringAny, hiringMarketing, hiringTitles,
     hiringMarketingTitles: lanes.marketing,
     hiringSource,
@@ -73088,8 +73588,9 @@ const runFindContactRead = async (company, keys, opts = {}) => {
 
   // Their own navigation names the pages we want. This is what replaces the
   // paid sitemap call, and it is free because the links are in markup we hold.
+  let links = [];
   if (pages.length) {
-    const links = sameHostLinks(pages[0].html, pages[0].url);
+    links = sameHostLinks(pages[0].html, pages[0].url);
     const picks = pickFindPages(links, pages[0].url);
     const viaFirecrawl = out.readVia.indexOf('Firecrawl') === 0;
     for (const pick of picks) {
@@ -73130,6 +73631,24 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   out.signals = signals;
   out.icp = findIcpScore(signals);
 
+  // ── AND IS THIS A BRANCH OF SOMEBODY ELSE'S BUSINESS? ───────────────
+  // Read from the pages we have just read and the navigation we already hold,
+  // so it costs nothing at all.
+  //
+  // It sits HERE, and not at the end, on purpose. The site read is already
+  // spent and cannot be refunded; the paid owner wave and the address lookup
+  // behind it are about ten Firecrawl credits and they can. Truly Nolen's own
+  // team page named it a franchise on the FIRST page we read, and we then
+  // went on and bought the rest of the lead anyway.
+  out.chain = readChainEvidence({ pages, rosterTitles: signals.teamTitles, links });
+  if (out.chain.isChain) {
+    out.notIcp = true;
+    out.icpReason = 'chain';
+    out.icpWhy = out.chain.why;
+    notes.push(`this is a branch of a larger operation \u2014 ${out.chain.why}. The branch manager does not own the marketing, so there is nothing here to sell him.`);
+  }
+
+
   // ── THE OWNER ────────────────────────────────────────────────────────────
   // findDecisionMaker in callOnly mode: stage 1 only, so the paid web-search and
   // licence wave is never bought. A contact list is dialled and emailed by a
@@ -73142,7 +73661,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   const interior = pages.slice(1).map(p => ({ url: p.url, text: p.text, intent: p.intent }));
   const paidOwner = opts.paidOwnerLookup !== false;
   out.paidOwnerLookup = paidOwner;
-  if (apiKey && name) {
+  if (apiKey && name && !out.notIcp) {
     try {
       const dm = await findDecisionMaker({
         companyName: name, website,
@@ -73175,7 +73694,9 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   }
 
   // ── THE ADDRESS ──────────────────────────────────────────────────────────
-  if (website) {
+  // Not bought for a chain outlet: the address of a branch manager who does
+  // not own the marketing is a real address and nothing to do with a sale.
+  if (website && !out.notIcp) {
     try {
       const siteConfirmed = pages.length > 0;
       const allowBuy = FIND_EMAIL_FIRECRAWL === 'always'
@@ -73196,13 +73717,21 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         industry: (company && company.industry) || '',
         // The pages we already hold, scanned by the same extractor with the
         // same same-domain strictness before a single credit can be spent.
-        freePages: pages.map(p => ({ url: p.url, text: p.text })),
+        // The INTENT travels. Dropped here, the extractor could not tell that
+        // a page fetched on purpose as a careers page was a careers page.
+        freePages: pages.map(p => ({ url: p.url, text: p.text, intent: p.intent })),
       });
       if (em) {
         out.email = {
           address: em.email || '', tier: em.tier ?? null, sendable: em.sendable === true,
           label: em.label || '', pattern: em.pattern || '',
           blockReason: em.blockReason || em.lookupBlocked || '',
+          // Who the address actually reaches. mailboxKind is the ONE
+          // vocabulary; 'person' means only that it is not recognisably a
+          // department mailbox, never that we know a human reads it.
+          kind: em.mailboxKind || (em.email ? mailboxKind(em.email) : ''),
+          offDomain: em.offDomain === true,
+          fromCareersPage: em.fromCareersPage === true,
         };
         if (!em.email) notes.push('no address could be resolved for this business');
       }
@@ -73215,6 +73744,10 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     anthropicUsd: Math.round((led.anthropicUsd || 0) * 10000) / 10000,
   };
   out.tookMs = Date.now() - t0;
+  if (out.notIcp) {
+    console.log(`\u{1F517} FIND CONTACT [${name}]: DROPPED as a branch of a larger operation \u2014 ${out.icpWhy}. Stopped before the owner wave and the address lookup, so this cost ${out.spend.firecrawl} Firecrawl credit(s) rather than the ~8-16 a full read costs. The site read was already spent and cannot be refunded; everything after it can.`);
+    return out;
+  }
   console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) || 'none'} | phone ${out.phone || 'none'} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
   return out;
 };
@@ -73331,15 +73864,24 @@ app.post('/api/find-contact', async (req, res) => {
   // them is an owner-operated business in the $800k-$15M range this exists to
   // find, and none of them was ever going to be.
   //
-  // The filter that knows this already exists and is already falsified against
-  // seventeen real owner-operated names that must survive it - it simply ran
-  // only inside /api/discover. Reading it here is free and happens before a
-  // single byte moves.
-  if (looksLikeEnterpriseByName(company.name)) {
-    console.log(`\u{1F6D1} FIND CONTACT [${who}]: REFUSED - the name reads as an institution or a national brand, not an owner-operated business in our range. Nothing was spent. Use Skip on this lead, or rename it if the filter has it wrong.`);
+  // ── AND THE FILTERS ALL LIVED IN THE OTHER ROUTE ─────────────────────
+  // This check used to be looksLikeEnterpriseByName alone, under a comment
+  // claiming it was 'already falsified against seventeen real owner-operated
+  // names'. That is true of the names it KEEPS and says nothing about the ones
+  // it catches: executed against the six businesses that same comment lists as
+  // the reason it was added, it returns false for all six. Meanwhile
+  // GP_FRANCHISE and the four brand sets - the filters that actually know what
+  // a national brand is - were declared inside the discovery handler, so this
+  // route could not reach any of them. A guard in the wrong function, four
+  // times over, on the route that builds the list somebody dials.
+  //
+  // nameIsOutOfIcp is the one door now, and it runs before a single byte moves.
+  const _outOfIcp = nameIsOutOfIcp(company.name);
+  if (_outOfIcp) {
+    console.log(`\u{1F6D1} FIND CONTACT [${who}]: REFUSED - ${_outOfIcp.why}. Nothing was read and nothing was spent.`);
     return res.status(422).json({
-      error: `"${String(company.name).slice(0, 60)}" reads as an institution or a national brand rather than an owner-operated business, so nothing was read and nothing was spent.`,
-      preflightStopped: true, notIcp: true,
+      error: `"${String(company.name).slice(0, 60)}" is not an owner-operated business in our range: ${_outOfIcp.why}. Nothing was read and nothing was spent.`,
+      preflightStopped: true, notIcp: true, icpReason: _outOfIcp.kind,
     });
   }
   const ceiling = budgetRefusal(['fc', 'anthropicUsd']);

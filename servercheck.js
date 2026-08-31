@@ -626,6 +626,34 @@ const runLead = async (b, over, capMs) => {
     // cuts a request at 60, so on 2026-08-28 three presses each completed and
     // each had its answer dropped with the connection. A boot fixture cannot
     // see any of this: what is new is a ROUTE and the store behind it.
+    // ── J: A NATIONAL BRAND IS REFUSED BEFORE A BYTE MOVES ───────────────
+    // Mike's brief, 2026-08-31: "we just need to focus on getting good quality
+    // leads in our ICP." The live run before it read Truly Nolen, Window Nation
+    // and Ram Jack at full price, and every franchise filter this file owns was
+    // unreachable from this route - they were declared inside the discovery
+    // handler. A fixture cannot see that; only driving the route can.
+    console.log('── scenario J: the contact route refuses a national brand with zero network calls');
+    {
+      const _beforeJ = state.requests.length;
+      const J1 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+        company: { name: 'Ram Jack, by American Leveling', website: 'https://example.com', placeId: 'p1' },
+        keys: { anthropicKey: 'sk-test' },
+      });
+      ok(J1.code === 422 && J1.json && J1.json.notIcp === true,
+        `a national franchise was not refused by the contact route (got ${J1.code}: ${String((J1.json && J1.json.error) || '').slice(0, 140)})`);
+      ok(state.requests.length === _beforeJ,
+        `the franchise refusal still made ${state.requests.length - _beforeJ} network call(s) - "nothing was read and nothing was spent" is false`);
+      // And the guard must not have been tightened until it eats the ICP. An
+      // owner-operated name has to reach the read, which is section 14's
+      // guard-too-tight failure and the expensive one.
+      const J2 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+        company: { name: 'Aqua Blue Pools', website: 'https://example.com', placeId: 'p2' },
+        keys: { anthropicKey: 'sk-test' },
+      });
+      ok(!(J2.code === 422 && J2.json && J2.json.notIcp === true),
+        `an owner-operated pool company was refused as out of ICP - the name gate has been widened until it deletes the leads this pipeline exists to find`);
+    }
+
     console.log('── scenario I: the Find run outlives the request that started it');
     {
       const _t0 = Date.now();
