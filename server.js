@@ -10949,9 +10949,18 @@ const isEponymousOwnerRule = (personName, coName, siteUrl) => {
 // surname AND a distinctive word of the company's name; false = no hit ties
 // them (the August Hoppe discard); null = the company name has no distinctive
 // token to test, so no judgement — positive evidence only, never a guess.
+// The words of a company name that could identify it in somebody else's
+// sentence. One copy, because two places now ask the same question and a
+// second hand-kept list of legal suffixes is the disease this file records
+// most. Empty means the name is entirely generic and no judgement is
+// available from it - callers must treat that as "we cannot tell", never as
+// "it does not match".
+const companyDistinctiveTokens = (companyName) => String(companyName || '')
+  .toLowerCase().split(/[^a-z0-9]+/)
+  .filter(w => w.length >= 3 && !/^(the|and|inc|llc|corp|company|companies|group|service|services|of)$/.test(w));
 const licenseHitTiesToCompany = (personName, companyName, hits) => {
   const sur = String(personName || '').trim().split(/\s+/).pop().toLowerCase().replace(/[^a-z]/g, '');
-  const co = String(companyName || '').toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !/^(the|and|inc|llc|corp|company|companies|group|service|services|of)$/.test(w));
+  const co = companyDistinctiveTokens(companyName);
   if (!sur || !co.length) return null;
   return (Array.isArray(hits) ? hits : []).some(h => {
     const ln = `${(h && h.title) || ''} ${(h && (h.description || h.snippet)) || ''} ${(h && h.url) || ''}`.toLowerCase();
@@ -11049,6 +11058,25 @@ const wrongCompanyOverruled = (companyName, domain, content, location, phone) =>
 // would refuse a name that appears only inside an address like
 // davidprice@x.com, which is genuine corroboration, and this round is not the
 // place to trade one for the other.
+// ══ AND A TITLE NOBODY WROTE IS NOT A TITLE ═══════════════════════════════
+// The same question as nameCorroborated, asked of the other half of the
+// answer. It is the weaker of the two on purpose: word presence, not
+// adjacency. A roster writes the name and the title next to each other, but a
+// bio writes "David founded the company in 1998" and states the role three
+// paragraphs later, and refusing that would hold back a real owner - the
+// guard-too-tight failure this file records at the size gate.
+//
+// Stopwords are dropped so "Founder & CEO" is asked of founder and ceo rather
+// than of the ampersand, and one content word carries the whole title: a page
+// that says "owner" corroborates "Owner/Operator", which is the same job.
+const TITLE_STOPWORDS = /^(and|of|the|at|for|to|a|an|our|co)$/;
+const corpusHasTitle = (title, corpus) => {
+  const flat = String(corpus || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ');
+  const words = String(title || '').toLowerCase().split(/[^a-z0-9]+/)
+    .filter(w => w.length >= 2 && !TITLE_STOPWORDS.test(w));
+  if (!words.length) return false;
+  return words.some(w => new RegExp(`(^| )${w}( |$)`).test(flat));
+};
 const NAME_ADJACENCY_CHARS = 40;
 const nameCorroborated = (name, companyName, corpus) => {
   const flat = (String(companyName || '') + ' ' + String(corpus || '')).toLowerCase().replace(/\s+/g, ' ');
@@ -11354,15 +11382,56 @@ ${corpus}` }]
       // "construction" and "owner" become candidate names. So the role words
       // carry their own capitalised variants instead \u2014 "Owner of Smith Roofing,
       // Bill has been..." starts a sentence and would otherwise be missed.
+      // ══ IT MATCHED NOTHING FOR ITS WHOLE LIFE ═════════════════════
+      // Every escape was written FOUR backslashes deep inside a template
+      // literal, so what reached RegExp was a literal backslash followed by a
+      // letter rather than a word boundary. Executed against the exact
+      // sentence this was written for it returns null. So the paid search it
+      // exists to save has been bought on every lead since it shipped, and the
+      // false absence it exists to prevent has been printed on every one of
+      // them. A regex that matches nothing is silent rather than wrong - the
+      // same class as the stem trap and the corrupted byte this file records.
+      //
+      // Un-breaking it makes a dead path live, so its three holes close in the
+      // same change rather than shipping as new behaviour:
+      //
+      //   · THE COMPANY WAS UNCONSTRAINED. "owner of <anything>, David is..."
+      //     lifts the owner of a SUPPLIER out of a testimonial and reports him
+      //     as ours. It must name OUR company, by a distinctive word of it.
+      //   · IT CLAIMED HIGH CONFIDENCE, which is exactly what ownSiteConfident
+      //     reads to settle stage 1 - so one regex hit would switch off every
+      //     source that could disagree with it. A code-read backstop
+      //     corroborates; it does not settle.
+      //   · THE TITLE WAS HARD-CODED "Owner" even when the sentence said
+      //     president. The role word matched is the title.
+      //
+      // Shape A now takes an OPTIONAL surname. It captured one token before,
+      // and looksLikeRealName requires two - so even with a working regex it
+      // could never have returned anybody. Where the sentence writes only a
+      // first name we say so and return nothing: completing it from the
+      // company name would be inference reported as a read.
       const _ROLE = `[Ff]ounder|[Oo]wner|[Pp]resident|[Pp]rincipal|[Pp]roprietor`;
+      const _NAMETOK = `[A-Z][a-zA-Z'\\u2019-]{1,20}`;
       const _OWNER_SENTENCE = new RegExp(
-        `\\\\b(?:${_ROLE})(?:\\\\s+and\\\\s+\\\\w+)?\\\\s+of\\\\s+[^.]{2,80}?,\\\\s*([A-Z][a-z]{1,15})\\\\s+(?:is|was|has|had|founded|started|began|brings|built|leads|runs|opened)\\\\b`
-        + `|\\\\b([A-Z][a-z]{1,15}\\\\s+[A-Z][a-zA-Z'\\u2019-]{2,20})\\\\s*,?\\\\s+(?:the\\\\s+)?(?:${_ROLE})\\\\b`);
+        `\\b(${_ROLE})(?:\\s+and\\s+\\w+)?\\s+of\\s+([^.]{2,80}?),\\s*([A-Z][a-z]{1,15}(?:\\s+${_NAMETOK})?)\\s+(?:is|was|has|had|founded|started|began|brings|built|leads|runs|opened)\\b`
+        + `|\\b([A-Z][a-z]{1,15}\\s+${_NAMETOK})\\s*,?\\s+(?:the\\s+)?(${_ROLE})\\b`);
       const _m = String(corpus || '').match(_OWNER_SENTENCE);
-      const _fallbackName = _m ? (_m[2] || _m[1] || '').trim() : '';
-      if (_fallbackName && looksLikeRealName(_fallbackName) && String(corpus).includes(_fallbackName.split(/\s+/)[0])) {
-        console.log(`DM/brain [${companyName}]: the model found nobody, but their own page names one \u2014 "${_m[0].trim().slice(0, 70)}". Read directly from the text we already scraped, so no extra credit and no false claim of absence.`);
-        return { name: _fallbackName, title: 'Owner', confidence: 'high', source: 'own_website_brain' };
+      const _shapeA = !!(_m && _m[3]);
+      const _fallbackName = _m ? String((_shapeA ? _m[3] : _m[4]) || '').trim() : '';
+      const _fallbackRole = _m ? String((_shapeA ? _m[1] : _m[5]) || '').trim() : '';
+      // An empty token list means the company name is entirely generic, so
+      // there is nothing to tie the sentence to - refuse rather than guess.
+      const _coTok = companyDistinctiveTokens(companyName);
+      const _ours = !_shapeA || _coTok.some(t => String((_m && _m[2]) || '').toLowerCase().includes(t));
+      if (_fallbackName && _ours && looksLikeRealName(_fallbackName) && String(corpus).includes(_fallbackName.split(/\s+/)[0])) {
+        const _title = _fallbackRole
+          ? _fallbackRole.charAt(0).toUpperCase() + _fallbackRole.slice(1).toLowerCase()
+          : 'Owner';
+        console.log(`DM/brain [${companyName}]: the model found nobody, but their own page names one \u2014 "${_m[0].trim().slice(0, 70)}". Read directly from the text we already scraped, so no extra credit and no false claim of absence. Offered as CORROBORATION rather than a settled answer: one sentence matched by one regex must not switch off the sources that could disagree with it.`);
+        return { name: _fallbackName, title: _title, confidence: 'medium', source: 'own_website_brain' };
+      }
+      if (_shapeA && !_ours) {
+        console.log(`DM/brain [${companyName}]: an owner sentence is on the page but it is about a DIFFERENT company \u2014 "${_m[0].trim().slice(0, 70)}". Refused: a supplier's or a partner's owner quoted on their site is a stranger, not this lead's buyer.`);
       }
       console.log(`DM/brain [${companyName}]: no owner-level person named on their site (model found none, and no owner sentence in the page text either)`);
       return null;
@@ -11385,10 +11454,26 @@ ${corpus}` }]
       console.log(`DM/brain [${companyName}]: "${parsed.name}" not present in source — REJECTED as hallucinated`);
       return null;
     }
-    console.log(`DM/brain [${companyName}]: ✓ ${parsed.name} (${parsed.title || '?'}) [${parsed.confidence}]`);
+    // ══ AND THE TITLE GETS THE SAME TREATMENT AS THE NAME ═════════════
+    // The name is checked against what we read and the TITLE never was, so a
+    // model that found a real person on the page could attach "Owner" to him
+    // out of nothing - and the title is not decoration here, it is what
+    // authorityScore reads to decide whether this person may be shown as the
+    // buyer at all. An invented "Owner" scores 100 and walks through the
+    // buying floor; the same person with no title scores the 30 default and is
+    // held back, which is the conservative direction and the honest one.
+    //
+    // The NAME is kept either way. Losing a real person because the model
+    // guessed at his job is the guard-too-tight failure; what is refused is
+    // the assertion nobody wrote.
+    const _titleSeen = parsed.title && corpusHasTitle(parsed.title, corpus);
+    if (parsed.title && !_titleSeen) {
+      console.log(`DM/brain [${companyName}]: "${parsed.title}" does not appear anywhere in the pages we read, so it is DROPPED and ${parsed.name} is kept with no title. A title we cannot point at is what the buying floor is applied to, and an invented one clears it.`);
+    }
+    console.log(`DM/brain [${companyName}]: ✓ ${parsed.name} (${(_titleSeen && parsed.title) || 'no title we could point at'}) [${parsed.confidence}]`);
     return {
       name: parsed.name.trim(),
-      title: parsed.title || null,
+      title: (_titleSeen && parsed.title) || null,
       confidence: parsed.confidence || 'medium',
       evidence: parsed.evidence || '',
       source: 'own_website_brain',
@@ -69900,6 +69985,97 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ DM SPEND CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // == THE BACKSTOP THAT MATCHED NOTHING, AND THE TITLE NOBODY WROTE =========
+  // The measured owner sentence is a closure inside _ownerFromCorpus, so no
+  // fixture can call it. What CAN be executed is the regex ITSELF, lifted out
+  // of the live function's own source and compiled here - so this runs the
+  // production text rather than a second copy of it, and an escaping mistake
+  // in it fails the build instead of going quiet. That is the whole point:
+  // every escape in it was four backslashes deep for its entire life, which
+  // reached RegExp as a literal backslash and matched nothing, on a path built
+  // to save ~8 Firecrawl credits and to stop us reporting a false absence.
+  try {
+    const _fails = [];
+    const _fn = String(_ownerFromCorpus);
+    const _a = _fn.indexOf('const _ROLE = ');
+    const _b = _fn.indexOf('const _m = String(corpus', _a);
+    if (_a < 0 || _b < 0) {
+      _fails.push('the owner-sentence backstop could not be found in _ownerFromCorpus at all, so nothing here is being checked');
+    } else {
+      const _re = new Function('return (function(){' + _fn.slice(_a, _b) + ' return _OWNER_SENTENCE; })()')();
+      // A word boundary that is really a literal backslash matches none of
+      // these. This is the assertion that would have caught it on day one.
+      const _shapeB = 'Mike Taft, founder of CROJungle, has been doing this for years.'.match(_re);
+      if (!_shapeB) {
+        _fails.push('the owner-sentence regex no longer matches "Mike Taft, founder of ..." - if the escapes went back to four deep it matches NOTHING, silently, and every lead buys the paid search this exists to save while reporting a false absence');
+      } else {
+        if (_shapeB[4] !== 'Mike Taft') _fails.push(`the full-name shape captured "${_shapeB[4]}" instead of the person`);
+        if (String(_shapeB[5] || '').toLowerCase() !== 'founder') _fails.push('the role word is no longer captured, so the title goes back to a hard-coded "Owner" even when the sentence says president');
+      }
+      const _shapeA = 'As the founder and owner of David Price Construction, LLC, David is a lifelong builder.'.match(_re);
+      if (!_shapeA) _fails.push('the company-first shape no longer matches the live sentence this backstop was written for');
+      else {
+        if (!String(_shapeA[2] || '').toLowerCase().includes('david price')) {
+          _fails.push('the company between the role and the person is no longer captured, so nothing can check that the sentence is about OUR company rather than a supplier quoted on their page');
+        }
+        // The honest limit, asserted so it cannot be quietly widened: this
+        // shape writes only a first name, and two tokens are required. We say
+        // so and return nobody rather than completing the surname from the
+        // company name, which would be inference reported as a read.
+        if (looksLikeRealName(String(_shapeA[3] || ''))) {
+          _fails.push('a single first name is now accepted as a person, so "David, Owner" can reach a call sheet with no surname behind it');
+        }
+      }
+      // And the hole that opens the moment the regex works: a testimonial.
+      const _stranger = 'The owner of Precision Supply Company, Marcus is thrilled with the work.'.match(_re);
+      const _ourTok = companyDistinctiveTokens('Acme Roofing LLC');
+      if (_stranger && _ourTok.some(t => String(_stranger[2] || '').toLowerCase().includes(t))) {
+        _fails.push("a supplier's owner quoted on their page ties to OUR company, so a stranger is reported as this lead's buyer");
+      }
+    }
+    // The company tokens, both directions.
+    const _tok = companyDistinctiveTokens('Acme Roofing LLC');
+    if (!(_tok.includes('acme') && _tok.includes('roofing') && !_tok.includes('llc'))) {
+      _fails.push(`the distinctive words of a company name came back as [${_tok.join(', ')}] - a legal suffix is not distinctive and the trading name is`);
+    }
+    if (companyDistinctiveTokens('The Company Group').length) {
+      _fails.push('an entirely generic company name reports distinctive words, so "of the company" would tie a stranger to us');
+    }
+    // The title check, both directions. Word presence, not adjacency - a bio
+    // states the role paragraphs from the name, and refusing that holds back a
+    // real owner.
+    if (corpusHasTitle('Managing Partner', 'we are a family business serving the valley since 1998')) {
+      _fails.push('a title that appears nowhere in the pages we read is accepted, and an invented "Owner" scores 100 and walks straight through the buying floor');
+    }
+    if (!corpusHasTitle('Owner/Operator', 'ask for the owner when you call')) {
+      _fails.push('a title the page really does state is being dropped, which holds back a real buyer over punctuation');
+    }
+    if (!corpusHasTitle('Founder & CEO', 'she founded the practice and serves as ceo today')) {
+      _fails.push('a two-word title is refused because of the ampersand between its halves');
+    }
+    if (corpusHasTitle('and of the', 'and of the')) {
+      _fails.push('a title made only of stopwords is accepted, so any punctuation soup passes as a job');
+    }
+    // The call sites, because everything above supplies its own arguments.
+    const _src = selfSourceNoComments();
+    const _n = (a, b) => a + b;
+    if (!_src.includes(_n('return { name: _fallbackName, title: _title, confidence:', " 'medium', source: 'own_website_brain' };"))) {
+      _fails.push('the code-read backstop claims high confidence again, which is exactly what ownSiteConfident reads to settle stage 1 - one regex hit would switch off every source that could disagree with it');
+    }
+    if (!_src.includes(_n('if (_fallbackName && _ours && ', 'looksLikeRealName(_fallbackName)'))) {
+      _fails.push('the backstop no longer requires the sentence to name OUR company, so an owner quoted in a testimonial is reported as this lead\'s buyer');
+    }
+    if (!_src.includes(_n('      title: (_titleSeen && ', 'parsed.title) || null,'))) {
+      _fails.push('the model\'s title is returned again without being checked against what we read, so an invented title decides the buying floor');
+    }
+    if (_fails.length) {
+      console.log(`⛔ OWNER BACKSTOP CHECK: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ OWNER BACKSTOP CHECK: the measured owner sentence compiles and MATCHES - every escape in it was four backslashes deep for its whole life, so it returned null on the exact sentence it was written for and the paid search it exists to save was bought on every lead. It now names the role it found, requires the sentence to be about OUR company rather than a supplier quoted on their page, and offers itself as corroboration rather than settling stage 1 alone. And the model's title is checked against the pages we read the way the name always was, because an invented title scores 100 and walks through the buying floor.`);
+    }
+  } catch (e) {
+    console.log(`⛔ OWNER BACKSTOP CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // == THE FREE SOURCE THAT COULD NEVER CORROBORATE ==========================
   // Miller's Fancy Bath, live 2026-08-27: their own site named "Rick Miller"
