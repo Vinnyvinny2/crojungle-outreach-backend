@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260916;
+const CONTRACT_VERSION = 20260917;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -11394,6 +11394,25 @@ const ownershipIsHead = (title) => {
   const m = OWNER_TITLE_RE.exec(s);
   if (!m) return false;
   const after = s.slice(m.index + m[0].length);
+  // ══ A POSSESSIVE IS ABOUT THE OWNER, NOT A TITLE ANYONE HOLDS ══════
+  // Live on the 2026-08-28 Find run: America's Home Place shipped to the
+  // sheet as the person "Last Name" with the title "Principal's Contact
+  // Info" - a form field label under a form section heading, sold to a
+  // junior rep as the decision-maker to ask for by name.
+  //
+  // This is the "Partner Track" class one grammatical form to the side. That
+  // fix asks what FOLLOWS the ownership word, and an apostrophe is not a
+  // letter, so "Principal's Contact Info" fell straight through the
+  // punctuation branch below and read as a title whose head is Principal.
+  // Executed rather than reasoned: ownershipIsHead returned true for
+  // "Principal's Contact Info", "Owner's Manual" and "Founder's Story".
+  //
+  // A possessive says the phrase is ABOUT the owner - his manual, his story,
+  // his contact details. It is never a title somebody holds, and the one
+  // near-miss proves the rule: "Owner's Representative" is a hired agent in
+  // construction and emphatically NOT the owner, so refusing it is correct
+  // twice over.
+  if (/^['\u2019]s?\b/.test(after)) return false;
   // Nothing after it, or punctuation/a separator: the ownership word is the head.
   if (!/^\s*[A-Za-z]/.test(after)) return true;
   return TITLE_HEAD_FOLLOWERS.test(after.trim());
@@ -11472,13 +11491,31 @@ const NOT_A_PERSON_LAST = new Set(['reviews', 'review', 'testimonials', 'form', 
   'us', 'more', 'here', 'now', 'today', 'quote', 'estimate', 'appointment', 'appointments',
   'booking', 'bookings', 'hours', 'directions', 'menu', 'faq', 'faqs', 'gallery',
   'specials', 'financing', 'careers', 'portfolio', 'blog', 'news', 'services', 'service',
-  'team', 'staff', 'story', 'mission', 'values', 'history', 'process', 'policy']);
+  'team', 'staff', 'story', 'mission', 'values', 'history', 'process', 'policy',
+  // ══ A FORM FIELD LABEL SITS EXACTLY WHERE A NAME SITS ════════════
+  // "Last Name" satisfies the two-capitalised-words name pattern by
+  // construction, and on a contact page it sits directly under a section
+  // heading - which is the position a job title occupies. Live on
+  // 2026-08-28 that pair became the decision-maker on a call sheet.
+  //
+  // Same family as "About Us" and "Google Reviews", both already here, and
+  // the cause is the same INPUT problem: the Find tab's free read hands the
+  // roster parser a WHOLE PAGE where the audit path hands it a leadership
+  // page, so navigation and form furniture arrive in a person's slot.
+  //
+  // Last-word rules, because no human surname is any of these.
+  'name', 'address', 'number', 'code', 'message', 'required', 'optional']);
 const NOT_A_PERSON_PHRASE = new Set(['about us', 'our team', 'the team', 'our story',
   'contact us', 'our people', 'leadership team', 'our staff', 'get started', 'our process',
   'our mission', 'our values', 'our history', 'read more', 'learn more', 'view all',
   'see more', 'find us', 'call us', 'email us', 'visit us', 'follow us', 'our work',
   'case studies', 'our services', 'why choose', 'meet our', 'privacy policy', 'terms of',
-  'home page', 'main menu', 'site map', 'free consultation', 'book now', 'schedule now']);
+  'home page', 'main menu', 'site map', 'free consultation', 'book now', 'schedule now',
+  // The whole-phrase half of the form-label family, for the labels whose
+  // last word is ordinary on its own.
+  'first name', 'last name', 'full name', 'your name', 'contact info',
+  'contact information', 'job title', 'email address', 'phone number',
+  'street address', 'zip code', 'postal code', 'company name']);
 const looksLikeAPerson = (name) => {
   const t = String(name || '').toLowerCase().replace(/[^a-z' -]/g, ' ').replace(/\s+/g, ' ').trim();
   if (!t) return false;
@@ -56030,6 +56067,47 @@ app.listen(PORT, () => {
     const _oneVp = findIcpScore({ teamCount: 12, execTitles: ['Vice President, Operations'], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: null, rating: null });
     if (_oneVp.score !== _small.score) _fails.push('a single VP is being treated as a corporate org chart, which would demote ordinary contractors');
 
+    // ══ SIX - A CONTACT FORM IS NOT A ROSTER ═════════════════════════════
+    // Live on the 2026-08-28 run, on the sheet a junior rep would have dialled
+    // from: America's Home Place, decision-maker "Last Name", title
+    // "Principal's Contact Info". A form field label under a form section
+    // heading - one occupying the slot a name occupies, the other the slot a
+    // title occupies.
+    //
+    // TWO independent causes, and each is asserted on its own, because either
+    // one alone still ships a false person: with only the possessive fix,
+    // "Last Name / Owner" survives; with only the label fix, "Becky Griffith /
+    // Founder's Story" survives.
+    if (ownershipIsHead("Principal's Contact Info")) _fails.push('a possessive ownership word still reads as a job title, so a form heading becomes the decision-maker again');
+    if (ownershipIsHead("Owner's Manual")) _fails.push("a possessive ownership word still reads as a job title - Owner's Manual is a document, not a person");
+    if (ownershipIsHead("Founder's Story")) _fails.push('a possessive ownership word still reads as a job title on an about-page heading');
+    // And the direction that costs leads if it is wrong: a real title survives.
+    for (const _t of ['Owner', 'Owner, President', 'Managing Partner', 'Owner/Operator', 'CEO', 'Founder & CEO', 'President']) {
+      if (!ownershipIsHead(_t)) _fails.push(`"${_t}" no longer reads as an ownership title, so the guard is refusing real owners`);
+    }
+    // The form label, through the REAL parser, in the arrangement that shipped.
+    const _form = parseTeamRoster("Last Name\nPrincipal's Contact Info", "America's Home Place");
+    if (_form.length) _fails.push(`a contact form still yields a person - ${JSON.stringify(_form[0].name)} as ${JSON.stringify(_form[0].title)} - which is what reached a live call sheet`);
+    if (parseTeamRoster('First Name\nOwner', 'X Co').length) _fails.push('a form field label still reads as a person when the run after it IS a real title, which is the half the possessive fix cannot catch');
+    // The label guard has TWO halves and they hide each other on the live
+    // strings, which the falsification run proved: "Last Name" is refused by
+    // the last-word rule AND by the whole-phrase rule, so removing either one
+    // alone left every fixture green. A case only ONE half can refuse:
+    if (parseTeamRoster('Business Name\nOwner', 'X Co').length) _fails.push('a form label whose exact phrase is not on the list still reads as a person - the last-word rule is what catches the labels nobody thought to write down');
+    if (parseTeamRoster('Contact Info\nOwner', 'X Co').length) _fails.push('a form label whose last word is ordinary still reads as a person - the whole-phrase rule is what catches the labels the last-word rule cannot see');
+    // Four real rosters from the same run must survive both guards untouched.
+    for (const [_h, _co, _who] of [
+      ['<p>Becky Griffith</p><p>Owner</p>', 'All About Flooring', 'Becky Griffith'],
+      ['<p>Carl Darley</p><p>President</p>', "Darley's Plumbing Inc", 'Carl Darley'],
+      ['<p>Michael Schweitzer, Owner, President</p>', 'Luxury Bath', 'Michael Schweitzer'],
+      ['<p>Danny Griffith</p><p>Owner</p>', 'All About Flooring', 'Danny Griffith'],
+    ]) {
+      const _r = parseTeamRoster(_h, _co);
+      if (!_r.length || _r[0].name !== _who || !_r[0].isOwner) {
+        _fails.push(`the roster no longer reads ${_who} as the owner - the form-label guard is eating real people, which costs the decision-maker on every lead that publishes one`);
+      }
+    }
+
     if (_fails.length) {
       console.log(`⛔ OWNER TRUTH CHECK: ${_fails.join(' | ')}.`);
     } else {
@@ -56116,12 +56194,39 @@ app.listen(PORT, () => {
 
     // THREE - the picker. At most one page per intent and never the homepage
     // again: buying the homepage twice is the recorded duplicate-page cost.
+    //
+    // ══ THE ORIGINAL RULE WAS ONE PAGE PER INTENT, AND IT WAS TOO TIGHT ═══
+    // The 2026-08-28 run returned no decision-maker on about half the list,
+    // and one regex covers /about AND /our-team AND /leadership - so only the
+    // top-ranked of the three was ever read, and the owner is commonly named
+    // on the other one. The table now says how many each intent is worth.
+    //
+    // What the old assertion was really protecting is that a careers page
+    // cannot be crowded out by two about pages, and counting to one was a
+    // proxy for it. The real property is stronger and is asserted directly:
+    // the declared wants must SUM to no more than the page budget, so every
+    // intent in the table is guaranteed its share whatever order they run in.
+    // Widen one want without widening the budget and this goes red.
+    const _wantSum = FIND_PAGE_INTENTS.reduce((n, i) => n + (i.want || 1), 0);
+    if (_wantSum > FIND_MAX_PAGES) {
+      _fails.push(`the Find page intents ask for ${_wantSum} page(s) against a budget of ${FIND_MAX_PAGES}, so whichever intent is declared last can be starved - on this table that is the careers page, which is the hiring signal`);
+    }
     const _picked = pickFindPages(
       ['https://x.com/about', 'https://x.com/about-us', 'https://x.com/contact', 'https://x.com/careers', 'https://x.com'],
       'https://x.com');
-    if (_picked.length !== 3) _fails.push(`pickFindPages returned ${_picked.length} page(s); it must take at most one per intent, so at most ${FIND_MAX_PAGES}`);
+    if (_picked.length !== _wantSum) _fails.push(`pickFindPages returned ${_picked.length} page(s) where the table declares ${_wantSum}; the wants are not being honoured, which is how a field declared on every row is read by nobody`);
+    if (_picked.length > FIND_MAX_PAGES) _fails.push(`pickFindPages returned ${_picked.length} page(s) against a budget of ${FIND_MAX_PAGES}`);
     if (_picked.some(p => p.url === 'https://x.com')) _fails.push('pickFindPages is picking the homepage again as an interior page');
-    if (new Set(_picked.map(p => p.intent)).size !== _picked.length) _fails.push('pickFindPages took two pages for one intent, so a careers page can be crowded out by two about pages');
+    if (new Set(_picked.map(p => p.url)).size !== _picked.length) _fails.push('pickFindPages picked the same URL twice, so a page is bought and read as two');
+    // The one that is actually at risk: two about pages must not eat the
+    // careers slot, because the hiring signal is one of the five the score is
+    // built from and there is no other source for it.
+    for (const _i of FIND_PAGE_INTENTS) {
+      const _n = _picked.filter(p => p.intent === _i.key).length;
+      if (_n > (_i.want || 1)) _fails.push(`pickFindPages took ${_n} page(s) for the ${_i.key} intent where the table allows ${_i.want || 1}`);
+    }
+    if (!_picked.some(p => p.intent === 'careers')) _fails.push('the careers page was crowded out, so the hiring-for-marketing signal has no source on this lead');
+    if (_picked.filter(p => p.intent === 'team').length !== 2) _fails.push('only one of the about/team pages is read, so the owner named on the other one is never seen - which is the defect this widening exists to fix');
 
     // FOUR - the three signals, both directions. The absence direction is the
     // one that matters: an unread site is not a business with no ads.
@@ -56213,8 +56318,25 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('fcKey: allowBuy ? fcKey :', " '',"))) {
       _fails.push('the email engine is handed a Firecrawl key unconditionally, so FIND_EMAIL_FIRECRAWL no longer bounds what a contact read can spend');
     }
-    if (!_src.includes(_n('apifyToken:', " '', callOnly: true,"))) {
-      _fails.push('the Find owner read is no longer in calling mode, so it buys the paid web-search and licence wave it exists to skip');
+    // ══ THE OWNER SWITCH, ASSERTED AT ITS CALL SITE ══════════════════════
+    // This used to pin `callOnly: true` - the paid owner wave hard-coded OFF.
+    // That was the right cost decision for a dial-only batch and the wrong one
+    // for this list, which is emailed as well as called: live on 2026-08-28 it
+    // returned no decision-maker on about half the rows. So the assertion is
+    // re-aimed rather than deleted, at the two things that must stay true
+    // whichever way the switch is set:
+    //   1. the stages follow the switch, not a constant;
+    //   2. the Firecrawl key is handed over ONLY when the paid stage may run -
+    //      a key passed beside a stood-down stage is spend one forgotten
+    //      branch away, which is how a switched-off feature bills anyway.
+    if (!_src.includes(_n('apifyToken:', " '', callOnly: !paidOwner,"))) {
+      _fails.push('the Find owner read no longer follows the paid-lookup switch, so the operator\'s Settings choice decides nothing');
+    }
+    if (!_src.includes(_n('fcKey: paidOwner ?', " fcKey : '',"))) {
+      _fails.push('the Find owner read is handed a Firecrawl key regardless of the switch, so turning the paid lookup off no longer bounds what it can spend');
+    }
+    if (!_src.includes(_n('const _opts = { paidOwnerLookup:', ' b.paidOwnerLookup !== false };'))) {
+      _fails.push('the find-contact route no longer defaults the paid owner lookup ON, so a client that predates the Settings field silently stops finding owners');
     }
     // The render must still be bought on the AUDIT path. A cost fix that
     // quietly removes a measurement from the other caller is not a cost fix.
@@ -71755,14 +71877,21 @@ const findPlainFetch = async (url, timeoutMs = 12000) => {
 // careers page on the site.
 const FIND_PAGE_INTENTS = [
   { key: 'contact', re: /(contact|get-?in-?touch|reach-?us)/i, want: 1 },
-  { key: 'team',    re: /(team|our-?team|staff|people|leadership|management|about|our-?story|who-?we-?are|meet)/i, want: 1 },
+  // ══ TWO, BECAUSE THE OWNER IS ON WHICHEVER ONE WE DID NOT READ ═════
+  // One regex covers /about AND /our-team AND /leadership, and only the
+  // top-ranked of them was ever fetched. A business commonly names its owner
+  // on one and not the other, and the 2026-08-28 run returned no
+  // decision-maker on about half the list. A page on the plain path is FREE,
+  // so the second one costs nothing on the leads this is for; it costs one
+  // credit only on a site that refused a plain fetch.
+  { key: 'team',    re: /(team|our-?team|staff|people|leadership|management|about|our-?story|who-?we-?are|meet)/i, want: 2 },
   { key: 'careers', re: /(careers?|jobs?|employment|join-?(our-?)?team|work-?with-?us|hiring|apply)/i, want: 1 },
 ];
 // Bounded by construction: at most one page per intent, at most FIND_MAX_PAGES
 // in total. The bound is the cost model - every page here is free on the plain
 // path and one credit on the Firecrawl fallback, so an unbounded list is an
 // unbounded bill on exactly the leads whose sites are hardest to read.
-const FIND_MAX_PAGES = 3;
+const FIND_MAX_PAGES = 4;
 const pickFindPages = (links, homepageUrl) => {
   const home = String(homepageUrl || '').replace(/\/$/, '').toLowerCase();
   const pool = (Array.isArray(links) ? links : []).filter(u => String(u).toLowerCase() !== home);
@@ -71773,11 +71902,16 @@ const pickFindPages = (links, homepageUrl) => {
     // recorded fixes: a whole path SEGMENT rather than a substring, so
     // "/blog/how-to-talk-about-infertility" is not read as an about page.
     const ranked = rankUrlsByIntent(pool, intent.re, 6);
+    // `want` was DECLARED on every row of the table above and read by nobody:
+    // this loop broke after the first hit whatever it said. Honoured now, so
+    // the table is the thing that decides how many pages an intent is worth.
+    let got = 0;
     for (const u of ranked) {
       if (taken.has(u)) continue;
       taken.add(u);
       out.push({ url: u, intent: intent.key });
-      break;
+      got += 1;
+      if (got >= (intent.want || 1) || out.length >= FIND_MAX_PAGES) break;
     }
     if (out.length >= FIND_MAX_PAGES) break;
   }
@@ -72032,8 +72166,28 @@ const FIND_EMAIL_FIRECRAWL = String(process.env.FIND_EMAIL_FIRECRAWL || 'fallbac
 const FIND_CONTACT_CONCURRENCY = Math.max(1, Number(process.env.FIND_CONTACT_CONCURRENCY || 8) || 8);
 let _findInFlight = 0;
 
-const runFindContactRead = async (company, keys) => {
+const runFindContactRead = async (company, keys, opts = {}) => {
   const t0 = Date.now();
+  // ══ THE OWNER IS THE POINT OF THIS LIST ═════════════════════════════
+  // Vin, 2026-08-28, reading a run where about half the rows had no
+  // decision-maker: "some of these leads arent coming with decion makers
+  // phone numebrs and emails those are impoirtnbant stuff yano", and then
+  // "if its that cheap then yes always have it on make it so i can swtich
+  // it off within the settings though".
+  //
+  // The free stage of the owner ladder settles roughly half of leads. The
+  // paid stage - a web search and a licence-record search - is what finds
+  // the other half, and it was hard-coded OFF here because the mode was
+  // written for a batch that would only ever be dialled. That was the wrong
+  // default for a list that is emailed AND dialled: measured on the live run,
+  // it cost about eight Firecrawl credits and two cheap model calls per
+  // unsettled lead, roughly 200 credits across fifty.
+  //
+  // Default ON, and OFF is a setting rather than a code change. Note the
+  // direction of the default: an absent flag BUYS. That is deliberate - a
+  // client that has not been redeployed yet sends nothing, and the honest
+  // reading of nothing here is "the old client, which expected the owner to
+  // be found", not "the operator asked us to save money".
   const name = String((company && company.name) || '').trim();
   const website = String((company && company.website) || '').trim();
   const apiKey = (keys && keys.anthropicKey) || '';
@@ -72121,6 +72275,8 @@ const runFindContactRead = async (company, keys) => {
   // Firecrawl credits to answer it first is the trade this mode declines.
   const homeText = (pages[0] && pages[0].text) || '';
   const interior = pages.slice(1).map(p => ({ url: p.url, text: p.text }));
+  const paidOwner = opts.paidOwnerLookup !== false;
+  out.paidOwnerLookup = paidOwner;
   if (apiKey && name) {
     try {
       const dm = await findDecisionMaker({
@@ -72128,11 +72284,15 @@ const runFindContactRead = async (company, keys) => {
         // No fcKey: every source that could spend one is either stood down by
         // callOnly or handed pages it does not have to buy. Passing the key
         // anyway would leave the spend one forgotten branch away.
-        fcKey: '', apiKey,
+        // The key is handed over ONLY when the paid stage is allowed to run.
+        // Passing it while callOnly stands down the stages would leave the
+        // spend one forgotten branch away, which is how a switched-off
+        // feature bills anyway.
+        fcKey: paidOwner ? fcKey : '', apiKey,
         homepageContent: homeText,
         location: (company && company.location) || '',
         placeId: '', industry: (company && company.industry) || '',
-        apifyToken: '', callOnly: true,
+        apifyToken: '', callOnly: !paidOwner,
         preFetchedPages: interior,
       });
       if (dm && dm.name) {
@@ -72186,7 +72346,7 @@ const runFindContactRead = async (company, keys) => {
     anthropicUsd: Math.round((led.anthropicUsd || 0) * 10000) / 10000,
   };
   out.tookMs = Date.now() - t0;
-  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) || 'none'} | phone ${out.phone || 'none'} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s`);
+  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) || 'none'} | phone ${out.phone || 'none'} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
   return out;
 };
 
@@ -72326,9 +72486,15 @@ app.post('/api/find-contact', async (req, res) => {
   }
   _findInFlight += 1;
   try {
+    // ══ AN ABSENT SWITCH BUYS THE OWNER ═════════════════════════════════
+    // === false, not a truthy test: only an explicit off from the operator
+    // stands the paid stage down. A client that predates the Settings field
+    // sends nothing, and "nothing" here means the old client - which expected
+    // the owner to be found - and never "they asked us to save money".
+    const _opts = { paidOwnerLookup: b.paidOwnerLookup !== false };
     const out = await runWithLead(who, () =>
       FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0, places: 0, anthropicUsd: 0, apify: 0 },
-        () => runFindContactRead(company, keys)));
+        () => runFindContactRead(company, keys, _opts)));
     res.json(out);
   } catch (e) {
     console.log(`FIND CONTACT [${who}]: failed — ${e && e.message}`);
