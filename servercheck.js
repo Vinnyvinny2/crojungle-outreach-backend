@@ -559,7 +559,15 @@ const runLead = async (b, over, capMs) => {
     ok(HS.hiringMarketing === true, `the dated Marketing Manager posting did not read as hiring for marketing (${JSON.stringify(HS.hiringTitles)})`);
     // THE SCORE, delivered and complete.
     ok(HJ.icp && typeof HJ.icp.score === 'number', `no ICP score arrived: ${JSON.stringify(HJ.icp)}`);
-    ok(HJ.icp && HJ.icp.measured === 5, `the score was measured on ${HJ.icp && HJ.icp.measured} of 5 signals on a lead carrying all five`);
+    ok(HJ.icp && HJ.icp.measured === 7, `the score was measured on ${HJ.icp && HJ.icp.measured} of 7 signals on a lead carrying every one`);
+    // THE TWO TERMS THAT ONLY EXIST AFTER THE LOOKUPS RUN. This is the whole of
+    // section 98's score fix and no boot fixture can see it: findIcpScore used
+    // to be called ~370 lines ABOVE the owner and address lookups, so a lead
+    // where we found both scored identically to one where we found neither.
+    ok(HJ.icp && (HJ.icp.terms || []).some(t => t.id === 'reach' && t.measured),
+      'the reach term is not measured on a lead that produced a named owner and a published address, so the score is being computed before the lookups again');
+    ok(HJ.icp && (HJ.icp.terms || []).some(t => t.id === 'afford' && t.measured),
+      'the affordability band is not reaching the contact score, so the Find card, the CSV and contactRankFor are back to three verdicts about one business');
     ok(HJ.icp && HJ.icp.score >= 80, `a business with ad spend, a crew, a marketing hire, 180 reviews and 4.6 stars scored ${HJ.icp && HJ.icp.score}/100`);
     // THE OWNER, from the shared resolver, off pages nobody paid for.
     ok(HJ.owner && /Pete Barnes/.test(String(HJ.owner.name || '')), `the owner named on their own team page was not resolved: ${JSON.stringify(HJ.owner)}`);
@@ -602,7 +610,16 @@ const runLead = async (b, over, capMs) => {
     const S3 = H3J.signals || {};
     ok(S3.adsCode === null && S3.teamCount === null && S3.hiringAny === null,
       `a business whose site we never opened reports definite answers: ${JSON.stringify({ ads: S3.adsCode, team: S3.teamCount, hiring: S3.hiringAny })} — that is the unmeasured-as-zero failure aimed at a claim about their money`);
-    ok(H3J.icp && H3J.icp.measured === 2, `the no-website lead scored on ${H3J.icp && H3J.icp.measured} signals; only the review count and the rating were measurable`);
+    // The review count, the rating, and the fact that the lookups RAN and
+    // found nothing. Nothing site-derived, and NOT the affordability band -
+    // this fixture carries no industry, so the trade tier and the capacity
+    // class have nothing to read and the band correctly declines to speak.
+    // (It measures on scenario H, where an industry is present: measured===7.)
+    ok(H3J.icp && H3J.icp.measured === 3, `the no-website lead scored on ${H3J.icp && H3J.icp.measured} signals; only the review count, the rating and the empty result of the lookups were measurable`);
+    ok(H3J.icp && (H3J.icp.terms || []).some(t => t.id === 'reach' && t.measured),
+      'the lookups ran on a lead with no website and the reach term still says unmeasured');
+    ok(H3J.icp && !(H3J.icp.terms || []).some(t => (t.id === 'size' || t.id === 'ads' || t.id === 'hiring') && t.measured),
+      'a business whose site we never opened is being scored on its site');
     ok(H3J.phone === '(214) 555-0199', 'the phone from the listing was lost on a lead with no website, which is the only field that lead has');
 
     // ── H4: THE ADMISSION GATES ─────────────────────────────────────────
@@ -626,6 +643,34 @@ const runLead = async (b, over, capMs) => {
     // cuts a request at 60, so on 2026-08-28 three presses each completed and
     // each had its answer dropped with the connection. A boot fixture cannot
     // see any of this: what is new is a ROUTE and the store behind it.
+    // ── J: A NATIONAL BRAND IS REFUSED BEFORE A BYTE MOVES ───────────────
+    // Mike's brief, 2026-08-31: "we just need to focus on getting good quality
+    // leads in our ICP." The live run before it read Truly Nolen, Window Nation
+    // and Ram Jack at full price, and every franchise filter this file owns was
+    // unreachable from this route - they were declared inside the discovery
+    // handler. A fixture cannot see that; only driving the route can.
+    console.log('── scenario J: the contact route refuses a national brand with zero network calls');
+    {
+      const _beforeJ = state.requests.length;
+      const J1 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+        company: { name: 'Ram Jack, by American Leveling', website: 'https://example.com', placeId: 'p1' },
+        keys: { anthropicKey: 'sk-test' },
+      });
+      ok(J1.code === 422 && J1.json && J1.json.notIcp === true,
+        `a national franchise was not refused by the contact route (got ${J1.code}: ${String((J1.json && J1.json.error) || '').slice(0, 140)})`);
+      ok(state.requests.length === _beforeJ,
+        `the franchise refusal still made ${state.requests.length - _beforeJ} network call(s) - "nothing was read and nothing was spent" is false`);
+      // And the guard must not have been tightened until it eats the ICP. An
+      // owner-operated name has to reach the read, which is section 14's
+      // guard-too-tight failure and the expensive one.
+      const J2 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+        company: { name: 'Aqua Blue Pools', website: 'https://example.com', placeId: 'p2' },
+        keys: { anthropicKey: 'sk-test' },
+      });
+      ok(!(J2.code === 422 && J2.json && J2.json.notIcp === true),
+        `an owner-operated pool company was refused as out of ICP - the name gate has been widened until it deletes the leads this pipeline exists to find`);
+    }
+
     console.log('── scenario I: the Find run outlives the request that started it');
     {
       const _t0 = Date.now();

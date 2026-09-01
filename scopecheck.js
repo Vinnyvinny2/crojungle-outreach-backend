@@ -64,7 +64,7 @@ Object Array String Number Boolean Symbol BigInt Math JSON Date RegExp Error
 TypeError RangeError SyntaxError ReferenceError EvalError URIError AggregateError
 Map Set WeakMap WeakSet WeakRef FinalizationRegistry Promise Proxy Reflect Intl
 parseInt parseFloat isNaN isFinite encodeURIComponent decodeURIComponent
-encodeURI decodeURI globalThis undefined NaN Infinity eval
+encodeURI decodeURI globalThis undefined NaN Infinity eval Function
 Uint8Array Int8Array Uint16Array Int16Array Uint32Array Int32Array BigInt64Array
 BigUint64Array Uint8ClampedArray Float32Array Float64Array ArrayBuffer
 SharedArrayBuffer DataView Atomics

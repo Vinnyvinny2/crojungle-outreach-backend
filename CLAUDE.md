@@ -8382,6 +8382,657 @@ the page widening and the column choice are executed at boot and in
 against a server that predates it.
 
 
+---
+
+## 96. Phase 1 — the fundamentals of a lead — 2026-08-31
+
+Vin: *"i really want to focus on quality of leads coming in and quality of info
+an accuracy for leads i want to work on just phase 1 which is the fundamentals
+of the leads yano"*, and *"make sure to build at the highest level and bugs fix
+at the root."* Three recon passes read the whole Find path — who gets into the
+queue, how we decide who the owner is, and what the row finally asserts.
+
+Four decisions he took before anything was built: **no paid revenue source**
+(sharpen the free proxies; revenue stays unmeasured and the row keeps saying
+so); **the non-Places lanes off by default**, one tick to re-enable; **a generic
+mailbox stays on the sheet, marked clearly**; and **measure first, set the bar
+after** — ship, run one 50-lead press, read the tally, then pick a target.
+
+### The measured owner sentence had never matched anything
+
+`_ownerFromCorpus`'s backstop reads the corpus directly for the sentence an
+owner writes about himself, so a name already in memory is not re-bought with
+~8 Firecrawl credits of paid search. Every escape in its regex was written FOUR
+backslashes deep inside a template literal, so what reached `RegExp` was a
+literal backslash followed by a letter rather than a word boundary. Executed
+against the exact live sentence it was written for — *"As the founder and owner
+of David Price Construction, LLC, David is a lifelong builder"* — it returns
+null. So the search it exists to save has been bought on every lead since it
+shipped, and the false *"no owner-level person named on their site"* it exists
+to prevent has been printed on every one of them. Its company-first shape also
+captured a single token while `looksLikeRealName` requires two, so even with
+working escapes it could never have returned anybody. **A regex that matches
+nothing is silent rather than wrong** — the §15 stem trap and the §57 corrupted
+byte, a third time.
+
+Un-breaking it makes a dead path live, so its three holes closed in the same
+change rather than shipping as new behaviour: the company between the role and
+the person was unconstrained, so an owner quoted in a supplier's testimonial was
+reported as this lead's buyer; it claimed **high** confidence, which is exactly
+what `ownSiteConfident` reads to settle stage 1, so one regex hit would switch
+off every source that could disagree with it; and the title was hard-coded
+"Owner" even where the sentence said president.
+
+The check compiles the regex out of the live function's own source, so it runs
+the production text rather than a second copy. Its first run correctly reported
+that it could not find what it was aiming at.
+
+### Two tokens found separately are not a name
+
+`nameCorroborated` is the one gate between the model's JSON and a person's name
+on a call sheet. It flattened the company name and all four scraped pages into
+ONE string and asked only that the first name and the surname each appear
+SOMEWHERE in it, independently. On a four-page corpus that is close to
+unfalsifiable: "David" in the header and "Price" in a street address hundreds of
+characters away passed "David Price". It requires **adjacency** now, not a
+contiguous span — "David A. Price", "Price, David", a line break between them
+and `davidprice@x.com` all still corroborate, because demanding the exact string
+back would refuse the real shapes a page writes a name in. A ceiling assertion
+sits on the window, since the cheap way to "fix" a refusal is to widen it until
+it is the whole document again.
+
+**And the model's title was never checked at all.** The name got a gate and the
+title did not, so a real person found on the page could have "Owner" attached to
+him out of nothing — and the title is not decoration, it is what
+`authorityScore` reads to decide whether he may be shown as the buyer. An
+invented "Owner" scores 100 and walks through the buying floor; the same person
+with no title scores the 30 default and is held back. The NAME is kept either
+way: losing a real person because the model guessed at his job is the
+guard-too-tight failure.
+
+### A held-back name was building email addresses
+
+The authority gate's `canBuy` verdict stopped at the sheet. The same held-back
+name was passed into the email engine as `ceoName`, where it built a personal
+address, taught a **process-lifetime** house pattern for the whole domain, and
+came back marked sendable. That is the path from an invented person to a hard
+bounce, and a bounce is charged to the sending DOMAIN — the one asset here that
+cannot be rebuilt in an afternoon. Both of this project's bounces came from
+addresses it had itself labelled "pattern-built, not confirmed".
+
+**The rule is not "refuse the lead".** A name is usually held back because no
+TITLE was found, not because the name is wrong — Michael's Flooring returned
+"Daniel Meadows, no title found" and Daniel Meadows is almost certainly real.
+So an unvouched name may be **TESTED** and never **ASSUMED**: a published
+address is a measurement of their site, an SMTP-confirmed one is a measurement
+of that mailbox and is the strongest possible proof the name was right, and
+neither is touched. What is refused is the half that assumes — no house pattern
+is learned from an unproven name, and a constructed T3/T4 guess stays on the row
+with its reason and is not sendable. The downgrade happens at the ONE door every
+result leaves through, because gating the core's many exits is a list somebody
+forgets.
+
+### Three more ways the row could assert something nobody measured
+
+- **A neighbour's job.** The roster lookahead stopped at the next person only
+  when that person carried NO title, so on a card layout "Jane Doe, CFO"
+  satisfied the title test and became the title of the person above her. Two
+  people wrong at once, and the output still reads as a plausible roster. The
+  reason the old test could not simply ask "is this a person" is that a bare job
+  title satisfies every name pattern — "Managing Partner" is two capitalised
+  words — so the question is which reading a run has, and only a run whose title
+  reading is the ONLY reading belongs to the person above it.
+- **The phone was asserted, never checked.** It was copied off the Google
+  listing and stamped "their Google listing" unconditionally — true about where
+  we got it, silent about whether it is the number they answer. We hold their
+  pages by then and `sitePrintsOurPhone` already existed, so this costs nothing.
+  The number is never deleted: a disagreement is a note about a possible
+  tracking number or a listing nobody has updated.
+- **One lead reading another lead's page length.** `_leadershipTextLen` was
+  keyed by company name alone; the reasoning that made that safe was the
+  duplicate-run guard, which keys on the PLACE ID first — so two genuinely
+  different businesses sharing a name get two job ids, run concurrently by
+  design, and collide here. A blank name was worse: every nameless lead shared
+  one slot. The website is what was actually read, so it belongs in the key, and
+  a TTL is the other half, because the reset only runs when the leadership read
+  runs.
+
+### The lanes that produce unjudged leads
+
+Every ICP rule in this system is written against a Google listing: the rating
+band, the trade review floor, the capacity class and the affordability band all
+read fields only Places supplies. The job-board, funding, news and for-sale
+lanes carry none of them, so a lead from one arrives unjudged by every filter
+that matters and is then scored as though it had been judged. That is where
+Coca-Cola Bottling, Penn Medicine, Lennar Homes, Securitas, Goodyear and
+SkillPath came from, and no widening of the name filter was ever going to catch
+them.
+
+Off by default, one tick to re-enable, in the scope bar beside the button that
+spends the money. Nothing is deleted — those lanes are still the only thing in
+this pipeline that puts a CLOCK on a finding. **The gate takes a thunk rather
+than a promise**, because written the natural way the call happens before the
+gate is entered and a switched-off lane spends its network anyway. And Reset now
+MERGES rather than replacing `pullFilters`: a button labelled Reset silently
+clearing a spend switch is how an operator buys a different run than the screen
+describes.
+
+### A long name is not a size measurement
+
+`if (name.length > 55) return false` sat under a SIZE heading and DELETED the
+lead. Character count has never measured how big a business is, and this file
+already records that reasoning being rejected once: *"Character count is NOT a
+measure of distinctiveness and never was."* "Southern Comfort Heating and Air
+Conditioning" is 47 before a suffix or a city. Removed rather than raised,
+because a bigger number is the same guess.
+
+### The two biggest deleters finally have fixtures
+
+`GP_FRANCHISE` is the only **unconditional** name-delete in the Places loop — no
+demotion, no bench, gone — and it had no must-catch list and no must-survive
+list, which is exactly the protection `brandNameHit` gets. Two of its entries
+were ordinary English: **"rainbow" deleted Rainbow Roofing** and **"one hour"
+deleted anything called One Hour Signs**, both squarely in the ICP. Each is now
+qualified by the words that actually name the franchise, and both directions are
+asserted, because a filter loosened until it catches nothing is the more
+expensive failure.
+
+`reviewFloorFor` deletes more leads per run than anything else in the file and
+nothing asserted a trade sat in the right set. The two directions cost opposite
+things: a high-ticket trade wrongly held to the base floor deletes the richest
+leads in the ICP (a $6m custom home builder may have nine reviews), and a
+high-volume trade wrongly given the low floor fills the queue with businesses
+that farm reviews. An unclassified trade must keep the base floor, or adding a
+trade silently changes how many leads every run deletes.
+
+### Everything measured reaches the row
+
+- **The do-not-send flag was dropped on promotion.** `leadFromCompany` carried
+  thirteen contact fields and `contactEmailSendable` was not one of them, so a
+  lead promoted out of Find arrived WITH the address and WITHOUT the flag the
+  card refuses to send on and the CSV prints "NO - do not send" for.
+- **Three fields computed on every read and rendered nowhere:**
+  `contactOwnerSources` (so a name read verbatim off a team page and one a model
+  proposed looked identical to the rep saying it out loud), `contactAdsWhy` (all
+  four phrasings, including the one that says a tag container could be hiding a
+  tag we cannot see), and the phone check above. The recorded
+  computed-but-not-passed class, three instances in one artefact.
+- **A front-desk mailbox says so on the row.** The tier already distinguished it
+  internally; the row never said it in words, so a caller opened with the
+  owner's first name into a mailbox the office manager reads first. Kept, marked,
+  and the test is deliberately narrow — a name that merely CONTAINS one of those
+  words ("infosystems@", "billsales@") is a real mailbox.
+- **A stale local queue permanently shadowed the cloud.** The Find queue restore
+  returned the moment localStorage held anything, so once a browser had ONE
+  queued company the Supabase queue could never load in it again. It MERGES now,
+  the cloud winning a name collision, because replacing would delete a company
+  queued in this tab and not yet pushed.
+
+### The affordability sentence says which half is about this business
+
+The tier and the capacity class are inherited from the GOOGLE CATEGORY the lead
+was found under, so every plumber in a run shares them; only the job count, the
+published team and the published hours are this business's own record. An
+operator reading one sentence has to be able to tell those apart, or a shared
+judgement about a trade reads as a measurement of the company in front of him.
+And the two /100 numbers on one card now say which is which: the triage score is
+what we thought before reading them, FIT is what we found afterwards.
+
+### What was NOT done, and why
+
+- **`placesTriageScore`'s `|| 0` on the review count and rating**, which the
+  plan flagged as null laundering. Checked by execution rather than asserted:
+  discovery sets `reviewCount` from `p.userRatingCount || 0` before this ever
+  runs, every term reading either value is a BONUS rather than a penalty, and
+  the `_affIn` object is built only inside the Places branch. So the laundering
+  is real and its effect is nil today. Recorded rather than "fixed", because a
+  mechanism no fixture can reach is the kind that rots.
+- **No paid size or revenue source** (Vin's decision). The proxies are named as
+  proxies and there is no dollar band anywhere.
+- **`findOwnerViaReviewReplies` stays unwired** on the Find path. It is the best
+  owner source at an owner-run shop and it costs an Apify review pull per lead;
+  the tally is what should decide it.
+- **No audit, ladder or email-copy changes.** PART 6 holds.
+
+### What the falsification runs found in the checks themselves
+
+**The C-group fixtures were inserted inside the `Promise.all` callback, AFTER
+the block that reports `fails` and exits** — so every push landed in an array
+nobody read, and the first smoke test of the promotion revert came back GREEN on
+a build with the field deleted. My own version of the recorded "a check that
+reported a green line ahead of a failure it did not know about yet". Moved above
+the report; the same revert then went red on its named assertion.
+
+And the harness itself refused to start twice rather than reporting a colour:
+once on a port left in use by a killed run, and once on a baseline it could not
+prove green. A harness whose baseline is already red proves reds too cheaply.
+
+**HONEST SHAPE: none of this has run against a live press.** Everything is
+executed at boot and in `clientcheck`; what a real fifty-lead contact run yields
+is settled by the next run's `FIND RUN TALLY` and `FIND YIELD` lines, and Vin's
+own decision was to read those before anybody sets a target.
+
+**`index.html` changed, so this needs a Netlify deploy**, and the contract is
+**20260918** on both sides.
+
+---
+
+## 97. The contact list had no ICP filter on it, and the score rewarded the businesses we cannot sell to — 2026-08-31
+
+Mike's brief, via Vin: **"we just need to focus on getting good quality leads in
+our ICP."** Vin's three complaints from the live five-lead run: he could not move
+what he had just read into Research, the Find tab is *"way too much going on"*,
+and *"the read 16 like i just ran 5 leads and im not sure where they are now im
+not sure where 16 came from."*
+
+Three recon passes read the code behind each. All three complaints were real and
+every one had a root cause. The run's own log carried a fourth that nobody
+reported, and it was the biggest.
+
+### The contact route ran one content check, and it catches none of them
+
+`/api/find-contact` had exactly one business-identity gate,
+`looksLikeEnterpriseByName`. Executed against the six live businesses that
+check's **own comment** names as the reason it was added — The Washington Post,
+Herc Rentals, Lodging Dynamics, Penske Truck Leasing, Highmark Health and the
+American Heart Association — it returns **false for all six**. A guard in the
+wrong function, under a comment claiming a capability it does not have.
+
+Meanwhile `GP_FRANCHISE`, `brandNameHit` and the four brand sets — the filters
+that DO know what a national brand is — were declared with `const` **inside the
+discovery handler**, so the route that builds the list somebody dials could
+reach none of them. Four guards in the wrong function at once. They are at
+module scope now, moved verbatim, and `nameIsOutOfIcp` is the one door: the
+franchise list, all four brand sets and the institution pattern. `icpFiltered`
+calls the same door, which matters because that is the ONLY place a **benched**
+lead is re-filtered — a lead banked under last month's rules re-enters the
+pipeline right there, and GP_FRANCHISE never ran on it.
+
+### The evidence was in hand and free
+
+Truly Nolen's own team page told us: **John Sanders is "Majority Franchise
+Owner"**. `titleKind` reads that string, matches "Owner", returns owner — and
+the word FRANCHISE sitting in the middle of it was read by nothing, anywhere.
+Window Nation's own URL is `/locations/north-carolina/charlotte`. We fetched
+both and read neither.
+
+`readChainEvidence` reads two signals off pages we already hold, both
+unambiguous by construction because Vin's ruling is that a chain is **dropped**
+— so a false positive deletes a real lead, which is §14's guard-too-tight
+failure and the expensive one:
+
+- **ROLE** — a roster title naming the franchise relationship itself.
+- **PLACE** — a locations URL scoped to a STATE and then a city. A two-branch
+  independent publishes `/locations/downtown`, which cannot match; a
+  three-branch single-state operator publishes `/locations/austin`.
+
+Deliberately NOT signals: *corporate office*, *all locations*, *find a location
+near you*. Each appears on independents with two branches. And the word cuts
+both ways — *"locally owned, NOT a franchise"* is a selling point independents
+print, so a negated mention can never fire. Twelve cases fixtured in both
+directions, including a franchise lawyer.
+
+**The drop happens before the expensive half.** The site read is already spent
+and cannot be refunded; the paid owner wave and the address lookup behind it are
+about ten Firecrawl credits and they can. Truly Nolen's own team page named it a
+franchise on the FIRST page we read, and the run went on and bought the rest of
+the lead anyway.
+
+### The chain detector had no memory, and the memory already existed
+
+`detectChainOutlets` needs three metros and three distinct names **inside one
+run**, so a franchise that surfaces once per run is invisible to it forever.
+That is how Ram Jack — the franchise §24 is an entire entry about — was still
+third from the top of the live list. The bench is loaded before the search runs
+and every row on it IS a lead, restored whole, carrying its own `marketsSeen`.
+Passing it in costs nothing, needs **no new table and no SQL**, and only ever
+adds evidence: the bar is unchanged and the filtering still applies to this
+run's own results.
+
+### Six lists answered "is this a person's mailbox" and disagreed
+
+`JUNK_LOCAL` (17 words), `ROLE_LOCAL_S` (24), `GENERIC_LOCAL` (13),
+`ROLE_INBOX` (30), `ROLE_RE_M` (45) and the client's own `GENERIC_MAILBOX_RE`.
+**The word "recruiting" was in none of them** — which is how
+`recruiting@windownation.com`, scraped off their CAREERS page, shipped as a
+tier-1 *"Published on their site"* address, sendable, score 100, to cold-pitch
+marketing services at. Same-domain addresses skipped every filter outright.
+
+`mailboxKind` is the one vocabulary now, in two grades: **junk** (not a human at
+all) and **role** (a real mailbox a department reads — still worth having, per
+Vin's standing ruling that a front-desk address stays on the sheet marked, but
+never the owner). And `person` is the honest name for the third answer: NOT
+RECOGNISABLY a department mailbox. It has never meant we know a human reads it,
+and jacksonville@ is a location mailbox this cannot tell.
+
+**Tier 1 stopped being unconditional.** The tier is right — it really is
+published on their site — and the LABEL was not. A careers-page address scores
+70 and says a recruiter reads it; a role inbox 85; an off-domain address 90 and
+says which domain it is on.
+
+**And the careers-page intent finally travels.** `freePages` mapped to
+`{ url, text }` **one line after** the owner path keeps `intent` — so the
+extractor was handed a page fetched on purpose BECAUSE it is a careers page,
+with no way to know. That is the same fix already made for the roster reader and
+never applied to its sibling. The careers page is now read LAST rather than
+skipped, because a small business whose only published address sits there is
+still reachable.
+
+The `"using personal off-domain email"` log line was unconditional and false
+whenever the siteConfirmed fallback admitted the address — `service@hspools.com`
+printed as "personal". Third recorded instance of a message naming the wrong
+cause.
+
+### A real owner was missed and a licence qualifier bought instead
+
+Aqua Blue Pools' page reads *"Jerry Owner Kyle General Manager Jim Operations
+Manager"*. `ROSTER_NAME_RE` structurally requires two capitalised tokens, so
+Jerry was discarded before the title lookahead ran — and the run then spent about
+fourteen Firecrawl credits on paid search and came back with a name off a licence
+record. The log even said so: *"An ownership word IS in the text, so the page is
+here and the layout is what we cannot read."*
+
+The mononym pass is bounded four ways: only when the main pass found no owner,
+the next run must be an unambiguous ownership title, the word must not be a
+title or a declared section heading, and the row is marked `mononym` so nothing
+downstream treats one first name as a settled identity — `foldFirstNameClusters`
+is already the mechanism that corroborates it. **The check caught the missing
+guard on its first boot**: "Careers" above an ownership word parsed as a person.
+There is no dictionary in this process that can tell "Jerry" from "Careers", so
+the headings are DECLARED, the way `STEM_COMPLETE_WORDS` and the chain stoplist
+are.
+
+And `findOwnerViaLicense` returned `title: parsed.title || 'Owner'` — the exact
+`|| 'Owner'` default §41 removed from the merge, back again. Its query asks for
+`"license holder" OR qualifier OR owner`, so the name is routinely the tradesman
+a company EMPLOYS to hold its state licence. No title is invented now, and a
+qualifier is labelled as one.
+
+### The screen
+
+- **Where the five you just ran went.** `contactAt` was stamped on every read and
+  consumed by nothing. Every number on the panel counted the whole filtered
+  queue, cumulatively, across every press this browser has ever made. One toggle
+  now: **This run (5)** beside **The whole queue (16)**, and the stats, the tally
+  and the CSV all read whichever is chosen.
+- **From a contact read to Research, in one press.** The existing button acts on
+  `filtered` top-50-by-score — never the leads just paid for. There is a tick box
+  on every card now (the same shape the Research tab's batch runner already
+  honours) and a **"Move the N you just read"** button. With nothing ticked the
+  old behaviour is untouched.
+- **A refused lead does not cost a slot.** The runner takes a POOL plus a number
+  and keeps drawing until it has that many GOOD leads, so "read 5" returns five.
+- **The duplicates go.** The queue size was rendered twice in identical words a
+  few hundred lines apart; the "narrow the list" sentence was printed by two
+  panels.
+
+### A read knows how old it is
+
+Contact results are stored whole and re-rendered and re-exported forever.
+*"America's Home Place / Last Name / Principal's Contact Info"* — a form-field
+label parsed as the decision-maker — was still on the sheet after the parser that
+produced it had been fixed, because nothing recorded which build a read came
+from. Stamped and FLAGGED, never auto-cleared: a silent re-read spends money the
+operator did not ask to spend.
+
+### What was deliberately NOT built
+
+- **No new Supabase table and no SQL.** The bench already carried the cross-run
+  memory the chain detector needed.
+- **No paid size or revenue source.** Revenue stays unmeasured and the row says so.
+- **No `independent` score term.** The plan called for one, and with chains
+  dropped outright it could only ever score on the ABSENCE of chain evidence —
+  which is precisely what this round's own rule forbids. §66: a mechanism no
+  fixture can reach is the kind that rots. What was built instead is the one
+  remaining real defect in `size`: its anti-scale carve-out knew only SVP/VP and
+  C-suite words, so a 200-person regional operator staffing Regional Directors
+  scored the full 35 as though it were a ten-person crew.
+- **No audit, ladder or email-copy changes.** PART 6 holds.
+
+### What the falsification runs found in the checks themselves
+
+Twenty reverts, each applied ALONE against a baseline the harness refuses to
+start without proving green first. **Two came back GREEN, and both were checks
+that could not see what they named.**
+
+- **The denial fixture could not reach the denial guard.** "We are not a
+  franchise" trips none of the franchise-SELLING phrases, so the fixture was
+  proving `CHAIN_SELF_RE`'s narrowness and nothing at all about
+  `CHAIN_DENIAL_RE` — reverting that guard left the boot green. The only shape
+  that reaches it is a page that uses the vocabulary and then denies it, and
+  that case exists now. §66's rule aimed at a guard rather than at production
+  code: a mechanism no fixture can reach is the kind that rots.
+- **The tier-1 generic decision had no call-site assertion.** Every mailbox
+  fixture exercises `mailboxKind`; `isGeneric` is the CALL SITE, and reverting
+  it to the old thirteen-word list left all 23 of them green while a recruiting
+  inbox went back to shipping at score 100. Tenth recorded instance of *a check
+  that does not assert its call site is half a check* — and the one this round
+  was written to close, committed by me inside the round.
+
+Both re-armed reverts then went red on their own named assertions. Final:
+**20/20 red alone.**
+
+**273 boot checks green**, and every gate: tdz, dupkeys and scopecheck on both
+files, fetchtest, pngscale, clientcheck, batchcheck, auditfuzz over 5,000
+vectors, fuzzcore over 20,000 cases, and servercheck's **77** assertions over a
+fake network — including a new scenario J that refuses a national franchise on
+the contact route with **zero network calls** while an owner-operated pool
+company beside it is still read in full.
+
+**HONEST SHAPE: none of this has run against a live press.** The name gate, the
+chain evidence, the mailbox vocabulary and the mononym pass are executed at boot
+against the exact strings the live run produced, and scenario J drives the route
+end to end over a fake network. What a real fifty-lead press returns is settled
+by the next run's `📇 FIND CONTACT`, `📇 FIND RUN TALLY` and `🔗 CHAIN OUTLETS`
+lines.
+
+**`index.html` changed, so this needs a Netlify deploy**, and the contract is
+**20260919** on both sides — without the new server the panel would render a
+chain drop as an ordinary read.
+
+---
+
+## 98. The score could not see what the read produced, and a product name was the buyer — 2026-08-31
+
+Vin ran the Find contact button again and sent the panel, a five-row CSV and the
+whole Render log. Two asks and one question: *"this section is still messy and
+unorganized it needs to look professional"*, *"analyze veyr metickousoly fix fom
+root work hard and build sat the highest quality"*, and **"can we trsut the
+ratiings on these as well?"**
+
+Every finding below was reproduced by extracting the real functions and
+**executing** them. And the first one is not a code defect at all.
+
+### Zero: eight commits were sitting unmerged, so Render was serving §95
+
+The live log printed a format string that does not exist in this tree. Netlify
+had the new client. The branch was pushed and **`main` stopped at PR #88** — so
+§96 and §97 had never reached the server, and the app was running a new client
+against an old one. Vin: *"yes nothing pushed to github thats y."* He was right
+about the consequence and I had answered the wrong question, having checked only
+that the PUSH succeeded. §37's own rule: **a push to the branch is not a deploy.**
+
+### The ratings could not be trusted. Three reasons, each executed.
+
+- **The score was frozen before the lead was known.** `out.icp =
+  findIcpScore(signals)` ran ~370 lines ABOVE the owner lookup and the address
+  lookup. So a lead where we found a named buyer and an SMTP-confirmed personal
+  address scored **identically** to one where we found neither — the two things
+  that decide whether a rep can work the row, structurally invisible to the
+  number he sorts by.
+- **The denominator moves and the bare number sorts.** The score is a percentage
+  of what could be MEASURED, so a lead scored on three signals and one scored on
+  seven are divided by different totals. `why` said so; nothing read it.
+- **It measured marketing maturity, not fit.** Five terms: size 35, ads 25,
+  hiring 20, demand 12, rating 8. Four reward organisational maturity and only
+  `rating` is fit-shaped. From the live rows: **Castellano 45** (a real owner, an
+  SMTP-verified personal address, textbook ICP) against **DHI Roofing 75** (no
+  owner, no address, location pages in six states). The business that already
+  has what we sell won, because that is what four of the five terms measure.
+
+**The fix reuses the derivation that already existed.** §94 built
+`affordabilityBand` as *"one derivation, three consumers — the Find score, the
+card's tier label, and the contact list's own ranking"*. `contactRankFor` reads
+it. **`findIcpScore` never had**, which is how three surfaces came to hold three
+verdicts about one business.
+
+The scoring moved below the lookups (`signals` stays exactly where it is — the
+chain read depends on its position and is deliberately ahead of the paid wave),
+and two terms were added beside Vin's three rather than taken from them:
+**`afford`** from `affordabilityBand`, and **`reach`** from what the read
+actually produced — a decision-maker who cleared the buying floor, and an
+address read from its TIER, never from prose that happens to contain the word
+"verified". Both leave the denominator when unmeasured, and a lead dropped as a
+chain never reached the lookups, so `reachMeasured` is false there rather than
+scoring a confident 1. The card and the sort now carry the denominator: it
+prints on the face of the number, and it breaks a tie, so a thin read cannot
+outrank a full one.
+
+**No `independent` term.** §97 settled that: with chains dropped outright it
+could only score on the ABSENCE of chain evidence, which this file forbids.
+
+### A product name was the decision-maker, and it settled the lookup
+
+Floor Daddy shipped **"Vinyl Plank", "Affiliate Partner"** as the buyer. Three
+independent causes, all executed:
+
+- **`looksLikeRealName("Vinyl Plank")` is true.** Both name checks are purely
+  shape-based; the only defence is a closed list, and *vinyl, plank, laminate,
+  carpet, hardwood, tile* are in none of it. Adding flooring words is the list
+  that rots.
+- **`titleKind("Affiliate Partner")` returned `owner`.** `OWNER_TITLE_RE`
+  matches the bare trailing word, so `after` is empty and `ownershipIsHead`
+  returns true before anything asks what "Affiliate" modifies. Executed across
+  the family: **Channel, Referral, Delivery, Technology and Installation Partner
+  all read as owner**, identically to Managing, Founding and Senior Partner.
+- **And it SETTLED stage 1.** `rosterConfident` requires `ranked.authority >=
+  DM_AUTHORITY_FLOOR`, and `authorityScore('partner')` is **85** against a floor
+  of 75 — while the same log line printed **`score 45 | low`**. The gate
+  consulted a number the operator never sees and ignored the one he does, so a
+  single uncorroborated roster row stood down every paid source.
+
+Three fixes: the affiliation modifiers are **DECLARED** (grammar cannot separate
+"Affiliate Partner" from "Managing Partner" and never will, so the modifiers are
+written down where a reviewer sees them, the way the deputy list beside them
+already is), the label stays a TITLE so it cannot become a person on the next
+pass, and `dmConfidenceFor` is one derivation the gate and the log both read.
+The list is deliberately NARROW: a small law or accounting firm is squarely in
+this ICP, and **Tax, Audit and Advisory Partner are real equity partners who can
+buy.** Both directions fixtured, all nineteen strings.
+
+**Deliberately NOT done: refusing a roster row read off a whole page.** The
+plan called for it, and reading the code says it would delete real leads — a
+homepage that says "John Smith, Owner" is good evidence, and most small
+businesses in this ICP put their team there. The composite-confidence bar is
+the mechanism; the page-intent rule would have been the guard-too-tight failure.
+
+### The company's own name was six people's job title
+
+Auto Insurance Specialist's footer produced **Office Location, All Rights
+Reserved, Agency Office** and **Great Rates**, each with the company's own name
+as their title. Reproduced exactly by executing the real `parseTeamRoster`.
+
+One word does it: `titleKind`'s junior test contains `specialist`, and the
+business is CALLED "Auto Insurance Specialist" — so its own name tested as a real
+staff title, and a truthy kind is all the lookahead needs. `personFromRun` has
+refused a NAME made only of the company's own words since it was written;
+nothing ever asked the same question of the TITLE. A guard in the right function
+on the wrong half of a pair.
+
+They are **not one predicate**, because they are not one question: a name of only
+company words is refused outright, while a title may legitimately carry the
+company name after a real job word. "Owner, Auto Insurance Specialist" is a
+roster line and survives; the shared part is the normaliser and the word set.
+
+### The chain read could not see a locations index
+
+`chainLocationPath` required `/locations/<state>/<city>`. DHI Roofing publishes
+`/locations/missouri`, `/locations/kansas`, `/locations/minnesota`,
+`/locations/iowa`, `/locations/nebraska`, `/locations/wisconsin` — **one segment
+each, and executed against their real sitemap every one returned nothing.**
+
+And it would not have mattered: `links` is built only from the homepage's own
+navigation. The 165 URLs `findOwnerViaBrain` maps are a local that **never
+leaves the function**, so the sitemap has never once been in scope for the chain
+read. Instance twenty-eight of computed-but-not-passed.
+
+Both halves fixed. The one-segment form is accepted at a bar of **three distinct
+states** — one state page is ordinary and a two-branch independent inside one
+state cannot reach it, while a per-CITY page under a state stays at one, because
+that shape is a branch network by construction. And the mapped list is kept
+(same key, same TTL and same cap as the leadership-length memo beside it, for
+the same reason: two businesses with one name run concurrently by design) and
+handed to a **second** chain look. The first look stays where it is and stays
+cheap — it caught Truly Nolen on the first page we read, before a credit could
+move; the second runs after the owner wave and still saves the address lookup.
+
+### The panel: four bands, not twenty-two blocks
+
+It rendered a heading, five paragraphs of prose, three stat tiles, about fifteen
+controls and four boxes in **one flat vertical stack with the prose interleaved
+between the controls**, so there was no way to tell what a press would do from
+what had already happened.
+
+Four bands in the order the questions get asked — **what this is / what the next
+press covers (Scope) / what to press (Read, Export) / what came back (Result)**
+— using the file's own `.btn-p`, `.btn-g` and `.btn-sm` instead of recolouring
+inline. Prose became captions under the control it describes. **Every control
+survives**: this is the button that spends real credits and §39's rule holds,
+and `clientcheck` now names each spending and destroying control individually so
+a layout change can never quietly delete one.
+
+Three counts went with it:
+
+- **"68 of these 68 reads"** — the stale banner printed the stale count twice.
+  True by accident on a queue where every read is stale, false the moment one is
+  re-read. My own bug, from §97.
+- **The tally read the whole filtered queue while every stat above it read
+  `_scoped`**, so with "This run" selected the header and the tally described
+  different sets of leads on one panel.
+- **The primary button's pool is named rather than forced.** It draws from the
+  whole queue and the stats describe what is on screen; those are genuinely two
+  populations, so each says which it is instead of one being bent to fit.
+
+### What the falsification runs found in the checks themselves
+
+Four failures on the FIRST boot after the fixes, every one mine:
+
+- **`dmConfidenceFor(null)` returned 'low'.** `Number(null)` is 0 and
+  `Number.isFinite(0)` is true — the null-laundering trap, inside the function
+  written this round to close a different one, caught by its own fixture.
+- **The self-matching needle, twice.** My assertion that exactly one place
+  computes the contact score was written as a regex literal, so it sat in
+  `_src`, **found itself**, and failed a correct build. And the needle guarding
+  the roster settle was written with an EMPTY second half, which joins to one
+  contiguous literal in the check's own body — it passed on a build with the
+  guard removed, and only the falsification run found it. Nineteenth and
+  twentieth recorded instances in this file.
+- Two blocks used `_src` and `_n` above the lines that declare them.
+
+And three reverts did not prove what they named on the first pass:
+
+- **`rosterConfidence` (the empty-half needle above).**
+- **A check that does not assert its call site is half a check.** The
+  dropped-lead fixture hands `reachMeasured` in as false, so it proves the TERM
+  reads the flag and nothing about the line that WRITES it — reverting that
+  write to a bare `true` left every fixture green.
+- **A revert with two anchors is NO VERDICT, not a pass.** The tally was
+  computed twice, once per branch of a ternary, so the anchor matched twice and
+  the harness said so rather than reporting a colour. One call now, with the
+  branch choosing only the words in front of it.
+
+And one fixture asserted a number I had assumed rather than measured: the
+no-website lead scores on **three** signals, not four — with no industry there
+is no trade tier and no capacity class, so the affordability band correctly
+declines to speak. Corrected to the measured value, with the reason written at
+the assertion.
+
+**273 boot checks green**, every gate green, and every fix reverted ALONE
+against a baseline the harness proves green before it starts.
+
+**`index.html` changed, so this needs a Netlify deploy**, and the contract is
+**20260920** on both sides.
+
 # PART 5 — WHAT IS PROVEN
 
 Only two things have real evidence behind them. Everything else is inference.

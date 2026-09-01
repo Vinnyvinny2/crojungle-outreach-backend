@@ -2333,6 +2333,10 @@ let contactTally = null;
 {
   const NEED2 = ['findCsvCell', 'FIND_CSV_CTRL', 'FIND_CSV_COLUMNS', 'findContactRows', 'findContactCsv', 'findSheetPayload',
                  'contactFieldsFrom', 'contactRequestBody', 'contactYesNo', 'hasContactData',
+                 // A contact read stamps the build that produced it, so the panel
+                 // can say which rows predate a parser fix instead of re-exporting
+                 // them forever. contactFieldsFrom reads the constant directly.
+                 'CLIENT_CONTRACT',
                  // The CSV's affordability column reads the same labeller the card
                  // reads, so it has to be lifted with it.
                  'AFFORD_LABEL', 'affordLabel',
@@ -2343,7 +2347,10 @@ let contactTally = null;
                  // hand after every paste, so the lean set is the default and
                  // the full set is a tick box - and both destinations have to
                  // read the same chooser or the CSV and the sheet drift.
-                 'FIND_CSV_ESSENTIAL', 'findCsvColumns', 'FIND_SHEET_SCRIPT'];
+                 'FIND_CSV_ESSENTIAL', 'findCsvColumns', 'FIND_SHEET_SCRIPT',
+                 // A front-desk mailbox is kept on the sheet and marked, and the
+                 // resolver's source ids are said the way a rep would say them.
+                 'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN'];
   const got2 = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED2.includes(n.id.name) && n.init) {
@@ -2360,7 +2367,8 @@ let contactTally = null;
         + '\nreturn { cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
         + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
-        + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT };')();
+        + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT,'
+        + ' generic: isGenericMailbox };')();
     } catch (e) {
       fails.push('the contact list no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -2464,6 +2472,46 @@ let contactTally = null;
         fails.push('a lead whose site could not be read reports definite NOs for ads, hiring and team size — that is a claim about their business made from our own blindness');
       }
 
+      // FOUR-b — A FRONT-DESK MAILBOX SAYS SO, AND A REAL ONE DOES NOT.
+      // Vin's decision: keep it on the sheet, mark it clearly. The tier already
+      // distinguishes it internally; the row never said it in words a rep reads
+      // at a glance, so a caller opened with the owner's first name into a
+      // mailbox the office manager reads first.
+      for (const g of ['info@x.com', 'office@x.com', 'sales-team@x.com', 'no-reply@x.com', 'Contact@X.com']) {
+        if (!M.generic(g)) fails.push(`"${g}" is not marked as a shared front-desk mailbox, so a rep opens with the owner's name into an inbox somebody else reads`);
+      }
+      // A guard that eats real addresses is the more expensive failure: a name
+      // that merely CONTAINS one of these words is a person's mailbox.
+      for (const r of ['dave@x.com', 'infosystems@x.com', 'billsales@x.com', 'j.helms@x.com', 'teamers@x.com']) {
+        if (M.generic(r)) fails.push(`"${r}" is being called a shared mailbox, so a real personal address is marked as a front desk and the rep opens the wrong way`);
+      }
+      {
+        const _rows = M.rows([
+          { name: 'A Co', contactReadOk: true, contactEmail: 'info@a.com', contactOwner: 'Dana Reed' },
+          { name: 'B Co', contactReadOk: true, contactEmail: 'dana@b.com', contactOwner: 'Dana Reed' },
+        ]);
+        if (!/front-desk/i.test(String(_rows[0].emailGoesTo || ''))) fails.push('the row does not say a published address is a shared front-desk mailbox');
+        if (/front-desk/i.test(String(_rows[1].emailGoesTo || ''))) fails.push('a personal address is described as a front-desk mailbox on the row');
+      }
+
+      // FOUR-c — THREE FIELDS COMPUTED ON EVERY READ AND RENDERED NOWHERE.
+      // contactOwnerSources, contactAdsWhy and the phone check were all
+      // measured, stored, and read by nothing at all - the recorded
+      // computed-but-not-passed class, three instances in one artefact.
+      {
+        const _r = M.rows([{
+          name: 'C Co', contactReadOk: true,
+          contactOwner: 'Dana Reed', contactOwnerSources: ['own_website_brain', 'business_name'],
+          contactAdsCode: null, contactAdsWhy: 'a tag container could be hiding a tag we cannot see',
+          contactPhone: '555-0100', contactPhoneOnSite: false,
+        }])[0];
+        if (!/own website/i.test(String(_r.ownerFrom || ''))) fails.push('the row does not say WHERE the owner was found, so a name read off a team page and one a model proposed look identical to the rep saying it out loud');
+        if (!/tag container/i.test(String(_r.adsWhy || ''))) fails.push('the four phrasings behind the ads yes-or-no are still rendered nowhere, including the one that says a container could be hiding a tag');
+        if (!/worth confirming/i.test(String(_r.phoneOnSite || ''))) fails.push('the row does not say their own site never printed this number, so an unchecked number reads exactly like a confirmed one');
+        const _un = M.rows([{ name: 'D Co', contactReadOk: true, contactPhone: '555-0100' }])[0];
+        if (String(_un.phoneOnSite || '') !== 'not checked') fails.push('a number nobody checked against their site is reported as agreeing or disagreeing rather than as unchecked');
+      }
+
       // FIVE — the merge from the server. null must SURVIVE as null.
       const f = M.fields({ signals: { adsCode: null, teamCount: null, hiringAny: null, hiringMarketing: null }, icp: {}, owner: {}, email: {} });
       if (f.contactAdsCode !== null || f.contactTeamCount !== null || f.contactHiring !== null || f.contactHiringMarketing !== null) {
@@ -2475,6 +2523,16 @@ let contactTally = null;
       const f2 = M.fields({ signals: { adsCode: false, teamCount: 0, hiringAny: false }, icp: { score: 0 }, owner: {}, email: {} });
       if (f2.contactAdsCode !== false || f2.contactTeamCount !== 0 || f2.contactIcp !== 0) {
         fails.push('contactFieldsFrom throws away a genuine measured false or zero, which is the same defect pointed the other way');
+      }
+
+      // ══ THE DENOMINATOR TRAVELS, AND IT BREAKS THE TIE ═══════════════
+      // The score is a percentage of what could be MEASURED, so a lead scored
+      // on three signals and one scored on seven are divided by different
+      // totals - and the bare number is what sorts this list. Without the
+      // denominator a thin read outranks a full one and nothing says why.
+      const fD = M.fields({ signals: {}, owner: {}, email: {}, icp: { score: 61, measured: 4, of: 7, why: 'scored on 4 of 7' } });
+      if (fD.contactIcpMeasured !== 4 || fD.contactIcpOf !== 7) {
+        fails.push('the number of signals behind a contact score is dropped on the way onto the lead, so the sort and the card cannot tell a thin read from a full one');
       }
 
       // SIX — the request the server actually reads. A field dropped here is a
@@ -2632,10 +2690,15 @@ let contactTally = null;
   if (html.indexOf(_nn("BACKEND + '/api/find", "-contact'")) < 0) {
     fails.push('nothing in the client calls /api/find-contact — the Find tab button cannot produce a contact');
   }
-  // The button reads how many to run from the operator's own number now, so the
-  // needle pins the WIRE rather than the literal 50 it used to carry.
-  if (html.indexOf(_nn('onClick: () => runContactBatch(_cUnread.slice(0, Math.max(1,', ' contactHowMany))),')) < 0) {
-    fails.push('the contact panel button no longer starts a contact run for the number the operator chose');
+  // The button reads how many to run from the operator's own number, and the
+  // runner takes a POOL plus that number rather than a pre-cut slice - because a
+  // lead the server refuses as a chain must not consume one of the five the
+  // operator asked for. Slicing first is what made a refusal cost a slot.
+  if (html.indexOf(_nn('onClick: () => runContactBatch(_cUnread, Math.max(1,', ' contactHowMany)),')) < 0) {
+    fails.push('the contact panel button no longer starts a contact run for the number the operator chose, or it is pre-slicing the pool so a refused lead costs a slot');
+  }
+  if (html.indexOf(_nn('if (kept >= want)', ' return;')) < 0) {
+    fails.push('the runner no longer stops at the number of GOOD leads asked for, so a run of five that hits two chains comes back with three');
   }
   // Stop has to abort what is IN FLIGHT. The flag alone is read between leads,
   // and a lead ran for 155 seconds live - which is why Stop read as broken.
@@ -2656,8 +2719,81 @@ let contactTally = null;
   // ONE POPULATION. "14 read" counted the leads ON SCREEN and "Download CSV (8)"
   // counted the WHOLE QUEUE, so two numbers about the same thing disagreed on
   // one panel and the operator could not tell which was wrong. Live, 2026-08-28.
-  if (html.indexOf(_nn('const _cExportable = _cShown.filter', '(hasContactData);')) < 0) {
+  // _scoped is that one population: the whole filtered queue, or just the leads
+  // the last press read when the operator is looking at a run.
+  if (html.indexOf(_nn('const _cExportable = _scoped.filter', '(hasContactData);')) < 0
+      || html.indexOf(_nn('const _cRead = _scoped.filter', "(c => c && c.contactReadOk === true);")) < 0) {
     fails.push('the CSV count is taken from a different population than the read count beside it, so the two numbers on the panel contradict each other');
+  }
+  // And the run-scoped view has to exist at all: contactAt was stamped on every
+  // read and consumed by nothing, so "where did the five I just ran go" had no
+  // answer anywhere in the app.
+  if (html.indexOf(_nn('const _cRunSet = _cShown.filter(c => c &&', ' _runNames.has(c.name));')) < 0) {
+    fails.push('there is no run-scoped view of a contact press, so every number on the panel is a cumulative queue total again');
+  }
+  // ══ THE PANEL HAS A GRAMMAR, AND THE COUNTS AGREE ═══════════════════════
+  // Vin: "this section is still messy and unorganized it needs to look
+  // professional." It was twenty-two blocks in one flat vertical stack with
+  // five paragraphs of prose interleaved between about fifteen controls.
+  //
+  // HONEST LIMIT, stated at the assertion: the panel lives inside FindView and
+  // cannot be lifted and executed the way LeadBriefing is, so these are source
+  // needles. What they can prove is that the four bands exist, that every
+  // control that spends money still has its handler, and that the three counts
+  // that disagreed now read one population.
+  if (html.indexOf(_nn('const _band = (label, ...kids) =>', ' React.createElement(')) < 0) {
+    fails.push('the contact panel is back to a flat vertical stack with no bands, which is the layout the owner called messy and unorganized');
+  }
+  for (const [needle, why] of [
+    [_nn('_band(', "'Scope',"), 'the scope band is gone, so the control that decides what a press BUYS is no longer beside the press'],
+    [_nn('_band(', "'Read',"), 'the read band is gone'],
+    [_nn('_band(', "'Export',"), 'the export band is gone, so the CSV, the sheet and the column choice are loose in the stack again'],
+    [_nn('_band(', "'Result',"), 'the result band is gone, so what came back is interleaved with what to press again'],
+  ]) {
+    if (html.indexOf(needle) < 0) fails.push(why);
+  }
+  // Every control that SPENDS or DESTROYS has to survive a layout change. This
+  // is the button that buys real credits and the one that throws away work
+  // already paid for, and section 39's rule is that they all survive.
+  for (const [needle, why] of [
+    [_nn('onClick: () => runContactBatch(_cUnread,', ' _cUnread.length),'), 'the "All N" button is gone, so a full queue can only be read a page at a time'],
+    [_nn('runContactBatch(_cStale,', ' _cStale.length);'), 'the re-read of stale contact reads is gone'],
+    [_nn("setContactPlacesOnly(!!e.target", '.checked),'), 'the Google-listing scope tick box is gone, so the job-board lanes are back in the queue with no way to hide them'],
+    [_nn('setCsvFull(!!e.target', '.checked),'), 'the every-column tick box is gone'],
+    [_nn("setContactSort(v =>", ' !v),'), 'the sort-by-fit button is gone'],
+    [_nn("setContactHowMany(Math.max(1, Math.min(500,", ' Number(e.target.value) || 1))),'), 'the how-many box is gone, so a press can no longer be sized'],
+    [_nn('contactStop.current =', ' true;'), 'the Stop button is gone'],
+    [_nn("findSheetPayload(_cExportable,", ' csvFull);'), 'the Google Sheet send is gone'],
+    [_nn('saveDiscovered(cleared);', ' setDiscovered(cleared);'), 'the Clear-read button is gone, so there is no way back from a bad read'],
+    [_nn('contactNotFit: false, contactFailedAt:', ' null, contactNotes: [] }) : x);'), 'the "Put them back" button is gone, so a lead the filter has wrong can never be re-read'],
+  ]) {
+    if (html.indexOf(needle) < 0) fails.push(why);
+  }
+  // The denominator has to reach the SORT and the CARD, not just the lead.
+  if (html.indexOf(_nn('const Am = (typeof a.contactIcpMeasured ===', " 'number') ? a.contactIcpMeasured : 0;")) < 0) {
+    fails.push('the fit sort no longer breaks a tie on how much we actually know, so a lead scored on three signals sorts level with one scored on seven');
+  }
+  if (html.indexOf(_nn("co.contactIcpMeasured + ' of ' +", ' co.contactIcpOf)')) < 0) {
+    fails.push('the card no longer prints how many signals stood behind the fit score, so 45-of-3 and 45-of-7 look identical');
+  }
+
+  // ══ AND THE THREE COUNTS THAT DISAGREED ════════════════════════════════
+  // The tally read the whole filtered queue while every stat above it read
+  // _scoped, so with "This run" selected the header and the tally described
+  // different sets of leads on one panel.
+  if (html.indexOf(_nn('findTallyLine(findRunTally(', '_scoped))')) < 0) {
+    fails.push('the contact tally is computed over a different population than the numbers directly above it, so one panel reports two answers about one set of leads');
+  }
+  // "68 of these 68 reads" - the stale count printed twice, which is true by
+  // accident on a queue where every read is stale and false the moment one is
+  // re-read.
+  if (html.indexOf(_nn("_cStale.length + ' of these ' +", " _cRead.length + ' read'")) < 0) {
+    fails.push('the stale-read banner prints the stale count where the read count belongs, so it says "N of these N reads" whatever the real numbers are');
+  }
+
+  // And the leads just read have to be movable into Research in one press.
+  if (html.indexOf(_nn('const n = addManyToPipeline(', '_runMovable);')) < 0) {
+    fails.push('the leads a press just read cannot be moved to the pipeline, so a contact run still has no route into an audit');
   }
   // The two can still legitimately differ - a lead can be read and carry no
   // owner, no address and no number - so the panel has to SAY so rather than
@@ -2787,6 +2923,32 @@ let findStat = null;
     if (_bare !== 1) fails.push(`${_bare} call site(s) hit the synchronous /api/discover door — exactly one is expected, the old-server fallback inside discoverViaJob`);
   }
 
+  // ---- 2b. The trigger lanes are off unless a person ticks them ----------
+  // Vin's decision, 2026-08-31. A Places lead has a Google listing by
+  // construction and every ICP rule in this system reads those fields; a
+  // job-board or funding lead has none of them, so it arrives unjudged and is
+  // then scored as though it had been judged. The default has to be OFF and it
+  // has to be a real control, not a constant somebody has to edit.
+  {
+    if (!/extraLanes:\s*pullFilters\.extraLanes === true/.test(src)) {
+      fails.push('the Find request no longer carries the lane choice, so the server falls back to its own default and the tick box decides nothing');
+    }
+    if (!/extraLanes:\s*false,/.test(src)) {
+      fails.push('extraLanes is no longer declared false in pullFilters, so the trigger lanes are back on by default and every run buys four lanes nobody chose');
+    }
+    if (!/onChange:\s*e => setPullFilters\(p => \(\{ \.\.\.p, extraLanes: e\.target\.checked \}\)\)/.test(src)) {
+      fails.push('there is no control that sets extraLanes, so the lanes can only be turned on by editing the file - a switch nobody can reach is a switch that rots');
+    }
+    // And Reset must not silently take the choice with it. It used to REPLACE
+    // the whole filter object, so any field added to pullFilters was quietly
+    // deleted by a button labelled Reset - which for a spend switch means an
+    // operator turns the lanes on, presses Reset to clear a market, and buys a
+    // different run than the screen describes.
+    if (/setPullFilters\(\{ niches:\[\]/.test(src)) {
+      fails.push('the Reset button REPLACES pullFilters rather than merging, so it silently clears every field added to that state - including the lane choice, which decides what a run spends');
+    }
+  }
+
   // ---- 3. The queue cap is ONE number ------------------------------------
   // It was 200, hand-written in the merge, the Supabase upsert and the Supabase
   // restore, so raising it meant finding all three. A run banks over a thousand
@@ -2882,6 +3044,77 @@ let findStat = null;
     }
   }
 }
+// ══ THE DO-NOT-SEND FLAG MUST SURVIVE THE PROMOTION ═══════════════════════
+// leadFromCompany carries the contact read onto a pipeline lead, and it carried
+// thirteen fields with contactEmailSendable not among them - so a lead promoted
+// out of Find arrived WITH the address and WITHOUT the flag the card refuses to
+// send on and the CSV prints "NO - do not send" for. Executed, because a source
+// read cannot tell a missing key from one spelled differently.
+{
+  const _need = ['leadFromCompany'];
+  const _got = {};
+  walk(ast, (n) => {
+    if (n.type === 'VariableDeclarator' && n.id && _need.includes(n.id.name) && n.init) {
+      _got[n.id.name] = 'const ' + n.id.name + ' = ' + src.slice(n.init.start, n.init.end) + ';';
+    }
+  });
+  if (!_got.leadFromCompany) {
+    fails.push('leadFromCompany is no longer at module scope, so promoting a Find lead into the pipeline cannot be executed and the thirteen-field drop that lost the do-not-send flag can come straight back');
+  } else {
+    let _mk = null;
+    try {
+      _mk = new Function(
+        'const uid = () => "id1"; const today = () => "2026-01-01";'
+        + ' const daysFromNow = (n) => "2026-01-0" + n;\n'
+        + _got.leadFromCompany + '\nreturn leadFromCompany;')();
+    } catch (e) { fails.push('leadFromCompany does not compile standalone: ' + e.message); }
+    if (_mk) {
+      const _lead = _mk({
+        name: 'A Co', website: 'https://a.com',
+        contactReadOk: true, contactOwner: 'Dana Reed', contactOwnerTitle: 'Owner',
+        contactOwnerCanBuy: true, contactOwnerSources: ['own_website_brain'],
+        contactEmail: 'dana@a.com', contactEmailTier: 3, contactEmailSendable: false,
+        contactEmailBlockReason: 'built from a name the authority gate held back',
+        contactPhone: '555-0100', contactPhoneOnSite: false,
+      });
+      if (_lead.contactEmailSendable !== false) {
+        fails.push('a promoted lead arrives with the address and WITHOUT the do-not-send flag - the one field the card and the CSV both refuse to send on, separated from the address it belongs to');
+      }
+      if (!_lead.contactEmailBlockReason) {
+        fails.push('the reason the address cannot be sent to is dropped on promotion, so a block with no reason on it reads as a bug rather than a judgement');
+      }
+      if (!Array.isArray(_lead.contactOwnerSources) || !_lead.contactOwnerSources.length) {
+        fails.push('where the owner came from is dropped on promotion, so a name read off a team page and one a model guessed are indistinguishable in the pipeline');
+      }
+      if (_lead.contactOwnerCanBuy !== true) {
+        fails.push("the authority gate's verdict is dropped on promotion, so a held-back name and a confirmed buyer look the same downstream");
+      }
+      if (_lead.contactPhoneOnSite !== false) {
+        fails.push('whether their own site prints the number is dropped on promotion');
+      }
+      // And the direction that must not drift: a company with NO contact read
+      // must not arrive claiming one.
+      const _bare = _mk({ name: 'B Co' });
+      if (_bare.contactReadOk !== false || _bare.contactEmailSendable !== false) {
+        fails.push('a lead that was never contact-read arrives claiming it was, which is the stamp-says-done failure this file already records');
+      }
+    }
+  }
+}
+
+// ══ A STALE LOCAL QUEUE MUST NOT PERMANENTLY SHADOW THE CLOUD ═════════════
+// The Find queue restore returned the moment localStorage held anything, so
+// once a browser had ONE queued company the Supabase queue could never load in
+// it again. Same class as the leads loader this file already guards.
+{
+  if (/const local = loadDiscovered\(\);\s*\r?\n\s*if \(local\.length > 0\) return;/.test(src)) {
+    fails.push('the Find queue restore still returns early whenever localStorage holds anything, so a run banked on another machine is invisible in this browser forever');
+  }
+  if (!/const merged = Array\.from\(_byName\.values\(\)\)/.test(src)) {
+    fails.push('the Find queue restore no longer MERGES the cloud with local work - replacing would delete a company queued in this tab and not yet pushed, which is the guard pointed the other way');
+  }
+}
+
 Promise.all(PENDING).then(() => {
   if (fails.length) {
     console.log(`\n✗ index.html: ${fails.length} research-request defect(s)`);
@@ -2894,6 +3127,6 @@ Promise.all(PENDING).then(() => {
   notes.forEach(n => console.log(n));
   if (findStat) console.log(`\u2713 index.html: the Find run's clock, queue cap and card were EXECUTED, not read \u2014 the browser's wall sits above the server's own sweep so a healthy run is never killed by the wrong file, the submit goes through the poller and exactly one call site still touches the synchronous door as the old-server fallback, the queue cap is one number rather than three, and a lead we have actually read stops showing the name-based guess beside the owner, email and phone we measured. A demoted lead now says why it was sorted last: "${findStat.demoted}". And the card answers what a business can afford instead of inventing a revenue band from its review count: "${findStat.prem}".`);
   if (contactTally) console.log(`\u2713 index.html: the contact run TALLY was executed \u2014 the first thing in this project that has ever counted whether the owner resolver and the email engine work. Rates are over leads actually READ, the email tier split is reported rather than one "found" number because a published address and a guess are not the same thing, a run under twelve reads says its numbers are counts and not rates, and a run made while the verifier was down says so. On the fixture queue: ${contactTally}`);
-  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the CSV writes the ${contactStat.lean} columns a rep dials and sends from, with all ${contactStat.cols} one tick away and the Google Sheet reading the same choice. It neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, gives each email tier its own confidence sentence, and reports an unmeasured signal as "not checked" rather than as a definite no. Every call site is pinned too: the panel starts the run, the run posts to /api/find-contact, it saves after every lead so a Stop keeps what was paid for, the card strip renders only on a lead that was read, and the Research batch cannot reach any of it.`);
+  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the CSV writes the ${contactStat.lean} columns a rep dials and sends from, with all ${contactStat.cols} one tick away and the Google Sheet reading the same choice. It neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, gives each email tier its own confidence sentence, and reports an unmeasured signal as "not checked" rather than as a definite no. Every call site is pinned too: the panel starts the run, the run posts to /api/find-contact, it saves after every lead so a Stop keeps what was paid for, the card strip renders only on a lead that was read, and the Research batch cannot reach any of it. The panel itself now reads as four bands - what this is, what the next press covers, what to press, what came back - with every spending and destroying control still wired, and the three counts that used to describe three different populations on one screen now read one.`);
   if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
 }).catch((e) => { console.log('\n\u2717 index.html: the checks could not finish \u2014 ' + (e && e.message)); process.exit(1); });
