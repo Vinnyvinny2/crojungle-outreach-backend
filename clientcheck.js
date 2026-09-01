@@ -2503,6 +2503,135 @@ let contactTally = null;
         }
       }
 
+      // ══ THE FOUR VALUES THE REQUEST NEVER CARRIED ═════════════════════
+      // Each of these existed on the lead and was simply not sent, and each
+      // one killed a whole mechanism on the server. Executed on the real
+      // builder, because a fixture cannot see a request that is never made.
+      {
+        const _b = M.body({ name: 'A Co', website: 'https://a.example', placeId: 'ChIJ-test',
+          outsideBand: true, aboveSizeCeiling: true }, { apifyToken: 'apify_x' });
+        const _co = (_b && _b.company) || {}, _k = (_b && _b.keys) || {};
+        if (_co.placeId !== 'ChIJ-test') {
+          fails.push('the contact request does not send the place id, so the server cannot read who signs their Google review replies - the best free read of an owner-run shop owner');
+        }
+        if (_k.apifyToken !== 'apify_x') {
+          fails.push('the contact request does not send the Apify token, so the review-reply owner source stays structurally unreachable');
+        }
+        if (_co.outsideBand !== true || _co.aboveSizeCeiling !== true) {
+          fails.push('the contact request does not send what discovery already decided, so a demoted lead scores exactly like a clean one');
+        }
+        // A string is not a boolean, and a demotion is expensive enough that a
+        // stray value must never spend it.
+        const _s = M.body({ name: 'B Co', website: 'https://b.example', outsideBand: 'true' }, {});
+        if ((_s.company || {}).outsideBand !== false) {
+          fails.push('a non-boolean demotion flag is forwarded as true, so a stray string costs a good lead ten points');
+        }
+      }
+
+      // Whether the chain read could LOOK has to reach the row. Without it a
+      // site we failed to open renders exactly like a proven independent.
+      {
+        const _seen = M.fields({ signals: {}, notes: [], chain: { measured: true, isChain: false } });
+        const _blind = M.fields({ signals: {}, notes: [], chain: { measured: false, isChain: false } });
+        if (_seen.contactChainMeasured !== true || _blind.contactChainMeasured !== false) {
+          fails.push('whether the chain read could look at all stops at the merge, so silence and a clean read land on the lead the same way');
+        }
+        const _r = M.rows([{ ..._blind, contactReadOk: true, name: 'C Co', contactPhone: '+1 555 0100' }])[0];
+        if (!_r || !/not established/.test(String(_r.independence || ''))) {
+          fails.push('a lead whose site we could not read exports no independence answer, so our blindness reads as a clean result');
+        }
+      }
+
+      // ══ HOW SURE ARE WE THAT THIS IS HIM, AND CAN THE REP SEE IT ══════
+      // The server grades the owner once. Every consumer must read THAT and
+      // never re-decide, and the grade has to reach the CSV the rep dials
+      // from - not just the screen.
+      {
+        const _mk = (g) => M.fields({ signals: {}, notes: [],
+          owner: { name: 'John Smith', title: 'Owner', canBuy: g !== 'unconfirmed',
+            grade: g, gradeWhy: 'because', askAs: g === 'confirmed'
+              ? 'Confirmed - because. Ask for John.'
+              : 'NOT confirmed - because. Ask for John; if he is not the owner, ask who is.' } });
+        const _conf = _mk('confirmed'), _un = _mk('unconfirmed');
+        if (_conf.contactOwnerGrade !== 'confirmed' || _un.contactOwnerGrade !== 'unconfirmed') {
+          fails.push('the owner evidence grade stops at the merge, so a held-back name and a corroborated one land on the lead identically');
+        }
+        if (!_conf.contactOwnerAskAs || !_un.contactOwnerAskAs) {
+          fails.push('the pivot sentence does not reach the lead, so the rep is told a name and not how sure we are of it');
+        }
+        // The CSV, which is the artefact he actually works from.
+        const _rows = M.rows([{ ..._un, contactReadOk: true, name: 'A Co', contactPhone: '+1 555 0100' }]);
+        if (!_rows.length || !/ask who is/.test(String(_rows[0].ownerHowSure || ''))) {
+          fails.push('an unconfirmed owner reaches the CSV with no instruction to ask rather than assert');
+        }
+        if (M.lean.indexOf('ownerHowSure') < 0) {
+          fails.push('how sure we are about the name is not one of the lean columns, so the file the rep dials from does not carry it');
+        }
+        if (M.lean.indexOf('emailConfidence') < 0) {
+          fails.push('how sure we are about the address is not one of the lean columns');
+        }
+        // The card. A fixture cannot see a renderer, so the call site is pinned
+        // with a needle assembled at runtime.
+        const _nk = (a, b) => a + b;
+        if (src.indexOf(_nk('co.contactOwnerGrade ===', " 'unconfirmed' ? '#fca5a5'")) < 0) {
+          fails.push('the contact card no longer marks an unconfirmed owner, so the one row that needs a second question looks like every other');
+        }
+      }
+
+      // ══ SIX EMAIL STATES REACH THE ROW, DECIDED ON THE SERVER ═════════
+      {
+        const _em = (g, say) => M.fields({ signals: {}, notes: [],
+          email: { address: 'a@b.com', tier: 1, sendable: true, grade: g, gradeSay: say } });
+        const _role = _em('published_role', 'Real and published, but a shared or recruiting inbox.');
+        if (_role.contactEmailGrade !== 'published_role' || !_role.contactEmailGradeSay) {
+          fails.push('the email confidence grade stops at the merge, so the client is back to deriving it by regex over a label');
+        }
+        const _r = M.rows([{ ..._role, contactReadOk: true, name: 'A Co' }])[0];
+        if (!_r || !/recruiting inbox/.test(String(_r.emailConfidence || ''))) {
+          fails.push("the server's own answer about an address does not reach the exported row");
+        }
+        // A row read by an OLDER build has no grade and must still say
+        // something rather than going blank.
+        const _old = M.rows([{ contactReadOk: true, name: 'B Co', contactEmail: 'a@b.com', contactEmailTier: 2 }])[0];
+        if (!_old || !String(_old.emailConfidence || '').trim()) {
+          fails.push('a lead read before the grade existed now exports an empty confidence cell rather than falling back to its tier');
+        }
+      }
+
+      // ══ THE NUMBER THAT DECIDES EVERYTHING ════════════════════════════
+      // repReady is the first count in this project of rows a rep can actually
+      // pick up. A counter computed and never PRINTED is the exact defect this
+      // round exists to close, so both are asserted.
+      {
+        const _ready = { contactReadOk: true, contactOwner: 'A B', contactOwnerGrade: 'confirmed',
+          contactEmail: 'a@b.com', contactEmailSendable: true, contactPhone: '5125550134' };
+        const _t = M.tally([
+          _ready, { ..._ready, contactOwnerGrade: 'stated' },
+          { ..._ready, contactPhone: '' },                       // no number to dial
+          { ..._ready, contactEmailSendable: false },            // nothing that will deliver
+          { ..._ready, contactOwnerGrade: 'unconfirmed' },       // a name we cannot stand behind
+          { ..._ready, contactNotFit: true },                    // the server ruled it out
+        ]);
+        if (_t.repReady !== 2) fails.push('rep-ready counts ' + _t.repReady + ' of a fixture where exactly two rows are workable');
+        if (!_t.pivotReady) fails.push('a lead with a phone and an unconfirmed name is counted as nothing, when the rep can still call and ask');
+        // Four of the six fixtures carry a confirmed owner (the two that fail
+        // rep-ready on the phone and the address still have one, and so does
+        // the ruled-out row). The property is that the split accounts for
+        // every named owner and that each grade is actually counted.
+        if (_t.gConfirmed !== 4 || _t.gStated !== 1 || _t.gUnconfirmed !== 1) {
+          fails.push(`the owner-grade split reads ${_t.gConfirmed}/${_t.gStated}/${_t.gUnconfirmed} against a fixture of 4/1/1`);
+        }
+        if (_t.gConfirmed + _t.gStated + _t.gInferred + _t.gUnconfirmed !== _t.owner) {
+          fails.push('the owner-grade split does not add up to the owners counted, so some names are graded as nothing');
+        }
+        const _line = M.tallyLine(_t);
+        if (!/ready to work/.test(_line)) {
+          fails.push('the tally counts rep-ready rows and does not print them - a counter computed and never shown is the defect this round exists to close');
+        }
+        if (!/confirmed/.test(_line)) fails.push('the tally line does not report how many owners we actually stand behind');
+        if (M.tally([]).repReady !== 0) fails.push('an empty run reports rep-ready rows');
+      }
+
       // ══ THE WRONG-COMPANY STOP HAS A HOME ON THE SCREEN ═══════════════
       // quinnplasticsurgery.com served Surek Plastic Surgery's content on the
       // 2026-09-01 run and we read Chris Surek as Quinn's owner. The server
@@ -2787,9 +2916,20 @@ let contactTally = null;
         if (M.tallyLine(M.tally([])) !== '') fails.push('an empty queue prints a tally line about nothing');
         // A verifier that was not answering is a fact about US and has to be
         // said, or thirty downgraded addresses read as thirty bad prospects.
-        const off = M.tally(mk(12, { contactEmail: 'a@b.com', contactEmailTier: 3, contactNotes: ['the email verifier was not answering'] }));
+        // Read from the SERVER's own flag, not by grepping the notes for the
+        // word "verifier". That is what this counter used to do, and no note
+        // written anywhere on the contact path contains that word - so it was
+        // dead and printed nothing on exactly the runs where every address was
+        // silently downgraded. The fixture carries the flag now, and a run
+        // whose NOTES merely mention a verifier must NOT be counted, because
+        // guessing from prose is the defect.
+        const off = M.tally(mk(12, { contactEmail: 'a@b.com', contactEmailTier: 3, contactEmailVerifierDown: true }));
         if (off.verifierOff !== 12 || !/verifier/i.test(M.tallyLine(off))) {
           fails.push('a run made while the verifier was down says nothing about it, so its tier-3 addresses read as a fact about those prospects');
+        }
+        const notesOnly = M.tally(mk(12, { contactEmail: 'a@b.com', contactEmailTier: 3, contactNotes: ['the email verifier was not answering'] }));
+        if (notesOnly.verifierOff !== 0) {
+          fails.push('the verifier outage is still being guessed from note prose rather than read from the flag the server sets');
         }
         contactTally = M.tallyLine(t);
       }
@@ -3117,11 +3257,24 @@ let findStat = null;
         fails.push('a read lead with nothing found reports nothing rather than saying so');
       }
       if (/sorted last/.test(unread)) fails.push('an undemoted lead claims it was sorted last');
-      if (!/sorted last: above the review-mining ceiling/.test(demoted)) {
+      // The two demotions are DIFFERENT reasons and used to be described with
+      // the same words - the RATING band called a review-count ceiling - so the
+      // card and the new demotedWhy CSV column would have disagreed about one
+      // lead. Assert the property rather than a literal: each must say
+      // something, and the two must not say the same thing.
+      if (!/sorted last:/.test(demoted)) {
         fails.push('a band-demoted lead says nothing about it, so its position on the screen has no explanation');
       }
-      if (!/review-mining ceiling and above the review ceiling/.test(both)) {
+      if (/review-mining ceiling/.test(demoted)) {
+        fails.push('the RATING-band demotion is still described as a review-count ceiling, which is a different measurement');
+      }
+      const _bandSay = String(demoted.split('sorted last:')[1] || '').trim();
+      const _bothSay = String(both.split('sorted last:')[1] || '').trim();
+      if (!/ and /.test(_bothSay) || _bothSay === _bandSay) {
         fails.push('a lead demoted twice names only one reason');
+      }
+      if (_bothSay.split(' and ')[0] === _bothSay.split(' and ')[1]) {
+        fails.push('the two demotions are described with the same words, so the row cannot say which one applies');
       }
 
       // ---- 4b. What they can afford, which is the question the list exists
