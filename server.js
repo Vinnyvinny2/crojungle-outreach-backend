@@ -12105,6 +12105,106 @@ const PRACTICE_STAFF_RE = /\b(?:paralegal|legal\s+(?:assistant|secretary)|law\s+
 // DeVries are people rather than unparseable.
 const ROSTER_NAME_RE = /^([A-Z][a-z'’-]{1,20}(?:\s+[A-Z]\.?)?(?:\s+\([A-Z][a-z'’-]{1,20}\))?(?:\s+[A-Z][a-z'’-]{1,20})?\s+[A-Z][a-z'’-]{0,25}(?:[A-Z][a-z'’-]{1,20})?)$/;
 
+// ══ A ROLE NOUN IS NOT A SURNAME ═══════════════════════════════════════════
+// Moved up from the Find reader so the roster parser and the careers reader
+// ask ONE question rather than keeping two lists. It is load-bearing for the
+// swap rule below: "Master Plumber" and "Project Manager" are name-SHAPED by
+// every pattern in this file, and a swap that cannot refuse them turns the
+// correct row "David S Graham / Owner, Master Plumber" into a person called
+// Master Plumber.
+const FIND_ROLE_NOUN = /\b(manager|specialist|coordinator|director|representative|technician|installer|assistant|associate|supervisor|estimator|foreman|dispatcher|apprentice|designer|strategist|analyst|consultant|officer|engineer|mechanic|plumber|electrician|roofer|receptionist|admin(?:istrator)?|bookkeeper|marketer)\b/i;
+
+// Hoisted out of parseTeamRoster so the title-led reader below and the mononym
+// pass inside it share one declaration. Two copies of a declared word list is
+// the disease this file records most, and the copy that rots is always the one
+// that only runs in the case nobody tests.
+const MONONYM_RE = /^[A-Z][a-z'\u2019-]{2,15}$/;
+const NOT_A_MONONYM = new Set([
+  'about', 'careers', 'career', 'contact', 'team', 'staff', 'people', 'crew',
+  'leadership', 'management', 'services', 'service', 'products', 'shop', 'store',
+  'menu', 'blog', 'news', 'events', 'gallery', 'photos', 'videos', 'reviews',
+  'testimonials', 'pricing', 'prices', 'faq', 'faqs', 'home', 'locations',
+  'location', 'projects', 'portfolio', 'work', 'history', 'values', 'mission',
+  'vision', 'story', 'info', 'support', 'help', 'login', 'search', 'more',
+  'details', 'overview', 'summary', 'profile', 'company', 'business', 'hiring',
+  'jobs', 'apply', 'join', 'welcome', 'financing', 'warranty', 'specials',
+  'offers', 'coupons', 'estimate', 'quote', 'book', 'schedule', 'emergency',
+  'residential', 'commercial', 'maintenance', 'repair', 'installation',
+  'inspection', 'training', 'resources', 'downloads', 'privacy', 'terms',
+  'blogs', 'articles', 'press', 'media', 'awards', 'partners', 'clients',
+]);
+
+// ══ IS THIS TRAILING RUN A PERSON? ═════════════════════════════════════════
+// One question, asked by both readers below. A single token is permitted and
+// MARKED, because Ecoview's own page says "Our Owner, Carl" and we discarded
+// it and then paid ~6 Firecrawl credits to learn the surname. For a caller
+// "ask for Carl" works; nothing downstream may treat it as a settled identity,
+// and the held-back email rule already refuses to build an address from it.
+const rosterNameTailOk = (cand, kindOf) => {
+  const s = String(cand || '').trim().replace(/[.,;:]+$/, '');
+  if (!s || s.length > 40) return false;
+  if (FIND_ROLE_NOUN.test(s)) return false;
+  if (OWNER_TITLE_RE.test(s) || NON_OWNER_TITLE_RE.test(s) || PRACTITIONER_TITLE_RE.test(s)) return false;
+  if (kindOf && kindOf(s)) return false;
+  if (s.indexOf(' ') < 0) {
+    return MONONYM_RE.test(s) && !NOT_A_MONONYM.has(s.toLowerCase());
+  }
+  return ROSTER_NAME_RE.test(s) && looksLikeRealName(s);
+};
+
+// ══ A TITLE THAT CARRIES A PERSON'S NAME ═══════════════════════════════════
+// Live, JR & Co, 2026-09-01: the exported sheet named the decision-maker as
+// "Iron Sharpens Iron" with the title "President & CEO Jon Schilling", and its
+// two sibling rows had the name and the title in opposite columns too. The
+// name side is validated by SHAPE and the title side by SHAPE, and nothing
+// ever asked whether the TITLE contained a person. Returns the trailing run of
+// the title that is a real person's name, or ''.
+const nameTailOfTitle = (title, kindOf) => {
+  const words = String(title || '').trim().replace(/\s+/g, ' ').split(' ');
+  for (let take = 2; take <= 3 && take <= words.length; take++) {
+    const tail = words.slice(words.length - take).join(' ');
+    if (rosterNameTailOk(tail, kindOf)) return tail.replace(/[.,;:]+$/, '');
+  }
+  return '';
+};
+
+// ══ THE TITLE IN FRONT OF THE NAME ═════════════════════════════════════════
+// Scott Roofing's own page says "CEO Brian Scott and president Mike Scott" and
+// the parser returned NOTHING. Three forward-only decisions cause it: the name
+// is always the first comma-segment, the inline title is always what follows
+// it, and the lookahead runs strictly forward. On the 2026-09-01 run 21 of the
+// 25 sites we read returned zero name/title pairs, and on TEN of them the log
+// itself said an ownership word was on the page.
+//
+// Splitting on " and " first is what keeps the pairing honest: taken whole the
+// trailing name is Mike Scott, and the CEO is Brian.
+const titleLedPeople = (run, kindOf) => {
+  const out = [];
+  for (const part of String(run || '').split(/\s+\band\b\s+/i)) {
+    const s = part.trim().replace(/^[,;:\-\u2013\u2014\s]+/, '').replace(/[,;:\s]+$/, '');
+    if (!s || s.length > 90) continue;
+    let name = '';
+    let head = '';
+    const ci = s.lastIndexOf(',');
+    if (ci > 0 && rosterNameTailOk(s.slice(ci + 1), kindOf)) {
+      name = s.slice(ci + 1).trim().replace(/[.,;:]+$/, '');
+      head = s.slice(0, ci).trim();
+    }
+    if (!name) {
+      const tail = nameTailOfTitle(s, kindOf);
+      if (tail) {
+        name = tail;
+        head = s.slice(0, s.length - tail.length).replace(/[,;:\-\s]+$/, '').trim();
+      }
+    }
+    if (!name || !head) continue;
+    const kind = kindOf(head);
+    if (!kind) continue;
+    out.push({ name, title: head.replace(/\s+/g, ' '), isOwner: kind === 'owner', mononym: name.indexOf(' ') < 0 });
+  }
+  return out;
+};
+
 // ══ "GOOGLE REVIEWS" WENT OUT AS THE OWNER'S NAME ═══════════════════════════
 // Live, 2026-08-17, Mac Brian Doors & Window Installation. The site header
 // carries a "Leave us a review" widget. The roster parser read "Google Reviews"
@@ -12342,8 +12442,25 @@ const parseTeamRoster = (html, companyName = '') => {
     // a bare job title dressed as a name — "Managing Partner" satisfies every
     // name pattern — and only then is the title test the right question.
     const p = personFromRun(runs[i], companyName);
-    if (!p) continue;
-    if (!p.inlineTitle && titleKind(runs[i])) continue;
+    // ══ THE SHARED NAME GATE, FINALLY CALLED ═════════════════════════════
+    // looksLikeRealName holds BUSINESS_TAIL, jobWord and junkWhole - the three
+    // guards written for exactly this - and the roster was the ONE owner source
+    // that never called it. Live on 2026-09-01 that put "Trefoil Holdings" at
+    // the top of the exported file as Cooper CPA Group's decision-maker, and
+    // "Our Owner" and "Branch Manager" on rows beside it. A guard in the wrong
+    // function; one call site closes three live failures.
+    //
+    // And the title question is asked of the NAME SLOT rather than of the whole
+    // run. Asked of the run it had to be disabled whenever an inline title was
+    // present - "Jenny McDowell, Owner" reads as a title end to end - so the
+    // one guard against a job title in the name slot was switched off by a
+    // comma, which is how "Branch Manager" became a person.
+    const _pOk = !!p && looksLikeRealName(p.name) && !titleKind(p.name);
+    if (!_pOk) {
+      // The layout may simply be the other way round: a title, then the person.
+      for (const _tl of titleLedPeople(runs[i], titleKind)) out.push(_tl);
+      continue;
+    }
     const m = [p.name, p.name];
     // A section heading occupies the same position as a name and matches the
     // same shape. "About Us" reached a live email as the greeting.
@@ -12439,6 +12556,29 @@ const parseTeamRoster = (html, companyName = '') => {
   // pointed the other way.
   out = out.filter(r => looksLikeJobTitle(r.title));
 
+  // ══ TWO PEOPLE IN ONE ROW MEANS WE CANNOT SAY WHICH ONE OWNS IT ══════════
+  // JR & Co, live 2026-09-01: name "Iron Sharpens Iron", title "President &
+  // CEO Jon Schilling". The name side is validated by shape and the title side
+  // by shape, so a title-first layout ships silently with the columns swapped.
+  //
+  // Two outcomes, and the split is what keeps it safe. If the name slot is not
+  // a person at all, the person in the title IS the row and we recover it. If
+  // BOTH slots name somebody, we have no way to say which one owns the
+  // business, so the row keeps its pairing and loses its ownership claim - the
+  // model still runs, and an owner we cannot identify is better than the wrong
+  // one on a sheet somebody dials from.
+  out = out.map(r => {
+    if (r.mononym) return r;
+    const _tail = nameTailOfTitle(r.title, titleKind);
+    if (!_tail || _tail.toLowerCase() === String(r.name || '').toLowerCase()) return r;
+    if (!looksLikeRealName(r.name)) {
+      const _head = r.title.slice(0, r.title.length - _tail.length).replace(/[,;:\-\s]+$/, '').trim();
+      const _k = _head ? titleKind(_head) : null;
+      return _k ? { name: _tail, title: _head.replace(/\s+/g, ' '), isOwner: _k === 'owner' } : r;
+    }
+    return r.isOwner ? Object.assign({}, r, { isOwner: false, twoPeople: true }) : r;
+  });
+
   // ══ A ROSTER THAT NAMES ITS PEOPLE BY FIRST NAME ONLY ═════════════
   // Aqua Blue Pools, live: their page reads "Jerry Owner Kyle General Manager
   // Jim Operations Manager". ROSTER_NAME_RE structurally requires two
@@ -12457,7 +12597,8 @@ const parseTeamRoster = (html, companyName = '') => {
   //   - it is marked `mononym`, so nothing downstream may treat one first name
   //     as a settled identity. It is a candidate to be corroborated, and
   //     foldFirstNameClusters is already the mechanism that corroborates it.
-  const MONONYM_RE = /^[A-Z][a-z'\u2019-]{2,15}$/;
+  // MONONYM_RE and NOT_A_MONONYM are at module scope now, shared with the
+  // title-led reader. Same rule, one copy.
   // A single capitalised word sits in exactly the same position as a section
   // heading, and there is no dictionary in this process that can tell "Jerry"
   // from "Careers". The check caught that on its first boot: "Careers" above an
@@ -12465,20 +12606,6 @@ const parseTeamRoster = (html, companyName = '') => {
   // headings are DECLARED, the way STEM_COMPLETE_WORDS and the chain stoplist
   // are, and both directions are fixtured - a name that must survive and a
   // heading that must not.
-  const NOT_A_MONONYM = new Set([
-    'about', 'careers', 'career', 'contact', 'team', 'staff', 'people', 'crew',
-    'leadership', 'management', 'services', 'service', 'products', 'shop', 'store',
-    'menu', 'blog', 'news', 'events', 'gallery', 'photos', 'videos', 'reviews',
-    'testimonials', 'pricing', 'prices', 'faq', 'faqs', 'home', 'locations',
-    'location', 'projects', 'portfolio', 'work', 'history', 'values', 'mission',
-    'vision', 'story', 'info', 'support', 'help', 'login', 'search', 'more',
-    'details', 'overview', 'summary', 'profile', 'company', 'business', 'hiring',
-    'jobs', 'apply', 'join', 'welcome', 'financing', 'warranty', 'specials',
-    'offers', 'coupons', 'estimate', 'quote', 'book', 'schedule', 'emergency',
-    'residential', 'commercial', 'maintenance', 'repair', 'installation',
-    'inspection', 'training', 'resources', 'downloads', 'privacy', 'terms',
-    'blogs', 'articles', 'press', 'media', 'awards', 'partners', 'clients',
-  ]);
   if (!out.some(r => r.isOwner)) {
     for (let i = 0; i < runs.length - 1; i++) {
       const head = String(runs[i] || '').trim();
@@ -57642,6 +57769,72 @@ app.listen(PORT, () => {
       }
     }
 
+    // ══ THE PAGE NAMES THE OWNER AND THE PARSER COULD NOT READ IT ══════════
+    // 21 of the 25 sites read on 2026-09-01 returned zero name/title pairs, and
+    // on TEN of them the log itself said an ownership word was on the page.
+    // Seven of those ten then bought the ~10-credit paid search wave to
+    // rediscover what we were already holding. Every fixture below is a real
+    // string from that run, driven through the REAL parser.
+    {
+      const _row = (html, co) => parseTeamRoster(html, co);
+      const _owner = (rows) => (rows || []).filter(r => r.isOwner)[0] || null;
+
+      // A title in FRONT of the name. Scott Roofing's own page, and the parser
+      // returned nothing at all. Splitting on " and " is what keeps the pairing
+      // honest: taken whole the trailing name is Mike and the CEO is Brian.
+      const _scott = _owner(_row('<p>CEO Brian Scott and president Mike Scott share the inspiration</p>', 'Scott Roofing Company'));
+      if (!_scott || _scott.name !== 'Brian Scott') {
+        _fails.push(`a title in front of the name is still unreadable, so "CEO Brian Scott" names nobody: ${JSON.stringify(_scott)}`);
+      }
+
+      // The company motto in the name slot and the person inside the title.
+      // JR & Co shipped "Iron Sharpens Iron" as the decision-maker.
+      const _jr = _row('<h3>Iron Sharpens Iron</h3><p>President &amp; CEO Jon Schilling</p>', 'JR & Co.');
+      const _jrOwner = _owner(_jr);
+      if (!_jrOwner || _jrOwner.name !== 'Jon Schilling') {
+        _fails.push(`the person named inside the title is not recovered, so the motto still ships as the owner: ${JSON.stringify(_jr)}`);
+      }
+      if (_jr.some(r => r.name === 'Iron Sharpens Iron' && r.isOwner)) {
+        _fails.push('a row naming two people still claims one of them owns the business');
+      }
+
+      // The shared name gate. looksLikeRealName refuses "Trefoil Holdings" on
+      // BUSINESS_TAIL and "Our Owner" on jobWord, and the roster was the one
+      // owner source that never called it.
+      if (_row('<h3>Trefoil Holdings</h3><p>President of The Whitaker Company</p>', 'Cooper CPA Group').length) {
+        _fails.push('a company name in the name slot still ships as a person, so the roster is not calling the shared name gate');
+      }
+      if (!_src.includes(_n('const _pOk = !!p && looksLikeRealName(p.name)', ' && !titleKind(p.name);'))) {
+        _fails.push('the roster no longer gates on the shared name rule at its CALL SITE, so BUSINESS_TAIL and jobWord are unenforced on the one source that ships to a sheet');
+      }
+
+      // A first name, marked. Vin's decision 2026-09-01: for a caller "ask for
+      // Carl" works, and we were discarding it and then paying for the surname.
+      const _carl = _owner(_row('<p>Our Owner, Carl, and Factory Representative, Sean</p>', 'Ecoview Windows'));
+      if (!_carl || _carl.name !== 'Carl' || _carl.mononym !== true) {
+        _fails.push(`a first name their own page states as the owner is still discarded or unmarked: ${JSON.stringify(_carl)}`);
+      }
+
+      // MUST SURVIVE, and this is the expensive half. "Master Plumber" is
+      // name-SHAPED by every pattern in this file; a swap that cannot refuse a
+      // role noun invents a person called Master Plumber out of a correct row.
+      const _graham = _row('<h3>David S Graham</h3><p>Owner, Master Plumber</p>', "Graham's Plumbing Co. Inc.");
+      const _gOwner = _owner(_graham);
+      if (!_gOwner || _gOwner.name !== 'David S Graham') {
+        _fails.push(`a correct roster row was destroyed by the swap rule: ${JSON.stringify(_graham)}`);
+      }
+      const _jenny = _owner(_row('<h3>Jenny McDowell</h3><p>Owner</p>', 'Mid-America Contractors'));
+      if (!_jenny || _jenny.name !== 'Jenny McDowell') _fails.push('an ordinary roster row no longer parses');
+
+      // A role noun is not a surname, and one list answers that for both
+      // readers. Two copies is the disease; this is the shared one.
+      if (typeof FIND_ROLE_NOUN === 'undefined' || !FIND_ROLE_NOUN.test('Master Plumber')) {
+        _fails.push('the role-noun list is not shared with the roster parser, so the swap rule cannot refuse a trade title');
+      }
+      if (rosterNameTailOk('Master Plumber', null) !== false) _fails.push('a trade title reads as a person, so a correct title becomes a name');
+      if (rosterNameTailOk('Jon Schilling', null) !== true) _fails.push('a real person in a title is not recognised, so no swap can ever fire');
+    }
+
     if (_fails.length) {
       console.log(`⛔ OWNER TRUTH CHECK: ${_fails.join(' | ')}.`);
     } else {
@@ -74268,7 +74461,8 @@ const pickFindPages = (links, homepageUrl) => {
 // role. Bounded to a DECLARED list of role nouns: guessing a title out of prose
 // is how a page heading becomes a job opening. Positive evidence only - a page
 // with no recognisable role produces NO hiring claim rather than a false one.
-const FIND_ROLE_NOUN = /\b(manager|specialist|coordinator|director|representative|technician|installer|assistant|associate|supervisor|estimator|foreman|dispatcher|apprentice|designer|strategist|analyst|consultant|officer|engineer|mechanic|plumber|electrician|roofer|receptionist|admin(?:istrator)?|bookkeeper|marketer)\b/i;
+// FIND_ROLE_NOUN is declared beside the roster parser, which needs the same
+// question answered. One list.
 const FIND_HIRING_CONTEXT = /\b(now hiring|we(?:'|’)?re hiring|we are hiring|open positions?|current openings?|job openings?|apply now|join our team|careers?)\b/i;
 const titlesFromCareersText = (text) => {
   const out = [];

@@ -2603,23 +2603,33 @@ let contactTally = null;
       // pick up. A counter computed and never PRINTED is the exact defect this
       // round exists to close, so both are asserted.
       {
-        const _ready = { contactReadOk: true, contactOwner: 'A B', contactOwnerGrade: 'confirmed',
+        // Every row carries a name because contactTabOf - the ONE membership
+        // rule the tally, the tabs and the export now share - refuses a row
+        // without one, and every real queue row has one.
+        const _ready = { name: 'Acme', contactReadOk: true, contactOwner: 'A B', contactOwnerGrade: 'confirmed',
           contactEmail: 'a@b.com', contactEmailSendable: true, contactPhone: '5125550134' };
         const _t = M.tally([
-          _ready, { ..._ready, contactOwnerGrade: 'stated' },
-          { ..._ready, contactPhone: '' },                       // no number to dial
-          { ..._ready, contactEmailSendable: false },            // nothing that will deliver
-          { ..._ready, contactOwnerGrade: 'unconfirmed' },       // a name we cannot stand behind
-          { ..._ready, contactNotFit: true },                    // the server ruled it out
+          _ready, { ..._ready, name: 'B Co', contactOwnerGrade: 'stated' },
+          { ..._ready, name: 'C Co', contactPhone: '' },              // no number to dial
+          { ..._ready, name: 'D Co', contactEmailSendable: false },   // nothing that will deliver
+          { ..._ready, name: 'E Co', contactOwnerGrade: 'unconfirmed' }, // a name we cannot stand behind
+          { ..._ready, name: 'F Co', contactNotFit: true },           // the server ruled it out
         ]);
+        // ══ A RULED-OUT LEAD IS NOT A READ ═══════════════════════════════
+        // It used to be counted by the tally AND filed under Ruled out by the
+        // tabs, so it sat inside "31 read of 31" and inside "Ruled out 4" and
+        // in no exported file at all.
+        if (_t.read !== 5) fails.push('the tally counts ' + _t.read + ' reads of a fixture with five reads and one lead the server ruled out, so the run total and the tabs describe different sets again');
         if (_t.repReady !== 2) fails.push('rep-ready counts ' + _t.repReady + ' of a fixture where exactly two rows are workable');
         if (!_t.pivotReady) fails.push('a lead with a phone and an unconfirmed name is counted as nothing, when the rep can still call and ask');
-        // Four of the six fixtures carry a confirmed owner (the two that fail
-        // rep-ready on the phone and the address still have one, and so does
-        // the ruled-out row). The property is that the split accounts for
-        // every named owner and that each grade is actually counted.
-        if (_t.gConfirmed !== 4 || _t.gStated !== 1 || _t.gUnconfirmed !== 1) {
-          fails.push(`the owner-grade split reads ${_t.gConfirmed}/${_t.gStated}/${_t.gUnconfirmed} against a fixture of 4/1/1`);
+        // THREE of the six fixtures carry a confirmed owner that COUNTS: the
+        // two that fail rep-ready on the phone and the address still have one,
+        // and the ruled-out row's owner is deliberately no longer among them -
+        // a lead the server refused is not a lead this run read, and its owner
+        // does not belong in the run's own split. The property is that the
+        // split accounts for every named owner it does count.
+        if (_t.gConfirmed !== 3 || _t.gStated !== 1 || _t.gUnconfirmed !== 1) {
+          fails.push(`the owner-grade split reads ${_t.gConfirmed}/${_t.gStated}/${_t.gUnconfirmed} against a fixture of 3/1/1`);
         }
         if (_t.gConfirmed + _t.gStated + _t.gInferred + _t.gUnconfirmed !== _t.owner) {
           fails.push('the owner-grade split does not add up to the owners counted, so some names are graded as nothing');
@@ -2951,7 +2961,7 @@ let contactTally = null;
   if (html.indexOf(_nn('onClick: () => runContactBatch(_cUnread, Math.max(1,', ' contactHowMany)),')) < 0) {
     fails.push('the contact panel button no longer starts a contact run for the number the operator chose, or it is pre-slicing the pool so a refused lead costs a slot');
   }
-  if (html.indexOf(_nn('if (kept >= want)', ' return;')) < 0) {
+  if (html.indexOf(_nn('if (kept + inFlight >= want)', ' return;')) < 0) {
     fails.push('the runner no longer stops at the number of GOOD leads asked for, so a run of five that hits two chains comes back with three');
   }
   // Stop has to abort what is IN FLIGHT. The flag alone is read between leads,
@@ -3135,6 +3145,27 @@ let contactTally = null;
   {
     const defs = (html.match(/const runContactBatch\s*=/g) || []).length;
     if (defs !== 1) fails.push(`${defs} definition(s) of runContactBatch — one implementation, or the second is the one that rots`);
+  }
+  // ══ "READ 25" MUST RETURN 25 ═════════════════════════════════════════════
+  // Live 2026-09-01: 25 asked for, "31 read of 31" reported. The guard was
+  // checked BEFORE the draw with a pool of six workers, so at kept === want - 1
+  // all six passed it and drew at once. Ceiling was want + (CONTACT_POOL - 1).
+  // The runner lives inside a React component, so this is a source assertion
+  // and says so; the reservation itself is what the needles pin.
+  {
+    const runner2 = html.slice(html.indexOf('const runContactBatch'), html.indexOf('const addManyToPipeline'));
+    if (runner2.indexOf(_nn('inFlight += 1;', '\n        try { await one(list[i]); } finally { inFlight -= 1; }')) < 0) {
+      fails.push('the contact runner does not release its reservation, so a refusal or a failure permanently shrinks the run');
+    }
+    // A failed read stays in Not-read and the panel promises it will be picked
+    // up again. Charging it a slot makes that promise false.
+    if (runner2.indexOf(_nn('const _kept = fields.contactReadOk === true', ' && !_refused;')) < 0) {
+      fails.push('a contact read that FAILED still consumes one of the leads asked for, while the panel says it will be picked up again');
+    }
+  }
+  // The move bar must describe the same population the panel above it does.
+  if (html.indexOf(_nn('const _allMovable = _cShown.filter(c => c && c.name', ' && !alreadyAdded(c.name));')) < 0) {
+    fails.push('the move-to-pipeline bar ignores the Google-listing scope checkbox, so it offers to move the very leads the panel above says it is hiding');
   }
 }
 

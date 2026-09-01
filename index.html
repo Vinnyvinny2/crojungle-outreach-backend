@@ -5779,7 +5779,11 @@ const findCsvColumns = (full) => (full === true ? FIND_CSV_COLUMNS
 // this project's two hard bounces both came from the second kind.
 const findRunTally = (companies) => {
   const all = Array.isArray(companies) ? companies : [];
-  const read = all.filter(c => c && c.contactReadOk === true);
+  // ══ ONE MEMBERSHIP RULE ════════════════════════════════════════════════
+  // This read the raw flag while contactTabOf reads the verdict, so a chain
+  // drop was inside "31 read" AND inside "Ruled out 4" and in no file at all.
+  // The tally now counts what the tabs and the export count.
+  const read = all.filter(c => contactTabOf(c) === 'read');
   const t = { read: read.length, ofQueue: all.length,
     owner: 0, ownerTitled: 0, ownerCanBuy: 0,
     // ══ THE NUMBER THAT DECIDES EVERYTHING ═════════════════════════════
@@ -6830,6 +6834,10 @@ function FindView({
     setContactRun({ total: want, done: 0, withEmail: 0, withOwner: 0, running: [], fc: 0, usd: 0, startedAt: started, failed: 0, refused: 0, names: [] });
     let next = 0;
     let kept = 0;
+    // Claimed but not yet answered. Without it the guard below is checked by
+    // six workers at kept === want - 1 and all six draw: "read 25" came back
+    // "31 read of 31" on 2026-09-01, which is want + (CONTACT_POOL - 1).
+    let inFlight = 0;
     let transportFails = 0;
     const results = new Map();
     const one = async (co) => {
@@ -6907,13 +6915,18 @@ function FindView({
           + '). Nothing was read and nothing was spent. If it is asleep or redeploying, give it a minute and press the button again \u2014 no lead has been marked as read.');
       }
       results.set(co.name, fields);
-      // A lead the server ruled out is not one of the leads asked for, so it
-      // does not consume one of them.
+      // ══ ONLY A LEAD WE ACTUALLY READ CONSUMES ONE OF THE N ASKED FOR ═══
+      // A lead the server ruled out is not one of the leads asked for. Neither
+      // is one whose read FAILED: it stays in Not-read and the panel promises
+      // "the button above picks them up again", so charging it a slot makes
+      // that promise false. The three-strike dead-server stop is what bounds
+      // the loop when every read is failing.
       const _refused = fields.contactNotFit === true;
-      if (!_refused) kept += 1;
+      const _kept = fields.contactReadOk === true && !_refused;
+      if (_kept) kept += 1;
       setContactRun(s => s ? {
         ...s,
-        done: s.done + (_refused ? 0 : 1),
+        done: s.done + (_kept ? 1 : 0),
         refused: (s.refused || 0) + (_refused ? 1 : 0),
         // ══ WHERE THE FIVE YOU JUST RAN WENT ════════════════════════════
         // contactAt was stamped on every read and consumed by nothing, so
@@ -6938,11 +6951,14 @@ function FindView({
     const worker = async () => {
       for (;;) {
         if (contactStop.current) return;
-        // Enough good ones already, or the pool is exhausted. Both are ends.
-        if (kept >= want) return;
+        // Enough good ones already or CLAIMED, or the pool is exhausted. The
+        // reservation is what makes "read N" return N: a refusal or a failure
+        // releases it below and the worker draws again.
+        if (kept + inFlight >= want) return;
         const i = next++;
         if (i >= list.length) return;
-        await one(list[i]);
+        inFlight += 1;
+        try { await one(list[i]); } finally { inFlight -= 1; }
       }
     };
     await Promise.all(Array.from({ length: Math.min(CONTACT_POOL, want) }, worker));
@@ -8523,7 +8539,12 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       // Same rule the Research tab's batch runner already uses. With nothing
       // ticked this behaves exactly as it did: the filtered list, score-ordered,
       // capped at fifty.
-      const _allMovable = filtered.filter(c => c && c.name && !alreadyAdded(c.name));
+      // ══ THE SAME POPULATION THE PANEL ABOVE DESCRIBES ══════════════════
+      // This read `filtered`, one link above `_cShown`, so "Move all 92"
+      // offered to move the 32 leads the scope checkbox directly above says it
+      // is hiding - and those 32 are the non-Places lanes that panel warns
+      // about by name.
+      const _allMovable = _cShown.filter(c => c && c.name && !alreadyAdded(c.name));
       const _pickedMovable = _allMovable.filter(c => findPicked.has(c.name));
       const _movable = _pickedMovable.length ? _pickedMovable : _allMovable;
       const _byPick = _pickedMovable.length > 0;
