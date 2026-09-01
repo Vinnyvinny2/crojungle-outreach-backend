@@ -1309,7 +1309,19 @@ const discoverViaJob = async (signal, onTick, body) => {
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260923;
+// ══ A ROUND THAT CHANGES THIS FILE BUMPS THIS NUMBER ══════════════════════
+// It sat at 20260923 for THREE rounds. The warning below is
+// `if (s <= CLIENT_CONTRACT) return`, so a browser running the Round 101 build
+// against a Round 103 server was indistinguishable from an up-to-date one - no
+// banner, no console line - and contactReadBuild is stamped with this same
+// constant, so no read that client took could ever show as stale either.
+//
+// The live cost, 2026-09-01: a request for 7 contact reads returned 12, because
+// the reservation fix shipped in Round 102 and the page was never dragged in.
+// Nothing anywhere said so. The rule is not "bump on an incompatible change" -
+// it is "bump when index.html changes", because this number is the ONLY
+// staleness signal there is.
+const CLIENT_CONTRACT = 20260924;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5496,6 +5508,26 @@ const contactRequestBody = (company, settings) => {
       placeId: C.placeId || '',
       outsideBand: C.outsideBand === true,
       aboveSizeCeiling: C.aboveSizeCeiling === true,
+      // ══ THE TheirStack LANE'S OWN EVIDENCE ═════════════════════════════
+      // Vin, 2026-09-01: "im going to fill up the theirstack credits so that
+      // we have quality companies with actually job listings for marketing
+      // which is a huge timing signal. So that's the most important out of
+      // all the non Google places leads... we need to make sure we get all
+      // the essnritla info for that one."
+      //
+      // A TheirStack lead is built with a VERIFIED headcount (free, in the
+      // same call), the marketing role TITLES, the posting date and its URL.
+      // None of it was sent. So the strongest ICP measurement this system can
+      // hold was dropped and the size term fell back to counting names on a
+      // team page, and the reason the lead exists - a dated marketing role -
+      // was re-derived from their careers page and came back "no" on every
+      // row of that run.
+      source: C.source || '',
+      verifiedEmployees: (typeof C.verifiedEmployees === 'number') ? C.verifiedEmployees : null,
+      marketingRoles: Array.isArray(C.marketingRoles) ? C.marketingRoles : [],
+      jobPostedAt: C.jobPostedAt || '',
+      signalAgeDays: (typeof C.signalAgeDays === 'number') ? C.signalAgeDays : null,
+      jobPostingUrl: C.jobPostingUrl || '',
     },
     keys: {
       anthropicKey: S.apiKey, firecrawlKey: S.firecrawlKey, verifierKey: S.verifierKey,
@@ -5638,6 +5670,21 @@ const contactFieldsFrom = (data) => {
     // The server's own verdict, when it read the pages and found a chain.
     contactNotFit: d.notIcp === true,
     contactNotFitWhy: d.icpWhy || '',
+    // ══ THE LISTING WE RECOVERED, AND THE CLOCK ═══════════════════════
+    // A lead that arrived without a Google listing and got one from a single
+    // Places text search. It is worth saying on the row, because "rating 4.6"
+    // read off a recovered listing and one that came with the lead are the
+    // same fact but not the same provenance.
+    contactListingRecovered: d.listingRecovered === true,
+    // How many owner-lookup stages actually ran. Stage 1 is free; anything
+    // above it is the paid wave. A fact, not an inference from spend.
+    contactOwnerStages: (typeof d.ownerStagesRun === 'number') ? d.ownerStagesRun : null,
+    // The marketing role that made this a lead, and how old the posting is.
+    // The only clock in this pipeline, and it stopped at the server.
+    contactHiringRoles: (d.hiring && Array.isArray(d.hiring.roles)) ? d.hiring.roles : [],
+    contactHiringDaysAgo: (d.hiring && typeof d.hiring.daysAgo === 'number') ? d.hiring.daysAgo : null,
+    contactHiringPostingUrl: (d.hiring && d.hiring.postingUrl) || '',
+    contactVerifiedEmployees: (typeof sig.verifiedEmployees === 'number') ? sig.verifiedEmployees : null,
   };
 };
 
@@ -5713,6 +5760,7 @@ const FIND_CSV_COLUMNS = [
   ['email', 'Email'],
   ['emailConfidence', 'How confident we are in that address'],
   ['emailSafeToSend', 'Safe to send'],
+  ['emailWhyUnconfirmed', 'If it is unconfirmed, why'],
   ['emailGoesTo', 'Who opens it'],
   ['phone', 'Phone'],
   ['phoneOnSite', 'Does their own site print this number'],
@@ -5723,6 +5771,9 @@ const FIND_CSV_COLUMNS = [
   ['teamSize', 'People on their team page (a floor, not a headcount)'],
   ['hiringMarketing', 'Hiring for marketing'],
   ['hiringRoles', 'Roles they are hiring for'],
+  // The CLOCK. A marketing role posted eleven days ago is the strongest cold
+  // opening this pipeline can produce, and it never left the server.
+  ['hiringPosted', 'When that role was posted'],
   ['website', 'Website'],
   ['location', 'Location'],
   ['reviews', 'Google reviews'],
@@ -5755,7 +5806,10 @@ const FIND_CSV_COLUMNS = [
 // A confirmed owner and a name we held back are two different calls.
 const FIND_CSV_ESSENTIAL = ['company', 'owner', 'ownerTitle', 'ownerHowSure',
   'email', 'emailConfidence', 'phone',
-  'icp', 'payingForAds', 'hiringMarketing', 'callWindow'];
+  // hiringPosted joins the lean set beside hiringMarketing, because a date is
+  // what turns "they are hiring" into a reason to call THIS week. It is empty
+  // on every lead that carries no posting, so it costs nothing on those rows.
+  'icp', 'payingForAds', 'hiringMarketing', 'hiringPosted', 'callWindow'];
 const findCsvColumns = (full) => (full === true ? FIND_CSV_COLUMNS
   : FIND_CSV_COLUMNS.filter(c => FIND_CSV_ESSENTIAL.indexOf(c[0]) >= 0));
 // ══ THE FIRST MEASUREMENT OF WHETHER ANY OF THIS WORKS ══════════════════════
@@ -5949,6 +6003,16 @@ const findContactRows = (companies) => {
       : c.contactEmailTier === 3 ? 'built from a pattern seen at this company, not confirmed'
       : c.contactEmailTier === 4 ? 'a guess from a common pattern, nothing confirmed it'
       : (c.contactEmailLabel || 'unknown'),
+    // ══ OUR OUTAGE, NOT A FAULT OF THE ADDRESS ═══════════════════════════
+    // On the 2026-09-01 run the mailbox checker ran out of credits twice, and
+    // every address resolved while it was down falls to tier 3 at best. Only
+    // the server's own verifierDown flag survives to the row; blockReason is
+    // empty on that path and the note is the generic "no address could be
+    // resolved". A rep reading "not confirmed" cannot tell a doubtful mailbox
+    // from a minute when we could not ask.
+    emailWhyUnconfirmed: c.contactEmailVerifierDown === true
+      ? 'our mailbox checker was unavailable on this run - that is our outage, not a fault of the address. Re-read this lead once it is back.'
+      : (c.contactEmailBlockReason || ''),
     emailSafeToSend: !c.contactEmail ? '' : (c.contactEmailSendable ? 'yes' : 'NO - do not send'),
     // Who actually opens it. A front-desk mailbox is kept - it is often the
     // only published address and a rep can still work it - but a caller has to
@@ -5988,7 +6052,13 @@ const findContactRows = (companies) => {
     // Off their own published Google hours. An empty cell is honest: it means
     // their listing publishes no hours, never that any time is as good as any
     // other.
-    callWindow: c.contactCallWindow || '',
+    // ══ AN EMPTY CELL MUST SAY WHY ═══════════════════════════════════════
+    // contactCallWindowWhy is stored on every lead and had no column, so a
+    // blank "When to call" reached the rep with no explanation - and "their
+    // listing publishes no opening hours" is a fact he can act on, while a
+    // blank cell reads as a bug in the file.
+    callWindow: c.contactCallWindow
+      || (c.contactCallWindowWhy ? ('no window: ' + c.contactCallWindowWhy) : ''),
     // Read from the server's band. Never a dollar figure and never re-derived
     // here: an empty cell means nobody measured enough to say, which is a
     // different thing from a business that cannot pay.
@@ -6001,6 +6071,14 @@ const findContactRows = (companies) => {
     teamSize: (typeof c.contactTeamCount === 'number') ? String(c.contactTeamCount) : 'not published',
     hiringMarketing: contactYesNo(c.contactHiringMarketing, 'yes', 'no'),
     hiringRoles: (c.contactHiringTitles || []).join('; '),
+    // Straight from the lane that found them. "not dated" rather than a guess:
+    // searchTheirStack refuses to invent recency for an undated posting and
+    // this column must not do it either.
+    hiringPosted: (typeof c.contactHiringDaysAgo === 'number')
+      ? (c.contactHiringDaysAgo === 0 ? 'today'
+         : c.contactHiringDaysAgo === 1 ? 'yesterday'
+         : c.contactHiringDaysAgo + ' days ago')
+      : ((c.contactHiringRoles || []).length ? 'posted, but the listing carried no usable date' : ''),
     website: c.website || '',
     location: c.location || '',
     reviews: (typeof c.reviewCount === 'number') ? String(c.reviewCount) : '',
@@ -6237,7 +6315,11 @@ function FindView({
   // review count, somebody who claimed it. The job-board, funding and for-sale
   // lanes have none of that, and every one of tonight's wasted reads came from
   // them. So the scope is the measurement, not a guess about the words.
-  const [contactPlacesOnly, setContactPlacesOnly] = React.useState(true);
+  // Default OFF - see the note at _hasListing. The other lanes are where the
+  // national brands come from, so the control stays; what changed is that a
+  // lead without a listing now gets the same read, so hiding it by default
+  // costs quality it no longer buys.
+  const [contactPlacesOnly, setContactPlacesOnly] = React.useState(false);
   const [contactTab, setContactTab] = React.useState('unread');
   // 'run' shows only the leads the last press read; 'queue' shows everything
   // that has ever been read. Both are real questions and the panel could only
@@ -7685,7 +7767,20 @@ function FindView({
       // owner-operated business from a job-board or for-sale row. Places leads
       // carry a placeId; nothing else in the queue does. Lifted above the sort
       // because the TAB counts and the rendered cards both read this pool.
-      const _hasListing = (c) => !!(c && (c.placeId || c.source === 'google_places'));
+      // ══ THE TICK BOX MEANS WHAT IT SAYS ═══════════════════════════════
+      // `|| c.source === 'google_places'` let a lead through the "only
+      // businesses with a Google listing" filter WITH NO PLACE ID on it - and
+      // six of the twelve leads on the 2026-09-01 run then printed "this lead
+      // carries no Google place id" on the server. A filter with an escape
+      // hatch is a filter the operator cannot reason about.
+      //
+      // It defaults OFF now. Vin, 2026-09-01: "i have a bunch of leads in
+      // there that are not google places leads but guess what i dont care i
+      // want them to cost the same to read while ahving the same quality as
+      // places." The server recovers a listing for a lead that arrives without
+      // one, so the distinction the tick box draws is no longer a quality
+      // distinction - it survives as a control, not as a default.
+      const _hasListing = (c) => !!(c && c.placeId);
       const _cShown = contactPlacesOnly ? filtered.filter(_hasListing) : filtered;
       const _cHidden = contactPlacesOnly ? (filtered.length - _cShown.length) : 0;
       const _tabCount = { unread: 0, read: 0, out: 0 };
