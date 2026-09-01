@@ -1305,7 +1305,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260919;
+const CLIENT_CONTRACT = 20260920;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5509,6 +5509,13 @@ const contactFieldsFrom = (data) => {
     contactAt: new Date().toISOString(),
     contactFailedAt: null,
     contactIcp: (typeof icp.score === 'number') ? icp.score : null,
+    // HOW MANY SIGNALS STOOD BEHIND IT. The score is a percentage of what we
+    // could MEASURE, so a lead scored on three signals and one scored on seven
+    // are divided by different-sized totals - and the bare number is what sorts
+    // this list. Without the denominator on screen a thin read outranks a full
+    // one and nothing says why.
+    contactIcpMeasured: (typeof icp.measured === 'number') ? icp.measured : null,
+    contactIcpOf: (typeof icp.of === 'number') ? icp.of : null,
     contactIcpWhy: icp.why || '',
     contactIcpTerms: Array.isArray(icp.terms) ? icp.terms : [],
     contactOwner: own.name || '',
@@ -7483,7 +7490,14 @@ function FindView({
         ? filtered.slice().sort((a, b) => {
             const A = (typeof a.contactIcp === 'number') ? a.contactIcp : -1;
             const B = (typeof b.contactIcp === 'number') ? b.contactIcp : -1;
-            return B - A;
+            if (B !== A) return B - A;
+            // A TIE IS BROKEN BY HOW MUCH WE ACTUALLY KNOW. Two leads on the
+            // same number are not equally well understood: one may have been
+            // scored on three signals and the other on seven. The better-read
+            // lead goes first, because that is the one a rep can work.
+            const Am = (typeof a.contactIcpMeasured === 'number') ? a.contactIcpMeasured : 0;
+            const Bm = (typeof b.contactIcpMeasured === 'number') ? b.contactIcpMeasured : 0;
+            return Bm - Am;
           })
         : filtered;
       const cards = _shown.map((co, i) => {
@@ -7618,7 +7632,14 @@ function FindView({
           React.createElement('div', { style:{ fontFamily:'Syne', fontWeight:700, fontSize:19, lineHeight:1,
             color: _fit === null ? 'var(--m)' : _fit >= 70 ? 'var(--a)' : 'var(--t)' } },
             _fit === null ? '—' : String(_fit)),
-          React.createElement('div', { style:{ fontSize:9.5, color:'var(--m2)', marginTop:3, letterSpacing:'.04em' } }, 'FIT/100')),
+          React.createElement('div', { style:{ fontSize:9.5, color:'var(--m2)', marginTop:3, letterSpacing:'.04em' } }, 'FIT/100'),
+          // The denominator, on the face of the number rather than only in its
+          // tooltip. "45 of 7 signals" and "45 of 3 signals" are different
+          // statements and the score alone cannot tell them apart.
+          (typeof co.contactIcpMeasured === 'number' && typeof co.contactIcpOf === 'number')
+            ? React.createElement('div', { style:{ fontSize:9.5, color:'var(--m2)', marginTop:2 } },
+                co.contactIcpMeasured + ' of ' + co.contactIcpOf)
+            : null),
         React.createElement('div', { style:{ flex:1, minWidth:0 } },
           React.createElement('div', { style:_line },
             co.contactOwner
@@ -7913,46 +7934,78 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
         React.createElement('div', { style:{ fontFamily:'Syne', fontWeight:700, fontSize:22, lineHeight:1.1, color: tone || 'var(--t)' } }, String(n)),
         React.createElement('div', { style:{ fontSize:11, color:'var(--m2)', marginTop:2 } }, label));
 
+      // ══ ONE GRAMMAR FOR THIS PANEL ═══════════════════════════════════════
+      // Vin: "this section is still messy and unorganized it needs to look
+      // professional." It rendered twenty-two blocks in one flat vertical
+      // stack - a heading, five paragraphs of prose, three stat tiles, about
+      // fifteen controls and four boxes - with the prose interleaved BETWEEN
+      // the controls, so there was no way to tell what a press would do from
+      // what had already happened.
+      //
+      // Four bands, in the order the questions get asked: what this is, what
+      // the next press covers, what to press, and what came back. Every
+      // control survives - this is the button that spends real credits, and
+      // section 39's rule holds. What changed is the grouping and the grammar.
+      // Prose became captions under the control it describes, and the file's
+      // own .btn-p / .btn-g / .btn-sm are used instead of recolouring inline.
+      const _band = (label, ...kids) => React.createElement('div', {
+        style:{ display:'flex', gap:14, alignItems:'flex-start', padding:'11px 0',
+                borderTop:'1px solid var(--b)' },
+      },
+        React.createElement('div', { style:{ flex:'0 0 88px', fontSize:10.5, fontWeight:600,
+          letterSpacing:'.07em', textTransform:'uppercase', color:'var(--m2)', paddingTop:9 } }, label),
+        React.createElement('div', { style:{ flex:1, minWidth:0, display:'flex', gap:9,
+          alignItems:'center', flexWrap:'wrap' } }, ...kids.filter(Boolean)));
+      const _cap = (text, tone) => React.createElement('div', {
+        style:{ flexBasis:'100%', fontSize:11.5, color: tone || 'var(--m2)', lineHeight:1.5 },
+      }, text);
+
       const contactPanel = React.createElement('div', {
-        style: { border:'1px solid var(--b)', borderRadius:14, padding:'16px 18px', marginBottom:14,
+        style: { border:'1px solid var(--b)', borderRadius:14, padding:'15px 18px 4px', marginBottom:14,
                  background:'var(--s2)' },
       },
-        React.createElement('div', { style:{ display:'flex', alignItems:'flex-start', gap:16, flexWrap:'wrap' } },
-          React.createElement('div', { style:{ flex:'1 1 260px', minWidth:240 } },
+        // ── WHAT THIS IS, AND WHERE THE LEADS ARE ────────────────────────
+        React.createElement('div', { style:{ display:'flex', alignItems:'flex-start', gap:16, flexWrap:'wrap', paddingBottom:12 } },
+          React.createElement('div', { style:{ flex:'1 1 240px', minWidth:220 } },
             React.createElement('div', { style:{ fontFamily:'Syne', fontWeight:700, fontSize:15, letterSpacing:'-.01em' } }, 'Contact list'),
             React.createElement('div', { style:{ fontSize:12.5, color:'var(--m2)', marginTop:4, lineHeight:1.5 } },
               _running
-                ? 'Reading their site for the decision-maker, an address and the three fit signals. Nothing is being audited.'
-                : 'Gets the decision-maker, an email and a phone number, then scores the business out of 100 on whether they already pay for ads, how many people they publish, and whether they are hiring for marketing.')),
-          // The numbers. On a fresh queue these are all zero and the panel is
-          // still worth reading, because the first one says what a press covers.
+                ? 'Reading their site for the decision-maker, an address and the fit signals. Nothing is being audited.'
+                : 'The decision-maker, an email and a phone number, plus a fit score out of 100.'),
+            // One toggle, on the same row as the numbers it re-points, because
+            // it decides which set every figure below describes.
+            _cRunSet.length ? React.createElement('div', { style:{ display:'flex', gap:6, marginTop:9, alignItems:'center', flexWrap:'wrap' } },
+              ...[['run', 'This run (' + _cRunSet.length + ')'], ['queue', 'The whole queue (' + _cShown.length + ')']].map(([k, lab]) =>
+                React.createElement('button', { key:k,
+                  className:'btn btn-sm',
+                  style:{ background: contactScope === k ? 'var(--a)' : 'transparent',
+                          color: contactScope === k ? '#0b0d10' : 'var(--m2)',
+                          border:'1px solid ' + (contactScope === k ? 'var(--a)' : 'var(--b)') },
+                  onClick: () => setContactScope(k) }, lab))) : null),
           React.createElement('div', { style:{ display:'flex', gap:22, alignItems:'flex-start' } },
             _stat(_scoped.length, _scoped === _cRunSet ? 'in this run' : 'on screen'),
             _stat(_cRead.length, 'read', _cRead.length ? 'var(--a)' : null),
             _stat(_cWithEmail, 'with an email', _cWithEmail ? 'var(--g)' : null))),
-        // One toggle, and it only exists once a run has something to show.
-        _cRunSet.length ? React.createElement('div', { style:{ display:'flex', gap:6, marginTop:12, alignItems:'center', flexWrap:'wrap' } },
-          React.createElement('span', { style:{ fontSize:11.5, color:'var(--m2)', marginRight:2 } }, 'Showing'),
-          ...[['run', 'This run (' + _cRunSet.length + ')'], ['queue', 'The whole queue (' + _cShown.length + ')']].map(([k, lab]) =>
-            React.createElement('button', { key:k,
-              className:'btn btn-sm',
-              style:{ background: contactScope === k ? 'var(--a)' : 'transparent',
-                      color: contactScope === k ? '#fff' : 'var(--m2)',
-                      border:'1px solid ' + (contactScope === k ? 'var(--a)' : 'var(--b)') },
-              onClick: () => setContactScope(k) }, lab))) : null,
+
+        // ── A READ THAT PREDATES THE CURRENT PARSER ──────────────────────
         // Stamped and flagged. Nothing here spends until it is pressed.
-        _cStale.length ? React.createElement('div', { style:{ marginTop:10, fontSize:12, color:'var(--t)' } },
-          _cStale.length + ' of these ' + _cStale.length + ' read' + (_cStale.length === 1 ? ' was' : 's were')
-            + ' taken by an older build, so what they say about the owner and the address came from a parser that has since been fixed. Nothing is re-read until you press this.',
+        _cStale.length ? _band('Stale',
           React.createElement('button', {
-            className:'btn btn-sm', style:{ marginLeft:8, background:'transparent', border:'1px solid var(--b)', color:'var(--m2)' },
+            className:'btn btn-sm', style:{ background:'transparent', border:'1px solid var(--b)', color:'var(--t)' },
             onClick: () => {
               if (!window.confirm('Re-read ' + _cStale.length + ' lead(s) taken by an older build? This spends on them again.')) return;
               runContactBatch(_cStale, _cStale.length);
-            } }, 'Re-read ' + _cStale.length)) : null,
+            } }, 'Re-read ' + _cStale.length),
+          // The second number is how many reads there ARE. It printed the
+          // stale count twice - "68 of these 68 reads" on a queue with 68
+          // stale of 68 read, which is true by accident and false the moment
+          // one lead is re-read.
+          _cap(_cStale.length + ' of these ' + _cRead.length + ' read'
+            + (_cRead.length === 1 ? ' was' : 's were')
+            + ' taken by an older build, so what they say about the owner and the address came from a parser that has since been fixed.', 'var(--t)')) : null,
 
-        // -- RUNNING ------------------------------------------------------
-        _running ? React.createElement('div', { style:{ marginTop:14 } },
+        // ── RUNNING ──────────────────────────────────────────────────────
+        _running ? React.createElement('div', { style:{ padding:'12px 0', borderTop:'1px solid var(--b)' } },
           React.createElement('div', { style:{ height:6, borderRadius:99, background:'var(--b2)', overflow:'hidden' } },
             React.createElement('div', { style:{ height:'100%', width:_pct + '%', background:'var(--a)', borderRadius:99, transition:'width .3s ease' } })),
           React.createElement('div', { style:{ display:'flex', alignItems:'center', gap:12, flexWrap:'wrap', marginTop:10, fontSize:12.5, color:'var(--t)' } },
@@ -7978,176 +8031,176 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
           React.createElement('div', { style:{ fontSize:11.5, color:'var(--m2)', marginTop:6 } },
             'This run so far: ' + Math.round(contactRun.fc) + ' Firecrawl credit' + (Math.round(contactRun.fc) === 1 ? '' : 's')
             + ' and $' + contactRun.usd.toFixed(3) + ' of model. Stop keeps everything already read.'))
-        // -- IDLE ---------------------------------------------------------
-        : React.createElement('div', { style:{ display:'flex', gap:10, alignItems:'center', flexWrap:'wrap', marginTop:14 } },
-          // ══ THE SCOPE, BESIDE THE BUTTON THAT SPENDS ═════════════════════
-          // Same rule that moved the trade and market pickers up here: a
-          // control that decides what a press BUYS belongs next to the press.
-          React.createElement('label', {
-            style:{ display:'flex', alignItems:'center', gap:7, fontSize:12.5, color:'var(--t)',
-                    flexBasis:'100%', cursor:'pointer', lineHeight:1.5 },
-          },
-            React.createElement('input', {
-              type:'checkbox', checked: contactPlacesOnly,
-              onChange: e => setContactPlacesOnly(!!e.target.checked),
-            }),
-            React.createElement('span', null,
-              'Only businesses with a Google listing'
-              + (_cHidden ? ' \u2014 hiding ' + _cHidden + ' from the job-board, funding and for-sale lanes' : '')),
-            React.createElement('span', { style:{ color:'var(--m2)' } },
-              'A Google listing means a local address, a rating and reviews. The other lanes are where the national brands come from.')),
-          React.createElement('button', {
-            className:'btn btn-sm',
-            style:{ background:'var(--a)', color:'#0b0d10', border:'none', fontWeight:600 },
-            disabled: _cUnread.length === 0,
-            title: 'Reads their homepage and up to three pages their own navigation links to. Buys no audit.',
-            onClick: () => runContactBatch(_cUnread, Math.max(1, contactHowMany)),
-          }, _cUnread.length === 0
-              ? 'Every lead on screen has been read'
-              : ('Get contacts for ' + Math.min(Math.max(1, contactHowMany), _cUnread.length) + ' lead' + (Math.min(Math.max(1, contactHowMany), _cUnread.length) === 1 ? '' : 's'))),
-          _cUnread.length ? React.createElement('div', {
-            style:{ display:'flex', alignItems:'center', gap:7, fontSize:12, color:'var(--t)' },
-          },
-            React.createElement('span', { style:{ color:'var(--m2)' } }, 'How many'),
-            React.createElement('input', {
-              type:'number', min:'1', max:'500', value: contactHowMany,
-              onChange: e => setContactHowMany(Math.max(1, Math.min(500, Number(e.target.value) || 1))),
-              style:{ width:72, padding:'6px 9px', borderRadius:7, border:'1px solid var(--b)',
-                      background:'var(--s)', color:'var(--t)', fontFamily:'Inter,sans-serif', fontSize:13 },
-            }),
-            [5, 25, 50].map(n => React.createElement('button', {
-              key: n, className:'btn btn-sm',
-              style:{ padding:'5px 9px', background: contactHowMany === n ? 'var(--p)' : 'transparent',
-                      color: contactHowMany === n ? '#fff' : 'var(--m2)', border:'1px solid var(--b)' },
-              onClick: () => setContactHowMany(n),
-            }, String(n)))) : null,
-          _cUnread.length > contactHowMany ? React.createElement('button', {
-            className:'btn btn-g btn-sm',
-            onClick: () => runContactBatch(_cUnread, _cUnread.length),
-          }, 'All ' + _cUnread.length) : null,
-          _cExportable.length ? React.createElement('button', {
-            className:'btn btn-g btn-sm',
-            title: csvFull
-              ? 'All ' + FIND_CSV_COLUMNS.length + ' columns.'
-              : 'The ' + FIND_CSV_ESSENTIAL.length + ' columns you dial and send from. Tick "every column" for the rest.',
-            onClick: () => { const n = downloadFindContacts(_cExportable, csvFull); if (!n) setContactErr('Nothing to export yet.'); },
-          }, 'Download CSV (' + _cExportable.length + ')') : null,
-          // ══ THE COLUMNS, BESIDE THE BUTTON THAT WRITES THEM ══════════════
-          // Same rule as the scope tick box above it. He was deleting most of
-          // twenty-one columns by hand after every paste, so the default is the
-          // set he asked for and the rest is one tick away rather than gone.
-          _cExportable.length ? React.createElement('label', {
-            style:{ display:'flex', alignItems:'center', gap:7, fontSize:12, color:'var(--t)', cursor:'pointer' },
-          },
-            React.createElement('input', {
-              type:'checkbox', checked: csvFull,
-              onChange: e => setCsvFull(!!e.target.checked),
-            }),
-            React.createElement('span', null, 'every column (' + FIND_CSV_COLUMNS.length + ' instead of ' + FIND_CSV_ESSENTIAL.length + ')')) : null,
-          // ══ THE SAME LIST, STRAIGHT INTO HIS SHEET ═══════════════════════
-          // Same population as the CSV button beside it, same rows, same
-          // columns. If the two ever disagreed the operator would have no way
-          // to tell which one was right.
-          _cExportable.length ? React.createElement('button', {
-            className:'btn btn-sm',
-            style:{ background:'transparent', color:'var(--t)', border:'1px solid var(--b)' },
-            disabled: sheetBusy,
-            title: 'Appends these rows to the Google Sheet set up in Settings. A business already in the sheet is not added twice.',
-            onClick: async () => {
-              const url = String((settings && settings.sheetWebhookUrl) || '').trim();
-              if (!url) { setSheetHelp(true); setSheetNote(''); return; }
-              setSheetBusy(true); setSheetNote(''); setContactErr('');
-              try {
-                const payload = findSheetPayload(_cExportable, csvFull);
-                const r = await fetch(BACKEND + '/api/export-sheet', {
-                  method:'POST', headers:{ 'Content-Type':'application/json' },
-                  body: JSON.stringify(Object.assign({ url }, payload)),
-                });
-                const d = await r.json().catch(() => ({}));
-                if (!r.ok) { setSheetNote(''); setContactErr(d.error || ('The sheet export answered ' + r.status + '.')); if (d.setupNeeded) setSheetHelp(true); }
-                else {
-                  setSheetNote(d.written + ' row' + (d.written === 1 ? '' : 's') + ' added to the sheet'
-                    + (d.skipped ? ', ' + d.skipped + ' already there' : '') + '.');
-                }
-              } catch (e) {
-                setContactErr('Could not reach the server to send the sheet (' + ((e && e.message) || 'no response') + ').');
-              } finally { setSheetBusy(false); }
+
+        // ── IDLE: WHAT THE NEXT PRESS COVERS, THEN WHAT TO PRESS ─────────
+        : React.createElement(React.Fragment, null,
+          _band('Scope',
+            React.createElement('label', {
+              style:{ display:'flex', alignItems:'center', gap:7, fontSize:12.5, color:'var(--t)', cursor:'pointer' },
             },
-          }, sheetBusy ? 'Sending to the sheet...' : 'Send to Google Sheet') : null,
-          sheetNote ? React.createElement('div', {
-            style:{ fontSize:12, color:'var(--g)', flexBasis:'100%', lineHeight:1.5 },
-          }, sheetNote) : null,
-          _cRead.length ? React.createElement('div', {
-            style:{ fontSize:12, color:'var(--m2)', marginTop:8, lineHeight:1.5 },
-          }, 'This queue so far: ' + findTallyLine(findRunTally(_cShown))) : null,
-          _cReadNoContact > 0 ? React.createElement('div', {
-            style:{ fontSize:11.5, color:'var(--m2)', flexBasis:'100%', lineHeight:1.5 },
-          }, _cReadNoContact + ' of the ' + _cRead.length + ' read had no owner, no address and no number on their site, so they are not in the file.') : null,
-          _cRead.length ? React.createElement('button', {
-            className:'btn btn-sm',
-            style:{ background: contactSort ? 'var(--p)' : 'transparent', color: contactSort ? '#fff' : 'var(--m2)', border:'1px solid var(--b)' },
-            onClick: () => setContactSort(v => !v),
-          }, contactSort ? 'Sorted by fit score' : 'Sort by fit score') : null,
-          // The way back. Everything a contact read produced, cleared, so the
-          // next press reads them fresh. Confirmed, because it throws away work
-          // that cost real credits.
-          _cRead.length ? React.createElement('button', {
-            className: 'btn btn-sm',
-            style:{ background:'transparent', color:'var(--m2)', border:'1px solid var(--b)' },
-            title: 'Forgets every contact read on screen so they can be read again. The audit side is untouched.',
-            onClick: () => {
-              if (!window.confirm('Clear the contact read on ' + _cRead.length + ' lead(s)? They will be read again on the next press, which costs credits.')) return;
-              const names = new Set(_cRead.map(c => c.name));
-              const cleared = loadDiscovered().map(x => (x && names.has(x.name))
-                ? Object.assign({}, x, { contactReadOk: false, contactAt: null, contactFailedAt: null,
-                    contactIcp: null, contactIcpWhy: '', contactIcpTerms: [], contactOwner: '', contactOwnerTitle: '',
-                    contactEmail: '', contactEmailTier: null, contactEmailLabel: '', contactPhone: '',
-                    contactAdsCode: null, contactTeamCount: null, contactHiring: null, contactHiringMarketing: null,
-                    contactHiringTitles: [], contactReadVia: '', contactNotes: [] })
-                : x);
-              saveDiscovered(cleared); setDiscovered(cleared); setContactErr('');
+              React.createElement('input', {
+                type:'checkbox', checked: contactPlacesOnly,
+                onChange: e => setContactPlacesOnly(!!e.target.checked),
+              }),
+              React.createElement('span', null,
+                'Only businesses with a Google listing'
+                + (_cHidden ? ' (hiding ' + _cHidden + ')' : ''))),
+            _cUnread.length ? React.createElement('div', {
+              style:{ display:'flex', alignItems:'center', gap:7, fontSize:12, color:'var(--t)', marginLeft:'auto' },
             },
-          }, 'Clear ' + _cRead.length + ' read') : null,
-          // A failed read is a stop, so it gets the one colour this screen uses
-          // for one. It also names the reason, because "it did nothing" with no
-          // cause attached is what sent an operator to the Render logs looking
-          // for requests that were never made.
-          _cFailed.length ? React.createElement('div', {
-            style:{ flexBasis:'100%', fontSize:12, color:'#fca5a5', border:'1px solid rgba(239,68,68,.25)',
-                    borderRadius:9, padding:'8px 11px', lineHeight:1.5 },
-          }, _cFailed.length + ' lead' + (_cFailed.length === 1 ? '' : 's') + ' could not be read: '
-             + (((_cFailed[0].contactNotes || [])[0]) || 'no reason recorded')
-             + '. They are still counted as unread, so the button above picks them up again.') : null,
-          // ══ A DECISION IS NOT A FAILURE ══════════════════════════════════
-          // A lead the server ruled out was rendered in the same red box as a
-          // dead server, under the words "could not be read" - framing a
-          // deliberate, correct, zero-cost refusal as a fault. It is neither red
-          // nor a failure, and it has its own way back.
-          _cNotFit.length ? React.createElement('div', {
-            style:{ flexBasis:'100%', fontSize:12, color:'var(--t)', border:'1px solid var(--b)',
-                    borderRadius:9, padding:'8px 11px', lineHeight:1.5,
-                    display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' },
-          },
-            React.createElement('span', null,
-              _cNotFit.length + ' ruled out as not a business we sell to, at no cost: '
-              + _cNotFit.slice(0, 3).map(c => c.name).join(', ')
-              + (_cNotFit.length > 3 ? ' and ' + (_cNotFit.length - 3) + ' more' : '')
-              + '. They are not counted as unread, so the button above skips them from now on.'),
+              React.createElement('span', { style:{ color:'var(--m2)' } }, 'How many'),
+              React.createElement('input', {
+                type:'number', min:'1', max:'500', value: contactHowMany,
+                onChange: e => setContactHowMany(Math.max(1, Math.min(500, Number(e.target.value) || 1))),
+                style:{ width:66, padding:'6px 9px', borderRadius:7, border:'1px solid var(--b)',
+                        background:'var(--s)', color:'var(--t)', fontFamily:'Inter,sans-serif', fontSize:13 },
+              }),
+              [5, 25, 50].map(n => React.createElement('button', {
+                key: n, className:'btn btn-sm',
+                style:{ padding:'5px 9px', background: contactHowMany === n ? 'var(--p)' : 'transparent',
+                        color: contactHowMany === n ? '#fff' : 'var(--m2)', border:'1px solid var(--b)' },
+                onClick: () => setContactHowMany(n),
+              }, String(n)))) : null,
+            _cap('A Google listing means a local address, a rating and reviews. The other lanes are where the national brands come from.')),
+
+          _band('Read',
             React.createElement('button', {
-              className:'btn btn-sm',
-              style:{ background:'transparent', color:'var(--m2)', border:'1px solid var(--b)', marginLeft:'auto' },
-              title: 'Puts them back in the unread pool. Use this if the filter has a real lead wrong.',
-              onClick: () => {
-                const names = new Set(_cNotFit.map(c => c.name));
-                const back = loadDiscovered().map(x => (x && names.has(x.name))
-                  ? Object.assign({}, x, { contactNotFit: false, contactFailedAt: null, contactNotes: [] }) : x);
-                saveDiscovered(back); setDiscovered(back);
-              },
-            }, 'Put them back')) : null,
-          React.createElement('div', { style:{ fontSize:11.5, color:'var(--m2)', flexBasis:'100%', lineHeight:1.5 } },
-            _cUnread.length === 0 && _cRead.length === 0
+              className:'btn btn-p btn-sm',
+              disabled: _cUnread.length === 0,
+              title: 'Reads their homepage and up to three pages their own navigation links to. Buys no audit.',
+              onClick: () => runContactBatch(_cUnread, Math.max(1, contactHowMany)),
+            }, _cUnread.length === 0
+                ? 'Every lead on screen has been read'
+                : ('Get contacts for ' + Math.min(Math.max(1, contactHowMany), _cUnread.length) + ' lead' + (Math.min(Math.max(1, contactHowMany), _cUnread.length) === 1 ? '' : 's'))),
+            _cUnread.length > contactHowMany ? React.createElement('button', {
+              className:'btn btn-g btn-sm',
+              onClick: () => runContactBatch(_cUnread, _cUnread.length),
+            }, 'All ' + _cUnread.length) : null,
+            // THE BUTTON'S OWN POPULATION, NAMED. The stats above describe what
+            // is on SCREEN and this describes what a press DRAWS FROM, and with
+            // the run toggle set those are two different sets. Section 88's
+            // rule: each number names its own set rather than being forced into
+            // one that fits neither.
+            _cap(_cUnread.length === 0 && _cRead.length === 0
               ? 'Find some leads first, or widen the filters above.'
-              : 'About one to two Firecrawl credits and a cent of model per lead: it reads their site with a plain fetch and only falls back to Firecrawl when a site refuses one. No reviews, no search, no audit.')),
+              : _cUnread.length + ' unread in the whole queue. About one to two Firecrawl credits and a cent of model each: a plain fetch of their site, and Firecrawl only when a site refuses one. No reviews, no search, no audit.')),
+
+          (_cExportable.length || _cRead.length) ? _band('Export',
+            _cExportable.length ? React.createElement('button', {
+              className:'btn btn-g btn-sm',
+              title: csvFull
+                ? 'All ' + FIND_CSV_COLUMNS.length + ' columns.'
+                : 'The ' + FIND_CSV_ESSENTIAL.length + ' columns you dial and send from. Tick "every column" for the rest.',
+              onClick: () => { const n = downloadFindContacts(_cExportable, csvFull); if (!n) setContactErr('Nothing to export yet.'); },
+            }, 'Download CSV (' + _cExportable.length + ')') : null,
+            _cExportable.length ? React.createElement('button', {
+              className:'btn btn-g btn-sm',
+              disabled: sheetBusy,
+              title: 'Appends these rows to the Google Sheet set up in Settings. A business already in the sheet is not added twice.',
+              onClick: async () => {
+                const url = String((settings && settings.sheetWebhookUrl) || '').trim();
+                if (!url) { setSheetHelp(true); setSheetNote(''); return; }
+                setSheetBusy(true); setSheetNote(''); setContactErr('');
+                try {
+                  const payload = findSheetPayload(_cExportable, csvFull);
+                  const r = await fetch(BACKEND + '/api/export-sheet', {
+                    method:'POST', headers:{ 'Content-Type':'application/json' },
+                    body: JSON.stringify(Object.assign({ url }, payload)),
+                  });
+                  const d = await r.json().catch(() => ({}));
+                  if (!r.ok) { setSheetNote(''); setContactErr(d.error || ('The sheet export answered ' + r.status + '.')); if (d.setupNeeded) setSheetHelp(true); }
+                  else {
+                    setSheetNote(d.written + ' row' + (d.written === 1 ? '' : 's') + ' added to the sheet'
+                      + (d.skipped ? ', ' + d.skipped + ' already there' : '') + '.');
+                  }
+                } catch (e) {
+                  setContactErr('Could not reach the server to send the sheet (' + ((e && e.message) || 'no response') + ').');
+                } finally { setSheetBusy(false); }
+              },
+            }, sheetBusy ? 'Sending to the sheet...' : 'Send to Google Sheet') : null,
+            // ══ THE COLUMNS, BESIDE THE BUTTONS THAT WRITE THEM ════════════
+            // He was deleting most of twenty-one columns by hand after every
+            // paste, so the default is the set he asked for and the rest is one
+            // tick away rather than gone. Both destinations read this choice.
+            _cExportable.length ? React.createElement('label', {
+              style:{ display:'flex', alignItems:'center', gap:7, fontSize:12, color:'var(--t)', cursor:'pointer' },
+            },
+              React.createElement('input', {
+                type:'checkbox', checked: csvFull,
+                onChange: e => setCsvFull(!!e.target.checked),
+              }),
+              React.createElement('span', null, 'every column (' + FIND_CSV_COLUMNS.length + ' instead of ' + FIND_CSV_ESSENTIAL.length + ')')) : null,
+            _cRead.length ? React.createElement('button', {
+              className:'btn btn-sm',
+              style:{ background: contactSort ? 'var(--p)' : 'transparent', color: contactSort ? '#fff' : 'var(--m2)', border:'1px solid var(--b)', marginLeft:'auto' },
+              onClick: () => setContactSort(v => !v),
+            }, contactSort ? 'Sorted by fit' : 'Sort by fit') : null,
+            // The way back. Everything a contact read produced, cleared, so the
+            // next press reads them fresh. Confirmed, because it throws away
+            // work that cost real credits.
+            _cRead.length ? React.createElement('button', {
+              className: 'btn btn-sm',
+              style:{ background:'transparent', color:'var(--m2)', border:'1px solid var(--b)' },
+              title: 'Forgets every contact read on screen so they can be read again. The audit side is untouched.',
+              onClick: () => {
+                if (!window.confirm('Clear the contact read on ' + _cRead.length + ' lead(s)? They will be read again on the next press, which costs credits.')) return;
+                const names = new Set(_cRead.map(c => c.name));
+                const cleared = loadDiscovered().map(x => (x && names.has(x.name))
+                  ? Object.assign({}, x, { contactReadOk: false, contactAt: null, contactFailedAt: null,
+                      contactIcp: null, contactIcpMeasured: null, contactIcpOf: null, contactIcpWhy: '', contactIcpTerms: [], contactOwner: '', contactOwnerTitle: '',
+                      contactEmail: '', contactEmailTier: null, contactEmailLabel: '', contactPhone: '',
+                      contactAdsCode: null, contactTeamCount: null, contactHiring: null, contactHiringMarketing: null,
+                      contactHiringTitles: [], contactReadVia: '', contactNotes: [] })
+                  : x);
+                saveDiscovered(cleared); setDiscovered(cleared); setContactErr('');
+              },
+            }, 'Clear ' + _cRead.length + ' read') : null,
+            sheetNote ? _cap(sheetNote, 'var(--g)') : null) : null,
+
+          // ── WHAT CAME BACK ────────────────────────────────────────────
+          (_cRead.length || _cFailed.length || _cNotFit.length) ? _band('Result',
+            // ONE POPULATION. The stats above read _scoped and this read the
+            // whole filtered queue, so with "This run" selected the header and
+            // the tally described different sets of leads on one panel.
+            _cRead.length ? _cap((_scopeWord === 'in this run' ? 'This run: ' : 'This queue so far: ')
+              + findTallyLine(findRunTally(_scoped)), 'var(--t)') : null,
+            _cReadNoContact > 0 ? _cap(_cReadNoContact + ' of the ' + _cRead.length + ' read had no owner, no address and no number on their site, so they are not in the file.') : null,
+            // A failed read is a stop, so it gets the one colour this screen
+            // uses for one. It also names the reason, because "it did nothing"
+            // with no cause attached is what sent an operator to the Render
+            // logs looking for requests that were never made.
+            _cFailed.length ? React.createElement('div', {
+              style:{ flexBasis:'100%', fontSize:12, color:'#fca5a5', border:'1px solid rgba(239,68,68,.25)',
+                      borderRadius:9, padding:'8px 11px', lineHeight:1.5 },
+            }, _cFailed.length + ' lead' + (_cFailed.length === 1 ? '' : 's') + ' could not be read: '
+               + (((_cFailed[0].contactNotes || [])[0]) || 'no reason recorded')
+               + '. They are still counted as unread, so the button above picks them up again.') : null,
+            // ══ A DECISION IS NOT A FAILURE ══════════════════════════════
+            // A lead the server ruled out was rendered in the same red box as a
+            // dead server, under the words "could not be read" - framing a
+            // deliberate, correct, zero-cost refusal as a fault. It is neither
+            // red nor a failure, and it has its own way back.
+            _cNotFit.length ? React.createElement('div', {
+              style:{ flexBasis:'100%', fontSize:12, color:'var(--t)', border:'1px solid var(--b)',
+                      borderRadius:9, padding:'8px 11px', lineHeight:1.5,
+                      display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' },
+            },
+              React.createElement('span', null,
+                _cNotFit.length + ' ruled out as not a business we sell to, at no cost: '
+                + _cNotFit.slice(0, 3).map(c => c.name).join(', ')
+                + (_cNotFit.length > 3 ? ' and ' + (_cNotFit.length - 3) + ' more' : '')
+                + '. They are not counted as unread, so the button above skips them from now on.'),
+              React.createElement('button', {
+                className:'btn btn-sm',
+                style:{ background:'transparent', color:'var(--m2)', border:'1px solid var(--b)', marginLeft:'auto' },
+                title: 'Puts them back in the unread pool. Use this if the filter has a real lead wrong.',
+                onClick: () => {
+                  const names = new Set(_cNotFit.map(c => c.name));
+                  const back = loadDiscovered().map(x => (x && names.has(x.name))
+                    ? Object.assign({}, x, { contactNotFit: false, contactFailedAt: null, contactNotes: [] }) : x);
+                  saveDiscovered(back); setDiscovered(back);
+                },
+              }, 'Put them back')) : null) : null),
 
         contactErr ? React.createElement('div', {
           style:{ marginTop:10, fontSize:12, color:'#fca5a5', border:'1px solid rgba(239,68,68,.25)', borderRadius:9, padding:'8px 11px' },

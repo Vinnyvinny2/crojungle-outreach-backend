@@ -2525,6 +2525,16 @@ let contactTally = null;
         fails.push('contactFieldsFrom throws away a genuine measured false or zero, which is the same defect pointed the other way');
       }
 
+      // ══ THE DENOMINATOR TRAVELS, AND IT BREAKS THE TIE ═══════════════
+      // The score is a percentage of what could be MEASURED, so a lead scored
+      // on three signals and one scored on seven are divided by different
+      // totals - and the bare number is what sorts this list. Without the
+      // denominator a thin read outranks a full one and nothing says why.
+      const fD = M.fields({ signals: {}, owner: {}, email: {}, icp: { score: 61, measured: 4, of: 7, why: 'scored on 4 of 7' } });
+      if (fD.contactIcpMeasured !== 4 || fD.contactIcpOf !== 7) {
+        fails.push('the number of signals behind a contact score is dropped on the way onto the lead, so the sort and the card cannot tell a thin read from a full one');
+      }
+
       // SIX — the request the server actually reads. A field dropped here is a
       // signal measured for nothing: the review count and the rating are two
       // of the five terms in the score.
@@ -2721,6 +2731,66 @@ let contactTally = null;
   if (html.indexOf(_nn('const _cRunSet = _cShown.filter(c => c &&', ' _runNames.has(c.name));')) < 0) {
     fails.push('there is no run-scoped view of a contact press, so every number on the panel is a cumulative queue total again');
   }
+  // ══ THE PANEL HAS A GRAMMAR, AND THE COUNTS AGREE ═══════════════════════
+  // Vin: "this section is still messy and unorganized it needs to look
+  // professional." It was twenty-two blocks in one flat vertical stack with
+  // five paragraphs of prose interleaved between about fifteen controls.
+  //
+  // HONEST LIMIT, stated at the assertion: the panel lives inside FindView and
+  // cannot be lifted and executed the way LeadBriefing is, so these are source
+  // needles. What they can prove is that the four bands exist, that every
+  // control that spends money still has its handler, and that the three counts
+  // that disagreed now read one population.
+  if (html.indexOf(_nn('const _band = (label, ...kids) =>', ' React.createElement(')) < 0) {
+    fails.push('the contact panel is back to a flat vertical stack with no bands, which is the layout the owner called messy and unorganized');
+  }
+  for (const [needle, why] of [
+    [_nn('_band(', "'Scope',"), 'the scope band is gone, so the control that decides what a press BUYS is no longer beside the press'],
+    [_nn('_band(', "'Read',"), 'the read band is gone'],
+    [_nn('_band(', "'Export',"), 'the export band is gone, so the CSV, the sheet and the column choice are loose in the stack again'],
+    [_nn('_band(', "'Result',"), 'the result band is gone, so what came back is interleaved with what to press again'],
+  ]) {
+    if (html.indexOf(needle) < 0) fails.push(why);
+  }
+  // Every control that SPENDS or DESTROYS has to survive a layout change. This
+  // is the button that buys real credits and the one that throws away work
+  // already paid for, and section 39's rule is that they all survive.
+  for (const [needle, why] of [
+    [_nn('onClick: () => runContactBatch(_cUnread,', ' _cUnread.length),'), 'the "All N" button is gone, so a full queue can only be read a page at a time'],
+    [_nn('runContactBatch(_cStale,', ' _cStale.length);'), 'the re-read of stale contact reads is gone'],
+    [_nn("setContactPlacesOnly(!!e.target", '.checked),'), 'the Google-listing scope tick box is gone, so the job-board lanes are back in the queue with no way to hide them'],
+    [_nn('setCsvFull(!!e.target', '.checked),'), 'the every-column tick box is gone'],
+    [_nn("setContactSort(v =>", ' !v),'), 'the sort-by-fit button is gone'],
+    [_nn("setContactHowMany(Math.max(1, Math.min(500,", ' Number(e.target.value) || 1))),'), 'the how-many box is gone, so a press can no longer be sized'],
+    [_nn('contactStop.current =', ' true;'), 'the Stop button is gone'],
+    [_nn("findSheetPayload(_cExportable,", ' csvFull);'), 'the Google Sheet send is gone'],
+    [_nn('saveDiscovered(cleared);', ' setDiscovered(cleared);'), 'the Clear-read button is gone, so there is no way back from a bad read'],
+    [_nn('contactNotFit: false, contactFailedAt:', ' null, contactNotes: [] }) : x);'), 'the "Put them back" button is gone, so a lead the filter has wrong can never be re-read'],
+  ]) {
+    if (html.indexOf(needle) < 0) fails.push(why);
+  }
+  // The denominator has to reach the SORT and the CARD, not just the lead.
+  if (html.indexOf(_nn('const Am = (typeof a.contactIcpMeasured ===', " 'number') ? a.contactIcpMeasured : 0;")) < 0) {
+    fails.push('the fit sort no longer breaks a tie on how much we actually know, so a lead scored on three signals sorts level with one scored on seven');
+  }
+  if (html.indexOf(_nn("co.contactIcpMeasured + ' of ' +", ' co.contactIcpOf)')) < 0) {
+    fails.push('the card no longer prints how many signals stood behind the fit score, so 45-of-3 and 45-of-7 look identical');
+  }
+
+  // ══ AND THE THREE COUNTS THAT DISAGREED ════════════════════════════════
+  // The tally read the whole filtered queue while every stat above it read
+  // _scoped, so with "This run" selected the header and the tally described
+  // different sets of leads on one panel.
+  if (html.indexOf(_nn('findTallyLine(findRunTally(', '_scoped))')) < 0) {
+    fails.push('the contact tally is computed over a different population than the numbers directly above it, so one panel reports two answers about one set of leads');
+  }
+  // "68 of these 68 reads" - the stale count printed twice, which is true by
+  // accident on a queue where every read is stale and false the moment one is
+  // re-read.
+  if (html.indexOf(_nn("_cStale.length + ' of these ' +", " _cRead.length + ' read'")) < 0) {
+    fails.push('the stale-read banner prints the stale count where the read count belongs, so it says "N of these N reads" whatever the real numbers are');
+  }
+
   // And the leads just read have to be movable into Research in one press.
   if (html.indexOf(_nn('const n = addManyToPipeline(', '_runMovable);')) < 0) {
     fails.push('the leads a press just read cannot be moved to the pipeline, so a contact run still has no route into an audit');
@@ -3057,6 +3127,6 @@ Promise.all(PENDING).then(() => {
   notes.forEach(n => console.log(n));
   if (findStat) console.log(`\u2713 index.html: the Find run's clock, queue cap and card were EXECUTED, not read \u2014 the browser's wall sits above the server's own sweep so a healthy run is never killed by the wrong file, the submit goes through the poller and exactly one call site still touches the synchronous door as the old-server fallback, the queue cap is one number rather than three, and a lead we have actually read stops showing the name-based guess beside the owner, email and phone we measured. A demoted lead now says why it was sorted last: "${findStat.demoted}". And the card answers what a business can afford instead of inventing a revenue band from its review count: "${findStat.prem}".`);
   if (contactTally) console.log(`\u2713 index.html: the contact run TALLY was executed \u2014 the first thing in this project that has ever counted whether the owner resolver and the email engine work. Rates are over leads actually READ, the email tier split is reported rather than one "found" number because a published address and a guess are not the same thing, a run under twelve reads says its numbers are counts and not rates, and a run made while the verifier was down says so. On the fixture queue: ${contactTally}`);
-  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the CSV writes the ${contactStat.lean} columns a rep dials and sends from, with all ${contactStat.cols} one tick away and the Google Sheet reading the same choice. It neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, gives each email tier its own confidence sentence, and reports an unmeasured signal as "not checked" rather than as a definite no. Every call site is pinned too: the panel starts the run, the run posts to /api/find-contact, it saves after every lead so a Stop keeps what was paid for, the card strip renders only on a lead that was read, and the Research batch cannot reach any of it.`);
+  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the CSV writes the ${contactStat.lean} columns a rep dials and sends from, with all ${contactStat.cols} one tick away and the Google Sheet reading the same choice. It neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, gives each email tier its own confidence sentence, and reports an unmeasured signal as "not checked" rather than as a definite no. Every call site is pinned too: the panel starts the run, the run posts to /api/find-contact, it saves after every lead so a Stop keeps what was paid for, the card strip renders only on a lead that was read, and the Research batch cannot reach any of it. The panel itself now reads as four bands - what this is, what the next press covers, what to press, what came back - with every spending and destroying control still wired, and the three counts that used to describe three different populations on one screen now read one.`);
   if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
 }).catch((e) => { console.log('\n\u2717 index.html: the checks could not finish \u2014 ' + (e && e.message)); process.exit(1); });

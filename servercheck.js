@@ -559,7 +559,15 @@ const runLead = async (b, over, capMs) => {
     ok(HS.hiringMarketing === true, `the dated Marketing Manager posting did not read as hiring for marketing (${JSON.stringify(HS.hiringTitles)})`);
     // THE SCORE, delivered and complete.
     ok(HJ.icp && typeof HJ.icp.score === 'number', `no ICP score arrived: ${JSON.stringify(HJ.icp)}`);
-    ok(HJ.icp && HJ.icp.measured === 5, `the score was measured on ${HJ.icp && HJ.icp.measured} of 5 signals on a lead carrying all five`);
+    ok(HJ.icp && HJ.icp.measured === 7, `the score was measured on ${HJ.icp && HJ.icp.measured} of 7 signals on a lead carrying every one`);
+    // THE TWO TERMS THAT ONLY EXIST AFTER THE LOOKUPS RUN. This is the whole of
+    // section 98's score fix and no boot fixture can see it: findIcpScore used
+    // to be called ~370 lines ABOVE the owner and address lookups, so a lead
+    // where we found both scored identically to one where we found neither.
+    ok(HJ.icp && (HJ.icp.terms || []).some(t => t.id === 'reach' && t.measured),
+      'the reach term is not measured on a lead that produced a named owner and a published address, so the score is being computed before the lookups again');
+    ok(HJ.icp && (HJ.icp.terms || []).some(t => t.id === 'afford' && t.measured),
+      'the affordability band is not reaching the contact score, so the Find card, the CSV and contactRankFor are back to three verdicts about one business');
     ok(HJ.icp && HJ.icp.score >= 80, `a business with ad spend, a crew, a marketing hire, 180 reviews and 4.6 stars scored ${HJ.icp && HJ.icp.score}/100`);
     // THE OWNER, from the shared resolver, off pages nobody paid for.
     ok(HJ.owner && /Pete Barnes/.test(String(HJ.owner.name || '')), `the owner named on their own team page was not resolved: ${JSON.stringify(HJ.owner)}`);
@@ -602,7 +610,16 @@ const runLead = async (b, over, capMs) => {
     const S3 = H3J.signals || {};
     ok(S3.adsCode === null && S3.teamCount === null && S3.hiringAny === null,
       `a business whose site we never opened reports definite answers: ${JSON.stringify({ ads: S3.adsCode, team: S3.teamCount, hiring: S3.hiringAny })} — that is the unmeasured-as-zero failure aimed at a claim about their money`);
-    ok(H3J.icp && H3J.icp.measured === 2, `the no-website lead scored on ${H3J.icp && H3J.icp.measured} signals; only the review count and the rating were measurable`);
+    // The review count, the rating, and the fact that the lookups RAN and
+    // found nothing. Nothing site-derived, and NOT the affordability band -
+    // this fixture carries no industry, so the trade tier and the capacity
+    // class have nothing to read and the band correctly declines to speak.
+    // (It measures on scenario H, where an industry is present: measured===7.)
+    ok(H3J.icp && H3J.icp.measured === 3, `the no-website lead scored on ${H3J.icp && H3J.icp.measured} signals; only the review count, the rating and the empty result of the lookups were measurable`);
+    ok(H3J.icp && (H3J.icp.terms || []).some(t => t.id === 'reach' && t.measured),
+      'the lookups ran on a lead with no website and the reach term still says unmeasured');
+    ok(H3J.icp && !(H3J.icp.terms || []).some(t => (t.id === 'size' || t.id === 'ads' || t.id === 'hiring') && t.measured),
+      'a business whose site we never opened is being scored on its site');
     ok(H3J.phone === '(214) 555-0199', 'the phone from the listing was lost on a lead with no website, which is the only field that lead has');
 
     // ── H4: THE ADMISSION GATES ─────────────────────────────────────────

@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260919;
+const CONTRACT_VERSION = 20260920;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -10736,6 +10736,34 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
 // the two-hand-kept-copies disease pointed at the gate that decides who gets
 // emailed at all.
 const DM_AUTHORITY_FLOOR = 75;
+// == THE GATE MUST READ THE NUMBER IT PRINTS ===============================
+// Two different numbers describe one candidate and they are not related.
+// AUTHORITY is authorityScore(title) - a lookup on the words of the title
+// alone. SCORE is the blended source weight plus corroboration, and it is what
+// the log prints as high/medium/low.
+//
+// Live on Floor Daddy, 2026-08-31: one roster row, "Vinyl Plank (Affiliate
+// Partner)". authorityScore('partner') is 85, comfortably over the buying
+// floor of 75, so the roster settle fired and stood down every paid source -
+// while the same line printed `score 45 | low`. A low-confidence,
+// single-source hit skipped the three lookups that would have disagreed with
+// it, because the gate consulted a number the operator never sees and ignored
+// the one he does.
+//
+// One derivation for both, so the printed word and the decision can never
+// drift: two hand-kept copies of "how sure are we" is the disease this file
+// records most.
+const DM_CONFIDENCE_AT = { high: 80, medium: 50 };
+const dmConfidenceFor = (score) => {
+  // typeof FIRST. Number(null) is 0 and Number.isFinite(0) is true, so an
+  // unscored candidate came back 'low' rather than 'none' - the null-laundering
+  // trap, inside the function written this round to close a different one, and
+  // caught by its own fixture on the first boot.
+  if (typeof score !== 'number') return 'none';
+  const n = Number(score);
+  if (!Number.isFinite(n)) return 'none';
+  return n >= DM_CONFIDENCE_AT.high ? 'high' : n >= DM_CONFIDENCE_AT.medium ? 'medium' : 'low';
+};
 const TITLE_AUTHORITY = [
   { rank: 100, re: /\b(founder|co-?founder|owner|proprietor)\b/i },
   { rank: 95,  re: /\b(ceo|chief executive)\b/i },
@@ -11058,6 +11086,33 @@ const _getLeadershipLen = (companyName, website) => {
   if (!e || (Date.now() - e.at) > LEADERSHIP_LEN_TTL_MS) return 0;
   return e.len;
 };
+// == THE SITEMAP WE ALREADY BOUGHT, KEPT ==================================
+// findOwnerViaBrain asks Firecrawl to map the site when it has no pages in
+// hand, prints "mapped 165 URLs", ranks them for leadership intent and then
+// drops the list on the floor - it is a local that never leaves the function.
+//
+// Live on DHI Roofing, 2026-08-31: 165 URLs mapped, and the chain read beside
+// it saw only the homepage's own navigation, so a business publishing location
+// pages for six states read as an independent. The map is already paid for; a
+// value bought and then thrown away is the computed-but-not-passed class, and
+// this is its twenty-eighth recorded instance.
+//
+// Same key, same TTL and same cap as the leadership length beside it, for the
+// same reason: two businesses with one name run concurrently by design, so the
+// website is part of the key and a stale entry expires rather than lingering.
+const _mappedUrls = new Map();
+const _setMappedUrls = (companyName, website, urls) => {
+  const k = _leadershipLenKey(companyName, website);
+  if (!k || !Array.isArray(urls) || !urls.length) return;
+  if (_mappedUrls.size > 200) _mappedUrls.clear();
+  _mappedUrls.set(k, { urls: urls.slice(0, 400).map(String), at: Date.now() });
+};
+const _getMappedUrls = (companyName, website) => {
+  const k = _leadershipLenKey(companyName, website);
+  const e = k ? _mappedUrls.get(k) : null;
+  if (!e || (Date.now() - e.at) > LEADERSHIP_LEN_TTL_MS) return [];
+  return e.urls;
+};
 // Pure so the boot check can execute it. True when both name tokens appear in
 // the corroboration text — which INCLUDES the business name, because a business
 // named after its owner corroborates that owner all by itself and Places gave
@@ -11315,6 +11370,9 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
 
     // Ask the site for its real URLs, filtered toward leadership pages
     const urls = await firecrawlMap(fcKey, website, 'about team leadership founder owner');
+    // Kept rather than dropped. The chain read downstream can see a locations
+    // index only if somebody hands it one, and this list is already bought.
+    _setMappedUrls(companyName, website, urls);
     // Ranked, not first-in-list. This is the function the whole system exists for;
     // reading /blog/meet-the-team-at-our-new-location instead of /about is the
     // difference between resolving an owner and returning nothing.
@@ -11715,6 +11773,27 @@ const OWNER_TITLE_RE = /\b(?:co[- ]?)?(?:owner|founder|co[- ]?founder|proprietor
 //
 // A word list of banned phrases would have caught none of these four and would
 // need a new entry for every site; this needs none.
+// == A PARTNER PROGRAM IS NOT A PARTNERSHIP =================================
+// Live, 2026-08-31: Floor Daddy shipped "Vinyl Plank, Affiliate Partner" as the
+// decision-maker, and that title ALSO settled stage 1, so every paid source that
+// could have disagreed was stood down on it.
+//
+// Grammar cannot separate these and never will. In "Affiliate Partner" the
+// ownership word IS the head of the phrase, exactly as it is in "Managing
+// Partner" - executed across the family, Channel, Referral, Delivery,
+// Technology and Installation Partner all read as owner, identically to
+// Managing, Founding and Senior Partner. What separates them is what the
+// modifier MEANS, so the modifiers are DECLARED, the way the deputy list
+// below already is: a rule nobody has to write down is a rule nobody
+// maintains.
+//
+// Only "partner" is affected, because only "partner" has a second life as a
+// program label - nobody writes "Affiliate Owner" or "Channel Founder". And
+// the list is deliberately NARROW: a small law or accounting firm is squarely
+// in this ICP, and "Tax Partner", "Audit Partner" and "Advisory Partner" are
+// real equity partners who can buy. Refusing them would be the guard-too-tight
+// failure this file records at the size gate, and it is the expensive one.
+const AFFILIATION_PARTNER_RE = /\b(?:affiliate|channel|referral|reseller|distribution|distributor|delivery|installation|implementation|integration|technology|trade|training|community|media|content|preferred|certified|authoriz(?:ed)?|authoris(?:ed)?)[\s-]+partners?\b/i;
 const TITLE_HEAD_FOLLOWERS = /^(?:officer|officers|and|of|the|at|emeritus|elect|partner|partners|owner|founder|president|ceo|coo|cfo|director|manager|member|principal|operator|broker|agent|attorney|dds|dmd|md|do|esq|pe|cpa)\b/i;
 const ownershipIsHead = (title) => {
   const s = String(title || '').trim();
@@ -11740,13 +11819,64 @@ const ownershipIsHead = (title) => {
   // construction and emphatically NOT the owner, so refusing it is correct
   // twice over.
   if (/^['\u2019]s?\b/.test(after)) return false;
+  // A partner PROGRAM label. See AFFILIATION_PARTNER_RE above: the grammar is
+  // identical to a real partnership title and only the modifier tells them
+  // apart, so the modifiers are declared rather than inferred.
+  if (AFFILIATION_PARTNER_RE.test(s)) return false;
   // Nothing after it, or punctuation/a separator: the ownership word is the head.
   if (!/^\s*[A-Za-z]/.test(after)) return true;
   return TITLE_HEAD_FOLLOWERS.test(after.trim());
 };
 // Titles that are senior but are NOT the owner. Getting this list wrong is how
 // a COO becomes the decision-maker, so it is checked BEFORE the owner pattern.
-const NON_OWNER_TITLE_RE = /\b(?:c[ofti]o|chief\s+(?:operating|financial|technology|information|marketing|revenue)\s+officer|vice[- ]president|vp\b|director\s+of|head\s+of|manager|coordinator|superintendent|estimator|foreman|designer|assistant|administrator|controller|bookkeeper|receptionist|sales\s+(?:rep|representative|associate))\b/i;
+const NON_OWNER_TITLE_RE = /(?:affiliate|channel|referral|reseller|distribution|distributor|delivery|installation|implementation|integration|technology|trade|training|community|media|content|preferred|certified|authoriz(?:ed)?|authoris(?:ed)?)[\s-]+partners?\b|\b(?:c[ofti]o|chief\s+(?:operating|financial|technology|information|marketing|revenue)\s+officer|vice[- ]president|vp\b|director\s+of|head\s+of|manager|coordinator|superintendent|estimator|foreman|designer|assistant|administrator|controller|bookkeeper|receptionist|sales\s+(?:rep|representative|associate))\b/i;
+
+// == THE COMPANY'S OWN NAME IS NOT A JOB TITLE =============================
+// Live, 2026-08-31. Auto Insurance Specialist's footer produced four people:
+//   Office Location     (Auto Insurance Specialist)
+//   All Rights Reserved (Auto Insurance Specialist)
+//   Agency Office       (Auto Insurance Specialist)
+//   Great Rates         (About Auto Insurance Specialist)
+//
+// The cause is one word. titleKind's junior test contains "specialist", and
+// the business is CALLED "Auto Insurance Specialist" - so its own name tested
+// as a real staff title, and a truthy kind is all the lookahead needs to pair
+// it with whatever name-shaped run came before it.
+//
+// personFromRun has refused a NAME that is only the company's own words since
+// it was written. Nothing ever asked the same question of the TITLE. A guard
+// on one side of a pair is the guard-in-the-wrong-function class, and here it
+// was in the right function on the wrong half.
+//
+// The two halves are not one predicate, because they are not one question: a
+// NAME made only of company words is refused outright, while a TITLE may
+// legitimately carry the company name after a real job word - "Owner, Auto
+// Insurance Specialist" is a roster line, not footer furniture. So the shared
+// part is the normaliser and the word set; the tests differ, on purpose.
+const companyWordsOf = (companyName) => new Set(
+  String(companyName || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/).filter(Boolean));
+const normalizeTitleWords = (s) => String(s || '').toLowerCase()
+  .replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+// Lifted to module scope from inside titleKind so the regex that caused the
+// failure above can be executed by a check rather than only read.
+const JUNIOR_TITLE_RE = /\b(?:manager|coordinator|assistant|associate|representative|specialist|clerk)\b/i;
+const titleIsCompanyName = (title, companyName) => {
+  const co = normalizeTitleWords(companyName);
+  const t = normalizeTitleWords(title);
+  if (!co || !t) return false;
+  // A one-word company name is far too ordinary a word to disqualify a title
+  // on - "Precision" would delete "Precision Manager" at Precision Plumbing.
+  if (co.split(' ').length < 2) return false;
+  const i = t.indexOf(co);
+  if (i < 0) return false;
+  // What is left once the company's own name is taken out. If that remainder
+  // still names a job, this is a real title that happens to state the firm;
+  // if it is empty or framing words, the company name IS the whole title.
+  const rest = (t.slice(0, i) + ' ' + t.slice(i + co.length)).replace(/\s+/g, ' ').trim();
+  if (!rest) return true;
+  return !(OWNER_TITLE_RE.test(rest) || NON_OWNER_TITLE_RE.test(rest) || JUNIOR_TITLE_RE.test(rest));
+};
+
 
 // ══ A ROSTER LINE IS ALMOST NEVER A BARE "FIRST LAST" ══════════════════════
 // The name pattern is anchored — the whole run had to BE a name, with nothing
@@ -11955,6 +12085,10 @@ const parseTeamRoster = (html, companyName = '') => {
     'our values', 'our history', 'read more', 'learn more', 'view all',
     'see more', 'find us', 'call us', 'our work', 'case studies',
     'our services', 'why choose', 'meet our', 'privacy policy', 'terms of',
+    // Footer boilerplate. The whole-page read the Find tab performs carries
+    // the footer, where this sits directly above the company's own name -
+    // which is exactly the position a title occupies.
+    'all rights reserved',
   ]);
   // The pattern itself now lives at module scope as ROSTER_NAME_RE, beside the
   // normaliser that feeds it, so both can be tested directly.
@@ -11970,7 +12104,11 @@ const parseTeamRoster = (html, companyName = '') => {
   // and a run that matches a title pattern is never mistaken for a person.
   const titleKind = (t) => {
     if (!t || t.length > 70) return null;
-    const junior = /\b(?:manager|coordinator|assistant|associate|representative|specialist|clerk)\b/i.test(t);
+    // The company's own name is not a job somebody holds. See
+    // titleIsCompanyName: this fires before every other test because a
+    // company called "...Specialist" or "...Group" satisfies them all.
+    if (titleIsCompanyName(t, companyName)) return null;
+    const junior = JUNIOR_TITLE_RE.test(t);
     // ══ "PRESIDENT" IS INSIDE "VICE PRESIDENT" ═══════════════════════════
     // The owner pattern matched Joe Adams, Vice President, as an owner, because
     // the word president is a substring of his title. A deputy is not a
@@ -32229,9 +32367,17 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     // enough to stop us looking for somebody who is. A real "Owner" or
     // "Founder & CEO" clears it comfortably, so the Hannah Custom Homes saving
     // this rule was built for is untouched.
+    // == AND IT HAS TO CLEAR THE CONFIDENCE THE LOG PRINTS ==============
+    // The authority floor above asks whether the TITLE could buy. It cannot
+    // ask how sure we are that this is a person at all, and on Floor Daddy
+    // that gap was the whole failure: authority 85 on the word "Partner",
+    // composite score 45, printed "low", and stage 2 stood down. A single
+    // uncorroborated source is exactly the state the paid lookups exist for.
+    const rosterConfidence = dmConfidenceFor(ranked.score);
     const rosterConfident = !!(brainHit && brainHit.fromRoster
       && ranked.sources.includes('own_website_brain')
       && ranked.authority >= DM_AUTHORITY_FLOOR
+      && rosterConfidence !== 'low'
       && sameName(ranked.name, brainHit.name));
     if (rosterConfident && !(corroborated || ownSiteConfident)) {
       console.log(`DM [${companyName}]: ROSTER SETTLES IT \u2014 their own team page states ${ranked.name} is "${brainHit.title}". That is the company naming its owner on a page it maintains, which no paid search can outrank. Skipping the web, licence and registry lookups (~12 Firecrawl credits saved).`);
@@ -32241,7 +32387,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     }
     _settleWhy = `${ranked.name || 'nobody'} (${ranked.sources.join('+')}) authority=${ranked.authority} independent=${independent}`
       + ` | corroborated=${corroborated} ownSite=${ownSiteConfident} eponymous=${eponymousConfident} roster=${rosterConfident}`
-      + ` | brainConfidence=${(brainHit && brainHit.confidence) || 'none'} eponymousRule=${_isEponymousOwner(ranked.name, companyName, website)}`;
+      + ` | brainConfidence=${(brainHit && brainHit.confidence) || 'none'} rankedScore=${ranked.score} rankedConfidence=${dmConfidenceFor(ranked.score)} eponymousRule=${_isEponymousOwner(ranked.name, companyName, website)}`;
     return (corroborated || ownSiteConfident || eponymousConfident || rosterConfident) ? ranked : null;
   };
 
@@ -32361,9 +32507,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     console.log(`DM [${companyName}]: NO usable decision-maker after ranking`);
     return { name: null, title: null, score: 0, sources: [], corroborated: false, confidence: 'none' };
   }
-  const confidence =
-    best.score >= 80 ? 'high' :
-    best.score >= 50 ? 'medium' : 'low';
+  const confidence = dmConfidenceFor(best.score);
 
   // ═══ THE AUTHORITY GATE ══════════════════════════════════════════════════
   // Reaching the wrong person wastes the entire audit. A VP of Maintenance or an
@@ -56673,6 +56817,65 @@ app.listen(PORT, () => {
       _fails.push('titleKind is back on the bare pattern, so "Partner Track" is an owner again');
     }
 
+    // ONE-B - A PARTNER PROGRAM IS NOT A PARTNERSHIP.
+    // Live 2026-08-31: Floor Daddy shipped "Vinyl Plank, Affiliate Partner" as
+    // the buyer AND that title settled stage 1, standing down every paid
+    // source. The whole family is fixtured, because the grammar cannot tell
+    // any of them from a real partnership title.
+    for (const bad of ['Affiliate Partner', 'Channel Partner', 'Referral Partner', 'Delivery Partner',
+                       'Technology Partner', 'Installation Partner', 'Reseller Partner',
+                       'Certified Partner', 'Trade Partner', 'Community Partner']) {
+      if (ownershipIsHead(bad)) _fails.push(`"${bad}" still reads as an ownership title - a partner-program label is one press from being a call sheet's decision-maker`);
+      // Still a TITLE, or the run falls through titleKind and the LABEL itself
+      // becomes a person on the next pass.
+      if (!NON_OWNER_TITLE_RE.test(bad)) _fails.push(`"${bad}" is no longer recognised as a job title at all, so the label itself can now be parsed as a person`);
+    }
+    // And the direction that costs more. A small law or accounting firm is
+    // squarely in this ICP and its partners can buy.
+    for (const good of ['Founding Partner', 'Senior Partner', 'General Partner', 'Equity Partner',
+                        'Name Partner', 'Tax Partner', 'Audit Partner', 'Advisory Partner', 'Partner']) {
+      if (!ownershipIsHead(good)) _fails.push(`"${good}" no longer reads as an ownership title - the partner guard has tightened onto real equity partners`);
+    }
+
+    // ONE-C - THE COMPANY'S OWN NAME IS NOT A JOB SOMEBODY HOLDS.
+    // Auto Insurance Specialist's footer, verbatim from the same run. The word
+    // "Specialist" inside their own name made that name test as a real staff
+    // title, and a truthy kind is all the lookahead needs to pair it with
+    // whatever name-shaped run came before it.
+    for (const bad of ['Auto Insurance Specialist', 'About Auto Insurance Specialist', 'auto insurance specialist']) {
+      if (!titleIsCompanyName(bad, 'Auto Insurance Specialist')) _fails.push(`"${bad}" still reads as a job title at the company of that name`);
+    }
+    for (const good of ['Owner, Auto Insurance Specialist', 'Owner', 'Marketing Specialist', 'Office Manager']) {
+      if (titleIsCompanyName(good, 'Auto Insurance Specialist')) _fails.push(`"${good}" is no longer a job title - the company-name guard has widened onto real roster lines`);
+    }
+    // A one-word company name is far too ordinary a word to disqualify on.
+    if (titleIsCompanyName('Precision Manager', 'Precision')) _fails.push('a one-word company name is disqualifying real titles');
+    // Through the REAL parser, on the live footer shape.
+    const _footer = '<div>Office Location</div><div>Auto Insurance Specialist</div>'
+      + '<div>All Rights Reserved</div><div>Auto Insurance Specialist</div>'
+      + '<div>Agency Office</div><div>Auto Insurance Specialist</div>'
+      + '<div>Great Rates</div><div>About Auto Insurance Specialist</div>';
+    const _rf = parseTeamRoster(_footer, 'Auto Insurance Specialist');
+    if (_rf.length) _fails.push(`the footer of Auto Insurance Specialist still yields ${_rf.length} "people": ${_rf.slice(0, 3).map(r => `${r.name} (${r.title})`).join(', ')}`);
+    // And a real roster at the same company survives, which is the direction
+    // that costs a lead rather than a wrong sheet.
+    const _rr = parseTeamRoster('<div>Jane Doe</div><div>Owner</div>', 'Auto Insurance Specialist');
+    if (!_rr.some(r => r.isOwner && /Jane Doe/.test(r.name))) _fails.push('the company-name guard has eaten a real owner row at the same business');
+
+    // ONE-D - THE SETTLE GATE READS THE NUMBER IT PRINTS.
+    // authorityScore('partner') is 85 against a floor of 75, so one roster row
+    // settled stage 1 while the same log line printed `score 45 | low`.
+    if (dmConfidenceFor(45) !== 'low' || dmConfidenceFor(50) !== 'medium' || dmConfidenceFor(80) !== 'high') {
+      _fails.push('dmConfidenceFor no longer buckets the way the log prints, so the gate and the operator are reading two different numbers');
+    }
+    if (dmConfidenceFor(null) !== 'none' || dmConfidenceFor('x') !== 'none') _fails.push('an unscored candidate is being given a confidence bucket');
+    if (!_src.includes(_n('&& rosterConfidence', " !== 'low'"))) {
+      _fails.push('the roster settle is back to authority alone, so a single low-confidence roster row can stand down every paid source again');
+    }
+    if (!_src.includes(_n('const confidence = dmConfidenceFor', '(best.score);'))) {
+      _fails.push('the printed confidence is hand-written again, so the bucket the gate reads and the bucket the log prints can drift');
+    }
+
     // TWO - a nav label with a marketing line under it is not a person. The
     // free read hands the roster parser a WHOLE PAGE, so a nav item sits where
     // a name sits. Run through the real parser on the live markup shape.
@@ -56816,7 +57019,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ OWNER TRUTH CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ OWNER TRUTH CHECK: the four nav labels that became a live decision-maker on 2026-08-28 are all refused, and the twelve real ownership titles beside them all survive. An ownership word must be the HEAD of its title rather than an adjective in front of another noun, a marketing line is not a title, the owner is the most SENIOR person on the page rather than the first, a personnel headline no longer leaves its verb inside a name, and a leadership page carrying two or more corporate titles is scored as the bigger business it is rather than as a crew of that size. HONEST SHAPE: the enterprise-name filter now also runs on this route, and on the six national brands that cost real money that night it catches NONE of them — it is an institution and scale-word filter, and "Penske Truck Leasing" reads exactly like a local business by name. Keeping enterprises out of this queue is a Find-side job, not a name test.`);
+      console.log(`✓ OWNER TRUTH CHECK: the four nav labels that became a live decision-maker on 2026-08-28 are all refused, and the twelve real ownership titles beside them all survive. Ten partner-PROGRAM labels (Affiliate, Channel, Referral, Delivery, Technology, Installation, Reseller, Certified, Trade and Community Partner) no longer read as ownership titles while nine real partnership titles do, including the Tax, Audit and Advisory Partners a small firm's equity actually sits with. The company's own name is not a job somebody holds, so Auto Insurance Specialist's footer yields nobody while a real roster row at the same business survives. And the roster settle now clears the confidence the log PRINTS as well as the authority nobody sees - the gap between those two numbers is how one uncorroborated row scored 45 and stood down every paid source. An ownership word must be the HEAD of its title rather than an adjective in front of another noun, a marketing line is not a title, the owner is the most SENIOR person on the page rather than the first, a personnel headline no longer leaves its verb inside a name, and a leadership page carrying two or more corporate titles is scored as the bigger business it is rather than as a crew of that size. HONEST SHAPE: the enterprise-name filter now also runs on this route, and on the six national brands that cost real money that night it catches NONE of them — it is an institution and scale-word filter, and "Penske Truck Leasing" reads exactly like a local business by name. Keeping enterprises out of this queue is a Find-side job, not a name test.`);
     }
   } catch (e) {
     console.log(`⛔ OWNER TRUTH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -56877,6 +57080,19 @@ app.listen(PORT, () => {
       ['"corporate office" and "all locations" wording alone', { pages: [_pg('https://x.com/', 'Visit our corporate office. See all locations near you.')], rosterTitles: [], links: [] }, false],
       ['a franchise LAWYER', { pages: [_pg('https://x.com/', 'We handle franchise agreements and franchise litigation.')], rosterTitles: ['Managing Partner'], links: [] }, false],
       ['nothing read at all', { pages: [], rosterTitles: [], links: [] }, false],
+      // == ONE SEGMENT, AND WHY THE BAR IS THREE ==========================
+      // DHI Roofing's own sitemap, verbatim. Every path is /locations/<state>
+      // with no city under it, so the two-segment rule returned nothing for
+      // all six and a business trading in six states read as an independent.
+      //
+      // Three is the bar because ONE state page is ordinary - plenty of
+      // single-state independents publish /locations/texas - and a two-branch
+      // operator inside one state cannot reach it however many pages it has.
+      ['location pages for six different states', { pages: [_pg('https://dhiroofing.com/', 'Roofing.')], rosterTitles: [],
+        links: ['/locations/missouri', '/locations/kansas', '/locations/minnesota', '/locations/iowa', '/locations/nebraska', '/locations/wisconsin'] }, true],
+      ['a single state page', { pages: [_pg('https://x.com/', 'Roofing.')], rosterTitles: [], links: ['https://x.com/locations/texas'] }, false],
+      ['two state pages', { pages: [_pg('https://x.com/', 'Roofing.')], rosterTitles: [], links: ['https://x.com/locations/texas', 'https://x.com/locations/oklahoma'] }, false],
+      ['three non-state segments under /locations', { pages: [_pg('https://x.com/', 'Roofing.')], rosterTitles: [], links: ['https://x.com/locations/downtown', 'https://x.com/locations/uptown', 'https://x.com/locations/midtown'] }, false],
     ];
     for (const [what, args, want] of _chainCases) {
       const got = readChainEvidence(args);
@@ -56944,6 +57160,32 @@ app.listen(PORT, () => {
       [_nd('let isGeneric = mailboxKind(best)', " === 'role';"), 'the tier-1 generic decision is back on its own private word list, so the six lists have become two again'],
       [_nd("const personal  = scraped.emails.find(e => mailboxKind(e)", " === 'person');"), 'the pick of which scraped address to prefer is back on its own private word list'],
     ];
+    // == AND THE SITEMAP HAS TO REACH IT ================================
+    // The rule above can only see a locations index if somebody hands it one.
+    // findOwnerViaBrain maps the whole site, prints "mapped 165 URLs" and used
+    // to drop the list on the floor, while the chain read beside it saw only
+    // the homepage's own navigation. Two call sites, both pinned, because a
+    // fixture supplies its own arguments and cannot see either.
+    if (!_src.includes(_nd('_setMappedUrls(companyName, website,', ' urls);'))) {
+      _fails.push('the sitemap findOwnerViaBrain already paid for is thrown away again, so the chain read cannot see a locations index a homepage does not link');
+    }
+    if (!_src.includes(_nd('const _mapped = _getMappedUrls(name,', ' website);'))) {
+      _fails.push('the contact read no longer takes a second chain look at the sitemap it bought, so a multi-state operator reaches the sheet');
+    }
+    if (!_src.includes(_nd('links: links.concat(', '_mapped) });'))) {
+      _fails.push('the second chain look is not being handed the mapped URLs, so it re-reads the same homepage navigation and can only ever agree with the first');
+    }
+    // The memo is keyed by company AND website, and it expires. Two businesses
+    // sharing a name run concurrently by design, and a stale sitemap read as
+    // this lead's would be the cross-lead failure aimed at a drop decision.
+    _setMappedUrls('Probe Co', 'https://probe-a.example', ['/locations/texas']);
+    if (_getMappedUrls('Probe Co', 'https://probe-b.example').length) {
+      _fails.push('the mapped-sitemap memo is not keyed by website, so one business can be dropped as a chain on another business sitemap');
+    }
+    if (_getMappedUrls('Probe Co', 'https://probe-a.example').length !== 1) {
+      _fails.push('the mapped-sitemap memo does not return what was written to it');
+    }
+
     for (const [needle, why] of _sites) {
       if (!_src.includes(needle)) _fails.push(why);
     }
@@ -56951,7 +57193,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ FIND ICP GATE CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
     } else {
-      console.log(`✓ FIND ICP GATE CHECK: ${_mustDie.length} national brands are refused by name before a byte moves and ${_mustLive.length} owner-operated names beside them survive; ${_chainCases.length} chain cases are read from the business's OWN pages in both directions, including an independent that prints "not a franchise", a two-branch operator and a franchise lawyer; ${Object.keys(_mail).length} addresses resolve through ONE mailbox vocabulary where six disagreeing lists used to sit, so recruiting@ off a careers page can no longer ship as a tier-1 published address at score 100; and a roster that names its people by first name only finally yields the owner it states, marked as a candidate to corroborate rather than as a settled identity. Every call site is pinned, because a fixture supplies its own arguments and cannot see a caller.`);
+      console.log(`✓ FIND ICP GATE CHECK: ${_mustDie.length} national brands are refused by name before a byte moves and ${_mustLive.length} owner-operated names beside them survive; ${_chainCases.length} chain cases are read from the business's OWN pages in both directions, including an independent that prints "not a franchise", a two-branch operator and a franchise lawyer; ${Object.keys(_mail).length} addresses resolve through ONE mailbox vocabulary where six disagreeing lists used to sit, so recruiting@ off a careers page can no longer ship as a tier-1 published address at score 100; and a roster that names its people by first name only finally yields the owner it states, marked as a candidate to corroborate rather than as a settled identity. A locations index counts in both shapes: one per-city page under a state is a branch network by construction, while a one-segment state page needs ${CHAIN_STATE_ONLY_MIN} distinct states before it says anything - so DHI Roofing's six are caught and a single-state independent is not. The sitemap findOwnerViaBrain already paid for now reaches that rule instead of being dropped on the floor. Every call site is pinned, because a fixture supplies its own arguments and cannot see a caller.`);
     }
   } catch (e) {
     console.log(`⛔ FIND ICP GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -57120,9 +57362,51 @@ app.listen(PORT, () => {
     // FIVE - the score. The rule that makes it honest is that an unmeasured
     // term LEAVES THE DENOMINATOR; scoring it zero would tell a rep we checked
     // and this business is a bad fit.
-    const _full = findIcpScore({ teamCount: 12, adsCode: true, adPlatforms: ['Google'], hiringMarketing: true, hiringAny: true, hiringTitles: ['Marketing Manager'], hiringMarketingTitles: ['Marketing Manager'], reviewCount: 200, rating: 4.6 });
-    if (_full.score !== 100) _fails.push(`a business scoring the maximum on all five signals scored ${_full.score}, not 100`);
+    const _perfect = { teamCount: 12, adsCode: true, adPlatforms: ['Google'], hiringMarketing: true, hiringAny: true, hiringTitles: ['Marketing Manager'], hiringMarketingTitles: ['Marketing Manager'], reviewCount: 200, rating: 4.6,
+      affordBand: 'premium', affordWhy: 'a premium-fit trade at real volume', reachMeasured: true, ownerCanBuy: true, emailTier: 1 };
+    const _full = findIcpScore(_perfect);
+    if (_full.score !== 100) _fails.push(`a business scoring the maximum on every signal scored ${_full.score}, not 100`);
     if (_full.measured !== FIND_ICP_TERMS.length) _fails.push('the perfect-fit fixture did not measure every term, so the maximum is not reachable');
+
+    // == THE TWO TERMS THAT ANSWER "CAN WE SELL TO THEM" ==================
+    // The live 2026-08-31 run scored Castellano 45 - a real owner and an
+    // SMTP-verified personal address - and DHI Roofing 75, with no owner, no
+    // address and location pages in six states. The five original terms reward
+    // marketing maturity, so the business that already has what we sell won.
+    //
+    // The fixture is the PROPERTY rather than those two rows, because their
+    // exact inputs are not recoverable: two leads identical on all five of
+    // Vin's signals, one of which produced a named buyer and a confirmed
+    // address while the other produced neither.
+    const _sameFive = { teamCount: 6, adsCode: true, adPlatforms: ['Google'], hiringAny: false, reviewCount: 120, rating: 4.6, affordBand: 'lower', affordWhy: 'lower tier' };
+    const _reached = findIcpScore({ ..._sameFive, reachMeasured: true, ownerCanBuy: true, emailTier: 2 });
+    const _noContact = findIcpScore({ ..._sameFive, reachMeasured: true, ownerCanBuy: false, emailTier: null });
+    if (!(_reached.score > _noContact.score)) {
+      _fails.push(`a lead with a named buyer and a mailbox-confirmed address scored ${_reached.score} against ${_noContact.score} for the same business with neither - the score still cannot see what the read produced`);
+    }
+    // The tier is read as a TIER. A pattern-built guess and a published
+    // address are different risks and both of this project's hard bounces came
+    // from the guess, so they must not score the same.
+    const _guessed = findIcpScore({ ..._sameFive, reachMeasured: true, ownerCanBuy: true, emailTier: 4 });
+    if (!(_reached.score > _guessed.score)) _fails.push('a pattern-built address scores the same as a mailbox-confirmed one, so the tier is not being read');
+    // Affordability, from the shared derivation. A trade whose jobs cannot
+    // carry our floor must not outrank one that can, all else equal.
+    const _rich = findIcpScore({ ..._sameFive, affordBand: 'premium', reachMeasured: true, ownerCanBuy: true, emailTier: 2 });
+    const _poor = findIcpScore({ ..._sameFive, affordBand: 'below_floor', reachMeasured: true, ownerCanBuy: true, emailTier: 2 });
+    if (!(_rich.score > _poor.score)) _fails.push('a business below the floor we sell at scores the same as a premium-fit one, so the affordability band is not reaching the score');
+    // And both leave the denominator when they were never measured - a lead
+    // dropped as a chain never reaches the lookups at all.
+    const _dropped = findIcpScore({ ..._sameFive, affordBand: null, reachMeasured: false });
+    if (_dropped.terms.some(t => (t.id === 'reach' || t.id === 'afford') && t.measured)) {
+      _fails.push('a lead whose lookups never ran is being scored on them, which is the unmeasured-as-zero failure aimed at the number a rep sorts by');
+    }
+    // AND THE LINE THAT WRITES THE FLAG. The fixture above hands it in, so
+    // it can only ever prove the term READS it - reverting the write to a
+    // bare `true` left every fixture green, which is the recorded
+    // half-a-check trap and the reason this needle exists.
+    if (!_src.includes(_n('signals.reachMeasured =', ' !out.notIcp;'))) {
+      _fails.push('a lead dropped as a chain is scored on lookups that never ran for it, because the reach flag is set unconditionally again');
+    }
     const _thin = findIcpScore({ teamCount: 12, adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: null, rating: null });
     if (_thin.score !== 100) _fails.push(`a lead measured on ONE signal it scores full marks on came out at ${_thin.score} — the unmeasured terms are being counted as zero rather than left out`);
     if (_thin.measured !== 1) _fails.push('the thin fixture reports more measured signals than it has');
@@ -57135,6 +57419,30 @@ app.listen(PORT, () => {
       if (r.terms.some(t => (t.id === 'size' || t.id === 'rating' || t.id === 'demand') && t.measured)) {
         _fails.push(`findIcpScore treats ${JSON.stringify(bad)} as a measurement`);
         break;
+      }
+    }
+
+    // == AND THE SCORE IS COMPUTED AFTER THE LOOKUPS, NOT BEFORE ==========
+    // This is the whole defect and no fixture can see it: findIcpScore was
+    // called ~370 lines above the owner and address lookups, so the reach term
+    // could not exist. Asserted on the real source, by position.
+    {
+      const _iScore = _src.indexOf(_n('out.icp = findIcpScore', '(signals);'));
+      const _iOwner = _src.indexOf(_n('signals.ownerCanBuy = !!(out.owner && out.owner.canBuy', ' === true);'));
+      const _iMail = _src.indexOf(_n('signals.emailTier = (out.email && typeof out.email.tier', " === 'number')"));
+      const _iAff = _src.indexOf(_n('const _aff = affordabilityBand', '({'));
+      if (_iOwner < 0 || _iMail < 0) _fails.push('the contact read no longer hands the score what it found - the reach term is dark');
+      else if (_iAff < 0) _fails.push('the contact score no longer reads affordabilityBand, so the Find card, the CSV and contactRankFor are back to three verdicts about one business');
+      else if (_iScore < 0) _fails.push('the contact read no longer scores the lead at all');
+      else if (_iScore < _iOwner || _iScore < _iMail || _iScore < _iAff) {
+        _fails.push('the ICP score is computed BEFORE the owner and address lookups again, so a lead where we found both scores the same as one where we found neither');
+      }
+      // Assembled at runtime from two real halves. Written as one literal this
+      // needle sits in _src, finds ITSELF, and fails a correct build - which is
+      // exactly what it did on its first boot.
+      const _scoreNeedle = _n('out.icp = findIcpScore', '(signals);');
+      if (_src.split(_scoreNeedle).length - 1 !== 1) {
+        _fails.push('there is more than one place computing the contact ICP score, which is how two surfaces come to disagree about one business');
       }
     }
 
@@ -57311,7 +57619,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ FIND CONTACT CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ FIND CONTACT CHECK: the Find tab's contact read is executed end to end — a plain fetch first with Firecrawl only as the fallback, the site's own navigation instead of a paid sitemap call, and the shared owner reader, email engine, roster parser, ad signatures and role classifier rather than second copies of any of them. The score is out of the ${FIND_ICP_TERMS.length} signals it could measure and an unmeasured one leaves the denominator instead of scoring zero. HONEST SHAPE: no contact read has run against a live business from this build, so the per-lead cost below is bounded by the guards above rather than measured — the first real run's FIND CONTACT line reports what it actually cost. FIND_EMAIL_FIRECRAWL=${FIND_EMAIL_FIRECRAWL} (set it to "always" to let the address lookup buy its own pages, roughly five more credits a lead).`);
+      console.log(`✓ FIND CONTACT CHECK: the Find tab's contact read is executed end to end — a plain fetch first with Firecrawl only as the fallback, the site's own navigation instead of a paid sitemap call, and the shared owner reader, email engine, roster parser, ad signatures and role classifier rather than second copies of any of them. The score is out of the ${FIND_ICP_TERMS.length} signals it could measure and an unmeasured one leaves the denominator instead of scoring zero — and it is now computed AFTER the owner and address lookups rather than 370 lines before them, so a lead that produced a named buyer and a confirmed address can no longer score the same as one that produced neither. Affordability comes from affordabilityBand, the one derivation the Find card and contactRankFor already read. HONEST SHAPE: no contact read has run against a live business from this build, so the per-lead cost below is bounded by the guards above rather than measured — the first real run's FIND CONTACT line reports what it actually cost. FIND_EMAIL_FIRECRAWL=${FIND_EMAIL_FIRECRAWL} (set it to "always" to let the address lookup buy its own pages, roughly five more credits a lead).`);
     }
   } catch (e) {
     console.log(`⛔ FIND CONTACT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -73233,13 +73541,27 @@ const CHAIN_SELF_RE = /\b(?:own\s+(?:a|your\s+own)\s+franchise|become\s+a\s+fran
 // A business that prints the word to DENY it is the opposite of a franchise.
 const CHAIN_DENIAL_RE = /\b(?:not\s+a\s+franchise|never\s+(?:been\s+)?a\s+franchise|no\s+franchise\s+fees|non-?franchise)\b/i;
 const CHAIN_STATE_SLUGS = new Set(Object.values(US_STATE_NAMES).map(s => s.toLowerCase().replace(/\s+/g, '-')));
-// /locations/<state>/<city>, on their own domain. The state segment has to be a
-// real state name, so /locations/residential/roofing cannot match it.
+// /locations/<state>[/<city>], on their own domain. The state segment has to be
+// a real state name, so /locations/residential/roofing cannot match it.
+//
+// == A ONE-SEGMENT STATE PAGE IS A DIFFERENT KIND OF EVIDENCE ==============
+// This required BOTH segments, and DHI Roofing publishes /locations/missouri,
+// /locations/kansas, /locations/minnesota, /locations/iowa, /locations/nebraska
+// - one segment each. Executed against their real sitemap, every path returned
+// nothing, so a business trading in six states read as an independent.
+//
+// The two shapes do not carry the same weight and are not scored the same way.
+// A per-CITY page under a state is a branch network by construction, so one is
+// enough. A single state page is ordinary: plenty of one-state independents
+// publish /locations/texas. THREE OR MORE distinct states is the bar for the
+// one-segment form, which a two-branch independent inside one state cannot
+// reach however many pages it publishes.
 const chainLocationPath = (url) => {
-  const m = String(url || '').toLowerCase().match(/\/locations?\/([a-z-]{3,})\/([a-z0-9-]{2,})/);
-  if (!m) return '';
-  return CHAIN_STATE_SLUGS.has(m[1]) ? `${m[1]}/${m[2]}` : '';
+  const m = String(url || '').toLowerCase().match(/\/locations?\/([a-z-]{3,})(?:\/([a-z0-9-]{2,}))?(?:[\/?#]|$)/);
+  if (!m || !CHAIN_STATE_SLUGS.has(m[1])) return '';
+  return m[2] ? `${m[1]}/${m[2]}` : m[1];
 };
+const CHAIN_STATE_ONLY_MIN = 3;
 // PURE, so the boot check runs the real rule over the real strings rather than
 // reading the source and hoping.
 const readChainEvidence = ({ pages, rosterTitles, links } = {}) => {
@@ -73250,8 +73572,13 @@ const readChainEvidence = ({ pages, rosterTitles, links } = {}) => {
   const why = [];
   const role = titles.find(t => CHAIN_ROLE_RE.test(t)) || '';
   if (role) why.push(`their own team page gives somebody the title "${role.trim().slice(0, 60)}"`);
-  const place = urls.map(chainLocationPath).find(Boolean) || '';
-  if (place) why.push(`their own site publishes a per-state location page (/locations/${place})`);
+  // Split by shape, because they prove different things. See chainLocationPath.
+  const _paths = urls.map(chainLocationPath).filter(Boolean);
+  const _cityPath = _paths.find(p => p.indexOf('/') > 0) || '';
+  const _states = [...new Set(_paths.filter(p => p.indexOf('/') < 0))];
+  const place = _cityPath || (_states.length >= CHAIN_STATE_ONLY_MIN ? _states.join(', ') : '');
+  if (_cityPath) why.push(`their own site publishes a per-city location page under a state (/locations/${_cityPath})`);
+  else if (place) why.push(`their own site publishes location pages for ${_states.length} different states (${_states.slice(0, 4).join(', ')})`);
   const denied = CHAIN_DENIAL_RE.test(text);
   const self = (!denied && CHAIN_SELF_RE.test(text)) ? (text.match(CHAIN_SELF_RE) || [''])[0] : '';
   if (self) why.push(`their own pages sell franchises ("${self.trim().slice(0, 40)}")`);
@@ -73456,6 +73783,59 @@ const FIND_ICP_TERMS = [
       return { points: 3, say: `${r} stars - below the band we have evidence for` };
     },
   },
+  // == THE TWO TERMS THAT ASK WHETHER WE CAN SELL TO THEM ==================
+  // The five above reward MARKETING MATURITY: headcount, existing ad
+  // infrastructure, active hiring, review volume. Only `rating` is fit-shaped,
+  // and it is 8 of 100. So a national chain scored well on four terms BECAUSE
+  // it already has what we sell, and the owner-operated business we exist for
+  // scored lower BECAUSE it does not.
+  //
+  // Measured on the live 2026-08-31 run, before these two existed:
+  //   Castellano                45  real owner, SMTP-verified personal address
+  //   Chapman                   59  five-person team, owner + address
+  //   DHI Roofing               75  no owner, no address, multi-state chain
+  //   Auto Insurance Specialist 79  owner held back, address a blocked guess
+  //
+  // Vin's three signals are untouched and keep their weights. These are added
+  // BESIDE them, and both are positive evidence: an unmeasured one leaves the
+  // denominator rather than scoring zero, exactly like the five above.
+  {
+    id: 'afford', max: 20, label: 'what one job in their trade is worth against how many they do',
+    // affordabilityBand is the ONE derivation the Find card's tier label and
+    // contactRankFor already read. This score never consulted it, which is why
+    // three surfaces could disagree about one business. It reports a BAND, not
+    // a dollar figure: revenue is not measured anywhere here and never claimed.
+    score: (s) => {
+      const b = s.affordBand;
+      if (b === 'premium') return { points: 20, say: `${s.affordWhy || 'their trade and their job count put them at premium fit'}` };
+      if (b === 'lower') return { points: 12, say: `${s.affordWhy || 'their trade and their job count put them at the lower tier'}` };
+      if (b === 'below_floor') return { points: 3, say: `${s.affordWhy || 'their trade and their job count put them below the floor we sell at'}` };
+      return null;
+    },
+  },
+  {
+    id: 'reach', max: 15, label: 'whether the read actually produced somebody to contact',
+    // The score used to be computed BEFORE the owner and address lookups ran,
+    // so a lead where we found both scored identically to one where we found
+    // neither. That is the single most decisive thing about a row a rep works
+    // from, and the number he sorts by could not see it.
+    //
+    // Read from the TIER, never from the label: a published address, an SMTP
+    // confirmation, a learned pattern and an outright guess are four different
+    // risks, and both of this project's hard bounces came from the third kind.
+    score: (s) => {
+      if (s.reachMeasured !== true) return null;
+      const t = Number(s.emailTier);
+      const solid = Number.isFinite(t) && t <= 2;
+      const anyAddr = Number.isFinite(t) && t <= 4;
+      if (s.ownerCanBuy === true && solid) return { points: 15, say: 'a named decision-maker who clears the buying floor, and an address that is published or mailbox-confirmed' };
+      if (s.ownerCanBuy === true && anyAddr) return { points: 10, say: 'a named decision-maker who clears the buying floor, but the address is pattern-built rather than confirmed' };
+      if (s.ownerCanBuy === true) return { points: 7, say: 'a named decision-maker who clears the buying floor, but no address at all' };
+      if (solid) return { points: 8, say: 'a published or mailbox-confirmed address, but nobody we can name as the buyer' };
+      if (anyAddr) return { points: 4, say: 'a pattern-built address and nobody we can name as the buyer' };
+      return { points: 1, say: 'the read produced neither a decision-maker we can name nor an address' };
+    },
+  },
 ];
 const findIcpScore = (signals) => {
   const s = signals || {};
@@ -73629,7 +74009,11 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   signals.reviewCount = (typeof (company && company.reviewCount) === 'number') ? company.reviewCount : null;
   signals.rating = (typeof (company && company.rating) === 'number') ? company.rating : null;
   out.signals = signals;
-  out.icp = findIcpScore(signals);
+  // The SCORE is computed at the bottom of this function, not here. The chain
+  // read below depends on `signals` existing at this point and is deliberately
+  // ahead of the paid wave; the scoring is not, and it was answering "is this
+  // a lead worth working" before the owner and the address - the two things
+  // that decide it - had been looked for at all.
 
   // ── AND IS THIS A BRANCH OF SOMEBODY ELSE'S BUSINESS? ───────────────
   // Read from the pages we have just read and the navigation we already hold,
@@ -73693,6 +74077,34 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     notes.push('no Anthropic key, so nobody could be identified');
   }
 
+  // == AND A SECOND LOOK, ON THE SITEMAP THE OWNER WAVE ALREADY BOUGHT ====
+  // The read above is the CHEAP refusal and it stays first: it sees the roster
+  // and the homepage's own navigation, which is what caught Truly Nolen on the
+  // FIRST page we read, before a credit could move.
+  //
+  // What it cannot see is a locations index a site does not link from its home
+  // navigation. DHI Roofing publishes location pages for six states and links
+  // none of them from its homepage; the owner lookup above maps the whole site
+  // and that list was being dropped on the floor. So this buys nothing new - it
+  // re-runs the same pure rule over a list already paid for.
+  //
+  // It runs late, so the owner wave is already spent when it fires. It still
+  // saves the address lookup, and more to the point it keeps a chain off the
+  // sheet at all, which is what the filter is for.
+  if (!out.notIcp) {
+    const _mapped = _getMappedUrls(name, website);
+    if (_mapped.length) {
+      const _late = readChainEvidence({ pages, rosterTitles: signals.teamTitles, links: links.concat(_mapped) });
+      if (_late.isChain) {
+        out.chain = _late;
+        out.notIcp = true;
+        out.icpReason = 'chain';
+        out.icpWhy = _late.why;
+        notes.push(`this is a branch of a larger operation \u2014 ${_late.why}. Their homepage links none of it; their own sitemap does.`);
+      }
+    }
+  }
+
   // ── THE ADDRESS ──────────────────────────────────────────────────────────
   // Not bought for a chain outlet: the address of a branch manager who does
   // not own the marketing is a real address and nothing to do with a sale.
@@ -73737,6 +74149,34 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       }
     } catch (e) { notes.push(`the address lookup failed (${e && e.message})`); }
   }
+
+  // == THE SCORE, NOW THAT THE READ IS FINISHED ============================
+  // Everything above has run, so the two terms that decide whether a rep can
+  // work this row - a decision-maker who clears the buying floor, and an
+  // address whose tier says how much to trust it - are measurable rather than
+  // structurally unknowable.
+  //
+  // affordabilityBand is the shared derivation the Find card's tier label and
+  // contactRankFor both read. Reading it here is what stops three surfaces
+  // holding three verdicts about one business. A team count measured during
+  // THIS read sharpens it, which the Places-only version cannot do.
+  const _aff = affordabilityBand({
+    label: (company && company.industry) || '', trade: (company && company.trade) || '',
+    tier: (company && company.tier) || null,
+    reviewCount: typeof signals.reviewCount === 'number' ? signals.reviewCount : null,
+    teamCount: typeof signals.teamCount === 'number' ? signals.teamCount : null,
+    hours: (company && company.publishedHours) || null,
+  });
+  signals.affordBand = _aff.band;
+  signals.affordWhy = _aff.why || '';
+  // The lookups actually RAN, so "we did not find an owner" is a measurement
+  // and not an absence of one. A lead dropped as a chain never reached them,
+  // so the term leaves the denominator rather than scoring a confident 1 -
+  // the unmeasured-as-zero class, which every other term here already avoids.
+  signals.reachMeasured = !out.notIcp;
+  signals.ownerCanBuy = !!(out.owner && out.owner.canBuy === true);
+  signals.emailTier = (out.email && typeof out.email.tier === 'number') ? out.email.tier : null;
+  out.icp = findIcpScore(signals);
 
   const led = FC_LEDGER.getStore() || {};
   out.spend = {
