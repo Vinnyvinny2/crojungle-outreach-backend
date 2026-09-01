@@ -1305,7 +1305,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260920;
+const CLIENT_CONTRACT = 20260921;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5471,6 +5471,14 @@ const contactRequestBody = (company, settings) => {
       location: C.location || '', industry: C.industry || C.category || '',
       reviewCount: (typeof C.reviewCount === 'number') ? C.reviewCount : null,
       rating: (typeof C.rating === 'number') ? C.rating : null,
+      // The opening hours Google already sent on the discovery call. They ride
+      // the queued company and the server reads them for the affordability
+      // band's staffed term AND for the calling window - and the request
+      // builder had never sent them, so both arrived undefined on every read.
+      // The motion for this list is calling, so this is the single most useful
+      // free field on the row.
+      publishedHours: C.publishedHours || null,
+      trade: C.trade || '', tier: C.tier || null,
     },
     keys: {
       anthropicKey: S.apiKey, firecrawlKey: S.firecrawlKey, verifierKey: S.verifierKey,
@@ -5569,6 +5577,11 @@ const contactFieldsFrom = (data) => {
     // recorded which build a read came from. Stamped, never auto-cleared: a
     // silent re-read spends money the operator did not ask to spend.
     contactReadBuild: CLIENT_CONTRACT,
+    // When somebody is likely to pick the phone up, off their own published
+    // hours and the trade. callWindowFor already writes this for Mike's audit
+    // sheet; it had no source on this path until the hours were sent.
+    contactCallWindow: (d.callWindow && d.callWindow.say) || '',
+    contactCallWindowWhy: d.callWindowWhy || '',
     // The server's own verdict, when it read the pages and found a chain.
     contactNotFit: d.notIcp === true,
     contactNotFitWhy: d.icpWhy || '',
@@ -5611,6 +5624,30 @@ const findCsvCell = (v) => {
   s = s.replace(FIND_CSV_CTRL, '');
   return '"' + s.replace(/"/g, '""') + '"';
 };
+// ══ ONE LEAD, ONE TAB ═══════════════════════════════════════════════════════
+// Vin, 80 of 80 read and stuck: "if a lead gets read it wont get read again and
+// it can only be added to pipeline for audit... i think we need a whole format
+// change becasue im getting confused." A read lead already could not be read
+// twice - the unread filter excluded it - and the list never SHOWED it moving,
+// so the whole queue looked identical before and after a press.
+//
+// Module scope and pure, because the old section filters lived inline in the
+// render where nothing could execute them. Three answers, and a lead has
+// exactly one:
+//   out    the server read their pages and ruled them out. Asking again cannot
+//          change the answer, so it must never come back into a paid press.
+//   read   contactReadOk, which is written by the thing that did the reading.
+//   unread everything else, INCLUDING a failed read. The plan for this filed a
+//          failure under 'out'; that is wrong and it is the failure a hundred
+//          leads were retired by on 2026-08-28. A dead server is something that
+//          might work next time, so it has to come back.
+const CONTACT_TABS = [['unread', 'Not read'], ['read', 'Read'], ['out', 'Ruled out']];
+const contactTabOf = (c) => {
+  if (!c || !c.name) return null;
+  if (c.contactNotFit === true) return 'out';
+  if (c.contactReadOk === true) return 'read';
+  return 'unread';
+};
 const FIND_CSV_COLUMNS = [
   ['icp', 'ICP score out of 100 (our fit score, not a Google position)'],
   ['icpWhy', 'What that score was measured on'],
@@ -5625,6 +5662,7 @@ const FIND_CSV_COLUMNS = [
   ['emailGoesTo', 'Who opens it'],
   ['phone', 'Phone'],
   ['phoneOnSite', 'Does their own site print this number'],
+  ['callWindow', 'When to call'],
   ['affordTier', 'What they can afford'],
   ['payingForAds', 'Already paying for ads'],
   ['adsWhy', 'What we saw on their site'],
@@ -5652,8 +5690,11 @@ const FIND_CSV_COLUMNS = [
 //
 // Keys only, in the order the table above declares them, so a column can never
 // appear here under a heading that does not exist. The build fails if it does.
+// callWindow is the ninth, added at the owner's request on 2026-09-01: the
+// motion for this file is calling, and knowing a roofer is reachable before
+// he is on a roof is worth more than any other free field we hold.
 const FIND_CSV_ESSENTIAL = ['company', 'owner', 'ownerTitle', 'email', 'phone',
-  'icp', 'payingForAds', 'hiringMarketing'];
+  'icp', 'payingForAds', 'hiringMarketing', 'callWindow'];
 const findCsvColumns = (full) => (full === true ? FIND_CSV_COLUMNS
   : FIND_CSV_COLUMNS.filter(c => FIND_CSV_ESSENTIAL.indexOf(c[0]) >= 0));
 // ══ THE FIRST MEASUREMENT OF WHETHER ANY OF THIS WORKS ══════════════════════
@@ -5807,6 +5848,10 @@ const findContactRows = (companies) => {
       : c.contactPhoneOnSite === true ? 'yes, on their own site too'
       : c.contactPhoneOnSite === false ? 'not on any page we read - worth confirming'
       : 'not checked',
+    // Off their own published Google hours. An empty cell is honest: it means
+    // their listing publishes no hours, never that any time is as good as any
+    // other.
+    callWindow: c.contactCallWindow || '',
     // Read from the server's band. Never a dollar figure and never re-derived
     // here: an empty cell means nobody measured enough to say, which is a
     // different thing from a business that cannot pay.
@@ -6056,6 +6101,7 @@ function FindView({
   // lanes have none of that, and every one of tonight's wasted reads came from
   // them. So the scope is the measurement, not a guess about the words.
   const [contactPlacesOnly, setContactPlacesOnly] = React.useState(true);
+  const [contactTab, setContactTab] = React.useState('unread');
   // 'run' shows only the leads the last press read; 'queue' shows everything
   // that has ever been read. Both are real questions and the panel could only
   // ever answer the second one.
@@ -7486,8 +7532,21 @@ function FindView({
       // this one by how well the business FITS. They are different questions and
       // folding them into one toggle makes both unreadable. An unscored lead
       // sorts last, never as a zero.
+      // A Google listing is the measurement that separates a local
+      // owner-operated business from a job-board or for-sale row. Places leads
+      // carry a placeId; nothing else in the queue does. Lifted above the sort
+      // because the TAB counts and the rendered cards both read this pool.
+      const _hasListing = (c) => !!(c && (c.placeId || c.source === 'google_places'));
+      const _cShown = contactPlacesOnly ? filtered.filter(_hasListing) : filtered;
+      const _cHidden = contactPlacesOnly ? (filtered.length - _cShown.length) : 0;
+      const _tabCount = { unread: 0, read: 0, out: 0 };
+      for (const c of _cShown) { const t = contactTabOf(c); if (t) _tabCount[t]++; }
+      // THE LIST IS THE TAB. Counting alone would leave "a read lead leaves the
+      // pool" true of the numbers and false of the screen, which is the whole
+      // complaint.
+      const _tabbed = _cShown.filter(c => contactTabOf(c) === contactTab);
       const _shown = contactSort
-        ? filtered.slice().sort((a, b) => {
+        ? _tabbed.slice().sort((a, b) => {
             const A = (typeof a.contactIcp === 'number') ? a.contactIcp : -1;
             const B = (typeof b.contactIcp === 'number') ? b.contactIcp : -1;
             if (B !== A) return B - A;
@@ -7499,7 +7558,7 @@ function FindView({
             const Bm = (typeof b.contactIcpMeasured === 'number') ? b.contactIcpMeasured : 0;
             return Bm - Am;
           })
-        : filtered;
+        : _tabbed;
       const cards = _shown.map((co, i) => {
     const added = alreadyAdded(co.name);
     const isExpanded = expandedLead === co.name;
@@ -7653,7 +7712,12 @@ function FindView({
                   co.contactEmail,
                   _emailBad ? React.createElement('span', { style:{ color:'#fca5a5', marginLeft:7, fontSize:11.5 } }, 'do not send') : null)
               : React.createElement('span', { style:{ color:'var(--m2)' } }, 'No email found'),
-            (co.contactPhone || co.phone) ? React.createElement(React.Fragment, null, _dot, (co.contactPhone || co.phone)) : null),
+            (co.contactPhone || co.phone) ? React.createElement(React.Fragment, null, _dot, (co.contactPhone || co.phone)) : null,
+            // When to call, off their own published Google hours. It sits with
+            // the number because that is what it is about, and it is absent
+            // rather than hedged on a listing that publishes no hours.
+            co.contactCallWindow ? React.createElement('span', { style:{ color:'var(--a)' } },
+              _dot, co.contactCallWindow) : null),
           _bits.length ? React.createElement('div', { style:{ fontSize:12, color:'var(--m2)', marginTop:3 } }, _bits.join('  ·  ')) : null,
           // What we could NOT do. On a lead whose site refused us, every signal
           // above is "not checked" and the reason is the useful thing on the row.
@@ -7880,9 +7944,6 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       // A Google listing is the measurement that separates a local
       // owner-operated business from a job-board or for-sale row. Places leads
       // carry a placeId; nothing else in the queue does.
-      const _hasListing = (c) => !!(c && (c.placeId || c.source === 'google_places'));
-      const _cShown = contactPlacesOnly ? _shown.filter(_hasListing) : _shown;
-      const _cHidden = contactPlacesOnly ? (_shown.length - _cShown.length) : 0;
       // contactReadOk, not contactAt. A lead whose request failed is UNREAD and
       // must come back into the next press - that is what stops a paused server
       // from permanently retiring a hundred leads.
@@ -7972,24 +8033,32 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
               _running
                 ? 'Reading their site for the decision-maker, an address and the fit signals. Nothing is being audited.'
                 : 'The decision-maker, an email and a phone number, plus a fit score out of 100.'),
-            // One toggle, on the same row as the numbers it re-points, because
-            // it decides which set every figure below describes.
-            _cRunSet.length ? React.createElement('div', { style:{ display:'flex', gap:6, marginTop:9, alignItems:'center', flexWrap:'wrap' } },
-              ...[['run', 'This run (' + _cRunSet.length + ')'], ['queue', 'The whole queue (' + _cShown.length + ')']].map(([k, lab]) =>
-                React.createElement('button', { key:k,
-                  className:'btn btn-sm',
-                  style:{ background: contactScope === k ? 'var(--a)' : 'transparent',
-                          color: contactScope === k ? '#0b0d10' : 'var(--m2)',
-                          border:'1px solid ' + (contactScope === k ? 'var(--a)' : 'var(--b)') },
-                  onClick: () => setContactScope(k) }, lab))) : null),
-          React.createElement('div', { style:{ display:'flex', gap:22, alignItems:'flex-start' } },
-            _stat(_scoped.length, _scoped === _cRunSet ? 'in this run' : 'on screen'),
-            _stat(_cRead.length, 'read', _cRead.length ? 'var(--a)' : null),
-            _stat(_cWithEmail, 'with an email', _cWithEmail ? 'var(--g)' : null))),
+            // The run scope lives beside the TALLY it re-points, in the Read
+            // tab, because that is the only place it means anything. Two
+            // toggles above three tabs was the confusion, not the fix.
+            null),
+          _cWithEmail ? React.createElement('div', { style:{ display:'flex', gap:22, alignItems:'flex-start' } },
+            _stat(_cWithEmail, 'with an email', 'var(--g)')) : null),
+
+        // ── THREE TABS, AND A READ LEAD LEAVES THE POOL ──────────────────
+        // The counts ARE the header now: 13 / 67 / 6 says where every lead is,
+        // so the three stat tiles that used to say a slice of the same thing
+        // are gone rather than sitting beside it. The list underneath is the
+        // tab too, which is what makes "it wont get read again" visible.
+        React.createElement('div', {
+          style:{ display:'flex', gap:2, borderBottom:'1px solid var(--b)', margin:'0 -18px', padding:'0 18px' },
+        }, ...CONTACT_TABS.map(([k, lab]) => React.createElement('button', {
+          key: k,
+          onClick: () => setContactTab(k),
+          style:{ appearance:'none', background:'none', border:0, cursor:'pointer',
+                  borderBottom:'2px solid ' + (contactTab === k ? 'var(--a)' : 'transparent'),
+                  color: contactTab === k ? 'var(--t)' : 'var(--m2)',
+                  fontFamily:'Inter,sans-serif', fontSize:12.5, fontWeight:600, padding:'9px 12px 8px' },
+        }, lab, React.createElement('span', { style:{ opacity:.7, marginLeft:5 } }, String(_tabCount[k]))))),
 
         // ── A READ THAT PREDATES THE CURRENT PARSER ──────────────────────
         // Stamped and flagged. Nothing here spends until it is pressed.
-        _cStale.length ? _band('Stale',
+        (contactTab === 'read' && _cStale.length) ? _band('Stale',
           React.createElement('button', {
             className:'btn btn-sm', style:{ background:'transparent', border:'1px solid var(--b)', color:'var(--t)' },
             onClick: () => {
@@ -8045,33 +8114,46 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
               React.createElement('span', null,
                 'Only businesses with a Google listing'
                 + (_cHidden ? ' (hiding ' + _cHidden + ')' : ''))),
-            _cUnread.length ? React.createElement('div', {
-              style:{ display:'flex', alignItems:'center', gap:7, fontSize:12, color:'var(--t)', marginLeft:'auto' },
-            },
-              React.createElement('span', { style:{ color:'var(--m2)' } }, 'How many'),
-              React.createElement('input', {
-                type:'number', min:'1', max:'500', value: contactHowMany,
-                onChange: e => setContactHowMany(Math.max(1, Math.min(500, Number(e.target.value) || 1))),
-                style:{ width:66, padding:'6px 9px', borderRadius:7, border:'1px solid var(--b)',
-                        background:'var(--s)', color:'var(--t)', fontFamily:'Inter,sans-serif', fontSize:13 },
-              }),
-              [5, 25, 50].map(n => React.createElement('button', {
-                key: n, className:'btn btn-sm',
-                style:{ padding:'5px 9px', background: contactHowMany === n ? 'var(--p)' : 'transparent',
-                        color: contactHowMany === n ? '#fff' : 'var(--m2)', border:'1px solid var(--b)' },
-                onClick: () => setContactHowMany(n),
-              }, String(n)))) : null,
             _cap('A Google listing means a local address, a rating and reviews. The other lanes are where the national brands come from.')),
 
-          _band('Read',
+          // ══ ONLY THE NOT-READ TAB SPENDS ═════════════════════════════════
+          // Every control that costs money now lives on one tab, so the screen
+          // an operator lands on when there is nothing left to read cannot
+          // offer him Re-read and Clear as its only two buttons - which is
+          // exactly what it did tonight, both of them spending to go backwards.
+          contactTab !== 'unread' ? null : _cUnread.length === 0 ? _band('Read',
+            React.createElement('div', { style:{ flexBasis:'100%' } },
+              React.createElement('div', { style:{ fontFamily:'Syne', fontWeight:700, fontSize:14.5, marginBottom:3 } },
+                'Every lead in scope has been read.'),
+              React.createElement('div', { style:{ fontSize:12.5, color:'var(--m2)' } },
+                (_cHidden ? _cHidden + ' more sit behind the Google-listing filter, and a' : 'A')
+                + ' scan brings in new ones.')),
             React.createElement('button', {
               className:'btn btn-p btn-sm',
-              disabled: _cUnread.length === 0,
+              title: 'Scrolls up to the scan, which is what puts new businesses in the queue.',
+              onClick: () => { try { window.scrollTo({ top: 0, behavior: 'smooth' }); } catch (e) { window.scrollTo(0, 0); } },
+            }, 'Find more leads'),
+            _cHidden ? React.createElement('button', {
+              className:'btn btn-g btn-sm',
+              onClick: () => setContactPlacesOnly(false),
+            }, 'Include the other lanes (' + _cHidden + ')') : null) : _band('Read',
+            React.createElement('button', {
+              className:'btn btn-p btn-sm',
               title: 'Reads their homepage and up to three pages their own navigation links to. Buys no audit.',
               onClick: () => runContactBatch(_cUnread, Math.max(1, contactHowMany)),
-            }, _cUnread.length === 0
-                ? 'Every lead on screen has been read'
-                : ('Get contacts for ' + Math.min(Math.max(1, contactHowMany), _cUnread.length) + ' lead' + (Math.min(Math.max(1, contactHowMany), _cUnread.length) === 1 ? '' : 's'))),
+            }, 'Read ' + Math.min(Math.max(1, contactHowMany), _cUnread.length) + ' lead' + (Math.min(Math.max(1, contactHowMany), _cUnread.length) === 1 ? '' : 's')),
+            React.createElement('input', {
+              type:'number', min:'1', max:'500', value: contactHowMany,
+              onChange: e => setContactHowMany(Math.max(1, Math.min(500, Number(e.target.value) || 1))),
+              style:{ width:66, padding:'6px 9px', borderRadius:7, border:'1px solid var(--b)',
+                      background:'var(--s)', color:'var(--t)', fontFamily:'Inter,sans-serif', fontSize:13 },
+            }),
+            ...[5, 25, 50].map(n => React.createElement('button', {
+              key: n, className:'btn btn-sm',
+              style:{ padding:'5px 9px', background: contactHowMany === n ? 'var(--p)' : 'transparent',
+                      color: contactHowMany === n ? '#fff' : 'var(--m2)', border:'1px solid var(--b)' },
+              onClick: () => setContactHowMany(n),
+            }, String(n))),
             _cUnread.length > contactHowMany ? React.createElement('button', {
               className:'btn btn-g btn-sm',
               onClick: () => runContactBatch(_cUnread, _cUnread.length),
@@ -8081,11 +8163,22 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
             // the run toggle set those are two different sets. Section 88's
             // rule: each number names its own set rather than being forced into
             // one that fits neither.
-            _cap(_cUnread.length === 0 && _cRead.length === 0
-              ? 'Find some leads first, or widen the filters above.'
-              : _cUnread.length + ' unread in the whole queue. About one to two Firecrawl credits and a cent of model each: a plain fetch of their site, and Firecrawl only when a site refuses one. No reviews, no search, no audit.')),
+            // The button's own population, and it is now the tab you are
+            // standing on rather than a set the caption had to name.
+            _cap(_cUnread.length + ' not read. About one to two Firecrawl credits and a cent of model each: a plain fetch of their site, and Firecrawl only when a site refuses one. No reviews, no search, no audit.')),
 
-          (_cExportable.length || _cRead.length) ? _band('Export',
+          // A failed read is a stop, so it gets the one colour this screen uses
+          // for one, and it stays on the NOT-READ tab because that is where it
+          // belongs: it is something that might work next time.
+          (contactTab === 'unread' && _cFailed.length) ? _band('Failed',
+            React.createElement('div', {
+              style:{ flexBasis:'100%', fontSize:12, color:'#fca5a5', border:'1px solid rgba(239,68,68,.25)',
+                      borderRadius:9, padding:'8px 11px', lineHeight:1.5 },
+            }, _cFailed.length + ' lead' + (_cFailed.length === 1 ? '' : 's') + ' could not be read: '
+               + (((_cFailed[0].contactNotes || [])[0]) || 'no reason recorded')
+               + '. They are still counted as not read, so the button above picks them up again.')) : null,
+
+          (contactTab === 'read' && (_cExportable.length || _cRead.length)) ? _band('Export',
             _cExportable.length ? React.createElement('button', {
               className:'btn btn-g btn-sm',
               title: csvFull
@@ -8158,29 +8251,30 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
             sheetNote ? _cap(sheetNote, 'var(--g)') : null) : null,
 
           // ── WHAT CAME BACK ────────────────────────────────────────────
-          (_cRead.length || _cFailed.length || _cNotFit.length) ? _band('Result',
-            // ONE POPULATION. The stats above read _scoped and this read the
-            // whole filtered queue, so with "This run" selected the header and
-            // the tally described different sets of leads on one panel.
-            _cRead.length ? _cap((_scopeWord === 'in this run' ? 'This run: ' : 'This queue so far: ')
-              + findTallyLine(findRunTally(_scoped)), 'var(--t)') : null,
-            _cReadNoContact > 0 ? _cap(_cReadNoContact + ' of the ' + _cRead.length + ' read had no owner, no address and no number on their site, so they are not in the file.') : null,
-            // A failed read is a stop, so it gets the one colour this screen
-            // uses for one. It also names the reason, because "it did nothing"
-            // with no cause attached is what sent an operator to the Render
-            // logs looking for requests that were never made.
-            _cFailed.length ? React.createElement('div', {
-              style:{ flexBasis:'100%', fontSize:12, color:'#fca5a5', border:'1px solid rgba(239,68,68,.25)',
-                      borderRadius:9, padding:'8px 11px', lineHeight:1.5 },
-            }, _cFailed.length + ' lead' + (_cFailed.length === 1 ? '' : 's') + ' could not be read: '
-               + (((_cFailed[0].contactNotes || [])[0]) || 'no reason recorded')
-               + '. They are still counted as unread, so the button above picks them up again.') : null,
-            // ══ A DECISION IS NOT A FAILURE ══════════════════════════════
-            // A lead the server ruled out was rendered in the same red box as a
-            // dead server, under the words "could not be read" - framing a
-            // deliberate, correct, zero-cost refusal as a fault. It is neither
-            // red nor a failure, and it has its own way back.
-            _cNotFit.length ? React.createElement('div', {
+          // The tally is the only thing on this panel that still has two
+          // honest populations - this run, and the queue so far - so the scope
+          // toggle lives here, next to the sentence it re-points, instead of
+          // above three tabs that answer a different question.
+          (contactTab === 'read' && _cRead.length) ? _band('Result',
+            _cRunSet.length ? React.createElement('div', { style:{ display:'flex', gap:6, flexWrap:'wrap' } },
+              ...[['run', 'This run (' + _cRunSet.length + ')'], ['queue', 'The whole queue (' + _cShown.length + ')']].map(([k, lab]) =>
+                React.createElement('button', { key:k,
+                  className:'btn btn-sm',
+                  style:{ background: contactScope === k ? 'var(--a)' : 'transparent',
+                          color: contactScope === k ? '#0b0d10' : 'var(--m2)',
+                          border:'1px solid ' + (contactScope === k ? 'var(--a)' : 'var(--b)') },
+                  onClick: () => setContactScope(k) }, lab))) : null,
+            _cap((_scopeWord === 'in this run' ? 'This run: ' : 'This queue so far: ')
+              + findTallyLine(findRunTally(_scoped)), 'var(--t)'),
+            _cReadNoContact > 0 ? _cap(_cReadNoContact + ' of the ' + _cRead.length + ' read had no owner, no address and no number on their site, so they are not in the file.') : null) : null,
+
+          // ══ A DECISION IS NOT A FAILURE ══════════════════════════════════
+          // A lead the server ruled out was rendered in the same red box as a
+          // dead server, under the words "could not be read" - framing a
+          // deliberate, correct, zero-cost refusal as a fault. It is neither
+          // red nor a failure, it has its own tab, and it has a way back.
+          (contactTab === 'out' && _cNotFit.length) ? _band('Ruled out',
+            React.createElement('div', {
               style:{ flexBasis:'100%', fontSize:12, color:'var(--t)', border:'1px solid var(--b)',
                       borderRadius:9, padding:'8px 11px', lineHeight:1.5,
                       display:'flex', alignItems:'center', gap:10, flexWrap:'wrap' },
@@ -8200,7 +8294,7 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
                     ? Object.assign({}, x, { contactNotFit: false, contactFailedAt: null, contactNotes: [] }) : x);
                   saveDiscovered(back); setDiscovered(back);
                 },
-              }, 'Put them back')) : null) : null),
+              }, 'Put them back'))) : null),
 
         contactErr ? React.createElement('div', {
           style:{ marginTop:10, fontSize:12, color:'#fca5a5', border:'1px solid rgba(239,68,68,.25)', borderRadius:9, padding:'8px 11px' },
