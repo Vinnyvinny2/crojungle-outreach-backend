@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260920;
+const CONTRACT_VERSION = 20260921;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -5928,7 +5928,12 @@ const readPublishedHours = (roh) => {
       total += (((b - a) + 1440) % 1440) / 60;
     }
   }
-  return { checked: true, openDays, weeklyHours: parsedAll ? Math.round(total) : null, open24: any24 };
+  // The LINES themselves, not just the two derived counts. callWindowFor reads
+  // them to say when a person is likely to pick the phone up, and it already
+  // feeds Mike's audit sheet - it simply had no source on the Find path,
+  // because this function threw the text away the moment it had counted it.
+  // Bounded to a week, which is all Google ever sends.
+  return { checked: true, openDays, weeklyHours: parsedAll ? Math.round(total) : null, open24: any24, lines: lines.slice(0, 7).map(String) };
 };
 
 // ══ CAN THIS BUSINESS AFFORD WHAT WE SELL ═══════════════════════════════════
@@ -10768,7 +10773,12 @@ const TITLE_AUTHORITY = [
   { rank: 100, re: /\b(founder|co-?founder|owner|proprietor)\b/i },
   { rank: 95,  re: /\b(ceo|chief executive)\b/i },
   { rank: 90,  re: /\b(president)\b/i },
-  { rank: 85,  re: /\b(managing (partner|director)|principal|partner)\b/i },
+  // shareholder and managing attorney join this row rather than the credential
+  // row below it, because they are statements of OWNERSHIP at a professional
+  // corporation, not of qualification. Scored 30 (unknown title) they sat below
+  // the buying floor, so a roster that named the firm's owner in the firm's own
+  // words still bought the paid search wave.
+  { rank: 85,  re: /\b(managing (partner|director|member|attorney|shareholder|physician|dentist|broker)|shareholder|principal|partner)\b/i },
   // At an owner-operated trade business the person whose NAME is on the state
   // licence is almost always the owner — that is the entire premise of the licence
   // lookup. Scoring these 30 ("unknown title") sent them below the buying floor and
@@ -11491,11 +11501,19 @@ const _ownerFromCorpus = async (corpus, companyName, website, apiKey, rosterCorp
       // When an ownership word IS present but no pair was built, print the text
       // around it. That is the exact shape to fix, and it costs one log line on
       // the runs where the parser is already failing.
-      const _hint = OWNER_TITLE_RE.exec(corpus);
+      // == THE HINT MUST USE EVERY VOCABULARY THE PARSER HAS ==============
+      // This searched OWNER_TITLE_RE alone, and executed against two live
+      // corpora - "Cagney McCormick, Attorney at Law" and "Dr. Michael Hekler,
+      // DC - Chiropractor" - it finds nothing in either. So on a professional
+      // practice the branch below printed that their pages genuinely do not
+      // state who owns the business, about pages that plainly do. A fact about
+      // OUR word list, dressed as a fact about them: the recorded
+      // message-names-the-wrong-cause class, and the fourth instance of it.
+      const _hint = ownershipWordInCorpus(corpus);
       const _sample = _hint
         ? corpus.slice(Math.max(0, _hint.index - 120), _hint.index + 120).replace(/\s+/g, ' ').trim()
         : null;
-      console.log(`\u{1F464} ROSTER [${companyName}]: no owner-level title found on their pages. Read ${_roster.length} name/title pair(s) from ${corpus.length} characters${_roster.length ? ' \u2014 ' + _roster.slice(0, 4).map(r => `${r.name} (${r.title})`).join(', ') : ''}. Falling through to the model, which still finds the owner \u2014 this only costs the paid searches the roster would have skipped.${_sample ? ` An ownership word IS in the text, so the page is here and the layout is what we cannot read. Around it: "\u2026${_sample}\u2026"` : ' No ownership word appears anywhere in the text, so their pages genuinely do not state who owns the business.'}`);
+      console.log(`\u{1F464} ROSTER [${companyName}]: no owner-level title found on their pages. Read ${_roster.length} name/title pair(s) from ${corpus.length} characters${_roster.length ? ' \u2014 ' + _roster.slice(0, 4).map(r => `${r.name} (${r.title})`).join(', ') : ''}. Falling through to the model, which still finds the owner \u2014 this only costs the paid searches the roster would have skipped.${_sample ? ` An ownership word IS in the text, so the page is here and the layout is what we cannot read. Around it: "\u2026${_sample}\u2026"` : ' No ownership or professional title appears anywhere in the text we read, so either their pages do not state who runs the business or the words they use are ones this parser does not know.'}`);
     } catch (e) {
       console.log(`ROSTER [${companyName}]: could not read the team page structure (${e && e.message}) \u2014 falling through to the model.`);
     }
@@ -11795,9 +11813,37 @@ const OWNER_TITLE_RE = /\b(?:co[- ]?)?(?:owner|founder|co[- ]?founder|proprietor
 // failure this file records at the size gate, and it is the expensive one.
 const AFFILIATION_PARTNER_RE = /\b(?:affiliate|channel|referral|reseller|distribution|distributor|delivery|installation|implementation|integration|technology|trade|training|community|media|content|preferred|certified|authoriz(?:ed)?|authoris(?:ed)?)[\s-]+partners?\b/i;
 const TITLE_HEAD_FOLLOWERS = /^(?:officer|officers|and|of|the|at|emeritus|elect|partner|partners|owner|founder|president|ceo|coo|cfo|director|manager|member|principal|operator|broker|agent|attorney|dds|dmd|md|do|esq|pe|cpa)\b/i;
-const ownershipIsHead = (title) => {
+// == OWNERSHIP AT A PROFESSIONAL PRACTICE ==================================
+// Executed against the real parseTeamRoster on 2026-09-01: of 41 realistic
+// roster titles, 29 came back NULL - and a null kind means the run is not a
+// title, so THE NAME ABOVE IT IS NEVER PAIRED. Every one of the 29 was a
+// professional practice: Attorney, Attorney at Law, Of Counsel, Shareholder,
+// Managing Attorney, Dentist, DDS, DMD, Orthodontist, Oral Surgeon, Physician,
+// MD, Plastic Surgeon, Dermatologist, Veterinarian, DVM, Optometrist,
+// Chiropractor, CPA, Accountant. The trades titles - Owner, President,
+// Founder, Estimator, Office Manager - were all fine.
+//
+// Fifteen of the 114 rows in GP_CATEGORIES are professional practices, and the
+// ICP is 'trades AND owner-operated professional practices'. So the free owner
+// read was dark on the whole second half of what this pipeline hunts, and every
+// miss buys the ~10-credit paid search wave out of a 1,000-credit lifetime
+// Firecrawl allowance. This is the quality fix and the cost fix at once.
+//
+// Two words are the ownership titles a practice actually uses and OWNER_TITLE_RE
+// does not carry: a SHAREHOLDER of a professional corporation is an equity
+// owner, and a MANAGING ATTORNEY runs the firm. Deliberately NOT here: a bare
+// 'Member'. It is the ownership word at an LLC and it is also 'Team Member',
+// 'Board Member' and 'Staff Member', and there is no grammar that tells those
+// apart - 'Managing Member' already resolves and is the form a firm prints.
+const PROFESSIONAL_OWNER_RE = /\b(?:shareholder|managing\s+(?:attorney|shareholder|physician|dentist|broker))\b/i;
+// The head rule is PARAMETERISED rather than copied. Every guard already earned
+// by the ownership pattern - the possessive that shipped "Principal's Contact
+// Info" as a person, the partner-program modifiers, the followers list - applies
+// to the professional words for free. A second copy of this function is the
+// two-hand-kept-copies disease, and the copy that rots is always the newer one.
+const titleHeadIs = (title, pattern) => {
   const s = String(title || '').trim();
-  const m = OWNER_TITLE_RE.exec(s);
+  const m = pattern.exec(s);
   if (!m) return false;
   const after = s.slice(m.index + m[0].length);
   // ══ A POSSESSIVE IS ABOUT THE OWNER, NOT A TITLE ANYONE HOLDS ══════
@@ -11827,6 +11873,8 @@ const ownershipIsHead = (title) => {
   if (!/^\s*[A-Za-z]/.test(after)) return true;
   return TITLE_HEAD_FOLLOWERS.test(after.trim());
 };
+const ownershipIsHead = (title) => titleHeadIs(title, OWNER_TITLE_RE);
+const professionalOwnerIsHead = (title) => titleHeadIs(title, PROFESSIONAL_OWNER_RE);
 // Titles that are senior but are NOT the owner. Getting this list wrong is how
 // a COO becomes the decision-maker, so it is checked BEFORE the owner pattern.
 const NON_OWNER_TITLE_RE = /(?:affiliate|channel|referral|reseller|distribution|distributor|delivery|installation|implementation|integration|technology|trade|training|community|media|content|preferred|certified|authoriz(?:ed)?|authoris(?:ed)?)[\s-]+partners?\b|\b(?:c[ofti]o|chief\s+(?:operating|financial|technology|information|marketing|revenue)\s+officer|vice[- ]president|vp\b|director\s+of|head\s+of|manager|coordinator|superintendent|estimator|foreman|designer|assistant|administrator|controller|bookkeeper|receptionist|sales\s+(?:rep|representative|associate))\b/i;
@@ -11910,6 +11958,34 @@ const HONORIFIC_RE = /^(?:dr|doctor|mr|mrs|ms|miss|prof|professor|rev|father|att
 // The two-letter ones that are also real words or names — PA, MS, BS, DO, OD,
 // PE, DC, EA, RA — are accepted ONLY in their dotted form. "Do" is a surname.
 const CREDENTIAL_RE = /^(?:(?:[A-Za-z]\.){2,6}|(?:D\.?D\.?S|D\.?M\.?D|D\.?V\.?M|Ph\.?D|Esq|C\.?P\.?A|M\.?B\.?A|A\.?I\.?A|F\.?A\.?C\.?S|F\.?A\.?G\.?D|C\.?F\.?P|C\.?F\.?A|L\.?M\.?T|M\.?P\.?H|F\.?N\.?P|C\.?R\.?N\.?A|LEED\s*AP|MD|JD|RN|NP)|P\.A|M\.S|B\.S|D\.O|O\.D|P\.E|D\.C|E\.A|R\.A)\.?$/i;
+// == A PRACTITIONER IS A REAL PERSON AND IS NOT THE BUYER ==================
+// The name has to be paired or it is lost, and an associate attorney or a
+// staff dentist is emphatically not who buys a $35k build. So this is its own
+// answer rather than being folded into either of the two that already exist:
+// 'owner' settles the decision-maker and skips the paid wave; 'staff' is
+// somebody we know is not senior; 'practitioner' is a real person on their
+// roster whose seniority the page does not state. It pairs the name, it reaches
+// the model as corroboration, and it never sets isOwner.
+//
+// TITLE_AUTHORITY already scores these 80 - above the buying floor - with the
+// reasoning written at it: at a small practice the credentialed person almost
+// always owns it, but a group employs many, so corroboration decides the rest.
+// That is exactly this rule, and the gap was only ever that the parser refused
+// to see the title at all.
+const PRACTITIONER_TITLE_RE = /\b(?:attorney|lawyer|counsel|dentist|orthodontist|periodontist|endodontist|prosthodontist|surgeon|physician|dermatologist|chiropractor|veterinarian|optometrist|ophthalmologist|podiatrist|audiologist|accountant|enrolled\s+agent|nurse\s+practitioner|physician\s+assistant|doctor\s+of\s+[a-z]+)\b/i;
+// Named because they sit in the same title slot and are NOT practitioners.
+// Checked first: 'Dental Hygienist' and 'Legal Assistant' carry no practitioner
+// word, but 'Surgical Coordinator' at an oral surgery practice can, and filing
+// a coordinator as a person whose seniority is unstated is the wrong answer.
+// One derivation for "does this text name a role at all", so the ROSTER log's
+// branch and the check that guards it execute the same rule rather than two
+// hand-kept copies. It searched OWNER_TITLE_RE alone and therefore printed
+// "their pages genuinely do not state who owns the business" about pages
+// reading "Cagney McCormick, Attorney at Law".
+const ownershipWordInCorpus = (corpus) => OWNER_TITLE_RE.exec(String(corpus || ''))
+  || PROFESSIONAL_OWNER_RE.exec(String(corpus || ''))
+  || PRACTITIONER_TITLE_RE.exec(String(corpus || ''));
+const PRACTICE_STAFF_RE = /\b(?:paralegal|legal\s+(?:assistant|secretary)|law\s+clerk|hygienist|dental\s+assistant|(?:a|e)sthetician|medical\s+director|practice\s+(?:manager|administrator)|treatment\s+coordinator|surgical\s+coordinator|billing\s+specialist)\b/i;
 // One optional internal capital in the surname, so McDonald, MacLeod and
 // DeVries are people rather than unparseable.
 const ROSTER_NAME_RE = /^([A-Z][a-z'’-]{1,20}(?:\s+[A-Z]\.?)?(?:\s+\([A-Z][a-z'’-]{1,20}\))?(?:\s+[A-Z][a-z'’-]{1,20})?\s+[A-Z][a-z'’-]{0,25}(?:[A-Z][a-z'’-]{1,20})?)$/;
@@ -12122,6 +12198,19 @@ const parseTeamRoster = (html, companyName = '') => {
     // decision-maker on 2026-08-28. The ownership word has to be the HEAD of
     // the title, not an adjective in front of a different noun.
     if (ownershipIsHead(t) && !junior) return 'owner';
+    // The same head rule over the words a practice uses for ownership. See
+    // PROFESSIONAL_OWNER_RE: a shareholder of a P.C. and a managing attorney
+    // both own the firm, and neither was a title this parser could see.
+    if (professionalOwnerIsHead(t) && !junior) return 'owner';
+    // Practice staff BEFORE practitioner, and both before the general staff
+    // list, because a hygienist and a paralegal are known-junior while a bare
+    // 'Dentist' is a person whose seniority the page does not state.
+    if (PRACTICE_STAFF_RE.test(t)) return 'staff';
+    // CREDENTIAL_RE rather than a second credential list: it already encodes the
+    // policy this needs, which is that DDS, DMD, DVM, MD, CPA and Esq are
+    // unambiguous bare while DO, DC, OD and PA are ordinary English words or
+    // places and are only ever read in their dotted form.
+    if (PRACTITIONER_TITLE_RE.test(t) || CREDENTIAL_RE.test(t.trim().replace(/[,;]+$/, ''))) return 'practitioner';
     if (NON_OWNER_TITLE_RE.test(t) || junior) return 'staff';
     return null;
   };
@@ -12200,7 +12289,27 @@ const parseTeamRoster = (html, companyName = '') => {
   const looksLikeJobTitle = (t) => {
     const s = String(t || '').trim();
     if (!s || s.length > 70) return false;
-    if (/[.!?;]/.test(s)) return false;                  // a sentence, not a title
+    // == A TRAILING PERIOD IS AN ABBREVIATION, NOT A SENTENCE ============
+    // This refused "Esq.", "D.O." and "D.C." outright - the dotted credential
+    // forms, which are the only forms those three are ever read in (see
+    // CREDENTIAL_RE: bare DO, DC and OD are ordinary English words or places).
+    // So the shape filter was deleting exactly the professional titles the
+    // vocabulary above had just been taught to recognise.
+    //
+    // The sentence test still has to hold - a line of copy carries periods. The
+    // difference is that an abbreviation's periods follow a SINGLE letter, or
+    // end the string. Strip those two and any period left is real punctuation.
+    if (/[!?;]/.test(s)) return false;
+    // The trailing-period allowance is bounded to a SHORT run, and the boot
+    // caught why on the first run: "Gain a partner, keep your practice." is a
+    // marketing line off Alliance Animal Health that ends in a period and
+    // carries the word partner, so an unbounded strip handed it to
+    // ownershipIsHead and a nav label became the decision-maker again - the
+    // exact live failure section one of this check exists for.
+    const _abbrev = s.replace(/\b[A-Za-z]\./g, '');
+    const _stripped = _abbrev.trim().split(/\s+/).filter(Boolean).length <= 3
+      ? _abbrev.replace(/\.$/, '') : _abbrev;
+    if (/\./.test(_stripped)) return false;
     if (s.split(/\s+/).length > 6) return false;         // a line of copy
     if (/\d\s*\+|\d{2,}/.test(s)) return false;          // "250+ partner practices"
     if (_NAV_PHRASE.test(s)) return false;
@@ -32341,6 +32450,22 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     // WRONG-company owner from a Milwaukee licence hit. The site naming him
     // and the business bearing his name are two artifacts of the owner's own
     // making; that IS the evidence floor.
+    // == AND IT DELIBERATELY DOES NOT TAKE THE ROSTER'S CONFIDENCE BAR ====
+    // The roster settle grew `rosterConfidence !== 'low'` on 2026-08-31,
+    // because one uncorroborated roster row scored 45 and stood down every
+    // paid source. McCormick Law then settled through THIS path at score 25,
+    // and the asymmetry is an accident of which rule was tightened - so it is
+    // written down as a decision instead of left as one.
+    //
+    // It stays open on purpose. A low score here is almost always NO TITLE
+    // FOUND rather than a doubtful person, and an eponymous business whose
+    // own site names a person with no title is precisely the shape this rule
+    // exists for. Adding the bar would refuse exactly those leads and buy the
+    // ~10-credit wave back on every one of them - out of a 1,000-credit
+    // lifetime allowance. What guards it instead is the evidence: the name
+    // must be read off their OWN site at high confidence AND the business
+    // must be named after them, which is two artifacts of the owner's own
+    // making rather than a score. EPONYMOUS SETTLE BAR CHECK asserts both.
     const eponymousConfident = ranked.sources.includes('own_website_brain')
       && (brainHit && brainHit.confidence === 'high')
       && _isEponymousOwner(ranked.name, companyName, website);
@@ -57016,10 +57141,103 @@ app.listen(PORT, () => {
       _fails.push('the page picker no longer uses the same careers vocabulary the roster rule refuses on, so a page can be fetched as careers and still parsed as a roster');
     }
 
+    // == SECTION FIVE: THE ROSTER MUST KNOW THE PROFESSIONS ==============
+    // Measured against the real parseTeamRoster on 2026-09-01: 29 of 41
+    // realistic roster titles came back NULL, and a null kind means the run is
+    // not a title, so the NAME ABOVE IT was never paired. All 29 were
+    // professional practices - fifteen of the 114 rows in GP_CATEGORIES - and
+    // every miss buys the ~10-credit paid owner wave.
+    //
+    // DECLARED, the way STEM_COMPLETE_WORDS and NICHE_BRIEF_EXPECT are: a
+    // vertical added later cannot inherit a vocabulary by accident, because a
+    // title with no row here is not covered by anything.
+    //   owner  = the firm saying who owns it, so the paid wave is skipped
+    //   paired = a real person on their roster whose seniority is unstated
+    //   none   = not a title at all
+    const _TITLE_EXPECT = [
+      ['Attorney', 'paired'], ['Attorney at Law', 'paired'], ['Of Counsel', 'paired'],
+      ['Senior Counsel', 'paired'], ['Associate Attorney', 'paired'], ['Esq.', 'paired'],
+      ['Shareholder', 'owner'], ['Managing Attorney', 'owner'], ['Managing Member', 'owner'],
+      ['Partner', 'owner'], ['Senior Partner', 'owner'], ['Practice Owner', 'owner'],
+      ['Paralegal', 'paired'], ['Legal Assistant', 'paired'],
+      ['Dentist', 'paired'], ['DDS', 'paired'], ['DMD', 'paired'], ['Orthodontist', 'paired'],
+      ['Oral Surgeon', 'paired'], ['Dental Hygienist', 'paired'],
+      ['Physician', 'paired'], ['MD', 'paired'], ['M.D.', 'paired'], ['D.O.', 'paired'],
+      ['Plastic Surgeon', 'paired'], ['Dermatologist', 'paired'], ['Medical Director', 'paired'],
+      ['Chiropractor', 'paired'], ['D.C.', 'paired'],
+      ['Veterinarian', 'paired'], ['DVM', 'paired'], ['Optometrist', 'paired'],
+      ['CPA', 'paired'], ['Certified Public Accountant', 'paired'], ['Accountant', 'paired'],
+      // The trades, unchanged. A vocabulary widened until it refuses nothing
+      // stops resolving the owners this whole path exists to find, so the
+      // must-survive half is asserted with the must-refuse half.
+      ['Owner', 'owner'], ['President', 'owner'], ['Founder', 'owner'],
+      ['Estimator', 'paired'], ['Office Manager', 'paired'], ['Vice President', 'paired'],
+      // Must stay refused. 'Member' is the ownership word at an LLC AND is
+      // 'Team Member' and 'Board Member', with no grammar between them -
+      // 'Managing Member' is the form a firm prints and it resolves above.
+      ['Member', 'none'], ['Team Member', 'none'], ['Partner Track', 'none'],
+      ['CEO Roundtable', 'none'], ['Shareholder Services', 'none'], ['Do It Right', 'none'],
+      ['250+ partner practices', 'none'], ['She runs the front desk. Ask for her.', 'none'],
+    ];
+    for (const [_t, _want] of _TITLE_EXPECT) {
+      const _r = parseTeamRoster('Our Team\nJane Smith\n' + _t + '\n', 'Acme Legal Group');
+      const _got = !_r.length ? 'none' : (_r[0].isOwner ? 'owner' : 'paired');
+      if (_got !== _want) _fails.push(`the roster reads "${_t}" as ${_got}, and it is ${_want}`);
+    }
+    // == THE AUTHORITY SIDE, WHICH IS WHAT ACTUALLY LETS THE SETTLE FIRE ==
+    // The roster fixtures above assert isOwner, and isOwner alone settles
+    // nothing: rosterConfident also requires authority >= DM_AUTHORITY_FLOOR.
+    // So a Shareholder read correctly as an owner and scored 30 still bought
+    // the paid wave, and reverting the TITLE_AUTHORITY row left every fixture
+    // in this check GREEN. Found only by running that revert.
+    for (const _t of ['Shareholder', 'Managing Attorney', 'Managing Member', 'Owner', 'President']) {
+      if (authorityScore(_t) < DM_AUTHORITY_FLOOR) {
+        _fails.push(`"${_t}" scores ${authorityScore(_t)} against a buying floor of ${DM_AUTHORITY_FLOOR}, so a roster naming the firm's owner in the firm's own words still buys the paid search wave`);
+      }
+    }
+    // A practitioner clears the floor too - TITLE_AUTHORITY has scored these 80
+    // since it was written - but is NOT owner-level, and the two are different
+    // questions. The parser must never file one as the buyer.
+    for (const _t of ['Attorney', 'Dentist', 'CPA', 'Physician']) {
+      const _r = parseTeamRoster('Our Team\nJane Smith\n' + _t + '\n', 'Acme Legal Group');
+      if (_r.length && _r[0].isOwner) _fails.push(`a bare "${_t}" is being filed as the owner, and an associate at a practice is not the buyer`);
+    }
+    // == THE ROSTER LOG MUST NOT CALL A PRACTICE PAGE SILENT ===============
+    // The branch that prints "their pages genuinely do not state who owns the
+    // business" fires when this returns nothing, and it searched the trade
+    // vocabulary alone - so it fired on two live corpora that plainly name the
+    // person. Executed on those exact strings.
+    for (const _c of ['Cagney McCormick, Attorney at Law',
+                      'Dr. Michael Hekler, DC - Chiropractor',
+                      'Rick Miller, Owner']) {
+      if (!ownershipWordInCorpus(_c)) {
+        _fails.push(`the roster log reports "${_c}" as a page that does not say who runs the business, which is a fact about our word list dressed as a fact about them`);
+      }
+    }
+    if (ownershipWordInCorpus('We install gutters across three counties.')) {
+      _fails.push('the roster log finds a role in a page that names nobody, so the hint would quote unrelated text as the shape we cannot read');
+    }
+    // The head rule is SHARED, not copied: every guard the ownership pattern
+    // earned - the possessive, the partner-program modifiers, the followers -
+    // has to apply to the professional words too, and a second copy of that
+    // function would be the newer one that rots.
+    if (!_src.includes(_n('const ownershipIsHead = (title) => titleHeadIs(title,', ' OWNER_TITLE_RE);'))
+      || !_src.includes(_n('const professionalOwnerIsHead = (title) => titleHeadIs(title,', ' PROFESSIONAL_OWNER_RE);'))) {
+      _fails.push('the professional ownership words no longer go through the same head rule as the trade ones, so the possessive and partner-program guards are being hand-copied');
+    }
+    if (!_src.includes(_n('if (professionalOwnerIsHead(t) && !junior) return', " 'owner';"))) {
+      _fails.push('titleKind no longer consults the professional ownership words, so a shareholder and a managing attorney stop settling the owner');
+    }
+    // CREDENTIAL_RE rather than a second credential list. It already encodes
+    // which two-letter forms are safe bare and which are only ever read dotted.
+    if (!_src.includes(_n('|| CREDENTIAL_RE.test(t.trim().replace(', "/[,;]+$/, ''))) return 'practitioner';"))) {
+      _fails.push('the practitioner test no longer shares CREDENTIAL_RE, so there are two credential lists and the newer one will drift');
+    }
+
     if (_fails.length) {
       console.log(`⛔ OWNER TRUTH CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ OWNER TRUTH CHECK: the four nav labels that became a live decision-maker on 2026-08-28 are all refused, and the twelve real ownership titles beside them all survive. Ten partner-PROGRAM labels (Affiliate, Channel, Referral, Delivery, Technology, Installation, Reseller, Certified, Trade and Community Partner) no longer read as ownership titles while nine real partnership titles do, including the Tax, Audit and Advisory Partners a small firm's equity actually sits with. The company's own name is not a job somebody holds, so Auto Insurance Specialist's footer yields nobody while a real roster row at the same business survives. And the roster settle now clears the confidence the log PRINTS as well as the authority nobody sees - the gap between those two numbers is how one uncorroborated row scored 45 and stood down every paid source. An ownership word must be the HEAD of its title rather than an adjective in front of another noun, a marketing line is not a title, the owner is the most SENIOR person on the page rather than the first, a personnel headline no longer leaves its verb inside a name, and a leadership page carrying two or more corporate titles is scored as the bigger business it is rather than as a crew of that size. HONEST SHAPE: the enterprise-name filter now also runs on this route, and on the six national brands that cost real money that night it catches NONE of them — it is an institution and scale-word filter, and "Penske Truck Leasing" reads exactly like a local business by name. Keeping enterprises out of this queue is a Find-side job, not a name test.`);
+      console.log(`✓ OWNER TRUTH CHECK: the four nav labels that became a live decision-maker on 2026-08-28 are all refused, and the twelve real ownership titles beside them all survive. Ten partner-PROGRAM labels (Affiliate, Channel, Referral, Delivery, Technology, Installation, Reseller, Certified, Trade and Community Partner) no longer read as ownership titles while nine real partnership titles do, including the Tax, Audit and Advisory Partners a small firm's equity actually sits with. The company's own name is not a job somebody holds, so Auto Insurance Specialist's footer yields nobody while a real roster row at the same business survives. And the roster settle now clears the confidence the log PRINTS as well as the authority nobody sees - the gap between those two numbers is how one uncorroborated row scored 45 and stood down every paid source. An ownership word must be the HEAD of its title rather than an adjective in front of another noun, a marketing line is not a title, the owner is the most SENIOR person on the page rather than the first, a personnel headline no longer leaves its verb inside a name, and a leadership page carrying two or more corporate titles is scored as the bigger business it is rather than as a crew of that size. And the roster finally knows the second half of the ICP: 47 declared titles are executed through the real parser, so a Shareholder and a Managing Attorney settle the owner for nothing while an Attorney, a Dentist, an MD and a CPA at least PAIR their name instead of being dropped as not-a-title - 29 of 41 came back NULL before this, and every one of those misses bought the ~10-credit paid search wave. Member, Team Member, Partner Track and Shareholder Services stay refused. HONEST SHAPE: the enterprise-name filter now also runs on this route, and on the six national brands that cost real money that night it catches NONE of them — it is an institution and scale-word filter, and "Penske Truck Leasing" reads exactly like a local business by name. Keeping enterprises out of this queue is a Find-side job, not a name test.`);
     }
   } catch (e) {
     console.log(`⛔ OWNER TRUTH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -57615,6 +57833,73 @@ app.listen(PORT, () => {
         _fails.push('a stale entry is still returned, so a lead that never reached the leadership read is handed a page length from a previous run with no way to tell it apart from a fresh one');
       }
       _leadershipTextLen.delete(_leadershipLenKey('TTL Fixture Co', 'https://ttlfixture.example/'));
+    }
+    // == THE EPONYMOUS SETTLE, AND WHY IT HAS NO CONFIDENCE BAR ============
+    // The roster settle takes one and this one does not, and that asymmetry
+    // was an accident until it was written down. It is asserted in BOTH
+    // directions, because the cheap way to 'tidy' it is to add the bar - which
+    // would refuse an eponymous business whose own site names a person with no
+    // title, buying the ~10-credit paid wave back on exactly the leads this
+    // rule exists to save.
+    {
+      // Sliced to the statement's own terminator, not to a fixed number of
+      // characters: a 260-char window ran straight past it into the roster
+      // settle below, which legitimately mentions the bar, and the check went
+      // RED on a correct build on its first boot. A ruler that overshoots is
+      // the recorded false-RED class and it costs exactly what a false green
+      // costs.
+      const _epoAt = _src.indexOf('const eponymousConfident =');
+      const _epoEnd = _epoAt < 0 ? -1 : _src.indexOf(';', _epoAt);
+      const _epo = (_epoAt < 0 || _epoEnd < 0) ? '' : _src.slice(_epoAt, _epoEnd + 1);
+      if (!_epo) {
+        _fails.push('the eponymous settle could not be found at all, so nothing below is checking anything');
+      } else {
+        if (_epo.indexOf(_n('rosterConfid', 'ence')) >= 0) {
+          _fails.push('the eponymous settle has taken the roster confidence bar, which refuses an eponymous business whose own site names a person with no title - the shape this rule exists for');
+        }
+        // And the two things it DOES require, so it cannot be loosened either.
+        for (const _need of [_n('own_website_', "brain'"), _n('_isEponymousOwner(ranked.name,', ' companyName, website)')]) {
+          if (_epo.indexOf(_need) < 0) _fails.push('the eponymous settle no longer requires both the own-site read and the business name, so it is settling the owner on one artifact instead of two');
+        }
+      }
+      // The rule itself, executed, in both directions.
+      if (isEponymousOwnerRule('Cagney McCormick', 'McCormick Law Firm', '') !== true) {
+        _fails.push('a business named after its owner no longer settles eponymously, so every one of them buys the paid search wave again');
+      }
+      if (isEponymousOwnerRule('Marcus Webb', 'Precision Paving', '') !== false) {
+        _fails.push('the eponymous rule fires on a business that does not carry the name, which settles the owner on nothing');
+      }
+    }
+    // == WHEN TO CALL, FROM HOURS WE ALREADY BOUGHT =========================
+    // The motion for this list is calling. callWindowFor has fed Mike's audit
+    // sheet for weeks and publishedHours has been captured free at discovery
+    // for weeks, and they had never met: the request builder did not send the
+    // hours, so this arrived undefined on every contact read. Both halves are
+    // asserted, because the wire is what was broken and a fixture that supplies
+    // its own arguments cannot see a caller.
+    {
+      const _h = readPublishedHours({ weekdayDescriptions: [
+        'Monday: 7:00 AM - 5:00 PM', 'Tuesday: 7:00 AM - 5:00 PM',
+        'Wednesday: 7:00 AM - 5:00 PM', 'Thursday: 7:00 AM - 5:00 PM',
+        'Friday: 7:00 AM - 5:00 PM', 'Saturday: Closed', 'Sunday: Closed'] });
+      if (!Array.isArray(_h.lines) || _h.lines.length !== 7) {
+        _fails.push('the published hours no longer carry their own text, so the calling window has nothing to read and the two derived counts are all that survives');
+      }
+      const _w = callWindowFor(_h.lines, 'roofing contractor', null);
+      if (!_w || _w.checked !== true || !_w.say) {
+        _fails.push('a full week of published hours produces no calling window');
+      }
+      // A listing that publishes nothing produces no window rather than an
+      // invented one - the direction that would put a guess on a call sheet.
+      const _none = callWindowFor(readPublishedHours({}).lines, 'roofing contractor', null);
+      if (!_none || _none.checked !== false) {
+        _fails.push('a listing with no published hours is being given a calling window anyway');
+      }
+      const _cw = _n('const _win = callWindowFor(((company && company.publishedHours) || {}).lines,',
+        "\r\n    (company && company.industry) || '', null);");
+      if (!_src.includes(_cw.replace(/\r\n/g, '\n'))) {
+        _fails.push('the contact read no longer computes a calling window from the hours it was sent, so the field is measured and never delivered');
+      }
     }
     if (_fails.length) {
       console.log(`⛔ FIND CONTACT CHECK: ${_fails.join(' | ')}.`);
@@ -74169,6 +74454,21 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   });
   signals.affordBand = _aff.band;
   signals.affordWhy = _aff.why || '';
+  // == WHEN TO CALL, FROM HOURS WE ALREADY BOUGHT =========================
+  // The motion for this list is CALLING. callWindowFor has existed since the
+  // audit sheet needed it and publishedHours has been captured free at
+  // discovery since the capacity read was added, and the two had never met -
+  // the request builder simply did not send the hours, so it arrived undefined
+  // on every contact read. Instance twenty-nine of computed-but-not-passed.
+  //
+  // No timezone offset is passed and none is available here: utcOffsetMinutes
+  // comes from the Place Details call the audit makes and this route does not.
+  // callWindowFor says nothing at all about zones on a null offset, which is
+  // the honest answer rather than assuming the caller's own clock.
+  const _win = callWindowFor(((company && company.publishedHours) || {}).lines,
+    (company && company.industry) || '', null);
+  out.callWindow = _win && _win.checked ? { say: _win.say || '', open24: !!_win.open24 } : null;
+  out.callWindowWhy = _win && !_win.checked ? (_win.why || '') : '';
   // The lookups actually RAN, so "we did not find an owner" is a measurement
   // and not an absence of one. A lead dropped as a chain never reached them,
   // so the term leaves the denominator rather than scoring a confident 1 -

@@ -2331,7 +2331,7 @@ const PENDING = [];
 let contactStat = null;
 let contactTally = null;
 {
-  const NEED2 = ['findCsvCell', 'FIND_CSV_CTRL', 'FIND_CSV_COLUMNS', 'findContactRows', 'findContactCsv', 'findSheetPayload',
+  const NEED2 = ['contactTabOf', 'CONTACT_TABS', 'findCsvCell', 'FIND_CSV_CTRL', 'FIND_CSV_COLUMNS', 'findContactRows', 'findContactCsv', 'findSheetPayload',
                  'contactFieldsFrom', 'contactRequestBody', 'contactYesNo', 'hasContactData',
                  // A contact read stamps the build that produced it, so the panel
                  // can say which rows predate a parser fix instead of re-exporting
@@ -2364,7 +2364,7 @@ let contactTally = null;
     let M = null;
     try {
       M = new Function(NEED2.map(k => got2[k]).join('\n')
-        + '\nreturn { cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
+        + '\nreturn { tabOf: contactTabOf, tabs: CONTACT_TABS, cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
         + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
         + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT,'
@@ -2434,6 +2434,72 @@ let contactTally = null;
         const _script = String(M.script || '');
         if (_script && /getRange\(2,\s*3,/.test(_script)) fails.push('the Apps Script still dedupes on a hard-coded column 3, which is the decision-maker in the lean column set');
         if (_script && _script.indexOf("indexOf('Company')") < 0) fails.push('the Apps Script no longer finds the Company column from the header, so the column order and the dedupe can drift apart again');
+      }
+
+      // ══ ONE LEAD, ONE TAB ═════════════════════════════════════════════
+      // Vin, with 80 of 80 read and no way forward: "i think we need a whole
+      // format change becasue im getting confused." Three properties, all
+      // executed, because the section filters this replaces lived inline in
+      // the render where nothing could run them.
+      {
+        const _cases = [
+          [{ name: 'Unread Co' }, 'unread'],
+          [{ name: 'Read Co', contactReadOk: true }, 'read'],
+          [{ name: 'Out Co', contactNotFit: true }, 'out'],
+          // A READ LEAD RULED OUT IS STILL RULED OUT. The verdict is the
+          // stronger fact: asking again cannot change it.
+          [{ name: 'Both Co', contactReadOk: true, contactNotFit: true }, 'out'],
+          // A FAILED READ IS NOT READ AND NOT RULED OUT. This is the one the
+          // plan for the round got wrong, and it is the exact failure that
+          // retired a hundred leads against a paused server: a dead server is
+          // something that might work next time, so it has to come back.
+          [{ name: 'Failed Co', contactFailedAt: Date.now(), contactNotes: ['no response'] }, 'unread'],
+          [{ name: '' }, null],
+        ];
+        const _keys = M.tabs.map(t => t[0]);
+        if (_keys.join(',') !== 'unread,read,out') fails.push('the contact tabs are no longer not-read / read / ruled-out, so the panel and this check disagree about what the tabs are');
+        for (const [_c, _want] of _cases) {
+          const _got = M.tabOf(_c);
+          if (_got !== _want) fails.push(`a lead the panel calls "${_c.name || '(nameless)'}" lands in the ${_got} tab and belongs in ${_want}`);
+          // Exactly one, or a lead is either invisible or counted twice.
+          if (_want !== null && _keys.filter(k => M.tabOf(_c) === k).length !== 1) fails.push('a lead does not land in exactly one contact tab');
+        }
+      }
+
+      // AND THE CALL SITES, because a fixture supplies its own arguments and
+      // therefore cannot see a caller. Three wires, and the middle one is the
+      // whole point: counting alone would leave "a read lead leaves the pool"
+      // true of the numbers and false of the list.
+      {
+        const _need = [
+          ['the panel no longer renders a tab per contact state', "CONTACT_TABS.map(([k, lab]) =>"],
+          ['the rendered list is not filtered by the tab, so a read lead never leaves the pool on screen', "_cShown.filter(c => contactTabOf(c) === contactTab)"],
+          ['the tab counts are not computed from the same pool the list is', "for (const c of _cShown) { const t = contactTabOf(c);"],
+          ['the spending band is no longer confined to the not-read tab', "contactTab !== 'unread' ? null : _cUnread.length === 0 ? _band('Read',"],
+        ];
+        for (const [why, needle] of _need) if (src.indexOf(needle) < 0) fails.push(why);
+      }
+
+      // ══ THE CALLING WINDOW REACHES THE ROW AND THE FILE ═══════════════
+      // The motion for this list is calling. Two halves and both were broken:
+      // the request builder never sent the published hours the server needs,
+      // and there was no column for the answer. Both are asserted, because a
+      // fixture that supplies its own arguments cannot see a caller.
+      {
+        const _b = M.body({ name: 'A Co', website: 'https://a.example',
+          publishedHours: { checked: true, lines: ['Monday: 7:00 AM - 5:00 PM'] } }, {});
+        const _ph = _b && _b.company && _b.company.publishedHours;
+        if (!_ph || !Array.isArray(_ph.lines) || _ph.lines.length !== 1) {
+          fails.push('the contact request no longer sends the published hours, so the server can compute neither a calling window nor the staffed half of the affordability band');
+        }
+        if (M.lean.indexOf('callWindow') < 0) fails.push('the calling window is not one of the lean CSV columns, so the file the rep dials from does not carry it');
+        const _r = M.rows([{ name: 'A Co', contactPhone: '+1 555 0100', contactCallWindow: 'Try 7-8am, before jobs start.' }])[0];
+        if (!_r || _r.callWindow !== 'Try 7-8am, before jobs start.') fails.push('the server calling window does not reach the exported row');
+        // A listing with no hours gets an EMPTY cell, never a guess. An
+        // invented "any time is fine" is the unmeasured-as-measured class on
+        // the one field a caller acts on directly.
+        const _r2 = M.rows([{ name: 'B Co', contactPhone: '+1 555 0101' }])[0];
+        if (!_r2 || _r2.callWindow !== '') fails.push('a lead whose listing publishes no hours is given a calling window anyway');
       }
 
       // TWO — the ORDER, with the trap that matters. A MEASURED zero must sort
