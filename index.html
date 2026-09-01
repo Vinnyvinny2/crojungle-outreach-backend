@@ -8256,10 +8256,18 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
         (contactTab === 'read' && _cStale.length) ? _band('Stale',
           React.createElement('button', {
             className:'btn btn-sm', style:{ background:'transparent', border:'1px solid var(--b)', color:'var(--t)' },
+            // ══ A RE-READ IS A SPEND, SO IT OBEYS THE SAME NUMBER ══════════
+            // This passed the WHOLE stale set as the limit, so the one control
+            // on this panel that exists after a parser fix - exactly when an
+            // operator wants to re-read a handful and compare - was all or
+            // nothing. On a queue of 53 stale reads that is ~53 leads of
+            // Firecrawl and model spend behind one confirm, and the number box
+            // directly above it was ignored.
             onClick: () => {
-              if (!window.confirm('Re-read ' + _cStale.length + ' lead(s) taken by an older build? This spends on them again.')) return;
-              runContactBatch(_cStale, _cStale.length);
-            } }, 'Re-read ' + _cStale.length),
+              const _n = Math.max(1, Math.min(Number(contactHowMany) || _cStale.length, _cStale.length));
+              if (!window.confirm('Re-read ' + _n + ' of the ' + _cStale.length + ' lead(s) taken by an older build? This spends on them again.')) return;
+              runContactBatch(_cStale, _n);
+            } }, 'Re-read ' + Math.max(1, Math.min(Number(contactHowMany) || _cStale.length, _cStale.length)) + ' of ' + _cStale.length),
           // The second number is how many reads there ARE. It printed the
           // stale count twice - "68 of these 68 reads" on a queue with 68
           // stale of 68 read, which is true by accident and false the moment

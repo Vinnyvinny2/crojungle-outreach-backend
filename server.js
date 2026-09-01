@@ -11436,6 +11436,23 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
 
     if (_pre.length) {
       let _skipped = 0;
+      // ══ THE CAP DECIDES WHAT IS READ, SO THE ORDER IS NOT COSMETIC ═══════
+      // Each page is sliced to 6,000 characters and the whole corpus is capped
+      // at 22,000, so about three interior pages fit and everything after them
+      // contributes NOTHING. Until now the corpus was built in arrival order,
+      // which meant the truncation point was decided by whichever page happened
+      // to be fetched first - and on the free path the page that fell off the
+      // end was the SECOND team page, the one most likely to name the owner.
+      //
+      // FIND_INTENT_RANK is the same declaration that orders the fetch, so the
+      // judgement about which page names an owner lives in one table rather
+      // than in two hand-kept copies. A page with no intent (the audit path
+      // supplies none) keeps its arrival position.
+      const _rank = (p) => {
+        const r = FIND_INTENT_RANK[String((p && p.intent) || '')];
+        return Number.isFinite(r) ? r : 99;
+      };
+      _pre.sort((a, b) => _rank(a) - _rank(b));
       for (const p of _pre) {
         const _block = `\n\n--- PAGE: ${p.url} ---\n` + String(p.text).slice(0, 6000);
         pages.push(_block);
@@ -35459,6 +35476,14 @@ const CONTACT_RANK_TERMS = [
   { id: 'belowFloor', points: -12, why: 'nothing in the catalogue is affordable at this job value and volume' },
   { id: 'outOfBand',  points: -10, why: 'outside the star band discovery demotes on' },
   { id: 'aboveSize',  points: -10, why: 'above the review ceiling discovery demotes on' },
+  // ══ SOMEBODY COMPETENT IS ALREADY ON THIS ACCOUNT ═══════════════════════
+  // Conversion tracking AND call tracking AND a real booking tool, all three,
+  // is not a business that set itself up by accident. Vin's own rule: the lead
+  // to skip is the one doing marketing and doing it WELL, because there is
+  // nothing left to sell. -12 rather than -25 because it is evidence that
+  // somebody has been here, not proof they are getting a return - we are
+  // reading markup, not their ads account - so it never sinks a lead alone.
+  { id: 'dialledIn',  points: -12, why: 'their tracking and booking are already set up properly, so somebody competent is on this account' },
 ];
 const CONTACT_RANK_MAX_MODIFIER = 18;   // the three positives; asserted at boot
 
@@ -35480,6 +35505,25 @@ const CONTACT_RANK_MAX_MODIFIER = 18;   // the three positives; asserted at boot
 //
 // Reads the SAME declared table the contact ranker reads. Two hand-kept copies
 // of one penalty is how one of them stays wrong.
+// ══ ALREADY IN COMPETENT HANDS ══════════════════════════════════════════
+// All three, or nothing. Conversion tracking alone is a plugin default; call
+// tracking alone is one vendor a receptionist signed up for; a scheduler alone
+// is a trade whose software ships with one. Together they are somebody who
+// knows what they are doing, and Vin's rule is that such a business is the one
+// to skip - there is nothing left to sell them.
+//
+// HONEST NAME AND HONEST LIMIT: this says their marketing is INSTRUMENTED, not
+// that it works. We are reading markup. We cannot see their cost per lead, and
+// neither can the audit - that is inside their ads account. So it marks a lead
+// down rather than refusing it, and the row says which of the three we saw.
+const alreadyDialledIn = (s) => {
+  const d = s || {};
+  if (!(d.adsConversion === true && d.callTracking === true && d.scheduler === true)) {
+    return { points: 0, terms: [] };
+  }
+  const t = CONTACT_RANK_TERMS.find(x => x.id === 'dialledIn');
+  return t ? { points: t.points, terms: [t] } : { points: 0, terms: [] };
+};
 const demotionPenalty = (lead) => {
   const l = lead || {};
   const terms = [];
@@ -59307,6 +59351,131 @@ app.listen(PORT, () => {
       _fails.push('the card label no longer reads the same argument object the score reads, so the number and the tier can disagree about one business again');
     }
 
+    // ══ SPENDING AND DISSATISFIED, OR MONEYED AND UNTOUCHED ═══════════════
+    // Vin's shape, 2026-09-01, backed by the research: a business already
+    // paying for ads is a GOOD lead (45% of small businesses are dissatisfied
+    // with their agency; 68% admit they are paying for marketing they know is
+    // not working). The one to skip is the one whose setup is already in
+    // competent hands. Both directions are asserted, because a rule that only
+    // marks leads down is a rule that eventually marks every lead down.
+    {
+      const _sig = (extra) => Object.assign({
+        teamCount: 9, execTitles: [], hiringAny: false, reviewCount: 120, rating: 4.6,
+        affordBand: 'premium', affordWhy: 'premium tier', reachMeasured: false,
+      }, extra || {});
+
+      // GREENFIELD. This scored 5 of 25 - twenty points behind an advertiser -
+      // so a moneyed business nobody has marketed to sorted below one that is
+      // already committed to somebody else. Proven spend still wins; the gap
+      // is now the size of the evidence difference.
+      const _spending = findIcpScore(_sig({ adsCode: true, adPlatforms: ['Google'] }));
+      const _green = findIcpScore(_sig({ adsCode: false, analytics: false, tagManager: false }));
+      if (!_green.score || !_spending.score) {
+        _fails.push('the advertising term stopped scoring, so neither archetype can be ranked at all');
+      } else {
+        if (_green.score >= _spending.score) {
+          _fails.push(`a business with no marketing at all scores ${_green.score} against an advertiser's ${_spending.score} - proven spend must still beat assumed spend, it is evidence rather than inference`);
+        }
+        if (_spending.score - _green.score > 12) {
+          _fails.push(`greenfield is ${_spending.score - _green.score} points behind an advertiser, which is the old disqualification back again - "people with a lot of moeny not doigng marketing at all" is an archetype we want`);
+        }
+      }
+      // They measure but do not advertise: somebody here thinks about it.
+      const _measures = findIcpScore(_sig({ adsCode: false, analytics: true }));
+      if (!(_measures.score > _green.score)) {
+        _fails.push('a business running analytics scores no better than one with nothing at all, so the intent signal is not being read');
+      }
+
+      // ALREADY IN COMPETENT HANDS. All three together, or nothing.
+      if (alreadyDialledIn({ adsConversion: true, callTracking: true, scheduler: true }).points !== -12) {
+        _fails.push('an account with conversion tracking, call tracking AND a booking tool is not marked down, so the lead with nothing left to sell ranks with the rest');
+      }
+      for (const _miss of ['adsConversion', 'callTracking', 'scheduler']) {
+        const _two = { adsConversion: true, callTracking: true, scheduler: true };
+        _two[_miss] = false;
+        if (alreadyDialledIn(_two).points !== 0) {
+          _fails.push(`a business missing ${_miss} is marked down as already sorted - two of the three is an ordinary small business, and a penalty that fires on it marks down the whole ICP`);
+        }
+      }
+      if (alreadyDialledIn({}).points !== 0) _fails.push('a lead whose markup we never read is marked down as already sorted, which is our blindness charged to them');
+      // The magnitude comes from the ONE declared table, so the Find score and
+      // the contact ranker cannot disagree about what it is worth.
+      const _declaredRun = (CONTACT_RANK_TERMS.find(t => t.id === 'dialledIn') || {}).points;
+      if (alreadyDialledIn({ adsConversion: true, callTracking: true, scheduler: true }).points !== _declaredRun) {
+        _fails.push('the already-sorted penalty is retyped rather than read from CONTACT_RANK_TERMS, so the two rankers can drift');
+      }
+      // And the OUTCOME, which no rewording can slip past.
+      const _sorted = findIcpScore(_sig({ adsCode: true, adPlatforms: ['Google'], adsConversion: true, callTracking: true, scheduler: true }));
+      if (!(_sorted.score < _spending.score)) {
+        _fails.push(`a business already running ads WELL scores ${_sorted.score} against ${_spending.score} for one running them blind - the blind one is the lead`);
+      }
+    }
+
+    // ══ READ AS MANY FREE PAGES AS THEY WILL GIVE US ══════════════════════
+    // Vin's decision, 2026-09-01: "if they give us 20 read 20. dont excute paid
+    // wave unless we have to." The fetch is a plain GET and costs nothing - but
+    // reading twenty pages on its own delivers exactly the same evidence as
+    // reading four, because each page is sliced to 6,000 characters and the
+    // corpus caps at 22,000. That is homepage plus about three interior pages,
+    // and the cap was ALREADY binding at the old budget: the careers page
+    // contributed zero bytes and the second team page - the one most likely to
+    // name the owner - was two-thirds read. So the page count is the least
+    // important part of this and the ORDER is the load-bearing part.
+    {
+      const _links = [];
+      for (let i = 0; i < 14; i++) _links.push(`https://x.com/about-${i}`);
+      for (let i = 0; i < 6; i++) _links.push(`https://x.com/contact-${i}`);
+      _links.push('https://x.com/careers');
+      const _free = pickFindPages(_links, 'https://x.com', FIND_MAX_FREE_PAGES);
+      const _paid = pickFindPages(_links, 'https://x.com', FIND_MAX_PAGES);
+      if (_free.length <= FIND_MAX_PAGES) {
+        _fails.push(`the free page read returns ${_free.length} page(s) from a 21-link site - the plain fetch costs nothing, so the small budget belongs to the Firecrawl fallback and not here`);
+      }
+      if (_free.length > FIND_MAX_FREE_PAGES) _fails.push('the free page read is unbounded, so a site with a thousand links reads a thousand pages');
+      // The paid path is where a page is a CREDIT, and it must not have moved.
+      if (_paid.length > FIND_MAX_PAGES) {
+        _fails.push(`the Firecrawl fallback now reads ${_paid.length} page(s) at one credit each - the wider budget was for the free path only`);
+      }
+      // The team/about family FIRST: it is what makes the early exit fire, and
+      // it is what survives the corpus cap.
+      if (!_free.length || _free[0].intent !== 'team') {
+        _fails.push(`the first page read is "${_free.length ? _free[0].intent : 'none'}" rather than the team/about family - that is the page that names an owner, so reading it later means the early exit never fires and the cap truncates the evidence`);
+      }
+      const _careersAt = _free.findIndex(p => p.intent === 'careers');
+      if (_careersAt >= 0 && _careersAt < _free.length - 1) {
+        _fails.push('the careers page is not read last, and a job advert is a name-shaped line followed by a job title - which is what a roster row looks like');
+      }
+      if (!Number.isFinite(FIND_INTENT_RANK.team) || !(FIND_INTENT_RANK.team < FIND_INTENT_RANK.careers)) {
+        _fails.push('the intent rank no longer puts the owner-likely pages first, so the corpus sort and the fetch order have stopped agreeing');
+      }
+    }
+    // The call sites: a fixture supplies its own arguments and cannot see a
+    // caller, and every one of these lives inside the route.
+    for (const _needle of [_n('_pre.sort((a, b) => _rank(a)', ' - _rank(b));'),
+                           _n('pickFindPages(links, pages[0].url, viaFirecrawl ? FIND_MAX_PAGES', ' : FIND_MAX_FREE_PAGES)'),
+                           _n('if (fp && _seenFp.has(fp)) { _dupPages', ' += 1; return false; }'),
+                           _n('if (Date.now() - _readStartedAt >', ' FIND_FREE_READ_MS) {'),
+                           _n('if (parseTeamRoster(_soFar, name).some(r =>', ' r.isOwner)) {')]) {
+      if (!_src.includes(_needle)) {
+        _fails.push('the free page read lost a call site: ' + _needle.slice(0, 46));
+      }
+    }
+
+    // ══ THE FIVE SIGNALS WERE ALREADY IN OUR HANDS ════════════════════════
+    // readFindIcpSignals tested three of the eight keys in AD_TAG_SIGNATURES
+    // and ignored the rest, so every "is somebody already here" signal was a
+    // regex this file owned, run against markup this read was already holding,
+    // and never asked. Zero extra requests.
+    for (const _needle of [_n('const adsConversion = anyMarkup ? AD_TAG_SIGNATURES.hasAdsConversion', '.test(allHtml) : null;'),
+                           _n('const callTracking = anyMarkup ? AD_TAG_SIGNATURES.hasCallTracking', '.test(allHtml) : null;'),
+                           _n('const analytics = anyMarkup ? AD_TAG_SIGNATURES.hasAnalytics', '.test(allHtml) : null;'),
+                           _n('const scheduler = anyMarkup ? SCHEDULER_SIGNATURES', '.test(allHtml) : null;'),
+                           _n('adsConversion, callTracking, analytics,', ' liveChat, scheduler,')]) {
+      if (!_src.includes(_needle)) {
+        _fails.push('the free read no longer measures ' + _needle.slice(6, 30) + ' - it is a regex we already own over markup we already hold, so not asking is the only cost');
+      }
+    }
+
     if (_fails.length) {
       console.log(`\u26d4 FIND SCORE CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
     } else {
@@ -74409,8 +74578,20 @@ const findPlainFetch = async (url, timeoutMs = 12000) => {
 // page carries the roster and the headcount, a careers page carries the hiring
 // signal. Ranking them together would let three about-pages crowd out the only
 // careers page on the site.
+// ══ ORDERED BY WHO IS LIKELIEST TO NAME THE OWNER ════════════════════════
+// Vin, 2026-09-01: "cant we make it so the less likley pages are read first to
+// sopeed it up?" - the right instinct, and the order below is the answer. The
+// team/about family is read FIRST because that is where an owner is named, so
+// the early exit fires on the first wave and a site that says who runs it never
+// buys the other pages OR the ~10-credit paid wave. It also decides what goes
+// into the corpus: the cap binds at about three interior pages, so arrival
+// order was silently deciding which evidence the parser and the model ever saw.
+//
+// freeWant is the plain-fetch budget and want is the Firecrawl-fallback budget.
+// They differ because a page is free on one path and a credit on the other.
 const FIND_PAGE_INTENTS = [
-  { key: 'contact', re: /(contact|get-?in-?touch|reach-?us)/i, want: 1 },
+  { key: 'team',    re: /(team|our-?team|staff|people|leadership|management|about|our-?story|who-?we-?are|meet|owner|founder|president|principal|history|our-?company)/i, want: 2, freeWant: 12 },
+  { key: 'contact', re: /(contact|get-?in-?touch|reach-?us)/i, want: 1, freeWant: 3 },
   // ══ TWO, BECAUSE THE OWNER IS ON WHICHEVER ONE WE DID NOT READ ═════
   // One regex covers /about AND /our-team AND /leadership, and only the
   // top-ranked of them was ever fetched. A business commonly names its owner
@@ -74418,19 +74599,41 @@ const FIND_PAGE_INTENTS = [
   // decision-maker on about half the list. A page on the plain path is FREE,
   // so the second one costs nothing on the leads this is for; it costs one
   // credit only on a site that refused a plain fetch.
-  { key: 'team',    re: /(team|our-?team|staff|people|leadership|management|about|our-?story|who-?we-?are|meet)/i, want: 2 },
   // The SAME constant the roster rule refuses on. Two copies of these words
   // would drift, and the drift that matters is a page picked as careers here
   // that rosterEligiblePage does not refuse - which is the exact hole that put
-  // a job title on a call sheet as the owner's.
-  { key: 'careers', re: CAREERS_PAGE_RE, want: 1 },
+  // a job title on a call sheet as the owner's. Last on purpose: a job advert
+  // is a name-shaped line followed by a job title, which is what a roster row
+  // looks like, so it is the page we least want filling the corpus.
+  { key: 'careers', re: CAREERS_PAGE_RE, want: 1, freeWant: 1 },
 ];
+// The order of the table IS the owner-likelihood order, so one declaration
+// drives the fetch order, the early exit and the corpus order rather than three
+// hand-kept copies of the same judgement.
+const FIND_INTENT_RANK = FIND_PAGE_INTENTS.reduce((m, t, i) => { m[t.key] = i; return m; }, {});
 // Bounded by construction: at most one page per intent, at most FIND_MAX_PAGES
 // in total. The bound is the cost model - every page here is free on the plain
 // path and one credit on the Firecrawl fallback, so an unbounded list is an
 // unbounded bill on exactly the leads whose sites are hardest to read.
 const FIND_MAX_PAGES = 4;
-const pickFindPages = (links, homepageUrl) => {
+// ══ THE FREE PATH IS NOT THE PAID PATH ═══════════════════════════════════
+// Vin's decision, 2026-09-01: "read as many free pages as they will give us of
+// course if they give us 20 read 20. dont excute paid wave unless we have to."
+// A plain GET costs nothing, so the only real bounds are wall clock and the
+// corpus cap - both handled where they belong (a parallel pool with a ceiling,
+// and a ranked corpus) rather than by refusing to look.
+const FIND_MAX_FREE_PAGES = parseInt(process.env.FIND_MAX_FREE_PAGES || '20', 10);
+// How many free pages go out at once, and the wall clock on the whole read.
+// The pool is what makes twenty pages affordable: read one after another at 10s
+// each they are +160s a lead, and the observed leads already run 40-275s. The
+// ceiling is the backstop for a site that keeps answering slowly - it bounds
+// the READ, not each page, because a per-page timeout times twenty pages is the
+// number that made the sequential version impossible.
+const FIND_FREE_POOL = parseInt(process.env.FIND_FREE_POOL || '5', 10);
+const FIND_FREE_READ_MS = parseInt(process.env.FIND_FREE_READ_MS || '120000', 10);
+const pickFindPages = (links, homepageUrl, budget) => {
+  const cap = Number.isFinite(Number(budget)) && Number(budget) > 0 ? Number(budget) : FIND_MAX_PAGES;
+  const free = cap > FIND_MAX_PAGES;
   const home = String(homepageUrl || '').replace(/\/$/, '').toLowerCase();
   const pool = (Array.isArray(links) ? links : []).filter(u => String(u).toLowerCase() !== home);
   const out = [];
@@ -74439,7 +74642,7 @@ const pickFindPages = (links, homepageUrl) => {
     // rankUrlsByIntent is the ranker the audit path already uses, with its
     // recorded fixes: a whole path SEGMENT rather than a substring, so
     // "/blog/how-to-talk-about-infertility" is not read as an about page.
-    const ranked = rankUrlsByIntent(pool, intent.re, 6);
+    const ranked = rankUrlsByIntent(pool, intent.re, free ? 24 : 6);
     // `want` was DECLARED on every row of the table above and read by nobody:
     // this loop broke after the first hit whatever it said. Honoured now, so
     // the table is the thing that decides how many pages an intent is worth.
@@ -74449,9 +74652,9 @@ const pickFindPages = (links, homepageUrl) => {
       taken.add(u);
       out.push({ url: u, intent: intent.key });
       got += 1;
-      if (got >= (intent.want || 1) || out.length >= FIND_MAX_PAGES) break;
+      if (got >= ((free ? intent.freeWant : intent.want) || 1) || out.length >= cap) break;
     }
-    if (out.length >= FIND_MAX_PAGES) break;
+    if (out.length >= cap) break;
   }
   return out;
 };
@@ -74594,6 +74797,27 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
   const googleAds = anyMarkup ? AD_TAG_SIGNATURES.hasGoogleAdsTag.test(allHtml) : null;
   const metaPixel = anyMarkup ? AD_TAG_SIGNATURES.hasMetaPixel.test(allHtml) : null;
   const tagManager = anyMarkup ? AD_TAG_SIGNATURES.hasTagManager.test(allHtml) : null;
+  // ══ IS SOMEBODY COMPETENT ALREADY ON THIS ACCOUNT? ═══════════════════════
+  // Vin's shape, 2026-09-01: a business already spending is a GOOD lead - the
+  // research is blunt about it, 68% of businesses say they are paying for
+  // marketing they already know is not working, and the average agency
+  // relationship lasts 2.5 years across 3-5 agencies. What we do NOT want is
+  // the one whose setup is visibly already in good hands.
+  //
+  // These five regexes were already in this file, already tested against markup
+  // this read is ALREADY HOLDING, and readFindIcpSignals tested three of the
+  // eight keys in the same object and ignored the rest. Zero extra requests.
+  //
+  // HONEST NAME: this measures whether their marketing is INSTRUMENTED, not
+  // whether it performs. We cannot see their cost per lead or their return -
+  // that needs the audit, and even the audit cannot see inside their ads
+  // account. Conversion tracking plus call tracking plus a real booking tool is
+  // evidence that somebody who knows what they are doing has been here.
+  const adsConversion = anyMarkup ? AD_TAG_SIGNATURES.hasAdsConversion.test(allHtml) : null;
+  const callTracking = anyMarkup ? AD_TAG_SIGNATURES.hasCallTracking.test(allHtml) : null;
+  const analytics = anyMarkup ? AD_TAG_SIGNATURES.hasAnalytics.test(allHtml) : null;
+  const liveChat = anyMarkup ? CHAT_SIGNATURES.test(allHtml) : null;
+  const scheduler = anyMarkup ? SCHEDULER_SIGNATURES.test(allHtml) : null;
   let adsCode = null;
   const adPlatforms = [];
   if (googleAds) adPlatforms.push('Google');
@@ -74687,6 +74911,7 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
     pagesRead: read.length,
     markupRead: anyMarkup,
     adsCode, adPlatforms, tagManager, adsWhy,
+    adsConversion, callTracking, analytics, liveChat, scheduler,
     teamCount, teamNames, teamPageUrl, execTitles, teamTitles,
     hiringAny, hiringMarketing, hiringTitles,
     hiringMarketingTitles: lanes.marketing,
@@ -74729,10 +74954,27 @@ const FIND_ICP_TERMS = [
     },
   },
   {
-    id: 'ads', max: 25, label: 'whether they already pay for advertising',
+    id: 'ads', max: 25, label: 'whether they invest in marketing at all',
+    // ══ SPENDING IS GOOD. ALREADY SORTED IS NOT. ═══════════════════════════
+    // Vin, 2026-09-01, and the research backs every word: a business already
+    // running ads "sees the beauty of spending on ads and the neccesity but
+    // they dont know if theyre preforming well." 45% of small businesses are
+    // dissatisfied with the agency they hired (Clutch 2024), 48% switch over
+    // failure to deliver, and 68% admit they are paying for marketing they
+    // already know is not working. That is a market of people with a budget
+    // and a grievance.
+    //
+    // What changed: "no ad code" scored 5 of 25, so a moneyed business nobody
+    // has marketed to lost twenty points against one already advertising -
+    // backwards for the second archetype he named, "people with a lot of moeny
+    // not doigng marketing at all". Proven spend still beats assumed spend,
+    // because it is evidence rather than inference, but the gap is now the size
+    // of that difference and not a disqualification. The already-sorted case is
+    // priced separately, after the ratio.
     score: (s) => {
       if (s.adsCode === true) return { points: 25, say: `${s.adPlatforms.join(' and ')} ad code on their site - they already spend on advertising` };
-      if (s.adsCode === false) return { points: 5, say: 'no ad code we could see, so no proof of an advertising budget' };
+      if (s.analytics === true || s.tagManager === true) return { points: 20, say: 'no ad code, but they measure their traffic - somebody here thinks about marketing' };
+      if (s.adsCode === false) return { points: 18, say: 'nothing marketing-related on their site at all - untouched, and the whole budget is still to play for' };
       return null;
     },
   },
@@ -74860,14 +75102,20 @@ const findIcpScore = (signals) => {
   // the DENOMINATOR, so a demoted lead would be scored out of a different
   // total than a clean one and the two numbers would stop being comparable.
   const _base = Math.round((points / possible) * 100);
+  // Post-ratio for exactly the reason above, and read from the same declared
+  // table, so the Find score and the contact ranker cannot disagree about what
+  // an already-instrumented business is worth.
   const _dem = demotionPenalty(s);
+  const _run = alreadyDialledIn(s);
+  const _marks = _dem.terms.concat(_run.terms);
+  const _off = _dem.points + _run.points;
   return {
-    score: Math.max(0, Math.min(100, _base + _dem.points)),
+    score: Math.max(0, Math.min(100, _base + _off)),
     measured, of: FIND_ICP_TERMS.length, terms,
-    demotions: _dem.terms,
+    demotions: _marks,
     why: `scored on the ${measured} of ${FIND_ICP_TERMS.length} signals we could measure`
        + (measured < FIND_ICP_TERMS.length ? '; the rest are left out rather than counted as zero' : '')
-       + (_dem.terms.length ? `, then marked down ${Math.abs(_dem.points)} for ${_dem.terms.map(t => t.why).join(' and ')}` : ''),
+       + (_marks.length ? `, then marked down ${Math.abs(_off)} for ${_marks.map(t => t.why).join(' and ')}` : ''),
   };
 };
 
@@ -74985,17 +75233,70 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   let links = [];
   if (pages.length) {
     links = sameHostLinks(pages[0].html, pages[0].url);
-    const picks = pickFindPages(links, pages[0].url);
     const viaFirecrawl = out.readVia.indexOf('Firecrawl') === 0;
-    for (const pick of picks) {
-      const got = await findPlainFetch(pick.url, 10000);
-      if (got.ok) { pages.push({ url: pick.url, intent: pick.intent, html: got.html, text: got.text }); continue; }
-      if (viaFirecrawl && fcKey && !fcCreditsBlocked()) {
-        let _h = '';
-        const md = await firecrawlScrape(fcKey, pick.url, 30000, FC_CACHE_MS, { shot: false, capture: (h) => { _h = h || ''; } });
-        if (md || _h) pages.push({ url: pick.url, intent: pick.intent, html: _h, text: _h ? plainTextFromHtml(_h) : String(md) });
+    // The free path reads deep; the Firecrawl fallback keeps the small budget,
+    // because there every page is a credit.
+    const picks = pickFindPages(links, pages[0].url, viaFirecrawl ? FIND_MAX_PAGES : FIND_MAX_FREE_PAGES);
+    // ══ THE SAME PAGE AT TWENTY URLS IS ONE PAGE ═════════════════════════
+    // The Find path deduped by URL only. A soft 404, a redirect to the homepage
+    // and an unrendered single-page app all return the homepage's text at a
+    // different address, pass every check in findPlainFetch, and eat a full
+    // 6,000-character block of a 22,000-character corpus as though they were
+    // distinct evidence. At a budget of four that wasted a page; at twenty it
+    // could make every block the homepage. pageFingerprint is the audit path's
+    // own rule, so this is one rule rather than a second copy.
+    const _seenFp = new Set();
+    const _homeFp = pageFingerprint(pages[0].text);
+    if (_homeFp) _seenFp.add(_homeFp);
+    let _dupPages = 0;
+    const _keep = (url, intent, html, text) => {
+      const fp = pageFingerprint(text);
+      if (fp && _seenFp.has(fp)) { _dupPages += 1; return false; }
+      if (fp) _seenFp.add(fp);
+      pages.push({ url, intent, html, text });
+      return true;
+    };
+    // ══ READ THE LIKELIEST PAGES FIRST AND STOP WHEN WE HAVE HIM ═════════
+    // Vin, 2026-09-01: "cant we make it so the less likley pages are read first
+    // to sopeed it up?" The table above is ordered by owner-likelihood, so the
+    // team/about family arrives in wave one. parseTeamRoster is pure and free -
+    // no model call - so asking it after each wave costs nothing and lets a site
+    // that plainly names its owner skip every remaining page.
+    //
+    // The ceiling is the backstop for a site that never settles, and it is a
+    // WALL CLOCK on the whole read rather than a per-page timeout, because a
+    // per-page timeout multiplied by twenty pages is what made the sequential
+    // version unaffordable.
+    const _readStartedAt = Date.now();
+    const _wave = viaFirecrawl ? 1 : FIND_FREE_POOL;
+    for (let i = 0; i < picks.length; i += _wave) {
+      if (Date.now() - _readStartedAt > FIND_FREE_READ_MS) {
+        console.log(`\u{1F50E} FIND READ [${name}]: stopped at ${pages.length} page(s) - the read passed its ${Math.round(FIND_FREE_READ_MS / 1000)}s ceiling with ${picks.length - i} page(s) unread. Everything below is measured on what we DID read.`);
+        break;
+      }
+      const batch = picks.slice(i, i + _wave);
+      const got = await Promise.all(batch.map(async (pick) => {
+        const r = await findPlainFetch(pick.url, 10000);
+        if (r.ok) return { pick, html: r.html, text: r.text };
+        if (viaFirecrawl && fcKey && !fcCreditsBlocked()) {
+          let _h = '';
+          const md = await firecrawlScrape(fcKey, pick.url, 30000, FC_CACHE_MS, { shot: false, capture: (h) => { _h = h || ''; } });
+          if (md || _h) return { pick, html: _h, text: _h ? plainTextFromHtml(_h) : String(md) };
+        }
+        return null;
+      }));
+      for (const g of got) if (g) _keep(g.pick.url, g.pick.intent, g.html, g.text);
+      // Free, pure, no model call: if their own pages already name an owner we
+      // can stop reading and the paid wave is never bought.
+      if (!viaFirecrawl && i + _wave < picks.length) {
+        const _soFar = pages.filter(rosterEligiblePage).map(p => String(p.text || '')).join('\n');
+        if (parseTeamRoster(_soFar, name).some(r => r.isOwner)) {
+          console.log(`\u{1F50E} FIND READ [${name}]: their own pages name an owner after ${pages.length} page(s), so the remaining ${picks.length - i - _wave} were not read and no paid lookup is needed.`);
+          break;
+        }
       }
     }
+    if (_dupPages) out.duplicatePages = _dupPages;
     console.log(`\u{1F50E} FIND READ [${name}]: ${pages.length} page(s) via ${out.readVia} — ${pages.map(p => p.intent).join(', ')}. ${links.length} same-host link(s) came off their own navigation, so no sitemap call was bought.`);
   }
   out.pagesRead = pages.map(p => ({ url: p.url, intent: p.intent, chars: (p.text || '').length }));

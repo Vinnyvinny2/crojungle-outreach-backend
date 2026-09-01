@@ -3024,7 +3024,10 @@ let contactTally = null;
   // already paid for, and section 39's rule is that they all survive.
   for (const [needle, why] of [
     [_nn('onClick: () => runContactBatch(_cUnread,', ' _cUnread.length),'), 'the "All N" button is gone, so a full queue can only be read a page at a time'],
-    [_nn('runContactBatch(_cStale,', ' _cStale.length);'), 'the re-read of stale contact reads is gone'],
+    // A re-read is a SPEND, so it obeys the same number box the first read
+    // does. It passed the whole stale set as the limit, so on a queue of 53
+    // stale reads one confirm bought 53 leads of Firecrawl and model spend.
+    [_nn('runContactBatch(_cStale,', ' _n);'), 'the re-read of stale contact reads is gone, or it is back to spending on every stale lead at once rather than the number the operator chose'],
     [_nn("setContactPlacesOnly(!!e.target", '.checked),'), 'the Google-listing scope tick box is gone, so the job-board lanes are back in the queue with no way to hide them'],
     [_nn('setCsvFull(!!e.target', '.checked),'), 'the every-column tick box is gone'],
     [_nn("setContactSort(v =>", ' !v),'), 'the sort-by-fit button is gone'],
