@@ -2943,6 +2943,59 @@ let contactTally = null;
         }
         contactTally = M.tallyLine(t);
       }
+      // ══ THE TheirStack LANE'S OWN EVIDENCE MUST BE SENT ═══════════════
+      // A TheirStack lead carries a VERIFIED headcount, the marketing role
+      // titles, the posting date and its URL - free, in the same call that
+      // found it. contactRequestBody sent none of them, so the strongest ICP
+      // measurement this system holds was dropped at the door and the reason
+      // the lead exists was re-derived from their careers page. Every row of
+      // the 2026-09-01 CSV said "no" in the hiring column.
+      {
+        const body = M.body({
+          name: 'Acme Roofing', website: 'https://acme.example', source: 'theirstack',
+          verifiedEmployees: 34, marketingRoles: ['Marketing Manager', 'SEO Specialist'],
+          jobPostedAt: '2026-08-25T00:00:00.000Z', signalAgeDays: 7,
+          jobPostingUrl: 'https://jobs.example/1',
+        }, {});
+        const co = (body && body.company) || {};
+        for (const [k, want] of [['source', 'theirstack'], ['verifiedEmployees', 34],
+          ['jobPostedAt', '2026-08-25T00:00:00.000Z'], ['signalAgeDays', 7],
+          ['jobPostingUrl', 'https://jobs.example/1']]) {
+          if (String(co[k]) !== String(want)) {
+            fails.push('the contact request no longer sends the TheirStack lane\'s ' + k + ', so the only clock this pipeline has stops at the door');
+          }
+        }
+        if (!Array.isArray(co.marketingRoles) || co.marketingRoles.length !== 2) {
+          fails.push('the contact request no longer sends the marketing roles that made the lead a lead');
+        }
+      }
+      // ══ THE CLOCK AND THE OUTAGE REACH THE FILE ═══════════════════════
+      {
+        const withClock = M.rows([{ name: 'Acme', contactReadOk: true, contactOwner: 'Jo Smith',
+          contactEmail: 'jo@acme.com', contactHiringDaysAgo: 11, contactHiringRoles: ['Marketing Manager'] }])[0];
+        if (!withClock || !/11 days ago/.test(String(withClock.hiringPosted || ''))) {
+          fails.push('a dated marketing posting no longer reaches the file, so the rep loses the one reason to call THIS week');
+        }
+        const undated = M.rows([{ name: 'B', contactReadOk: true, contactOwner: 'Jo Smith',
+          contactEmail: 'jo@b.com', contactHiringRoles: ['Marketing Manager'] }])[0];
+        if (!undated || /days ago/.test(String(undated.hiringPosted || '')) || !undated.hiringPosted) {
+          fails.push('an undated posting is either inventing recency or saying nothing at all - it must say it carried no usable date');
+        }
+        const noPost = M.rows([{ name: 'C', contactReadOk: true, contactOwner: 'Jo Smith', contactEmail: 'jo@c.com' }])[0];
+        if (noPost && noPost.hiringPosted) fails.push('a lead with no posting is being given a hiring date');
+        // Our outage, not a fault of the address.
+        const down = M.rows([{ name: 'D', contactReadOk: true, contactOwner: 'Jo Smith',
+          contactEmail: 'jo@d.com', contactEmailTier: 3, contactEmailVerifierDown: true }])[0];
+        if (!down || !/our outage/i.test(String(down.emailWhyUnconfirmed || ''))) {
+          fails.push('an address resolved while the mailbox checker was down no longer says so, so it reads as a doubtful mailbox rather than a minute we could not ask');
+        }
+        // An empty calling window carries its reason.
+        const noWin = M.rows([{ name: 'E', contactReadOk: true, contactOwner: 'Jo Smith', contactEmail: 'jo@e.com',
+          contactCallWindowWhy: 'their Google listing publishes no opening hours' }])[0];
+        if (!noWin || !/publishes no opening hours/.test(String(noWin.callWindow || ''))) {
+          fails.push('a blank When-to-call cell still reaches the rep with no explanation, which reads as a bug in the file');
+        }
+      }
       contactStat = { cols: M.cols.length, lean: M.pick(false).length };
     }
   }
@@ -2951,6 +3004,21 @@ let contactTally = null;
   // A fixture supplies its own arguments and therefore cannot see a caller.
   // Every wire below is what makes the panel actually do the thing.
   const _nn = (a, b) => a + b;
+  // ══ THE TICK BOX MEANS WHAT IT SAYS, AND STARTS OFF ═══════════════════════
+  // `|| c.source === 'google_places'` let a lead with NO place id through the
+  // "only businesses with a Google listing" filter, and six of the twelve leads
+  // on 2026-09-01 then printed "this lead carries no Google place id" on the
+  // server. And the default is OFF now: the owner's instruction was that leads
+  // from the other lanes "cost the same to read while ahving the same quality
+  // as places", and the server recovers a listing for a lead without one.
+  // Stops BEFORE the closing parens: counting them in a guard is how a green
+  // build gets called RED, and this file records that trap already.
+  if (html.indexOf(_nn("const _hasListing = (c) => !!(c && c.pla", "ceId)")) < 0) {
+    fails.push('the Google-listing filter has its source escape hatch back, so it passes leads with no place id while claiming to filter on a listing');
+  }
+  if (html.indexOf(_nn('const [contactPlacesOnly, setContactPlacesOnly] = React.useState(', 'false);')) < 0) {
+    fails.push('the Google-listing filter no longer defaults OFF, so the other lanes are hidden by default again');
+  }
   if (html.indexOf(_nn("BACKEND + '/api/find", "-contact'")) < 0) {
     fails.push('nothing in the client calls /api/find-contact — the Find tab button cannot produce a contact');
   }

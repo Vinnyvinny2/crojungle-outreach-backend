@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260923;
+const CONTRACT_VERSION = 20260924;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -6008,8 +6008,13 @@ const affordabilityBand = (m) => {
   // 4. A MEASURED HEADCOUNT BEATS EVERY PROXY ABOVE IT, and it is only ever
   // present after a contact read. It is a FLOOR, never a headcount: a firm
   // with forty staff may publish four.
-  const team = Number(l.teamCount);
-  if (typeof l.teamCount === 'number' && Number.isFinite(team) && team > 0) {
+  // A VERIFIED headcount is not a floor and beats it outright. TheirStack
+  // returns one free with the lead; §14 already made a verified count overrule
+  // a name pattern, and the same reasoning applies to a page count.
+  const _ver = Number(l.verifiedEmployees);
+  const haveVer = Number.isFinite(_ver) && _ver > 0;
+  const team = haveVer ? _ver : Number(l.teamCount);
+  if (haveVer || (typeof l.teamCount === 'number' && Number.isFinite(team) && team > 0)) {
     if (team >= 8) take('teamReal'); else if (team <= 2) take('teamTiny');
   }
 
@@ -11597,7 +11602,15 @@ const _ownerFromCorpus = async (corpus, companyName, website, apiKey, rosterCorp
       const _sample = _hint
         ? corpus.slice(Math.max(0, _hint.index - 120), _hint.index + 120).replace(/\s+/g, ' ').trim()
         : null;
-      console.log(`\u{1F464} ROSTER [${companyName}]: no owner-level title found on their pages. Read ${_roster.length} name/title pair(s) from ${corpus.length} characters${_roster.length ? ' \u2014 ' + _roster.slice(0, 4).map(r => `${r.name} (${r.title})`).join(', ') : ''}. Falling through to the model, which still finds the owner \u2014 this only costs the paid searches the roster would have skipped.${_sample ? ` An ownership word IS in the text, so the page is here and the layout is what we cannot read. Around it: "\u2026${_sample}\u2026"` : ' No ownership or professional title appears anywhere in the text we read, so either their pages do not state who runs the business or the words they use are ones this parser does not know.'}`);
+      // ══ AND THE HEADLINE MUST NOT ARGUE WITH THE PAIRS BENEATH IT ═══
+      // Live 2026-09-01, The Roof Detective: one sentence said BOTH "no
+      // owner-level title found" and "Shane Kaylor (Owner of The Roof
+      // Detective)". The headline is gated on the isOwner FILTER above while
+      // the pair clause prints the roster unfiltered, so a row whose
+      // ownership claim was stripped downstream reads as a parser failure.
+      // A reader handed a flat contradiction stops believing the whole line.
+      const _demoted = _roster.filter(r => r && r.twoPeople).length;
+      console.log(`\u{1F464} ROSTER [${companyName}]: no owner-level title found on their pages. Read ${_roster.length} name/title pair(s) from ${corpus.length} characters${_roster.length ? ' \u2014 ' + _roster.slice(0, 4).map(r => `${r.name} (${r.title})`).join(', ') : ''}.${_demoted ? ` ${_demoted} of them named a SECOND person inside the title, so the ownership claim was dropped rather than pinned on the wrong one.` : ''} Falling through to the model, which still finds the owner \u2014 this only costs the paid searches the roster would have skipped.${_sample ? ` An ownership word IS in the text, so the page is here and the layout is what we cannot read. Around it: "\u2026${_sample}\u2026"` : ' No ownership or professional title appears anywhere in the text we read, so either their pages do not state who runs the business or the words they use are ones this parser does not know.'}`);
     } catch (e) {
       console.log(`ROSTER [${companyName}]: could not read the team page structure (${e && e.message}) \u2014 falling through to the model.`);
     }
@@ -11984,6 +11997,21 @@ const titleHeadIs = (title, pattern) => {
   // construction and emphatically NOT the owner, so refusing it is correct
   // twice over.
   if (/^['\u2019]s?\b/.test(after)) return false;
+  // ══ AND "OUR FOUNDER" IS NOT A HEADING — TRIED, AND WRONG ═════════
+  // I added a guard here refusing a possessive determiner with the ownership
+  // word as the whole remainder, because Performance Windows Raleigh shipped
+  // "Schedule My Consult" / "OUR FOUNDER" as its decision-maker on
+  // 2026-09-01 and ownershipIsHead('OUR FOUNDER') is true.
+  //
+  // OWNER TRUTH CHECK went RED on it, and it was right: "Our Owner, Carl" is
+  // a real roster line off Ecoview's own page, and "John Smith / Our Founder"
+  // is the ordinary shape of a one-person leadership block. Refusing the
+  // title deletes the owner in both. The failure at Performance Windows was
+  // entirely in the NAME slot - a CTA button - and the imperative rule added
+  // to looksLikeAPerson closes it on its own, with nothing else needed.
+  //
+  // Recorded rather than silently dropped: the next person to read that log
+  // line will reach for exactly this guard.
   // A partner PROGRAM label. See AFFILIATION_PARTNER_RE above: the grammar is
   // identical to a real partnership title and only the modifier tells them
   // apart, so the modifiers are declared rather than inferred.
@@ -12114,9 +12142,37 @@ const practitionerIsHead = (title) => titleHeadIs(title, PRACTITIONER_TITLE_RE);
 // hand-kept copies. It searched OWNER_TITLE_RE alone and therefore printed
 // "their pages genuinely do not state who owns the business" about pages
 // reading "Cagney McCormick, Attorney at Law".
-const ownershipWordInCorpus = (corpus) => OWNER_TITLE_RE.exec(String(corpus || ''))
-  || PROFESSIONAL_OWNER_RE.exec(String(corpus || ''))
-  || PRACTITIONER_TITLE_RE.exec(String(corpus || ''));
+// ══ THE HINT MUST FIND A TITLE, NOT A WORD ═══════════════════════════════
+// This was three bare .exec() calls over the whole corpus, with no title
+// context at all, and it decides which of two OPPOSITE sentences the ROSTER
+// line prints: "the page is here and the layout is what we cannot read" or
+// "their pages do not state who runs the business". Executed against the
+// 2026-09-01 run, three of the four hits were false and every one of them
+// blamed the parser for a page that names nobody:
+//   "We hire locally, buy locally, and partner locally"   (a verb)
+//   "a commercial building owner who needs a new roof"    (their CUSTOMER)
+//   "Owner supervised worksite"                           (a service claim)
+// A fact about our word list dressed as a fact about them — the recorded
+// message-names-the-wrong-cause class, which this very line already carries
+// a comment about, one direction over.
+//
+// The same head rules the parser itself uses, over short runs. "Owner" alone
+// on a line still fires it, which is the layout case it exists for; a word
+// buried in a sentence of copy no longer does.
+const HINT_RUN_RE = /[^\r\n.!?|\u2022\u00b7]{2,90}/g;
+const ownershipWordInCorpus = (corpus) => {
+  const s = String(corpus || '');
+  const re = new RegExp(HINT_RUN_RE.source, 'g');
+  let m;
+  while ((m = re.exec(s))) {
+    const run = m[0].trim();
+    if (!run || run.split(/\s+/).length > 8) continue;
+    if (ownershipIsHead(run) || professionalOwnerIsHead(run) || practitionerIsHead(run)) {
+      return { index: m.index, 0: run };
+    }
+  }
+  return null;
+};
 const PRACTICE_STAFF_RE = /\b(?:paralegal|legal\s+(?:assistant|secretary)|law\s+clerk|hygienist|dental\s+assistant|(?:a|e)sthetician|medical\s+director|practice\s+(?:manager|administrator)|treatment\s+coordinator|surgical\s+coordinator|billing\s+specialist)\b/i;
 // One optional internal capital in the surname, so McDonald, MacLeod and
 // DeVries are people rather than unparseable.
@@ -12157,9 +12213,35 @@ const NOT_A_MONONYM = new Set([
 // it and then paid ~6 Firecrawl credits to learn the surname. For a caller
 // "ask for Carl" works; nothing downstream may treat it as a settled identity,
 // and the held-back email rule already refuses to build an address from it.
-const rosterNameTailOk = (cand, kindOf) => {
+// ══ AND A TAIL MADE ONLY OF THE COMPANY'S OWN WORDS IS NOT A PERSON ═════
+// Live 2026-09-01, The Roof Detective. Their page says "Shane Kaylor, Owner of
+// The Roof Detective" — a correct roster line with a correct ownership title.
+// Executed: nameTailOfTitle returned "Roof Detective" as a PERSON (it clears
+// the name pattern, and BUSINESS_TAIL carries "roofing", not "detective"), the
+// two-people swap read that as a second human in the title, and stripped
+// isOwner from the real owner. The lead then printed "no owner-level title
+// found" beside "Shane Kaylor (Owner of The Roof Detective)" in one sentence.
+//
+// The question is asked HERE rather than at the two readers, because both of
+// them ask it and a second copy is the disease this file records most.
+//
+// DISCLOSED COST, because the other direction is the expensive one: a title
+// whose trailing words are ALL words of an eponymous company — "Founder Luke
+// Smith" at Luke Smith Plumbing — is refused too, so a name sitting inside the
+// title is lost on that shape. It is bounded to candidates of TWO OR MORE
+// words on purpose: a single token that matches the company name is the
+// eponymous owner himself ("Carl" at Carl's Plumbing) and must survive.
+const tailIsCompanyWords = (cand, companyName) => {
+  const co = companyWordsOf(companyName);
+  if (!co.size) return false;
+  const w = normalizeTitleWords(cand).split(' ').filter(Boolean);
+  if (w.length < 2) return false;
+  return w.every(x => co.has(x));
+};
+const rosterNameTailOk = (cand, kindOf, companyName = '') => {
   const s = String(cand || '').trim().replace(/[.,;:]+$/, '');
   if (!s || s.length > 40) return false;
+  if (tailIsCompanyWords(s, companyName)) return false;
   if (FIND_ROLE_NOUN.test(s)) return false;
   if (OWNER_TITLE_RE.test(s) || NON_OWNER_TITLE_RE.test(s) || PRACTITIONER_TITLE_RE.test(s)) return false;
   if (kindOf && kindOf(s)) return false;
@@ -12176,11 +12258,11 @@ const rosterNameTailOk = (cand, kindOf) => {
 // name side is validated by SHAPE and the title side by SHAPE, and nothing
 // ever asked whether the TITLE contained a person. Returns the trailing run of
 // the title that is a real person's name, or ''.
-const nameTailOfTitle = (title, kindOf) => {
+const nameTailOfTitle = (title, kindOf, companyName = '') => {
   const words = String(title || '').trim().replace(/\s+/g, ' ').split(' ');
   for (let take = 2; take <= 3 && take <= words.length; take++) {
     const tail = words.slice(words.length - take).join(' ');
-    if (rosterNameTailOk(tail, kindOf)) return tail.replace(/[.,;:]+$/, '');
+    if (rosterNameTailOk(tail, kindOf, companyName)) return tail.replace(/[.,;:]+$/, '');
   }
   return '';
 };
@@ -12195,7 +12277,7 @@ const nameTailOfTitle = (title, kindOf) => {
 //
 // Splitting on " and " first is what keeps the pairing honest: taken whole the
 // trailing name is Mike Scott, and the CEO is Brian.
-const titleLedPeople = (run, kindOf) => {
+const titleLedPeople = (run, kindOf, companyName = '') => {
   const out = [];
   for (const part of String(run || '').split(/\s+\band\b\s+/i)) {
     const s = part.trim().replace(/^[,;:\-\u2013\u2014\s]+/, '').replace(/[,;:\s]+$/, '');
@@ -12203,12 +12285,12 @@ const titleLedPeople = (run, kindOf) => {
     let name = '';
     let head = '';
     const ci = s.lastIndexOf(',');
-    if (ci > 0 && rosterNameTailOk(s.slice(ci + 1), kindOf)) {
+    if (ci > 0 && rosterNameTailOk(s.slice(ci + 1), kindOf, companyName)) {
       name = s.slice(ci + 1).trim().replace(/[.,;:]+$/, '');
       head = s.slice(0, ci).trim();
     }
     if (!name) {
-      const tail = nameTailOfTitle(s, kindOf);
+      const tail = nameTailOfTitle(s, kindOf, companyName);
       if (tail) {
         name = tail;
         head = s.slice(0, s.length - tail.length).replace(/[,;:\-\s]+$/, '').trim();
@@ -12288,6 +12370,22 @@ const looksLikeAPerson = (name) => {
   if (NOT_A_PERSON_PHRASE.has(t)) return false;
   if (NOT_A_PERSON_FIRST.has(w[0])) return false;
   if (NOT_A_PERSON_LAST.has(w[w.length - 1])) return false;
+  // ══ AN IMPERATIVE VERB HEADS A NAV LABEL, NEVER A PERSON ════════
+  // CTA_VERB_RE was declared for exactly this and given ONE call site, inside
+  // titleHeadIs — which is only ever handed a TITLE. The name slot was left on
+  // shape alone, and on 2026-09-01 "Schedule My Consult" cleared the name
+  // pattern (three capitalised words), cleared every phrase list above, shipped
+  // as the decision-maker, and SETTLED stage 1 — standing down every paid source
+  // on that lead. Executed: CTA_VERB_RE.test('Schedule My Consult') was true the
+  // whole time and nothing on this path asked. Tenth recorded instance of a
+  // guard living in the wrong half of a pair.
+  //
+  // One declared list, both slots. DISCLOSED COST: "Read" is a real surname and
+  // is in that list, so a person whose FIRST name is Read is refused here. It is
+  // the only real-name collision in the list, it is vanishingly rare as a first
+  // name, and the participles that open real names and titles — Managing,
+  // Acting, Founding — are deliberately absent from it.
+  if (CTA_VERB_RE.test(t)) return false;
   return true;
 };
 
@@ -12475,7 +12573,7 @@ const parseTeamRoster = (html, companyName = '') => {
     const _pOk = !!p && looksLikeRealName(p.name) && !titleKind(p.name);
     if (!_pOk) {
       // The layout may simply be the other way round: a title, then the person.
-      for (const _tl of titleLedPeople(runs[i], titleKind)) out.push(_tl);
+      for (const _tl of titleLedPeople(runs[i], titleKind, companyName)) out.push(_tl);
       continue;
     }
     const m = [p.name, p.name];
@@ -12586,7 +12684,7 @@ const parseTeamRoster = (html, companyName = '') => {
   // one on a sheet somebody dials from.
   out = out.map(r => {
     if (r.mononym) return r;
-    const _tail = nameTailOfTitle(r.title, titleKind);
+    const _tail = nameTailOfTitle(r.title, titleKind, companyName);
     if (!_tail || _tail.toLowerCase() === String(r.name || '').toLowerCase()) return r;
     if (!looksLikeRealName(r.name)) {
       const _head = r.title.slice(0, r.title.length - _tail.length).replace(/[,;:\-\s]+$/, '').trim();
@@ -12668,10 +12766,17 @@ const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey, locati
     // Two angles: who owns it, and their profile on business directories that
     // actually index SMB owners (BBB lists a "Principal Contact", Manta and
     // Buzzfile list officers — these are goldmines that LinkedIn-based tools miss)
+    // Query 1 carries NEITHER the domain nor, on a city-less lead, a location —
+    // and this function's own note above says why that fails: "a common local
+    // name matches dozens of unrelated companies nationwide and we find nothing
+    // confident". So on a lead with no city it is dropped and query 2 stands,
+    // because query 2 identifies the business by its own DOMAIN, which needs no
+    // geography at all. That is the owner's decision: keep the domain search.
     const queries = [
-      `"${clean}" ${loc ? loc + ' ' : ''}owner OR founder OR "chief executive" OR president name`,
       `"${clean}" ${domain ? domain + ' ' : ''}${loc ? loc + ' ' : ''}(bbb.org OR manta.com OR buzzfile.com OR dnb.com) owner principal`,
     ];
+    if (loc) queries.unshift(`"${clean}" ${loc} owner OR founder OR "chief executive" OR president name`);
+    if (!loc) console.log(`DM/websearch [${companyName}]: no city, so the undisambiguated name search is skipped — only the domain-scoped directory search runs.`);
 
     // Run both searches in parallel — sequential cost us ~15s for no reason
     const batches = await Promise.all(
@@ -26928,6 +27033,21 @@ const LADDER_HARM_FLOOR = 45;
 // Nothing here is a claim to the prospect — it never leaves the call sheet — so
 // it is allowed to be a judgement in a way an email sentence is not. What it must
 // not do is invent hours. When the listing publishes none, it says so.
+// ══ NOON IS 12PM ══════════════════════════════════════════════════════════
+// `open > 12 ? (open - 12) + 'pm' : open + 'am'` has no case for 12, so a
+// listing that opens at noon told a rep to call "around 12am" - and this is
+// the one column on the sheet whose entire job is telling him when to dial.
+const clockHour = (h) => {
+  // typeof, not Number(): Number(null) is 0 and 0 is finite, so a null hour
+  // came back as '12am' - midnight, stated confidently, from a measurement
+  // that does not exist. Written by me inside the fix for the noon bug and
+  // caught by the assertion for it on the next boot.
+  const n = typeof h === 'number' ? h : NaN;
+  if (!Number.isFinite(n)) return '';
+  if (n === 12) return '12pm';
+  if (n === 0 || n === 24) return '12am';
+  return n > 12 ? (n - 12) + 'pm' : n + 'am';
+};
 const callWindowFor = (hoursText, tradeWord, utcOffsetMinutes = null) => {
   const rows = Array.isArray(hoursText) ? hoursText.filter(Boolean) : [];
   // §77 bought utcOffsetMinutes in the Place Details mask to put the calling
@@ -26978,14 +27098,14 @@ const callWindowFor = (hoursText, tradeWord, utcOffsetMinutes = null) => {
       // "on a roof or under a house" printed on a PAVING contractor and a kitchen
       // remodeler on 2026-08-24 — roofer imagery hardcoded for thirty trades.
       // "out on a job" is true of every one of them.
-      say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}.${_zone} On a trade like this the owner is usually reachable in the first half hour before crews go out, or late afternoon once they are back. Mid-morning is the worst window: he is out on a job.` };
+      say: `Their listing opens around ${clockHour(open)}.${_zone} On a trade like this the owner is usually reachable in the first half hour before crews go out, or late afternoon once they are back. Mid-morning is the worst window: he is out on a job.` };
   }
   if (inRooms) {
     return { checked: true, open24: false,
-      say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}.${_zone} A practice owner is with ${_withWhom} through the day, so the realistic windows are before the first ${_withWhom === 'clients' ? 'meeting' : 'appointment'} and over lunch. The person who answers will be front desk, and the owner's name is the only thing that gets past them.` };
+      say: `Their listing opens around ${clockHour(open)}.${_zone} A practice owner is with ${_withWhom} through the day, so the realistic windows are before the first ${_withWhom === 'clients' ? 'meeting' : 'appointment'} and over lunch. The person who answers will be front desk, and the owner's name is the only thing that gets past them.` };
   }
   return { checked: true, open24: false,
-    say: `Their listing opens around ${open > 12 ? (open - 12) + 'pm' : open + 'am'}.${_zone} Early is usually better than late for an owner-operated business.` };
+    say: `Their listing opens around ${clockHour(open)}.${_zone} Early is usually better than late for an owner-operated business.` };
 };
 
 // ══ WHAT WILL HE SAY BACK ═══════════════════════════════════════════════════
@@ -32123,6 +32243,30 @@ const findOwnerViaLicense = async (companyName, industry, location, fcKey, apiKe
   // "Garden City ID" — see cityState. This function's queries were the weakest in
   // the waterfall purely because of this line.
   const loc = cityState(location);
+  // ══ A LICENCE SEARCH WITHOUT A JURISDICTION IS NOT A SEARCH ══════════════
+  // Every branch below asks a STATE register who holds a licence, and every one
+  // of them interpolated `${loc}` bare. On a lead with no city that shipped, on
+  // 2026-09-01, as:
+  //
+  //   "Four Peaks Roofing LLC"  contractor license "license holder" OR ...
+  //
+  // — the double space is the missing jurisdiction, and the query is close to
+  // worthless without it: a licence board is a state thing, and a common local
+  // name matches dozens of unrelated companies nationwide. Two paid searches,
+  // four credits, bought to learn nothing.
+  //
+  // The audit path has had exactly this guard since §101 ("no city could be
+  // parsed from the location"); the owner-lookup SPEND path never got it. The
+  // guard is also the fix for the malformed string: past this line `loc` is
+  // always a real "City ST", so the double space is impossible by construction
+  // rather than patched at ten interpolation sites.
+  //
+  // The owner's decision: skip THIS query, keep the domain-scoped web search,
+  // which identifies the business by its own website and needs no city.
+  if (!loc) {
+    console.log(`DM/license [${companyName}]: no city could be parsed from the location, so a state licence register cannot be searched. Skipped — the domain-scoped web search still runs.`);
+    return null;
+  }
   // Trade detection reads the industry label AND the company name. industry is
   // frequently blank or generic ("Professional Services"), while the company name
   // almost always names the trade — "Castle Hills Chiropractic", "Bespoke Plastic
@@ -32456,6 +32600,33 @@ const NAMEY = (companyName) => {
 // Role markers that prove the site is describing a PERSON, not repeating its own
 // brand name. Used to decide how much confidence a business-name match needs.
 const PERSON_ROLE_NEAR = /\b(dr|doctor|owner|founder|founded|co-?founder|president|principal|partner|proprietor|ceo|agent|broker|attorney|practitioner|surgeon|physician|dentist|chiropractor|veterinarian|therapist|licensed|dds|dmd|md|do|dc|cpa|esq|od|dvm)\b/i;
+// ══ A MODEL-AUTHORED TITLE IS PROSE UNTIL SOMETHING CHECKS IT ═════════════
+// Live 2026-09-01, Sure Thing Pest Control. The CSV's "Their title" column
+// read "locally owned and operated owner" — a marketing line off their
+// homepage, handed to a junior rep as the job the person holds. The name on
+// this path has had an anti-fabrication gate since it was written; the TITLE
+// beside it had none at all, and it goes to the sheet either way.
+//
+// Four declared rules, each of which the live string breaks:
+//   a real title is SHORT (a five-word title is a sentence)
+//   it never opens on an -ly adverb ("locally owned...")
+//   it carries no pronoun and no sentence punctuation
+//   and one of the title vocabularies must read it as a HEAD, not merely
+//   contain the word somewhere in a line of copy
+//
+// A title that fails is DROPPED and the name is KEPT. §99 already settled
+// that "(no title found)" is the honest render; inventing one is what the
+// || 'Owner' default did before §41 removed it.
+const bizTitleUsable = (t) => {
+  const s = String(t || '').trim();
+  if (!s || s.length > 48) return false;
+  if (s.split(/\s+/).filter(Boolean).length > 4) return false;
+  if (/^[a-z]+ly\b/i.test(s)) return false;
+  if (/\b(?:we|our|us|their|his|her|is|are|was|were|been|being)\b/i.test(s)) return false;
+  if (/[.!?;]/.test(s.replace(/\b[A-Za-z]\./g, ''))) return false;
+  return ownershipIsHead(s) || professionalOwnerIsHead(s)
+    || NON_OWNER_TITLE_RE.test(s) || JUNIOR_TITLE_RE.test(s);
+};
 const findOwnerViaBusinessName = async (companyName, homepageContent, domain, apiKey) => {
   if (!companyName || !apiKey) return null;
   const content = String(homepageContent || '').slice(0, 6000);
@@ -32500,7 +32671,23 @@ ${content}` }]
     const parsed = parseLLMJSON(t) || {};
 
     if (!parsed.name || String(parsed.name).toLowerCase() === 'null') return null;
-    if (!looksLikeRealName(parsed.name)) {
+    // ══ A FIRST NAME SHIPS, MARKED ═══════════════════════════════════
+    // looksLikeRealName requires two tokens, and MONONYM_RE reaches only
+    // parseTeamRoster and its two helpers — so this path hard-rejected a
+    // single token and lost the candidate entirely. Live 2026-09-01,
+    // Performance Windows Raleigh: `"Levi" is not a usable full name —
+    // REJECTED`, on the same lead where a CTA button won the row instead.
+    //
+    // The owner's decision, in his words: a first name ships, marked. For a
+    // caller "ask for Levi" works; nothing downstream treats a mononym as a
+    // settled identity, foldFirstNameClusters can corroborate it against a
+    // fuller name, and the held-back rule already refuses to build an email
+    // address from a name we cannot vouch for.
+    const _mono = !looksLikeRealName(parsed.name)
+      && String(parsed.name).trim().indexOf(' ') < 0
+      && MONONYM_RE.test(String(parsed.name).trim())
+      && !NOT_A_MONONYM.has(String(parsed.name).trim().toLowerCase());
+    if (!looksLikeRealName(parsed.name) && !_mono) {
       console.log(`DM/bizname [${companyName}]: "${parsed.name}" is not a usable full name — REJECTED`);
       return null;
     }
@@ -32513,7 +32700,7 @@ ${content}` }]
     // plausible-sounding first name from being invented around a real surname.
     const hay = content.toLowerCase();
     const tokens = normalizePersonName(parsed.name).toLowerCase().split(' ').filter(w => w.length > 1);
-    const allPresent = tokens.length >= 2 && tokens.every(w => hay.includes(w));
+    const allPresent = tokens.length >= (_mono ? 1 : 2) && tokens.every(w => hay.includes(w));
     if (!allPresent) {
       console.log(`DM/bizname [${companyName}]: "${parsed.name}" not present in their own site copy — REJECTED as unverified`);
       return null;
@@ -32528,12 +32715,32 @@ ${content}` }]
     for (let i = hay.indexOf(surname); i !== -1 && !nearRole; i = hay.indexOf(surname, i + 1)) {
       if (PERSON_ROLE_NEAR.test(content.slice(Math.max(0, i - 120), i + 120))) nearRole = true;
     }
-    if (!nearRole && parsed.confidence !== 'high') {
+    // ══ THE MODEL'S OWN CONFIDENCE IS NOT EVIDENCE ═══════════════════
+    // This read `&& parsed.confidence !== 'high'`, so the one defence against
+    // a place name or a brand was switched off by the model asserting it was
+    // sure. The corpus is the whole homepage, testimonials included, and the
+    // live evidence quotes on 2026-09-01 were customer reviews: "I've been a
+    // client of Billy Luke's for over 20 years" and "An excellent job by
+    // Cassidy Cook and his HBD team." A role word must sit near the surname,
+    // on every confidence, or we are trusting the writer about the writing.
+    if (!nearRole) {
       console.log(`DM/bizname [${companyName}]: "${parsed.name}" appears on the site but never in an owner/practitioner context — REJECTED (likely a place or brand name)`);
       return null;
     }
-    console.log(`DM/bizname [${companyName}]: \u2713 ${parsed.name} (${parsed.title || 'owner'}) — the business is named after them and their own site confirms it — "${String(parsed.evidence || '').slice(0, 70)}"`);
-    return { name: String(parsed.name).trim(), title: parsed.title || null, evidence: parsed.evidence || '', confidence: parsed.confidence || 'medium', source: 'business_name' };
+    // ══ THE EPONYMY CLAUSE WAS PRINTED WITHOUT THE EPONYMY TEST ══════
+    // This sentence asserted "the business is named after them" on every
+    // result, and the function never called isEponymousOwnerRule. Executed
+    // against the two live 2026-09-01 rows the rule is FALSE for both:
+    // Jerry Zapf is not Sure Thing Pest Control, and Cassidy Cook is not High
+    // Bridge Development. A claim with no test behind it, in the one line
+    // that explains where a decision-maker came from.
+    const _epo = isEponymousOwnerRule(parsed.name, companyName, domain);
+    const _title = bizTitleUsable(parsed.title) ? String(parsed.title).trim() : null;
+    if (parsed.title && !_title) {
+      console.log(`DM/bizname [${companyName}]: the model's title "${String(parsed.title).slice(0, 60)}" does not read as a job anybody holds — the NAME stands, the title is dropped.`);
+    }
+    console.log(`DM/bizname [${companyName}]: \u2713 ${parsed.name}${_title ? ` (${_title})` : ' (no title found)'}${_mono ? ' [FIRST NAME ONLY — ask for them by it]' : ''} — ${_epo ? 'the business carries their name and their own site confirms it' : 'their own site names them as the person who runs it'} — "${String(parsed.evidence || '').slice(0, 70)}"`);
+    return { name: String(parsed.name).trim(), title: _title, evidence: parsed.evidence || '', confidence: parsed.confidence || 'medium', source: 'business_name', mononym: _mono, eponymous: _epo };
   } catch (e) {
     console.log(`DM/bizname [${companyName}] failed:`, e.message);
     return null;
@@ -32669,6 +32876,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // non-Hunter source as sufficient evidence. Requiring more here would have been
   // a stricter bar than the one we actually send on, paid for in credits.
   let brainHit = null;
+  let bizHit = null;
   // EPONYMOUS OWNERSHIP — the business is named after the person. That is
   // definitional evidence of ownership, not an inference, and it is free.
   // Julie L Stante of "Julie L Stante, DDS" on juliestantedds.com was already
@@ -32735,8 +32943,31 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     // must be read off their OWN site at high confidence AND the business
     // must be named after them, which is two artifacts of the owner's own
     // making rather than a score. EPONYMOUS SETTLE BAR CHECK asserts both.
-    const eponymousConfident = ranked.sources.includes('own_website_brain')
-      && (brainHit && brainHit.confidence === 'high')
+    // ══ AND IT COULD NEVER FIRE ON THE SOURCE THAT PRODUCES IT ══════════
+    // §83 shipped a diagnostic instead of a fix here, because the cause could
+    // not be resolved from source. The 2026-09-01 run answered it, on Lukes
+    // Asphalt Paving, in one line:
+    //
+    //   eponymousRule=true eponymous=false brainConfidence=none
+    //
+    // The rule was TRUE and the settle was FALSE, because the settle demanded
+    // the candidate come from own_website_brain AND that the BRAIN return high
+    // confidence. A findOwnerViaBusinessName candidate carries source
+    // 'business_name' and sets no brainHit, so on the one source whose entire
+    // job is to spot an eponymous owner this was false by construction. The
+    // lead then bought the 8-credit wave plus a 12-credit negative web search,
+    // for a name we were already holding.
+    //
+    // The evidence floor is unchanged and is stated in the comment above: the
+    // name read off THEIR OWN SITE at high confidence, and the business named
+    // after them. Both sources read the same homepage — independentSourceCount
+    // says so itself by collapsing them into one — so which of the two found
+    // him was never part of the bar.
+    const _ownSiteHigh = (ranked.sources.includes('own_website_brain')
+        && brainHit && brainHit.confidence === 'high')
+      || (ranked.sources.includes('business_name')
+        && bizHit && bizHit.confidence === 'high');
+    const eponymousConfident = _ownSiteHigh
       && _isEponymousOwner(ranked.name, companyName, website);
     // ══ THE COMPANY'S OWN ROSTER SETTLES IT ═══════════════════════════════
     // A title read verbatim off the company's team page is the primary source.
@@ -32805,6 +33036,11 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     findOwnerViaBusinessName(companyName, homepageContent, (website || '').replace(/^https?:\/\//, '').split('/')[0], apiKey).catch(() => null),
   ]);
   brainHit = brain;   // referenced by settled() to check own-site confidence
+  // The SAME reason brainHit exists. findOwnerViaBusinessName reads the same
+  // homepage and returns the same shape, and the eponymous settle below could
+  // not see it — which is what made that settle unreachable on the one source
+  // that produces an eponymous candidate. See the note at eponymousConfident.
+  bizHit = bizName;
   for (const f of [brain, news, bizName]) if (f) found.push(f);
 
   let stagesRun = 1;
@@ -32935,7 +33171,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
 
   if (found.length === 0) {
     console.log(`DM [${companyName}]: NO decision-maker found in any source`);
-    return { name: null, title: null, score: 0, sources: [], corroborated: false, confidence: 'none' };
+    return { name: null, title: null, score: 0, sources: [], corroborated: false, confidence: 'none', stagesRun };
   }
 
   // Cluster and rank — same function the stage gate used, so the decision to stop
@@ -32943,7 +33179,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   const best = rankOwnerCandidates(found);
   if (!best) {
     console.log(`DM [${companyName}]: NO usable decision-maker after ranking`);
-    return { name: null, title: null, score: 0, sources: [], corroborated: false, confidence: 'none' };
+    return { name: null, title: null, score: 0, sources: [], corroborated: false, confidence: 'none', stagesRun };
   }
   const confidence = dmConfidenceFor(best.score);
 
@@ -33041,6 +33277,12 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     eponymousOwner: _eponymousOwner,
     canBuy: best.canBuy,
     settledBy: _settledBy,
+    // ══ HOW MANY LOOKUP STAGES ACTUALLY RAN ═══════════════════════════════
+    // Computed here since the ladder was written, printed to the log, and
+    // never returned — so the OWNER WAVE line, whose whole job is to measure
+    // the free-settle rate, had to GUESS from total lead spend. Stage 1 is
+    // free; anything above it is the paid wave.
+    stagesRun,
     evidenceGrade: _grade.grade,
     evidenceWhy: _grade.why,
     askAs: ownerAskLine(best.name, _grade.grade, _grade.why),
@@ -38884,7 +39126,16 @@ const resolvePlaceId = async ({ companyName, website, location, placesKey }) => 
     const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey,
-                 'X-Goog-FieldMask': 'places.id,places.displayName,places.websiteUri,places.userRatingCount,places.location' },
+                 // == THE SAME CALL, THE WHOLE RECORD =============================
+                 // Every ICP judgement this system owns reads a Places field:
+                 // the rating band, the trade review floor, the capacity class
+                 // and the affordability band. On a lead that arrives without a
+                 // listing all four are dark, and the owner's instruction was
+                 // plain: those leads must cost the same and produce the same
+                 // quality. Rating, phone, hours, address and the category cost
+                 // NOTHING extra here - it is one text search either way, and
+                 // userRatingCount already puts it on the Enterprise SKU.
+                 'X-Goog-FieldMask': 'places.id,places.displayName,places.websiteUri,places.userRatingCount,places.location,places.rating,places.nationalPhoneNumber,places.regularOpeningHours,places.formattedAddress,places.primaryTypeDisplayName' },
       body: JSON.stringify({ textQuery: query, includePureServiceAreaBusinesses: true }),
     }, 12000);
     const d = await r.json();
@@ -38897,6 +39148,16 @@ const resolvePlaceId = async ({ companyName, website, location, placesKey }) => 
     });
     if (!hit || !hit.id) return null;
     return { id: hit.id, name: (hit.displayName && hit.displayName.text) || '', reviews: hit.userRatingCount || 0,
+             // strictNum, not `|| null`: Number(null) is 0 and 0 is finite, and a
+             // laundered zero here is a 0.0-star business that never existed.
+             rating: (typeof hit.rating === 'number' && Number.isFinite(hit.rating)) ? hit.rating : null,
+             phone: hit.nationalPhoneNumber || '',
+             // The OBJECT, not the array: readPublishedHours reads
+             // .weekdayDescriptions off what it is handed.
+             hours: (hit.regularOpeningHours && Array.isArray(hit.regularOpeningHours.weekdayDescriptions)
+               && hit.regularOpeningHours.weekdayDescriptions.length) ? hit.regularOpeningHours : null,
+             address: hit.formattedAddress || '',
+             category: (hit.primaryTypeDisplayName && hit.primaryTypeDisplayName.text) || '',
              lat: (hit.location && Number.isFinite(Number(hit.location.latitude))) ? Number(hit.location.latitude) : null,
              lng: (hit.location && Number.isFinite(Number(hit.location.longitude))) ? Number(hit.location.longitude) : null };
   } catch { return null; }
@@ -57877,6 +58138,104 @@ app.listen(PORT, () => {
       }
       if (rosterNameTailOk('Master Plumber', null) !== false) _fails.push('a trade title reads as a person, so a correct title becomes a name');
       if (rosterNameTailOk('Jon Schilling', null) !== true) _fails.push('a real person in a title is not recognised, so no swap can ever fire');
+
+      // ══ 2026-09-01: A CTA BUTTON BECAME THE DECISION-MAKER ═══════════
+      // Performance Windows Raleigh shipped "Schedule My Consult" as the
+      // person to ask for, and it SETTLED stage 1 - standing down every paid
+      // source. CTA_VERB_RE was declared for exactly this in the round
+      // before and had ONE call site, inside titleHeadIs, which is only ever
+      // handed a TITLE. The name slot was on shape alone.
+      for (const _cta of ['Schedule My Consult', 'Become A Partner', 'Request Your Quote', 'Meet The Team']) {
+        if (looksLikeAPerson(_cta) !== false) _fails.push(`a nav label headed by an imperative verb still reads as a person: ${_cta}`);
+      }
+      // Both directions. A verb list widened until it eats real names is the
+      // more expensive failure, and these are live 2026-09-01 owners.
+      for (const _real of ['Shane Kaylor', 'Glenn Scherzinger', 'Cassidy Cook', 'Adam Hallauer', 'Billy Luke', 'Doug Driscoll']) {
+        if (looksLikeAPerson(_real) !== true) _fails.push(`a real owner's name is refused by the imperative rule: ${_real}`);
+      }
+      if (!_src.includes(_n('if (CTA_VERB_RE.test(t))', ' return false;'))) {
+        _fails.push('the imperative rule is no longer applied at the NAME slot, so a CTA button can be a person again');
+      }
+
+      // ══ AND THE COMPANY'S OWN NAME IS NOT A SECOND PERSON ════════════
+      // The Roof Detective, same run: "Shane Kaylor, Owner of The Roof
+      // Detective" - a correct row with a correct ownership title - had
+      // isOwner STRIPPED, because nameTailOfTitle read "Roof Detective" as a
+      // second human (it clears the name pattern, and BUSINESS_TAIL carries
+      // "roofing", not "detective"). The lead then printed "no owner-level
+      // title found" beside that very row.
+      const _shane = _owner(_row('<p>Shane Kaylor, Owner of The Roof Detective</p>', 'The Roof Detective'));
+      if (!_shane || _shane.name !== 'Shane Kaylor') {
+        _fails.push(`a correct owner row is still demoted because the company's own name reads as a second person: ${JSON.stringify(_shane)}`);
+      }
+      // Both directions: a title that really does carry a second person must
+      // still be split, or Round 102's own fix is gone.
+      const _jon = _row('<h3>Iron Sharpens Iron</h3><p>President &amp; CEO Jon Schilling</p>', 'JR & Co')
+        .find(r => r && r.name === 'Jon Schilling');
+      if (!_jon || _jon.isOwner !== true) _fails.push('a real person inside a title is no longer recovered, so the swap rule is dead');
+      if (tailIsCompanyWords('Carl', 'Carls Plumbing') !== false) {
+        _fails.push('a one-token eponymous owner is refused as company words, which deletes the exact case the mononym rule exists for');
+      }
+      if (!_src.includes(_n('if (tailIsCompanyWords(s,', ' companyName)) return false;'))) {
+        _fails.push('the company-words rule is no longer asked at the shared tail gate, so both readers lose it');
+      }
+
+      // ══ THE HINT MUST FIND A TITLE, NOT A WORD ═══════════════════════
+      // Three of the four ROSTER hints in that run were false, and each one
+      // told the reader the PARSER was broken about a page that names nobody.
+      for (const _prose of ['We hire locally, buy locally, and partner locally',
+        'you are a commercial building owner who needs a new roof',
+        'Signature compact edges. Owner supervised worksite. SERVICE Angie']) {
+        if (ownershipWordInCorpus(_prose)) _fails.push(`the roster hint still fires on a word in ordinary copy: ${_prose.slice(0, 40)}`);
+      }
+      for (const _lay of ['Jane Doe\nOwner\nSince 1998', 'Cagney McCormick, Attorney at Law', 'Some copy\nFounder & CEO\n']) {
+        if (!ownershipWordInCorpus(_lay)) _fails.push(`the roster hint no longer fires on a layout it exists for: ${_lay.slice(0, 40)}`);
+      }
+
+      // ══ A MODEL-AUTHORED TITLE IS PROSE UNTIL SOMETHING CHECKS IT ════
+      // "locally owned and operated owner" reached the CSV's title column.
+      if (bizTitleUsable('locally owned and operated owner') !== false) {
+        _fails.push('a marketing line still ships as the title a person holds');
+      }
+      for (const _t of ['Owner', 'Owner/Co-founder', 'President & CEO', 'Founder', 'Managing Partner', 'Owner, Master Plumber', 'Chief Executive Officer', 'Principal']) {
+        if (bizTitleUsable(_t) !== true) _fails.push(`a real title is refused by the model-title gate: ${_t}`);
+      }
+      // The eponymy CLAIM, executed. This sentence was printed on every
+      // result and the function never called the rule: neither Jerry Zapf /
+      // Sure Thing Pest Control nor Cassidy Cook / High Bridge Development
+      // is eponymous, and both said "the business is named after them".
+      if (isEponymousOwnerRule('Jerry Zapf', 'Sure Thing Pest Control', '') !== false
+        || isEponymousOwnerRule('Cassidy Cook', 'High Bridge Development', 'highbridgedev.com') !== false
+        || isEponymousOwnerRule('Billy Luke', 'Lukes Asphalt Paving', 'lukesasphaltpaving.com') !== true) {
+        _fails.push('the eponymy rule no longer separates a business named after its owner from one that is not');
+      }
+      // ══ FOUND BY FALSIFICATION: TWO MECHANISMS WITH NO GUARD ════════
+      // Reverting each of these left the boot GREEN, which is the whole
+      // reason the reverts are run one at a time.
+      //
+      // The headline that must not argue with the pairs beneath it. A row
+      // whose ownership claim was stripped downstream reads as a parser
+      // failure unless the line says what happened to it.
+      const _two = _row('<h3>Iron Sharpens Iron</h3><p>President &amp; CEO Jon Schilling</p>', 'JR & Co')
+        .some(r => r && r.twoPeople === true);
+      if (!_two) _fails.push('a title carrying a second person no longer marks the row, so the ROSTER line cannot explain the demotion it just made');
+      if (!_src.includes(_n('const _demoted = _roster.filter(r => r &&', ' r.twoPeople).length;'))
+        || !_src.includes(_n('of them named a SECOND person', ' inside the title'))) {
+        _fails.push('the ROSTER headline no longer says a row was demoted, so it prints "no owner-level title found" beside the owner it just found');
+      }
+      // And a first name on the BUSINESS-NAME path. MONONYM_RE reaches only
+      // parseTeamRoster and its two helpers, so this path hard-rejected a
+      // single token and lost the candidate: "Levi" REJECTED on the same
+      // lead where a CTA button won the row.
+      if (!_src.includes(_n('    const _mono = !looksLikeRealName(parsed.name)', '\n      && String(parsed.name).trim().indexOf(\' \') < 0'))
+        || !_src.includes(_n('if (!looksLikeRealName(parsed.name)', ' && !_mono) {'))) {
+        _fails.push('the business-name path hard-rejects a first name again, so a lead whose own site names only "Carl" loses the candidate entirely');
+      }
+      for (const _need of [_n('const _epo = isEponymousOwnerRule(parsed.name,', ' companyName, domain);'),
+        _n('const _title = bizTitleUsable(parsed.title)', ' ? String(parsed.title).trim() : null;'),
+        _n('if (!nearRole)', ' {')]) {
+        if (!_src.includes(_need)) _fails.push('the business-name owner path lost a call site: ' + _need.slice(0, 46));
+      }
     }
 
     if (_fails.length) {
@@ -58592,18 +58951,44 @@ app.listen(PORT, () => {
       // RED on a correct build on its first boot. A ruler that overshoots is
       // the recorded false-RED class and it costs exactly what a false green
       // costs.
-      const _epoAt = _src.indexOf('const eponymousConfident =');
-      const _epoEnd = _epoAt < 0 ? -1 : _src.indexOf(';', _epoAt);
-      const _epo = (_epoAt < 0 || _epoEnd < 0) ? '' : _src.slice(_epoAt, _epoEnd + 1);
-      if (!_epo) {
+      // The evidence floor spans TWO statements now: _ownSiteHigh says the
+      // name was read off their own site at high confidence, and the settle
+      // ANDs that with the eponymy rule. Both are sliced, because a needle
+      // aimed at one of them would go green on a build that deleted the other.
+      const _stmt = (decl) => {
+        const a = _src.indexOf(decl);
+        const b = a < 0 ? -1 : _src.indexOf(';', a);
+        return (a < 0 || b < 0) ? '' : _src.slice(a, b + 1);
+      };
+      const _own = _stmt('const _ownSiteHigh =');
+      const _epo = _stmt('const eponymousConfident =');
+      if (!_epo || !_own) {
         _fails.push('the eponymous settle could not be found at all, so nothing below is checking anything');
       } else {
-        if (_epo.indexOf(_n('rosterConfid', 'ence')) >= 0) {
+        if ((_epo + _own).indexOf(_n('rosterConfid', 'ence')) >= 0) {
           _fails.push('the eponymous settle has taken the roster confidence bar, which refuses an eponymous business whose own site names a person with no title - the shape this rule exists for');
         }
-        // And the two things it DOES require, so it cannot be loosened either.
-        for (const _need of [_n('own_website_', "brain'"), _n('_isEponymousOwner(ranked.name,', ' companyName, website)')]) {
-          if (_epo.indexOf(_need) < 0) _fails.push('the eponymous settle no longer requires both the own-site read and the business name, so it is settling the owner on one artifact instead of two');
+        // The two artifacts it requires, unchanged: the name read off THEIR
+        // OWN SITE at high confidence, and the business named after them.
+        if (_epo.indexOf(_n('_isEponymousOwner(ranked.name,', ' companyName, website)')) < 0) {
+          _fails.push('the eponymous settle no longer requires the business to be named after them, so it is settling on one artifact instead of two');
+        }
+        if (_epo.indexOf(_n('_ownSite', 'High')) < 0 || _own.indexOf(_n("confidence === 'hi", "gh'")) < 0) {
+          _fails.push('the eponymous settle no longer requires the own-site read at HIGH confidence, so it is settling on one artifact instead of two');
+        }
+        // ══ AND BOTH SOURCES THAT READ THEIR OWN SITE ═══════════════════
+        // findOwnerViaBrain and findOwnerViaBusinessName read the SAME
+        // homepage - independentSourceCount collapses them into one source
+        // for exactly that reason - and this settle used to name only the
+        // first. A business_name candidate sets no brainHit, so on the one
+        // source whose whole job is spotting an eponymous owner the settle
+        // was false by construction: Lukes Asphalt Paving, 2026-09-01,
+        // eponymousRule=true eponymous=false, then 8 credits of paid wave
+        // plus a 12-credit negative for a name we already held.
+        for (const _need of [_n('own_website_', "brain'"), _n('business_', "name'")]) {
+          if (_own.indexOf(_need) < 0) {
+            _fails.push('the own-site read no longer accepts both sources that read their homepage, so the eponymous settle is unreachable on the source that produces an eponymous candidate');
+          }
         }
       }
       // The rule itself, executed, in both directions.
@@ -58643,6 +59028,108 @@ app.listen(PORT, () => {
         "\r\n    (company && company.industry) || '', null);");
       if (!_src.includes(_cw.replace(/\r\n/g, '\n'))) {
         _fails.push('the contact read no longer computes a calling window from the hours it was sent, so the field is measured and never delivered');
+      }
+      // Noon. `open > 12 ? ... : ... + 'am'` had no case for 12, so a listing
+      // opening at midday told a rep to call "around 12am".
+      if (clockHour(12) !== '12pm' || clockHour(8) !== '8am' || clockHour(13) !== '1pm' || clockHour(null) !== '') {
+        _fails.push('the calling window still cannot say noon, so a midday opening reads as the middle of the night');
+      }
+
+      // ══ A LEAD WITH NO LISTING GETS THE SAME READ ═══════════════════════
+      // Six of twelve leads on 2026-09-01 printed "this lead carries no Google
+      // place id", and every ICP judgement we own reads a Places field. The
+      // recovery is one text search, already metered, already domain-gated.
+      for (const _need of [
+        _n('const _rec = await resolve', 'PlaceId({'),
+        _n('placesKey: process.env.GOOGLE_', 'PLACES_KEY,'),
+        _n('out.listingRecovered', ' = true;'),
+        _n('places.rating,places.nationalPhoneNumber,places.regularOpeningHours', ',places.formattedAddress,places.primaryTypeDisplayName'),
+      ]) {
+        if (!_src.includes(_need)) {
+          _fails.push('the listing recovery lost a call site, so a lead without a place id is scored on nothing again: ' + _need.trim().slice(0, 44));
+        }
+      }
+      // And the two signals that READ the listing must be set after it can be
+      // recovered. Setting them above the recovery read the pre-recovery
+      // values, so the recovered listing reached the score as nothing.
+      const _recAt = _src.indexOf(_n('const _rec = await resolve', 'PlaceId({'));
+      const _rvAt = _src.indexOf(_n("signals.reviewCount = (typeof (company && company.reviewCount)", " === 'number') ? company.reviewCount : null;"));
+      if (_recAt < 0 || _rvAt < 0 || _rvAt < _recAt) {
+        _fails.push('the review count and rating are read BEFORE the listing recovery, so a recovered listing reaches the score as nothing');
+      }
+
+      // ══ NO CITY, NO WORTHLESS PAID QUERY ═══════════════════════════════
+      // Four Peaks Roofing bought a licence search with a double space where
+      // the jurisdiction belongs. A licence board is a STATE thing.
+      for (const _need of [
+        // The CONDITION, not the sentence it prints. Reverting `if (!loc)`
+        // to `if (false)` leaves the message standing, and a needle aimed at
+        // the message went GREEN on that build.
+        _n('  if (!loc) {\n    console.log(`DM/license [${company', "Name}]: no city could be parsed"),
+        _n("    if (loc) queries.unshift(`\"${clean}\" ${loc} owner OR founder", ' OR "chief executive" OR president name`);'),
+      ]) {
+        if (!_src.includes(_need)) _fails.push('the paid owner wave no longer skips the queries a missing city makes worthless: ' + _need.trim().slice(0, 44));
+      }
+
+      // ══ THE OWNER WAVE LINE MUST READ THE FACT ═════════════════════════
+      // It read `spend > 2`, so a site that refused a plain fetch - four page
+      // reads - printed "the paid wave was BOUGHT" on a lead whose roster
+      // settled the owner for free. That is the one number that sets the
+      // Firecrawl plan.
+      if (!_src.includes(_n('const _paid = out.paidOwnerLookup !== false &&', ' Number(out.ownerStagesRun) > 1;'))) {
+        _fails.push('the OWNER WAVE line is inferring the paid wave from total lead spend again, which is false on any lead whose pages cost credits');
+      }
+      if (!_src.includes(_n('    stages', 'Run,'))) {
+        _fails.push('findDecisionMaker no longer returns how many stages ran, so nothing downstream can know whether the wave fired');
+      }
+
+      // ══ THE TheirStack LANE'S OWN EVIDENCE ═════════════════════════════
+      // A verified headcount is a MEASUREMENT; a team page is a floor.
+      const _verBig = FIND_ICP_TERMS.find(t => t.id === 'size').score({ verifiedEmployees: 40, teamCount: 2 });
+      const _floorSmall = FIND_ICP_TERMS.find(t => t.id === 'size').score({ teamCount: 2 });
+      if (!_verBig || !_floorSmall || !(_verBig.points > _floorSmall.points)) {
+        _fails.push('a verified headcount no longer beats the team-page floor, so the one lane with a real number is scored on a page count');
+      }
+      if (!/verified/.test((_verBig && _verBig.say) || '')) {
+        _fails.push('the size sentence no longer says the count was verified, so a rep cannot tell a measurement from an inference');
+      }
+      // A dated marketing posting we HOLD sets the signal; their careers page
+      // can corroborate it and can never overturn it.
+      for (const _need of [
+        _n('if (_mktRoles.', 'length) {'),
+        _n('signals.hiringMarketing', ' = true;'),
+        _n('      daysAgo: Number.isFinite(_age) && _age >= 0', ' ? Math.round(_age) : null,'),
+      ]) {
+        if (!_src.includes(_need)) {
+          _fails.push('a marketing posting we already hold no longer reaches the row, so the only clock this pipeline has is deleted at the door: ' + _need.trim().slice(0, 40));
+        }
+      }
+
+      // ══ THE FREE PAGE BUDGET IS EXERCISED ══════════════════════════════
+      // The existing picker check calls pickFindPages with NO budget, so
+      // free=false and only the small `want` path ever ran - the entire free
+      // read added in the round before was untested.
+      {
+        const _links = [];
+        for (let i = 0; i < 8; i++) _links.push(`https://x.com/about/team-${i}`);
+        for (let i = 0; i < 4; i++) _links.push(`https://x.com/contact-${i}`);
+        const _free = pickFindPages(_links, 'https://x.com/', FIND_MAX_FREE_PAGES);
+        const _paidPick = pickFindPages(_links, 'https://x.com/', FIND_MAX_PAGES);
+        if (!(_free.length > _paidPick.length)) {
+          _fails.push('the free page read is no longer wider than the paid one, so reading a site that costs nothing buys nothing');
+        }
+        if (_free.length > FIND_MAX_FREE_PAGES) _fails.push('the free page read has no ceiling');
+        if (new Set(_free.map(p => p.url)).size !== _free.length) {
+          _fails.push('the page picker returns the same URL twice, so a duplicate read is bought');
+        }
+        if (!_free.length || _free[0].intent !== 'team') {
+          _fails.push('the free read no longer opens on the team/about family, which is the page that names an owner and the reason the early exit can fire at all');
+        }
+      }
+      // The FIND READ line prints PATHS. Five distinct URLs printed as
+      // "home, team, team, contact, careers" read as a duplicate purchase.
+      if (!_src.includes(_n('const _paths = pages.map(', 'p => {'))) {
+        _fails.push('the FIND READ line prints intent labels again, so distinct pages read as the same page bought five times');
       }
     }
     if (_fails.length) {
@@ -74936,6 +75423,29 @@ const FIND_ICP_TERMS = [
   {
     id: 'size', max: 35, label: 'how many people they publish',
     score: (s) => {
+      // ══ A MEASUREMENT BEATS A PROXY ═══════════════════════════════════
+      // TheirStack returns a VERIFIED headcount free in the same call that
+      // found the lead, and it never reached this route at all - the request
+      // builder sent name, website, phone, location, industry, reviews,
+      // rating, hours, trade, tier, placeId and two discovery verdicts, and
+      // stopped. So on the one lane with a real number this term fell back to
+      // counting names on a team page, which is a FLOOR and not a headcount:
+      // a forty-person firm that publishes four reads as a four-person shop.
+      //
+      // §14 already settled the rule in the other direction - "a verified
+      // headcount under 200 overrules the name pattern entirely" - and this
+      // score never got it. The bands are the same bands; only the input is
+      // better, and the sentence says which one it used so a rep can tell a
+      // measurement from an inference.
+      const _ver = Number(s.verifiedEmployees);
+      if (Number.isFinite(_ver) && _ver >= 1) {
+        if (_ver >= 201) return { points: 5,  say: `${_ver} employees, verified - larger than the businesses we sell to` };
+        if (_ver >= 121) return { points: 5,  say: `${_ver} employees, verified - larger than the businesses we sell to` };
+        if (_ver >= 41)  return { points: 25, say: `${_ver} employees, verified - upper end of the range` };
+        if (_ver >= 10)  return { points: 35, say: `${_ver} employees, verified - squarely the size we sell to` };
+        if (_ver >= 3)   return { points: 30, say: `${_ver} employees, verified - a real crew, right in range` };
+        return { points: 12, say: `${_ver} employee, verified - may be too small to carry a retainer` };
+      }
       const n = s.teamCount;
       if (typeof n !== 'number' || !Number.isFinite(n) || n < 1) return null;
       // Two or more corporate titles is a deep org chart, whatever the page
@@ -75173,7 +75683,8 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   //
   // Both values already existed on the lead. Neither was sent.
   const apifyToken = (keys && keys.apifyToken) || '';
-  const placeId = String((company && company.placeId) || '').trim();
+  // let, not const: a lead that arrives without one can RECOVER it below.
+  let placeId = String((company && company.placeId) || '').trim();
   const notes = [];
 
   const phoneDigits = String((company && company.phone) || '').replace(/\D/g, '');
@@ -75297,7 +75808,23 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       }
     }
     if (_dupPages) out.duplicatePages = _dupPages;
-    console.log(`\u{1F50E} FIND READ [${name}]: ${pages.length} page(s) via ${out.readVia} — ${pages.map(p => p.intent).join(', ')}. ${links.length} same-host link(s) came off their own navigation, so no sitemap call was bought.`);
+    // ══ A LABEL THAT HIDES WHAT WAS BOUGHT ═══════════════════════════════
+    // This printed p.intent, so five distinct URLs came out as "home, team,
+    // team, contact, careers" and read as a duplicate purchase. They ARE
+    // different pages - `taken` sits outside the intent loop in pickFindPages,
+    // and the fingerprint dedupe runs on top of it - and the real paths were
+    // already on out.pagesRead and simply not printed.
+    //
+    // §24 recorded this exact class: five leads logged "booking, page, page,
+    // page, page" and the owner read a run that HAD rendered every page as
+    // "it's clearly not taking pics of the other important pages". A label
+    // that hides what was bought reads exactly like the thing not having been
+    // bought.
+    const _paths = pages.map(p => {
+      try { const u = new URL(p.url); const _p = u.pathname === '/' ? '/' : u.pathname.replace(/\/$/, ''); return _p + (p.intent ? ` (${p.intent})` : ''); }
+      catch { return String((p && (p.url || p.intent)) || '?'); }
+    });
+    console.log(`\u{1F50E} FIND READ [${name}]: ${pages.length} page(s) via ${out.readVia} — ${_paths.join(', ')}. ${links.length} same-host link(s) came off their own navigation, so no sitemap call was bought.`);
   }
   out.pagesRead = pages.map(p => ({ url: p.url, intent: p.intent, chars: (p.text || '').length }));
 
@@ -75351,8 +75878,48 @@ const runFindContactRead = async (company, keys, opts = {}) => {
 
   // ── THE THREE SIGNALS ────────────────────────────────────────────────────
   const signals = readFindIcpSignals(pages);
-  signals.reviewCount = (typeof (company && company.reviewCount) === 'number') ? company.reviewCount : null;
-  signals.rating = (typeof (company && company.rating) === 'number') ? company.rating : null;
+  // ══ THE POSTING THAT MADE THIS A LEAD ═════════════════════════════════
+  // A TheirStack lead exists BECAUSE it published a marketing role, with a
+  // date on it - the only clock this pipeline has, and the thing §1 and §34
+  // call the largest gap in it. None of that reached this route, so
+  // readFindIcpSignals re-derived the answer from their careers page - and a
+  // role posted on Indeed or LinkedIn and not on their own site comes back
+  // NO. Every row of the 2026-09-01 CSV said 'no' in that column.
+  //
+  // A posting in our hand is evidence; an absence on their site is not
+  // evidence against it - the same did-we-look rule every absence claim in
+  // this file carries. So it SETS the signal and the careers read can only
+  // corroborate. Their own page still wins on the TITLES when it has them,
+  // because those are read verbatim.
+  const _mktRoles = Array.isArray(company && company.marketingRoles)
+    ? company.marketingRoles.map(r => String(r || '').trim()).filter(Boolean) : [];
+  if (_mktRoles.length) {
+    signals.hiringMarketing = true;
+    signals.hiringAny = true;
+    if (!Array.isArray(signals.hiringMarketingTitles) || !signals.hiringMarketingTitles.length) {
+      signals.hiringMarketingTitles = _mktRoles.slice(0, 4);
+    }
+    // Days since the newest posting, measured by the lane that found it. A
+    // posting with no usable date carries none rather than inventing recency,
+    // which is the rule searchTheirStack already states at signalFreshness.
+    const _age = Number(company && company.signalAgeDays);
+    out.hiring = {
+      roles: _mktRoles.slice(0, 4),
+      daysAgo: Number.isFinite(_age) && _age >= 0 ? Math.round(_age) : null,
+      postingUrl: String((company && company.jobPostingUrl) || ''),
+    };
+    console.log(`\u{1F4C5} HIRING SIGNAL [${name}]: they published ${_mktRoles.length} marketing role(s) - ${_mktRoles.slice(0, 2).join(', ')}${out.hiring.daysAgo === null ? ' (no usable date on the posting, so no clock is claimed)' : `, newest ${out.hiring.daysAgo} day(s) ago`}. That is the reason this lead exists and it now reaches the row.`);
+  }
+  // A verified headcount from the lane that found them. A measurement, not the
+  // team-page floor - see the size term.
+  {
+    const _ve = Number(company && company.verifiedEmployees);
+    signals.verifiedEmployees = Number.isFinite(_ve) && _ve >= 1 ? Math.round(_ve) : null;
+  }
+  // reviewCount and rating are set BELOW, after the listing recovery, because
+  // on a lead that arrives without a place id they do not exist yet. Setting
+  // them here read the pre-recovery values and the recovered listing reached
+  // the score as nothing - computed-but-not-passed, inside the fix for it.
   out.signals = signals;
   // The SCORE is computed at the bottom of this function, not here. The chain
   // read below depends on `signals` existing at this point and is deliberately
@@ -75389,6 +75956,57 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   }
 
 
+  // ══ A LEAD WITH NO GOOGLE LISTING GETS THE SAME READ ══════════════════════
+  // Vin, 2026-09-01: "i have a bunch of leads in there that are not google
+  // places leads but guess what i dont care i want them to cost the same to
+  // read while ahving the same quality as places."
+  //
+  // Six of the twelve leads in that run printed "this lead carries no Google
+  // place id", and every ICP judgement this system owns reads a Places field:
+  // the rating band, the trade review floor, the capacity class, the
+  // affordability band. All four were dark on those six, and so was the free
+  // review-reply owner source, which is why FOUR of the five paid owner waves
+  // in that run were bought on leads with no place id.
+  //
+  // So it costs LESS, not more. One Places text search replaces a ~10-credit
+  // Firecrawl wave often enough to pay for itself, and Google's free Enterprise
+  // allowance is 1,000 calls a month against roughly 550 recoveries at this
+  // volume. resolvePlaceId was already written, is already metered as
+  // place-id-recovery, and its match bar is DOMAIN PROOF - the site Google
+  // lists must be the site we hold - so it cannot resolve the wrong business.
+  //
+  // It sits AFTER the chain refusal: a lead we have already decided not to
+  // keep must not buy anything, and it sits BEFORE the owner block because the
+  // place id is what opens stage 1.5.
+  if (!placeId && !out.notIcp && website && process.env.GOOGLE_PLACES_KEY) {
+    const _rec = await resolvePlaceId({
+      companyName: name, website, location: (company && company.location) || '',
+      placesKey: process.env.GOOGLE_PLACES_KEY,
+    }).catch(() => null);
+    if (_rec && _rec.id) {
+      placeId = _rec.id;
+      out.listingRecovered = true;
+      // Only ever FILL a gap. A value the lead already carried is the one
+      // discovery measured and is not overwritten by a second read of the
+      // same record.
+      if (typeof company.reviewCount !== 'number' && Number.isFinite(Number(_rec.reviews))) company.reviewCount = Number(_rec.reviews);
+      if (typeof company.rating !== 'number' && typeof _rec.rating === 'number') company.rating = _rec.rating;
+      if (!company.publishedHours && _rec.hours) company.publishedHours = readPublishedHours(_rec.hours);
+      if (!company.industry && _rec.category) company.industry = _rec.category;
+      if (!company.location && _rec.address) company.location = _rec.address;
+      if (!out.phone && _rec.phone) { out.phone = _rec.phone; out.phoneSource = 'their Google listing'; }
+      console.log(`\u{1F4CD} LISTING RECOVERED [${name}]: matched their Google listing by DOMAIN, one Places text search. The rating band, the review floor, the affordability band and the free review-reply owner source can all run on this lead now.`);
+    } else {
+      out.listingRecovered = false;
+      notes.push('no Google listing could be matched to their domain, so the rating, review-volume and affordability judgements have nothing to read on this row');
+      console.log(`\u{1F4CD} LISTING [${name}]: no Google listing matched their domain. The ICP terms that read a listing leave the denominator rather than scoring zero.`);
+    }
+  }
+
+  // Now that a missing listing has had its one chance to be recovered.
+  signals.reviewCount = (typeof (company && company.reviewCount) === 'number') ? company.reviewCount : null;
+  signals.rating = (typeof (company && company.rating) === 'number') ? company.rating : null;
+
   // ── THE OWNER ────────────────────────────────────────────────────────────
   // findDecisionMaker in callOnly mode: stage 1 only, so the paid web-search and
   // licence wave is never bought. A contact list is dialled and emailed by a
@@ -75401,6 +76019,9 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   const interior = pages.slice(1).map(p => ({ url: p.url, text: p.text, intent: p.intent }));
   const paidOwner = opts.paidOwnerLookup !== false;
   out.paidOwnerLookup = paidOwner;
+  // null means the resolver never ran on this lead, which is a different thing
+  // from "it ran and bought nothing". Undefined would read as the second.
+  out.ownerStagesRun = null;
   if (apiKey && name && !out.notIcp) {
     try {
       const dm = await findDecisionMaker({
@@ -75424,6 +76045,11 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         apifyToken, callOnly: !paidOwner,
         preFetchedPages: interior,
       });
+      // The FACT, not a threshold over total spend. See the OWNER WAVE line.
+      // It is recorded whether or not a name came back, because "the wave was
+      // bought and found nobody" is the most expensive outcome there is and it
+      // is exactly the one an inference from spend cannot see.
+      out.ownerStagesRun = (dm && Number.isFinite(Number(dm.stagesRun))) ? Number(dm.stagesRun) : null;
       if (dm && dm.name) {
         out.owner = {
           name: dm.name, title: dm.title || '', confidence: dm.confidence || '',
@@ -75535,6 +76161,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     tier: (company && company.tier) || null,
     reviewCount: typeof signals.reviewCount === 'number' ? signals.reviewCount : null,
     teamCount: typeof signals.teamCount === 'number' ? signals.teamCount : null,
+    verifiedEmployees: signals.verifiedEmployees,
     hours: (company && company.publishedHours) || null,
   });
   signals.affordBand = _aff.band;
@@ -75595,14 +76222,26 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     // pair total lives inside findOwnerViaBrain and never returns. The source
     // list is on the result and it says which stage settled it, which is the
     // thing the stand-down decision actually needs.
-    const _paid = out.paidOwnerLookup !== false && (out.spend.firecrawl || 0) > 2;
+    // ══ WHETHER THE WAVE FIRED IS A FACT, NOT A SPEND THRESHOLD ═════════
+    // This read `(out.spend.firecrawl || 0) > 2`, and the comment above it
+    // admitted it did not hold the fact. Total lead spend is not the wave: a
+    // site that refuses a plain fetch costs four Firecrawl page reads, so a
+    // lead whose roster settled the owner for FREE printed "the paid wave was
+    // BOUGHT" — in the one line whose entire job is to measure the free-settle
+    // rate, which is the number that sets the monthly Firecrawl plan.
+    //
+    // stagesRun has been computed inside findDecisionMaker since the ladder was
+    // written and was never returned. Stage 1 is free; anything above it is the
+    // wave. A lead where the resolver did not run at all (no key, refused as
+    // out of ICP) reports null and is not counted either way.
+    const _paid = out.paidOwnerLookup !== false && Number(out.ownerStagesRun) > 1;
     const _src = (out.owner && Array.isArray(out.owner.sources)) ? out.owner.sources : [];
     const _got = !!(out.owner && out.owner.name && out.owner.canBuy === true);
     const _free = _src.length && _src.every(s => /own_website|business_name|hunter/.test(String(s)));
     console.log(`\u{1F4B8} OWNER WAVE [${name}]: the paid wave was ${_paid ? 'BOUGHT' : 'NOT bought'}`
       + ` \u2014 outcome: ${_got ? 'a buyer we can name' : (out.owner && out.owner.name) ? 'a name BELOW the buying floor' : 'nobody at all'}`
       + `${_src.length ? `, from ${_src.join('+')}${_free ? ' (all free sources)' : ''}` : ''}`
-      + `, ${out.spend.firecrawl} credit(s). Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan.`);
+      + `${out.ownerStagesRun === null ? ' (the resolver did not run on this lead)' : ''}, ${out.spend.firecrawl} credit(s) on the lead. Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan.`);
   }
   console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) || 'none'} | phone ${out.phone || 'none'} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
   return out;
