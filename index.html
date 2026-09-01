@@ -1305,7 +1305,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260921;
+const CLIENT_CONTRACT = 20260922;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5566,6 +5566,11 @@ const contactFieldsFrom = (data) => {
     // size half of the score the row displays, and they stopped at the server.
     contactExecTitles: Array.isArray(sig.execTitles) ? sig.execTitles : [],
     contactReadVia: d.readVia || '',
+    // The one stop this read can raise: their own pages never name the
+    // business. Carried explicitly rather than left inside notes, because the
+    // notes line only renders when there is no owner and no email, and this is
+    // exactly the case where both exist and may belong to another company.
+    contactNameNotOnSite: d.nameNotOnSite === true,
     contactNotes: Array.isArray(d.notes) ? d.notes : [],
     contactSpendFc: (d.spend && typeof d.spend.firecrawl === 'number') ? d.spend.firecrawl : 0,
     contactSpendUsd: (d.spend && typeof d.spend.anthropicUsd === 'number') ? d.spend.anthropicUsd : 0,
@@ -5801,7 +5806,17 @@ const OWNER_SOURCE_PLAIN = {
   roster: 'their own team page',
 };
 const findContactRows = (companies) => {
-  const list = (Array.isArray(companies) ? companies : []).filter(hasContactData);
+  // contactTabOf, not just hasContactData. Daniel Bortnick, MD was DROPPED as a
+  // branch of a chain on the 2026-09-01 run and his row went into the exported
+  // CSV anyway, ICP 45, because hasContactData only asks whether there is
+  // something to dial and a Google listing supplies the phone.
+  //
+  // It belongs HERE rather than at the call site: the CSV and the Google Sheet
+  // both come through this function, and a filter applied at one of them is the
+  // two-hand-kept-copies disease with the copy that rots being whichever
+  // destination is added next.
+  const list = (Array.isArray(companies) ? companies : [])
+    .filter(c => contactTabOf(c) === 'read' && hasContactData(c));
   const rows = list.map(c => ({
     icp: (typeof c.contactIcp === 'number') ? c.contactIcp : null,
     icpWhy: c.contactIcpWhy || '',
@@ -7723,6 +7738,18 @@ function FindView({
           // above is "not checked" and the reason is the useful thing on the row.
           (co.contactNotes && co.contactNotes.length && !co.contactOwner && !co.contactEmail)
             ? React.createElement('div', { style:{ fontSize:11.5, color:'var(--m2)', marginTop:3 } }, co.contactNotes[0])
+            : null,
+          // THE ONE STOP ON THIS CARD. The server flags a lead whose pages never
+          // name the business - quinnplasticsurgery.com served Surek Plastic
+          // Surgery's content on the 2026-09-01 run and we read Chris Surek as
+          // Quinn's owner. The note above cannot carry it: that line renders
+          // only when there is NO owner and NO email, and this is precisely the
+          // case where both exist and both may belong to somebody else.
+          //
+          // Red, because red marks a stop on this screen and nothing else.
+          co.contactNameNotOnSite === true
+            ? React.createElement('div', { style:{ fontSize:11.5, color:'#fca5a5', marginTop:3 } },
+                'The pages we read never name this business - the owner and address may belong to another company. Check before dialling.')
             : null));
     })(),
     (() => {
@@ -7958,7 +7985,10 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       const _cRunSet = _cShown.filter(c => c && _runNames.has(c.name));
       const _scoped = (contactScope === 'run' && _cRunSet.length) ? _cRunSet : _cShown;
       const _scopeWord = _scoped === _cRunSet ? 'in this run' : 'in the queue';
-      const _cRead = _scoped.filter(c => c && c.contactReadOk === true);
+      // contactTabOf, matching the export and the tab row. The raw flag is true
+      // on a lead the server RULED OUT - a chain drop is read and answered - so
+      // counting it here made the tally and the file describe different sets.
+      const _cRead = _scoped.filter(c => contactTabOf(c) === 'read');
       const _cWithEmail = _scoped.filter(c => c && c.contactEmail).length;
       // A lead the server ruled out is not unread. It is answered, and asking
       // again cannot change the answer.
@@ -7980,7 +8010,18 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       // The two can still legitimately differ - a lead can be read and carry
       // no owner, no address and no number - so the button says what it is
       // counting rather than leaving the gap to be guessed at.
-      const _cExportable = _scoped.filter(hasContactData);
+      // ══ AND A LEAD THE SERVER RULED OUT IS NOT EXPORTABLE ═══════════════
+      // Live on the 2026-09-01 run: Daniel Bortnick, MD was DROPPED as a branch
+      // of a chain ("their own site publishes a per-city location page under a
+      // state"), and his row is in the exported CSV with a phone number and an
+      // ICP score of 45. hasContactData only asks whether there is an email, an
+      // owner or a phone, and a Google listing supplies the phone.
+      //
+      // Mine, from the round that added the tabs: I filtered the rendered LIST
+      // by contactTabOf and left the export reading the whole pool. So the two
+      // now share the one membership rule - a chain drop is in the Ruled out
+      // tab and it is in no file.
+      const _cExportable = _scoped.filter(c => contactTabOf(c) === 'read' && hasContactData(c));
       const _cReadNoContact = _cRead.length - _cExportable.length;
       const _running = !!(contactRun && !contactRun.finishedAt && contactRun.done < contactRun.total);
       const _pct = contactRun && contactRun.total ? Math.round((contactRun.done / contactRun.total) * 100) : 0;
@@ -8243,7 +8284,8 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
                       contactIcp: null, contactIcpMeasured: null, contactIcpOf: null, contactIcpWhy: '', contactIcpTerms: [], contactOwner: '', contactOwnerTitle: '',
                       contactEmail: '', contactEmailTier: null, contactEmailLabel: '', contactPhone: '',
                       contactAdsCode: null, contactTeamCount: null, contactHiring: null, contactHiringMarketing: null,
-                      contactHiringTitles: [], contactReadVia: '', contactNotes: [] })
+                      contactHiringTitles: [], contactReadVia: '', contactNotes: [],
+                      contactNameNotOnSite: false })
                   : x);
                 saveDiscovered(cleared); setDiscovered(cleared); setContactErr('');
               },

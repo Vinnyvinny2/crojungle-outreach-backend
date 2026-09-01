@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260921;
+const CONTRACT_VERSION = 20260922;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -11022,6 +11022,18 @@ const looksLikeRealName = (n) => {
   // Reject if EITHER name token is itself a job word
   const jobWord = /^(team|leadership|management|company|owner|founder|president|ceo|coo|cfo|director|manager|staff|group|service|services|about|contact|contacts|home|core|welcome|our|us|office|offices|principal|principals|executive|executives|registered|agent|agents|corporation|corp|inc|llc|business|businesses|entity|filing|filings|records|record|department|division|mr|mrs|ms|dr)$/i;
   if (parts.some(p => jobWord.test(p))) return false;
+  // == A BUSINESS TAIL IS NOT A SURNAME ===================================
+  // Live on the 2026-09-01 run: quinnplasticsurgery.com serves SUREK Plastic
+  // Surgery's content, and the roster read "Surek Plastic Surgery" as a person
+  // with the title "Board-Certified Plastic Surgeon". "Firearms Trusts" came
+  // back a person on the same run.
+  //
+  // Only the LAST token is tested, because that is the surname slot, and the
+  // list is deliberately narrow: "Law", "Bell" and "Steele" are real surnames
+  // and are absent on purpose. What is here are nouns that end a FIRM's name
+  // and end nobody's: a person is not called Jane Surgery.
+  const BUSINESS_TAIL = /^(?:surgery|surgeries|dentistry|orthodontics|construction|contracting|remodeling|remodelling|plumbing|roofing|landscaping|paving|insurance|realty|consulting|accounting|associates|trusts|solutions|systems|industries|enterprises|holdings|partners|specialists|clinic|clinics|center|centers|centre|hospital|practice|firm|agency|studio|salon|spa|supply|rentals|leasing)$/i;
+  if (BUSINESS_TAIL.test(parts[parts.length - 1])) return false;
   return true;
 };
 
@@ -11841,10 +11853,45 @@ const PROFESSIONAL_OWNER_RE = /\b(?:shareholder|managing\s+(?:attorney|sharehold
 // Info" as a person, the partner-program modifiers, the followers list - applies
 // to the professional words for free. A second copy of this function is the
 // two-hand-kept-copies disease, and the copy that rots is always the newer one.
+// == A CALL TO ACTION IS NOT A JOB SOMEBODY HOLDS ==========================
+// Live on the 2026-09-01 contact run, both of them shipped to the CSV as the
+// person to ask for:
+//   THE ALLEN CPA FIRM  - "Corporate Responsibility" is "Meet the President"
+//   Jim Reynolds Asphalt - "Contact Us Feedback" is "Become a Partner"
+// and Allen CPA SETTLED on it, standing down every paid source, so the wrong
+// answer also looked like the cheap one.
+//
+// Executed: ownershipIsHead("Meet the President") was true at authority 90.
+// This is the "Partner Track" class one grammatical step sideways. That fix
+// asks what FOLLOWS the ownership word; here the word is the OBJECT of an
+// imperative verb, and everything to its right is clean.
+//
+// Declared rather than inferred, because there is no grammar in this process
+// that separates an imperative from a participle. No real job title opens with
+// one of these, and the participles that DO open real titles - Managing,
+// Acting, Interim, Founding - are deliberately absent, so "Managing Partner"
+// and "Acting President" are untouched.
+const CTA_VERB_RE = /^\s*(?:meet|become|becoming|join|contact|see|find|ask|talk|speak|learn|discover|explore|request|schedule|book|call|email|message|hire|choose|select|view|read|watch|get|start|apply|submit|download|subscribe|follow|visit|browse|shop|order|buy|try|click|tap|register|sign|enter|search|compare|calculate|estimate|report|refer|nominate|donate|give|support|partner\s+with|work\s+with|connect\s+with)\b/i;
 const titleHeadIs = (title, pattern) => {
   const s = String(title || '').trim();
+  // The head is the VERB, and the ownership or professional word is whatever it
+  // points at. Checked before the pattern runs at all, because the phrase is
+  // disqualified by its own opening whatever noun happens to sit inside it.
+  if (CTA_VERB_RE.test(s)) return false;
   const m = pattern.exec(s);
   if (!m) return false;
+  // == THE WORD MUST NOT BE THE OBJECT OF A PREPOSITION ==================
+  // "Power Of Attorney" is a legal instrument and it paired a junk name behind
+  // it on the 2026-09-01 run. The head rule below asks what FOLLOWS the match,
+  // and after "attorney" there is nothing at all, so it read as the head.
+  //
+  // The bar is deliberately narrow, because "Of Counsel" is a REAL law-firm
+  // title and a bare preposition test would delete it. What separates them is
+  // whether anything precedes the preposition: "Of Counsel" opens on it,
+  // "Power Of Attorney" has a noun in front. So the object of a preposition is
+  // only refused when the preposition itself is not the start of the phrase.
+  const _before = s.slice(0, m.index);
+  if (/\S+\s+\b(?:of|for|in|on|at|to|with|about|from|under|behind)\s*$/i.test(_before)) return false;
   const after = s.slice(m.index + m[0].length);
   // ══ A POSSESSIVE IS ABOUT THE OWNER, NOT A TITLE ANYONE HOLDS ══════
   // Live on the 2026-08-28 Find run: America's Home Place shipped to the
@@ -11874,6 +11921,16 @@ const titleHeadIs = (title, pattern) => {
   return TITLE_HEAD_FOLLOWERS.test(after.trim());
 };
 const ownershipIsHead = (title) => titleHeadIs(title, OWNER_TITLE_RE);
+// == AND THE PRACTITIONER WORDS GO THROUGH IT TOO ========================
+// My own regression, shipped 2026-09-01. PRACTITIONER_TITLE_RE was added as a
+// bare .test() with no head rule, so on Bradley Hull IV's site the roster read
+//   Video Center (An Ohio Attorney For)
+//   Services Across Ohio (Compassionate Attorney)
+//   Firearms Trusts (Power Of Attorney)
+// - three junk names paired behind a legal INSTRUMENT and two prose fragments.
+// Before that round "attorney" returned null and none of them paired at all, so
+// widening the vocabulary without the head rule made the parser noisier than it
+// had been. One rule, three wrappers, no second copy.
 const professionalOwnerIsHead = (title) => titleHeadIs(title, PROFESSIONAL_OWNER_RE);
 // Titles that are senior but are NOT the owner. Getting this list wrong is how
 // a COO becomes the decision-maker, so it is checked BEFORE the owner pattern.
@@ -11972,7 +12029,10 @@ const CREDENTIAL_RE = /^(?:(?:[A-Za-z]\.){2,6}|(?:D\.?D\.?S|D\.?M\.?D|D\.?V\.?M|
 // always owns it, but a group employs many, so corroboration decides the rest.
 // That is exactly this rule, and the gap was only ever that the parser refused
 // to see the title at all.
-const PRACTITIONER_TITLE_RE = /\b(?:attorney|lawyer|counsel|dentist|orthodontist|periodontist|endodontist|prosthodontist|surgeon|physician|dermatologist|chiropractor|veterinarian|optometrist|ophthalmologist|podiatrist|audiologist|accountant|enrolled\s+agent|nurse\s+practitioner|physician\s+assistant|doctor\s+of\s+[a-z]+)\b/i;
+const PRACTITIONER_TITLE_RE = /\b(?:attorney|lawyer|counsel|dentist|orthodontist|periodontist|endodontist|prosthodontist|surgeon|physician|dermatologist|chiropractor|veterinarian|optometrist|ophthalmologist|podiatrist|audiologist|accountant|enrolled\s+agent|nurse\s+practitioner|physician\s+assistant|doctor\s+of\s+[a-z]+(?:\s+[a-z]+)?)\b/i;
+// The SAME head rule the ownership words go through. See the note at
+// ownershipIsHead: a bare .test() made "Power Of Attorney" a job title.
+const practitionerIsHead = (title) => titleHeadIs(title, PRACTITIONER_TITLE_RE);
 // Named because they sit in the same title slot and are NOT practitioners.
 // Checked first: 'Dental Hygienist' and 'Legal Assistant' carry no practitioner
 // word, but 'Surgical Coordinator' at an oral surgery practice can, and filing
@@ -12210,7 +12270,10 @@ const parseTeamRoster = (html, companyName = '') => {
     // policy this needs, which is that DDS, DMD, DVM, MD, CPA and Esq are
     // unambiguous bare while DO, DC, OD and PA are ordinary English words or
     // places and are only ever read in their dotted form.
-    if (PRACTITIONER_TITLE_RE.test(t) || CREDENTIAL_RE.test(t.trim().replace(/[,;]+$/, ''))) return 'practitioner';
+    // practitionerIsHead, not a bare test: "Power Of Attorney" is a legal
+    // instrument and "An Ohio Attorney For" is a sentence fragment, and both
+    // paired a junk name behind them on the 2026-09-01 run.
+    if (practitionerIsHead(t) || CREDENTIAL_RE.test(t.trim().replace(/[,;]+$/, ''))) return 'practitioner';
     if (NON_OWNER_TITLE_RE.test(t) || junior) return 'staff';
     return null;
   };
@@ -57184,6 +57247,64 @@ app.listen(PORT, () => {
       const _got = !_r.length ? 'none' : (_r[0].isOwner ? 'owner' : 'paired');
       if (_got !== _want) _fails.push(`the roster reads "${_t}" as ${_got}, and it is ${_want}`);
     }
+    // == SECTION SIX: THE FOUR PAIRS THE 2026-09-01 RUN PUT IN A CSV ======
+    // Every string here is verbatim from that run's own log. Two of them
+    // reached the exported file as the person to ask for, and one of them
+    // SETTLED the decision-maker, standing down every paid source - so the
+    // wrong answer also looked like the cheap one.
+    for (const [_txt, _co, _why] of [
+      ['Contact Us Feedback\nBecome a Partner\n', 'Jim Reynolds Asphalt Contractor, Inc.',
+       'an ownership word as the object of an imperative verb'],
+      ['Corporate Responsibility\nMeet the President\n', 'THE ALLEN CPA FIRM PLLC',
+       'a call to action that SETTLED the owner and skipped the paid wave'],
+      ['Firearms Trusts\nPower Of Attorney\n', 'Bradley Hull IV Esquire LLC',
+       'a legal instrument read as a job title'],
+      ['Services Across Ohio\nAn Ohio Attorney For\n', 'Bradley Hull IV Esquire LLC',
+       'a sentence fragment read as a job title'],
+    ]) {
+      const _r = parseTeamRoster('Our Team\n' + _txt, _co);
+      if (_r.length) _fails.push(`the roster still pairs "${_r[0].name}" with "${_r[0].title}" at ${_co} - ${_why}`);
+    }
+    // The direction that costs leads if it is wrong. "Of Counsel" is the one
+    // that proves the preposition rule is narrow: it OPENS on the preposition,
+    // where "Power Of Attorney" has a noun in front of it.
+    for (const _t of ['Owner', 'President', 'Founder & CEO', 'Managing Partner', 'Acting President',
+                      'Shareholder', 'Managing Attorney', 'Owner/Operator', 'Partner, Litigation',
+                      'Of Counsel', 'Attorney at Law', 'Doctor of Dental Surgery', 'Oral Surgeon']) {
+      if (!parseTeamRoster('Our Team\nJane Smith\n' + _t + '\n', 'Acme Legal Group').length) {
+        _fails.push(`"${_t}" is no longer read as a title at all, so the person above it is thrown away - the call-to-action rule has widened onto real roster lines`);
+      }
+    }
+    // ONE head rule, three wrappers. A bare .test() on the practitioner words
+    // is what made "Power Of Attorney" a job title in the first place.
+    if (!_src.includes(_n('const practitionerIsHead = (title) => titleHeadIs(title,', ' PRACTITIONER_TITLE_RE);'))
+      || !_src.includes(_n('if (practitionerIsHead(t) ||', ' CREDENTIAL_RE.test('))) {
+      _fails.push('the practitioner words no longer go through the shared head rule, so a preposition object and a call to action read as job titles again');
+    }
+    // == A BUSINESS TAIL IS NOT A SURNAME =================================
+    // "Surek Plastic Surgery" and "Firearms Trusts" both came back people on
+    // the 2026-09-01 run. Only the LAST token is tested, and the list is
+    // narrow on purpose - "Law" and "Steele" are real surnames and are
+    // deliberately absent, so Jude Law survives.
+    for (const _n of ['Surek Plastic Surgery', 'Firearms Trusts', 'Miller Construction', 'Acme Solutions']) {
+      if (looksLikeRealName(_n)) _fails.push(`"${_n}" still reads as a person, so a different company's name can be paired with a title and shipped as the owner`);
+    }
+    for (const _n of ['Jude Law', 'Mary Steele', 'Richard J. Diehl', 'Bradley Hull IV', 'John Michael Quinn', 'Alissa Lewis-McGlone']) {
+      if (!looksLikeRealName(_n)) _fails.push(`"${_n}" is no longer a person - the business-tail list has widened onto real surnames`);
+    }
+    // The two free reads on the contact path, pinned at their call sites: a
+    // fixture supplies its own arguments and cannot see a caller.
+    // ONE ASSERTION EACH. Written as a single `||` these two both went red
+    // when either was reverted and the message could not say which - a
+    // needle covering two call sites, which is the shape this file records
+    // at the leakWhereFor and mailto scanners. A guard that fires with the
+    // wrong cause on it costs what a missing one costs.
+    if (!_src.includes(_n('out.nameNotOnSite =', ' true;'))) {
+      _fails.push('the contact read no longer flags a site whose pages never name the business, so a lead reading another company entirely ships unmarked');
+    }
+    if (!_src.includes(_n('OWNER WAVE [${name}]: the paid wave was', " ${_paid ? 'BOUGHT' : 'NOT bought'}"))) {
+      _fails.push('the paid owner wave no longer records what it cost against what it produced, so the free-settle rate - the number that decides the Firecrawl plan - cannot be grepped from a batch');
+    }
     // == THE AUTHORITY SIDE, WHICH IS WHAT ACTUALLY LETS THE SETTLE FIRE ==
     // The roster fixtures above assert isOwner, and isOwner alone settles
     // nothing: rosterConfident also requires authority >= DM_AUTHORITY_FLOOR.
@@ -74271,6 +74392,36 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   }
   out.pagesRead = pages.map(p => ({ url: p.url, intent: p.intent, chars: (p.text || '').length }));
 
+  // == IS THIS EVEN THEIR SITE? ============================================
+  // Live on the 2026-09-01 run: quinnplasticsurgery.com serves SUREK Plastic
+  // Surgery's content top to bottom, and we read Chris Surek as the owner of
+  // Quinn Plastic Surgery. The paid wave rescued it - Yelp and the licence
+  // record both said John Michael Quinn - but only by luck, and it cost eight
+  // credits. With the paid wave switched off, Surek would have shipped.
+  //
+  // confirmDomainMatch exists for exactly this on the audit path and is a MODEL
+  // call. This is the free code-checked half: not one distinctive word of the
+  // business's own name appears anywhere on the pages we read. "Quinn" is in
+  // the domain and nowhere in the text.
+  //
+  // A NOTE, never a drop. A business that rebranded, or trades under a brand
+  // that differs from its registered name, is still the business - and section
+  // 14 records what a guard too tight costs. This flags the lead for the person
+  // reading the row; it changes nothing about what we buy.
+  {
+    const _corpus = pages.map(p => String(p.text || '')).join(' ').toLowerCase();
+    const _GENERIC = new Set(['the','and','of','for','llc','inc','pllc','pc','ltd','co','company','group','and',
+      'services','service','center','centre','associates','partners','solutions','plastic','surgery','dental',
+      'law','office','offices','firm','clinic','practice','construction','contractor','contractors']);
+    const _own = String(name || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+      .filter(w => w.length >= 4 && !_GENERIC.has(w));
+    if (_corpus.length > 800 && _own.length && !_own.some(w => _corpus.includes(w))) {
+      out.nameNotOnSite = true;
+      notes.push(`not one distinctive word of "${name}" appears anywhere on the pages we read — the site may belong to a different business, or they may trade under another brand. Worth a look before dialling.`);
+      console.log(`\u{26A0} FIND READ [${name}]: the pages we read never name this business. Distinctive words looked for: ${_own.join(', ')}. Not a drop — a rebrand reads the same way — but the owner and the address below may belong to somebody else.`);
+    }
+  }
+
   // ── DOES THEIR OWN SITE PRINT THE SAME NUMBER? ──────────────────────────
   // The number was copied off the Google listing and stamped "their Google
   // listing" unconditionally - true about where we got it, and silent about
@@ -74487,6 +74638,32 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   if (out.notIcp) {
     console.log(`\u{1F517} FIND CONTACT [${name}]: DROPPED as a branch of a larger operation \u2014 ${out.icpWhy}. Stopped before the owner wave and the address lookup, so this cost ${out.spend.firecrawl} Firecrawl credit(s) rather than the ~8-16 a full read costs. The site read was already spent and cannot be refunded; everything after it can.`);
     return out;
+  }
+  // == WHAT THE PAID WAVE COST, AGAINST WHAT THE FREE READ HAD ============
+  // Miller's Integrity Construction, 2026-09-01: the free read found ZERO
+  // name/title pairs and no ownership word anywhere, all three paid stages ran,
+  // and the answer was "NO decision-maker found in any source" - 10 Firecrawl
+  // credits for nothing. Jerry Spears was the same shape and produced a name
+  // the authority gate then held back: 11 credits for an unusable row.
+  //
+  // Two of two in one run is NOT evidence, and standing the wave down on it
+  // would be tuning on one afternoon. So this MEASURES rather than decides:
+  // grep the line across a real batch and the stand-down becomes a decision
+  // somebody can make on numbers. The free-settle rate is the single figure
+  // that sets the monthly Firecrawl plan.
+  {
+    // WHERE the answer came from, not a pair count I do not hold: the roster
+    // pair total lives inside findOwnerViaBrain and never returns. The source
+    // list is on the result and it says which stage settled it, which is the
+    // thing the stand-down decision actually needs.
+    const _paid = out.paidOwnerLookup !== false && (out.spend.firecrawl || 0) > 2;
+    const _src = (out.owner && Array.isArray(out.owner.sources)) ? out.owner.sources : [];
+    const _got = !!(out.owner && out.owner.name && out.owner.canBuy === true);
+    const _free = _src.length && _src.every(s => /own_website|business_name|hunter/.test(String(s)));
+    console.log(`\u{1F4B8} OWNER WAVE [${name}]: the paid wave was ${_paid ? 'BOUGHT' : 'NOT bought'}`
+      + ` \u2014 outcome: ${_got ? 'a buyer we can name' : (out.owner && out.owner.name) ? 'a name BELOW the buying floor' : 'nobody at all'}`
+      + `${_src.length ? `, from ${_src.join('+')}${_free ? ' (all free sources)' : ''}` : ''}`
+      + `, ${out.spend.firecrawl} credit(s). Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan.`);
   }
   console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) || 'none'} | phone ${out.phone || 'none'} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
   return out;

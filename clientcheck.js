@@ -2393,8 +2393,8 @@ let contactTally = null;
       // as the header. A count is what a spreadsheet actually does.
       {
         const _f = M.csv([
-          { name: 'A Co', contactEmail: 'a@a.com', contactIcpWhy: 'scored on 3 of 5 signals\nthe rest are left out', contactNotes: ['line one\r\nline two'] },
-          { name: 'B Co', contactOwner: 'Jo Blogs', contactNotes: ['plain'] },
+          { contactReadOk: true, name: 'A Co', contactEmail: 'a@a.com', contactIcpWhy: 'scored on 3 of 5 signals\nthe rest are left out', contactNotes: ['line one\r\nline two'] },
+          { contactReadOk: true, name: 'B Co', contactOwner: 'Jo Blogs', contactNotes: ['plain'] },
         ]).replace(/^\uFEFF/, '');
         const _rows = _f.split('\r\n').filter(Boolean);
         if (_rows.length !== 3) fails.push(`the contact CSV produced ${_rows.length} row(s) for a header plus two leads - a cell is breaking the row structure`);
@@ -2420,7 +2420,7 @@ let contactTally = null;
           fails.push(`the lean CSV set produced ${_lean.length} column(s) for ${M.lean.length} declared key(s) - a key here does not exist in FIND_CSV_COLUMNS, so a column is silently missing`);
         }
         if (!(_lean.length < _full.length)) fails.push('the lean CSV set is not smaller than the full one, so the tick box changes nothing');
-        const _co = [{ name: 'A Co', contactOwner: 'Jo Blogs', contactEmail: 'a@a.com' }];
+        const _co = [{ contactReadOk: true, name: 'A Co', contactOwner: 'Jo Blogs', contactEmail: 'a@a.com' }];
         const _h = (M.csv(_co, false).replace(/^\uFEFF/, '').split('\r\n')[0].match(/","/g) || []).length + 1;
         if (_h !== _lean.length) fails.push(`the lean CSV wrote ${_h} column(s) where the chooser says ${_lean.length} - findContactCsv is not reading the chooser`);
         if (M.sheet(_co, false).header.length !== _lean.length) fails.push('the Google Sheet export ignores the column choice, so the sheet and the CSV are two different files');
@@ -2480,6 +2480,54 @@ let contactTally = null;
         for (const [why, needle] of _need) if (src.indexOf(needle) < 0) fails.push(why);
       }
 
+      // ══ A LEAD THE SERVER RULED OUT IS IN NO FILE ═════════════════════
+      // Live on the 2026-09-01 run: Daniel Bortnick, MD was dropped as a branch
+      // of a chain and his row was in the exported CSV, ICP 45, with the phone
+      // number off his Google listing. hasContactData only asks whether there is
+      // something to dial. The rule lives in findContactRows so the CSV and the
+      // Google Sheet both inherit it rather than each carrying a copy.
+      {
+        const _dropped = { name: 'Chain Co', contactReadOk: true, contactNotFit: true,
+          contactPhone: '+1 555 0199', contactIcp: 45 };
+        const _good = { name: 'Real Co', contactReadOk: true, contactPhone: '+1 555 0100', contactIcp: 61 };
+        const _co = M.rows([_dropped, _good]).map(r => r.company);
+        if (_co.indexOf('Chain Co') >= 0) fails.push('a lead the server ruled out as a chain is still in the exported rows');
+        if (_co.indexOf('Real Co') < 0) fails.push('a real read has been excluded from the export along with the chain drops');
+        // A lead that was never read is not exportable either - the file is a
+        // list of leads we actually looked at.
+        if (M.rows([{ name: 'Never Read Co', contactPhone: '+1 555 0101' }]).length) {
+          fails.push('a lead that was never read is in the exported rows');
+        }
+        if (M.sheet([_dropped, _good], false).rows.length !== 1) {
+          fails.push('the Google Sheet export still carries the ruled-out lead, so the two destinations disagree');
+        }
+      }
+
+      // ══ THE WRONG-COMPANY STOP HAS A HOME ON THE SCREEN ═══════════════
+      // quinnplasticsurgery.com served Surek Plastic Surgery's content on the
+      // 2026-09-01 run and we read Chris Surek as Quinn's owner. The server
+      // flags it; the flag has to reach a person.
+      //
+      // The wire is asserted at the MERGE and the render at its call site: the
+      // note the server also pushes cannot carry this, because the notes line
+      // renders only when there is no owner and no email, and this is exactly
+      // the case where both exist and both may belong to another company. That
+      // is the guard-in-the-wrong-place shape, and it was found before this
+      // shipped by reading which branch the note lands in.
+      {
+        const _f = M.fields({ nameNotOnSite: true, signals: {}, notes: [] });
+        if (!_f || _f.contactNameNotOnSite !== true) {
+          fails.push('the wrong-company flag stops at the merge, so a lead whose pages name a different business ships unmarked');
+        }
+        const _g = M.fields({ signals: {}, notes: [] });
+        if (!_g || _g.contactNameNotOnSite !== false) {
+          fails.push('the wrong-company flag defaults to something other than false, so an ordinary lead can carry a stop nobody measured');
+        }
+        if (src.indexOf('co.contactNameNotOnSite === true') < 0) {
+          fails.push('nothing on the contact card renders the wrong-company stop, so the flag is measured, carried and read by nobody');
+        }
+      }
+
       // ══ THE CALLING WINDOW REACHES THE ROW AND THE FILE ═══════════════
       // The motion for this list is calling. Two halves and both were broken:
       // the request builder never sent the published hours the server needs,
@@ -2493,12 +2541,12 @@ let contactTally = null;
           fails.push('the contact request no longer sends the published hours, so the server can compute neither a calling window nor the staffed half of the affordability band');
         }
         if (M.lean.indexOf('callWindow') < 0) fails.push('the calling window is not one of the lean CSV columns, so the file the rep dials from does not carry it');
-        const _r = M.rows([{ name: 'A Co', contactPhone: '+1 555 0100', contactCallWindow: 'Try 7-8am, before jobs start.' }])[0];
+        const _r = M.rows([{ contactReadOk: true, name: 'A Co', contactPhone: '+1 555 0100', contactCallWindow: 'Try 7-8am, before jobs start.' }])[0];
         if (!_r || _r.callWindow !== 'Try 7-8am, before jobs start.') fails.push('the server calling window does not reach the exported row');
         // A listing with no hours gets an EMPTY cell, never a guess. An
         // invented "any time is fine" is the unmeasured-as-measured class on
         // the one field a caller acts on directly.
-        const _r2 = M.rows([{ name: 'B Co', contactPhone: '+1 555 0101' }])[0];
+        const _r2 = M.rows([{ contactReadOk: true, name: 'B Co', contactPhone: '+1 555 0101' }])[0];
         if (!_r2 || _r2.callWindow !== '') fails.push('a lead whose listing publishes no hours is given a calling window anyway');
       }
 
@@ -2509,9 +2557,9 @@ let contactTally = null;
       // bad". The unscored lead is named first alphabetically on purpose, so
       // the tiebreak cannot rescue a broken comparator.
       const ord = M.rows([
-        { name: 'Aaa Unscored', contactEmail: 'a@a.com' },
-        { name: 'Zed Measured Zero', contactEmail: 'z@z.com', contactIcp: 0 },
-        { name: 'Mid Co', contactEmail: 'm@m.com', contactIcp: 55 },
+        { contactReadOk: true, name: 'Aaa Unscored', contactEmail: 'a@a.com' },
+        { contactReadOk: true, name: 'Zed Measured Zero', contactEmail: 'z@z.com', contactIcp: 0 },
+        { contactReadOk: true, name: 'Mid Co', contactEmail: 'm@m.com', contactIcp: 55 },
       ]).map(r => r.company).join(',');
       if (ord !== 'Mid Co,Zed Measured Zero,Aaa Unscored') {
         fails.push(`the contact list is not ranked highest-first with UNSCORED last: ${ord} — an unscored lead is being treated as a measured zero`);
@@ -2521,19 +2569,19 @@ let contactTally = null;
       // from the TIER and never from prose that happens to contain the word
       // "verified". A catch-all domain delivers and the RECIPIENT is unknown;
       // a pattern guess is a bounce risk charged to the sending domain.
-      const say = (t) => M.rows([{ name: 'X', contactEmail: 'a@b.com', contactEmailTier: t, contactEmailSendable: t <= 3 }])[0];
+      const say = (t) => M.rows([{ contactReadOk: true, name: 'X', contactEmail: 'a@b.com', contactEmailTier: t, contactEmailSendable: t <= 3 }])[0];
       const s1 = say(1), s2 = say(2), s3 = say(3), s4 = say(4);
       if (new Set([s1.emailConfidence, s2.emailConfidence, s3.emailConfidence, s4.emailConfidence]).size !== 4) {
         fails.push('two different email tiers get the same confidence sentence in the contact CSV, which is the defect the audit captions already have');
       }
       if (s4.emailSafeToSend.indexOf('NO') !== 0) fails.push('a tier-4 address does not report as unsafe to send, and the row reads like any other');
-      if (M.rows([{ name: 'X', contactOwner: 'A B' }])[0].emailConfidence !== '') fails.push('a lead with no address still carries an email-confidence sentence');
+      if (M.rows([{ contactReadOk: true, name: 'X', contactOwner: 'A B' }])[0].emailConfidence !== '') fails.push('a lead with no address still carries an email-confidence sentence');
 
       // FOUR — the three-state answers. "no" about a thing we never looked at
       // is the unmeasured-as-zero failure wearing a tick box.
       if (M.yn(null, 'yes', 'no') !== 'not checked') fails.push('contactYesNo reports an unmeasured signal as a definite answer');
       if (M.yn(undefined, 'yes', 'no') !== 'not checked' || M.yn(0, 'yes', 'no') !== 'not checked') fails.push('contactYesNo laundered a non-boolean into a definite answer');
-      const blind = M.rows([{ name: 'X', contactEmail: 'a@b.com' }])[0];
+      const blind = M.rows([{ contactReadOk: true, name: 'X', contactEmail: 'a@b.com' }])[0];
       if (blind.payingForAds !== 'not checked' || blind.hiringMarketing !== 'not checked' || blind.teamSize !== 'not published') {
         fails.push('a lead whose site could not be read reports definite NOs for ads, hiring and team size — that is a claim about their business made from our own blindness');
       }
@@ -2624,7 +2672,7 @@ let contactTally = null;
 
       // SEVEN — the file shape. One header, one row per lead, and a BOM,
       // without which Excel reads it as Latin-1 and mangles every accented name.
-      const csv = M.csv([{ name: 'A', contactEmail: 'a@a.com' }, { name: 'B', contactPhone: '555' }]);
+      const csv = M.csv([{ contactReadOk: true, name: 'A', contactEmail: 'a@a.com' }, { contactReadOk: true, name: 'B', contactPhone: '555' }]);
       if (csv.charCodeAt(0) !== 0xFEFF) fails.push('the contact CSV has no byte-order mark, so Excel mangles every accented name in it');
       const lines = csv.replace(/^﻿/, '').split('\r\n');
       if (lines.length !== 4 || lines[3] !== '') fails.push(`the contact CSV emitted ${lines.length} line(s) for two leads plus a header`);
@@ -2787,8 +2835,11 @@ let contactTally = null;
   // one panel and the operator could not tell which was wrong. Live, 2026-08-28.
   // _scoped is that one population: the whole filtered queue, or just the leads
   // the last press read when the operator is looking at a run.
-  if (html.indexOf(_nn('const _cExportable = _scoped.filter', '(hasContactData);')) < 0
-      || html.indexOf(_nn('const _cRead = _scoped.filter', "(c => c && c.contactReadOk === true);")) < 0) {
+  // Both read contactTabOf now: the raw contactReadOk flag is TRUE on a lead the
+  // server RULED OUT - a chain drop is read and answered - so counting it made
+  // the tally and the exported file describe different sets of leads.
+  if (html.indexOf(_nn("const _cExportable = _scoped.filter(c => contactTabOf(c) === 'read'", ' && hasContactData(c));')) < 0
+      || html.indexOf(_nn("const _cRead = _scoped.filter(c => contactTabOf(c)", " === 'read');")) < 0) {
     fails.push('the CSV count is taken from a different population than the read count beside it, so the two numbers on the panel contradict each other');
   }
   // And the run-scoped view has to exist at all: contactAt was stamped on every
