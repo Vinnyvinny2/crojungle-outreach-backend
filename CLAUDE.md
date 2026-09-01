@@ -9435,6 +9435,517 @@ produced. What a real fifty-lead press yields is settled by the next run's
 **20260922** on both sides — a stale page renders the ruled-out leads into the
 CSV and shows no wrong-company stop, and it will say so by number.
 
+---
+
+## 101. The row could not tell a confirmed owner from a guess — 2026-09-01
+
+Vin, on the only thing that matters now: *"the only goal right now is to get the
+highest quality possible leads of our ICP to our sales guy. thats the only goal
+right now nothigni else. so lets think on how quality can be increased."* And he
+asked for a number out of ten.
+
+**The honest answer was 5, and it was about 3 before Round 100.** Rated against
+the only two live logs this project has saved rather than against impressions:
+
+| | | why |
+|---|---|---|
+| Right company | **7/10** | discovery's ICP filters are strong; the contact route re-checks almost nothing |
+| **Right person** | **4/10** | the weak link, and most of the gap |
+| Reachable | **5/10** | one SMTP-confirmed address in eleven |
+| Rep can act | **6/10** | phone, calling window, three signals; no reason to call |
+
+From `vinlogs.txt` — eleven leads, running the same owner and email machinery
+this list uses: an owner name was emitted on **11 of 11** and ten cleared the
+buying floor, but only **4 of 11** settled on the free read, only **1 of 11**
+produced an SMTP-confirmed address, and **4 of 11** ended with both a usable
+owner and a usable email. From the 2026-09-01 nine-lead contact run: free-settle
+**2 of 9**, four of the owner rows navigation labels or another company's owner —
+those four fixed in Round 100.
+
+**The one-sentence diagnosis: the row cannot tell a confirmed owner from a guess,
+and neither can the rep.** `findDecisionMaker` has computed `canBuy`,
+`authority`, `sources` and `corroborated` since it was written. The card rendered
+the name and the title and threw the rest away, so a name the buying-floor gate
+HELD BACK shipped looking exactly like one three sources agree about.
+
+### The best free owner source was wired and structurally unreachable
+
+`findOwnerViaReviewReplies` is weighted 35 and guarded on `(placeId &&
+apifyToken)`. The contact route passed **`placeId: ''`** and **`apifyToken: ''`**
+for its whole life. At an owner-run shop whoever answers the Google reviews IS
+the owner, and he signs them — it is the best free read of who to ask for that
+this system can buy, and it could never fire on the one list a rep dials from.
+
+Both values already existed: `placeId` on the queued company, `apifyToken` a
+declared Settings field already sent on the research path. Neither was sent.
+
+**It runs as a stage 1.5, not in stage 1**, because it bills an Apify review
+pull. Stage 1 is genuinely free; this runs only on the leads stage 1 could not
+settle — which are exactly the leads about to buy the ~10-credit stage-2 search
+wave. That is the owner's own rule for it: only when free fails.
+
+**And the first placement was wrong in a way only the end-to-end check caught.**
+It sat below the dead-site early return, which silenced it on precisely the leads
+that need it most: a site that returned nothing is the one case where their
+Google reviews are the ONLY place an owner's name can still come from. The 402
+scenario in `servercheck` went red, and the fix was to move it above that return.
+A boot fixture could not have seen it.
+
+### Four grades, and the two thin settles are named rather than removed
+
+Vin's rule for a weak name: *"we really need the woners name to be correct
+because if we are asking for them and its wrong its not good but we are able to
+pivot like is jogn not the owner?"* The name **ships, graded**, and the row tells
+the rep how to open.
+
+| grade | when |
+|---|---|
+| **confirmed** | corroborated across two independent sources |
+| **stated** | their own site says so, one source, nothing corroborating |
+| **inferred** | the business is named after him and nothing else names an owner |
+| **unconfirmed** | the buying-floor gate held the name back |
+
+`eponymousConfident` carries no confidence floor at all and `rosterConfident`
+fires on one uncorroborated roster row. Both are **kept** — each saves ~10
+Firecrawl credits and §99 recorded the decision to leave the first open — and
+what changed is that their output is labelled. `ownerAskLine` builds the pivot
+sentence ONCE on the server, so the card, the CSV and the Google Sheet cannot
+describe one row three ways.
+
+### The demotion finally reaches the number
+
+`contactRequestBody` never sent `outsideBand` or `aboveSizeCeiling`, so
+`findIcpScore` could not see them and a 4.9-star business the star band demoted
+scored exactly like an in-band one. Vin, asked what should happen: *"i mean if
+its already demoted ti would be shown in its overall rating out of 100."* It was
+not; now it is.
+
+**The numbers come from the table that already declares them.**
+`demotionPenalty` reads `CONTACT_RANK_TERMS`, the same list the contact ranker
+reads, so the two can never disagree about what a demotion costs — and the boot
+check asserts the delta EQUALS that table rather than a literal. Applied after
+the ratio and never as a term: a negative max would change the denominator, so a
+demoted lead would be scored out of a different total than a clean one.
+
+**And the two demotion reasons were described with the same words.** Both strings
+said "review ceiling", so the RATING-band demotion read as a review-count one and
+the new CSV column would have disagreed with the card about the same lead.
+
+### Six email states, not one word
+
+Published-personal, SMTP-confirmed, a **role mailbox** (a careers-page
+`recruiting@` on another domain ships tier 1 `sendable:true` by decision, with
+only its score and label moved), a **catch-all** domain (cannot bounce, may not
+be his box), a **pattern guess**, and the one that is not about the address at
+all — **the verifier was down**, so tier 2 was unreachable and every later lead
+silently fell to tier 3 or 4.
+
+Graded at the single wrapper every one of the core's returns passes through, so
+nothing re-decides it. This also replaces the client's regex-over-the-label
+derivation, which was a fourth copy of a rule that already had three. A missing
+verifier KEY is deliberately not an outage: it is a setting nobody filled in, and
+reporting the two as one makes every run by an operator without the key read as
+a failure.
+
+### An absence claim needs a look
+
+`readChainEvidence` has computed `measured` since it was written and the consumer
+read only `isChain` — so a site we could not open returned `isChain:false` and
+was treated exactly like a business we proved independent. It says what is
+unknown now, and it does NOT score against the lead: charging a business for our
+own blindness is the guard-too-tight failure.
+
+### The number that decides everything
+
+Nothing in this project has ever counted whether the owner resolver and the email
+engine work. `findRunTally` now counts **rep-ready** rows — the company was kept,
+the name is one we stand behind, the address will deliver, and there is a number
+to dial — plus **pivot-ready**, the rows a caller can still work on an
+unconfirmed name, because that was the owner's own decision about weak names.
+`findTallyLine` prints it FIRST: a counter computed and never shown is the exact
+defect this round exists to close, and the check asserts the print as well as the
+count.
+
+**And `verifierOff` was dead.** It grepped `contactNotes` for the word
+"verifier", and no note written anywhere on the contact path contains it — so the
+counter printed nothing on precisely the runs where every address was silently
+downgraded. It reads the server's own flag now, and a fixture asserts that note
+prose can no longer be counted.
+
+### What the falsification runs found
+
+**Thirty-one reverts, each applied alone against a baseline the harness proves
+green first. Ten came back GREEN on the first pass, and every one of the ten was
+a mechanism with no guard at all** — which is the whole reason for running them:
+
+- Nothing asserted the Apify token was READ off the request. The wire forwards a
+  variable, and a variable hard-coded to `''` satisfies it perfectly.
+- Nothing asserted stage 1.5 was LIVE. The position needle finds the call
+  wherever it sits, so neutering its condition left the call in place.
+- Nothing asserted WHICH rule settled the owner was recorded. The grade fixtures
+  are handed `settledBy` directly, so they prove the reader and never the writer.
+- The catch-all return's own declaration, the verifier-down override on the
+  catch-all branch, and the string-tier laundering case each had no fixture that
+  could reach them.
+- And four client wires — the place id, the token, the demotion flags and the
+  chain measurement — were sent and never asserted.
+
+Two more things were wrong in the harness rather than the code. **The Apify
+assertion counted the whole run's requests**, and the golden lead legitimately
+buys a review pull, so it was measuring another scenario's spend — scoped to the
+lead's own window now. And **a global find-and-replace of a needle helper name
+renamed 39 lines it had no business touching**; caught by diffing every changed
+line against HEAD and restoring the ones whose only difference was the rename.
+
+**273 boot checks green**, every gate: tdz, dupkeys and scopecheck on both files,
+fetchtest, pngscale, clientcheck, batchcheck, auditfuzz over 5,000 vectors,
+fuzzcore over 20,000 cases, servercheck's **86** assertions over a fake network,
+and 2,045 emails composed over HTTP.
+
+### Deliberately NOT in this round
+
+- **Re-weighting `findIcpScore`.** `ads` 25 + `hiring` 20 of 135 rewards
+  marketing maturity rather than ICP fit, and only `rating` and `afford` are
+  fit-shaped. Real, and it re-orders every list — so it should be measured
+  against a baseline rather than changed at the moment the baseline is created.
+- **Running `contactRankFor` on this path.** Two rankers over one list is the
+  disease; the resolution is one ranker, and that is a bigger decision.
+- **Any paid revenue or headcount source** — the owner's standing decision. The
+  proxies are named as proxies and there is no dollar band anywhere.
+- **Removing the two thin settles** — they save credits and grading them is the
+  honest fix.
+
+**HONEST SHAPE: none of this has run against a live press.** Every fix is
+executed at boot, in `clientcheck`, or driven end to end over the fake network.
+The quality number becomes real on the next fifty-lead run, when the
+`📇 FIND RUN TALLY` line reports how many rows a rep could actually work — and
+until it is read, every judgement in this section is inference.
+
+**`index.html` changed, so this needs a Netlify deploy**, and the contract is
+**20260923** on both sides — a stale page sends no place id, no Apify token and
+no demotion flags, so the free owner source stays dead and every demoted lead
+scores like a clean one.
+
+## 102. The owner was on the page and the parser could not read it — 2026-09-01
+
+Vin asked for 25 contact reads, got 31, and read the file: *"im seeing a lot
+with no decion maker thats a problme id say thats more important than capturing
+the email."* He is right, and the cause is not the paid lookups. **Every finding
+below was reproduced by EXECUTING the real functions against the exact strings
+from his run.**
+
+### First, the honest finding: that run was on a build two steps behind
+
+Three strings on his screen cannot be produced by HEAD — `every column (27
+instead of 9)` where the arrays hold 30 and 11, a tally with no `ready to work`
+clause where index.html always emits one, and a CSV header reading `ICP score
+out of 10` where it reads `out of 100`. And no `♻ DM` line appears anywhere in
+the log, which server.js prints on every lead stage 1 fails to settle.
+
+**So PR #92 was unmerged and the Netlify file was never dragged.** Round 101's
+review-reply owner source — the free source that names an owner-run shop's
+owner — did not run on a single one of the 19 leads that went on to buy the
+paid search wave. Some of what he was looking at was already fixed and
+undeployed, and this entry must not take credit for it.
+
+### What his log measures (30 leads with an OWNER WAVE line)
+
+| | |
+|---|---|
+| free settle producing a buyer | **8 of 30** — two of them garbage (below) |
+| paid wave bought | **19 leads, 160 Firecrawl credits** |
+| paid wave that produced **nobody at all** | **7 leads, 71 credits** |
+| **paid credits that bought nothing usable** | **77 of 160 — 48%** |
+| rows with no usable decision-maker | **13 of 30 — 43%** |
+
+And the number that decided the round: **21 of the 25 sites we read returned
+`Read 0 name/title pair(s)`.** The roster parser worked on four. On **ten** of
+those 21 the log itself said *"An ownership word IS in the text, so the page is
+here and the layout is what we cannot read"* — and seven of those ten then
+bought the paid wave anyway: Ecoview 6, Bid-Rite 8, Red's 10, Andrew's 6,
+Today's Dentistry 11, Premier 6, American Roofing 13 = **60 credits spent
+re-finding an answer we had already read**, two of which still came back with
+nobody.
+
+### Six defects in the roster parser, each with a live example
+
+The parser validates the name by SHAPE (`ROSTER_NAME_RE`) and the title by SHAPE
+(`looksLikeJobTitle`). Neither side ever asked whether the thing in the name slot
+is a person or whether the thing in the title slot contains one.
+
+- **`parseTeamRoster` never called `looksLikeRealName`.** That one function holds
+  `BUSINESS_TAIL`, `jobWord` and `junkWhole` — the three guards written for
+  exactly this — and the roster was the ONE owner source that skipped it.
+  Executed: `ROSTER_NAME_RE` MATCHES `"Iron Sharpens Iron"`, `"Trefoil
+  Holdings"`, `"National Paving Solutions"` and `"Our Owner"`, while
+  `looksLikeRealName` refuses `"Trefoil Holdings"` on `holdings` and `"Our
+  Owner"` on `our`. **Live consequence: Cooper CPA Group shipped with
+  decision-maker "Trefoil Holdings" at the TOP of the exported file, score 88.**
+  A guard in the wrong function; one call site closes three live failures.
+- **A title carrying a person's name.** Executed: `titleHeadIs("President & CEO
+  Jon Schilling", OWNER_TITLE_RE)` returns **true** — the ownership word matches
+  at index 0, what follows starts with `&`, so the "punctuation means head"
+  branch returns true and the real person downstream of it is never examined. JR
+  & Co shipped **"Iron Sharpens Iron" / "President & CEO Jon Schilling"**, and
+  its two siblings the same way. Two outcomes now, and the split is the safety:
+  if the name slot is not a person the person in the title IS the row and we
+  recover it; if BOTH slots name somebody the row keeps its pairing and loses its
+  ownership claim, because an owner we cannot identify beats the wrong one on a
+  sheet somebody dials from.
+- **Title-before-name was structurally unreachable.** The name is always the
+  first comma-segment, the inline title is always what follows it, and the
+  lookahead runs strictly forward. Scott Roofing's own page says **"CEO Brian
+  Scott and president Mike Scott"** and the parser returned `[]`. Splitting on
+  " and " first is what keeps the pairing honest: taken whole the trailing name
+  is Mike, and the CEO is Brian.
+- **The name-is-a-title guard was switched off by a comma.** It read `if
+  (!p.inlineTitle && titleKind(runs[i]))` — conditioned that way because "Jenny
+  McDowell, Owner" reads as a title end to end — so any run carrying an inline
+  title never got asked. That is how **"Branch Manager"** became a person. The
+  question is asked of the NAME SLOT now, which is both stricter and correct.
+- **A first name ships, marked.** *Vin's decision.* Ecoview's page says **"Our
+  Owner, Carl"**; we discarded it and paid 6 credits for the surname. It is
+  emitted with `mononym: true`, counts as an owner for the caller, and never
+  builds an email address — the held-back email rule already refuses an unvouched
+  name.
+- **A role noun is not a surname.** `FIND_ROLE_NOUN` moved up beside the parser
+  so both readers ask one question. This is the expensive half: "Master Plumber"
+  is name-SHAPED by every pattern in the file, and the falsification proved it —
+  reverting that one test turns the correct row "David S Graham / Owner, Master
+  Plumber" into **a person called Master Plumber**.
+
+**Corroboration is unchanged** (*Vin's decision*): their own team page settles the
+owner for free and the row says "stated on their own site".
+
+### The counts — four separate causes, all verified
+
+- **The overshoot.** The runner checked `kept >= want` **before** the draw with a
+  pool of six workers, so at `kept === want - 1` all six passed the guard and
+  drew. Ceiling was `want + 5`. **25 asked, 31 read — exactly this.** The slot is
+  reserved before the work now.
+- **A failed read consumed a slot** while the lead stayed in Not-read and the
+  panel promised "the button above picks them up again". Only a lead we actually
+  read consumes one of the N; the three-strike dead-server stop is what bounds
+  the loop when every read is failing.
+- **A chain drop was counted twice and exported never.** `contactFieldsFrom` sets
+  both `contactReadOk: true` and `contactNotFit: true`, so the tally counted it as
+  read while the tabs filed it as Ruled out — it was inside "31 read" AND inside
+  "Ruled out 4" and in no file. One membership rule now, read by both.
+- **The move bar ignored the scope checkbox.** It read `filtered`, one link above
+  `_cShown`, so "Move all 92" offered to move the 32 leads the panel directly
+  above says it is hiding — and those 32 are the non-Places lanes that panel
+  warns about by name.
+
+### Deliberately NOT in this round
+
+- **Raising the free page budget.** Tempting, and the evidence refuses it: Today's
+  Dentistry read ONE page and that page contains `"Dr. Ryan L. Olson, DDS"` in the
+  parser's own hint text. The answer was already in the corpus. Fix the reader,
+  not the budget.
+- **Widening `looksLikeRealName` to accept mononyms globally** — it decides which
+  mailbox an owner-addressed email is sent to. The first-name rule is scoped to
+  the roster and to the caller.
+- **The email half.** The verifier ran out of credits mid-run and **13 domains
+  came back `Catch-all probe: COULD NOT RUN`** — ~42% of the run had no SMTP
+  check at all, which is what "1 mailbox-confirmed, 6 a guess" is. That is a
+  top-up at myemailverifier.com, not a build; §94's latch recovered on its own
+  twice in the same log, exactly as designed.
+- **Any paid revenue or headcount source**, and **no ranking or audit-copy
+  change.** PART 6 holds.
+
+### What the falsification runs found
+
+**Ten reverts, each applied alone against a baseline the harness proves green
+first, each red on its own named assertion.** Two things worth recording:
+
+- **The rep-ready fixture had no `name` on its rows**, and the one membership rule
+  it now shares (`contactTabOf`) refuses a row without one. Production rows always
+  carry a name, so this was the fixture bending to an old private rule rather than
+  to the shared one; both were corrected, and the ruled-out row's owner is now
+  deliberately outside the run's own grade split.
+- **The role-noun revert printed the invented person by name** — `{"name":"Master
+  Plumber"}` beside a demoted David S Graham — which is the clearest evidence in
+  this round that the must-survive half of a filter is the expensive half.
+
+**273 boot checks green**, every gate: tdz, dupkeys and scopecheck on both files,
+fetchtest, pngscale, clientcheck, batchcheck, auditfuzz over 5,000 vectors,
+fuzzcore over 20,000 cases, servercheck's 86 assertions over a fake network, and
+2,070 emails composed over HTTP.
+
+**HONEST SHAPE: none of this has run against a live press.** The parser is driven
+against the exact strings the 2026-09-01 run produced; what a real 25-lead press
+returns is settled by the next run, and the number to read is `Read 0 name/title
+pair(s)` — today it is 21 of 25.
+
+**The contract does NOT move this round.** The parser fix is server-only and the
+count fixes are client-only, so a new client works against an old server and the
+other way round. `index.html` changed, so it still needs a Netlify deploy.
+
+---
+
+## 103. Read the likeliest page first, and score for the business we can sell — 2026-09-01
+
+Vin, about to run seven more contact reads: *"i need the lead quality and overall
+whole read thing at a 10/10 how do we get it there from here?"* Four decisions
+came back, and two of them needed research before a line was written.
+
+### The verifier: we already own a second one and have never called it
+
+- **Self-hosting is impossible, not merely expensive.** Render blocks outbound
+  port 25 on **every** plan, free and paid, because it runs on EC2. A free
+  route is off the table for structural reasons, not budget ones.
+- **MyEmailVerifier is already the cheapest on the market** — $0.0025 a check,
+  $4 per 1,000, credits never expire. ZeroBounce, NeverBounce, Kickbox and
+  Bouncer are $0.008+, i.e. **3.2x more**. Switching vendors costs more.
+- **The outage was the free daily allowance**, not a bad vendor. 100 free
+  credits a day; a contact read spends a catch-all probe **plus** a verify per
+  lead, so 25 leads is 50+ and 50 leads is well past it. $4 covers about a year
+  at 25 sends a day.
+- **`api.hunter.io/v2/email-verifier` is never called anywhere in server.js.**
+  Only domain-search, email-finder, account, campaigns and leads are. Hunter's
+  verifier is **included in every Hunter plan** at 0.5 credit, and we already
+  pay Hunter to send. A second verifier we own, unused, whose one job is exactly
+  the case that hit 42% of the 2026-09-01 run. Recorded here and NOT built this
+  round: it wants its own falsification against the latch, and the run in front
+  of us needed the owner half more.
+
+### Firmographics: no free per-company source exists for local SMBs
+
+Checked and refused. **Financial Modeling Prep** is free and SEC-filing based,
+so it covers public companies and no local trades at all; Crustdata, Bright Data
+and the LinkedIn headcount APIs are paid with no usable free tier. The one
+free-to-us option is **Hunter Company Enrichment** at 0.2 credit, charged only
+when it returns company size — recorded for a later round, opt-in and measured,
+because Hunter is built around B2B domains and its coverage of a two-truck
+plumber is likely thin.
+
+### Reading twenty pages buys nothing on its own
+
+Vin: *"read as many free pages as they will give us of course if they give us 20
+read 20. dont excute paid wave unless we have to."* The fetch is a plain GET and
+costs nothing — and the arithmetic says the page count was the least important
+part of it:
+
+- Each page is sliced to **6,000 characters** and the corpus caps at **22,000**.
+  That is the homepage plus about three interior pages, the third two-thirds
+  read. **The cap was already binding at the old budget of four:** the careers
+  page contributed **zero bytes**, and in the ROSTER corpus the page truncated
+  was the **second team page** — the one `want: 2` was added specifically to
+  fetch, and the one most likely to name the owner.
+- The loop was **sequential at 10s a page**, so twenty pages is **+160s per
+  lead** against leads already running 40-275s, and up to **+640s and +16
+  credits** on a site that refused the plain fetch.
+- There was **no content dedupe on the Find path** — only URL dedupe. A soft
+  404, a redirect to the homepage or an unrendered single-page app passes every
+  check and eats a full 6,000-character block. At twenty pages every block could
+  have been the homepage.
+
+So five things, and the page count is the last of them:
+
+- **The table is now ordered by owner-likelihood** — team/about first, careers
+  last — and that ONE declaration drives the fetch order, the early exit and the
+  corpus order. `FIND_INTENT_RANK` is derived from it, so the judgement lives in
+  one place rather than three.
+- **The corpus is sorted before it is truncated.** Nothing did this: the fetch
+  order was ranked and the corpus was then built in plain arrival order, so
+  whichever page happened to arrive first decided what the parser and the model
+  ever saw.
+- **Read the likeliest first and stop when we have him.** Vin's own instinct —
+  *"cant we make it so the less likley pages are read first to sopeed it up?"* —
+  and it beats a flat time budget. `parseTeamRoster` is pure and free, so asking
+  it after each wave costs nothing and a site that plainly names its owner skips
+  every remaining page AND the ~10-credit paid wave.
+- **A bounded parallel pool with a 120-second ceiling on the whole read**, not
+  per page, because a per-page timeout multiplied by twenty is the number that
+  made the sequential version impossible.
+- **Content dedupe** through `pageFingerprint`, the audit path's own rule.
+
+The wider budget applies to the **free path only**; the Firecrawl fallback keeps
+the small one, because there every page is a credit.
+
+### The score: spending and dissatisfied, or moneyed and untouched
+
+Vin's shape, and he asked for it to be backed rather than assumed. It is:
+**45%** of small businesses were dissatisfied with the agency they hired (Clutch
+2024) and a 2026 study puts dissatisfaction inside the first year at **67%**;
+**48%** switch over failure to deliver; **68% admit they are paying for
+marketing they already know is not working** — almost word for word his *"they
+dont know if theyre preforming well"*; and the average agency relationship lasts
+**2.5 years** across **3-5 agencies**.
+
+**Five signals that measure "somebody competent is already here" were already
+regexes in this file, already tested against markup the Find read was ALREADY
+HOLDING, and never asked.** `readFindIcpSignals` tested three of the eight keys
+in `AD_TAG_SIGNATURES` and ignored `hasAdsConversion`, `hasCallTracking`,
+`hasAnalytics`, `CHAT_SIGNATURES` and `SCHEDULER_SIGNATURES`. Zero extra
+requests. And `tagManager` was measured free, sat on `signals`, and was read by
+no term at all — computed-but-not-passed again.
+
+- **Spend intent stays the heaviest measurable positive** and gets broader: an
+  ads tag, a tag manager or analytics all say they invest.
+- **Greenfield stops being punished.** `adsCode === false` scored **5 of 25**, so
+  a moneyed business nobody has marketed to lost twenty points to one already
+  committed elsewhere — backwards for the second archetype he named. It is 18
+  now: proven spend still beats assumed spend, because it is evidence rather
+  than inference, but the gap is the size of that difference and not a
+  disqualification.
+- **`alreadyDialledIn` marks down a business already in competent hands** —
+  conversion tracking AND call tracking AND a real booking tool, all three or
+  nothing, because any one alone is a plugin default. -12, read from the same
+  declared `CONTACT_RANK_TERMS` table the contact ranker reads, and applied
+  after the ratio for the reason written at `demotionPenalty`: a negative max
+  would change the denominator.
+
+**HONEST NAME AND HONEST LIMIT: this measures whether their marketing is
+INSTRUMENTED, not whether it performs.** We are reading markup. We cannot see
+their cost per lead, and neither can the audit — that is inside their ads
+account. So it marks a lead down; it never refuses one.
+
+### And the Re-read button spent on every stale lead at once
+
+Found while checking what a 7-lead re-run would actually do. After a parser fix
+every previous read is stale by contract number, so on the live queue that
+button was **one confirm for 53 leads of Firecrawl and model spend**, with the
+number box directly above it ignored. It obeys that number now.
+
+### What 10/10 actually requires
+
+Everything above is inference. The only thing that makes a quality number real is
+**call outcomes logged against the finding that opened the call**.
+`/api/call-outcome` has existed since §35, its row-write bug was fixed in §80,
+and **it has never recorded a single row**. Forty logged conversations would be
+more evidence than this project has accumulated in its life, and no code produces
+it. Realistic ceiling without that: about **8/10**.
+
+### What the falsification runs found
+
+**Twelve reverts, each applied ALONE against a baseline the harness proves green
+first, each red on its own named assertion.** Three things are worth recording:
+
+- **A killed falsification run left a revert applied**, and the next pass refused
+  to start with `BASELINE NOT GREEN` rather than reporting a colour. That is the
+  §74 rule doing its job from inside the proving machinery: a harness whose
+  baseline is already red proves reds too cheaply.
+- **A needle written across two lines failed a CORRECT build.** `_src` is the
+  LF-normalised, comment-stripped copy, so a needle carrying `\r\n` can never
+  match. Single-line halves only. Twenty-first recorded instance of a needle
+  failing on its own shape rather than on the code.
+- **The Re-read fix went in before its needle did**, so `ci-gates` went red on
+  the assertion that the old unbounded button still existed — the check was
+  right and out of date. Re-aimed rather than worked around, and the fix kept:
+  one confirm for 53 leads of spend is a real footgun.
+
+**HONEST SHAPE: none of this has run against a live press.** The reader and the
+score are executed at boot; what a real 7-lead press returns is settled by the
+next run, and the numbers to read are `Read 0 name/title pair(s)` (21 of 25 last
+time) and the free-settle rate in `💸 OWNER WAVE` (8 of 30 last time).
+
+**The contract does NOT move this round.** The reader and the score are
+server-only; the Re-read fix is client-only. `index.html` changed, so it still
+needs a Netlify deploy.
+
+---
+
 # PART 5 — WHAT IS PROVEN
 
 Only two things have real evidence behind them. Everything else is inference.

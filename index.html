@@ -1238,9 +1238,13 @@ const findScoreLine = (co) => {
   // says which, because a number that moved with nothing accounting for it is
   // what made the old rating read as broken.
   if (c.lowRating) parts.push('low rating, kept: harder to find on Google, so more reason to buy');
+  // ONE reason each, and they are different reasons. Both strings used to say
+  // "review ceiling", so the RATING-band demotion was described as a
+  // review-count one - and the new CSV column would have disagreed with the
+  // card about the same lead. Discovery writes its own reason; prefer it.
   const why = [
-    c.outsideBand ? 'above the review-mining ceiling' : '',
-    c.aboveSizeCeiling ? 'above the review ceiling' : '',
+    c.outsideBand ? (c.bandNote || 'outside the star band we mine reviews in') : '',
+    c.aboveSizeCeiling ? (c.sizeNote || 'above the review ceiling') : '',
   ].filter(Boolean).join(' and ');
   if (why) parts.push('sorted last: ' + why);
   return parts.join(' \u00b7 ');
@@ -1305,7 +1309,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // clientcheck.js asserts this constant EQUALS the server's, so the pair can
 // only drift between a merge and the Netlify drag-in — exactly the window the
 // warning exists for.
-const CLIENT_CONTRACT = 20260922;
+const CLIENT_CONTRACT = 20260923;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5479,9 +5483,26 @@ const contactRequestBody = (company, settings) => {
       // free field on the row.
       publishedHours: C.publishedHours || null,
       trade: C.trade || '', tier: C.tier || null,
+      // ══ THE PLACE ID AND THE TWO DISCOVERY VERDICTS ═══════════════════
+      // placeId is what lets the server read who signs their Google review
+      // replies - at an owner-run shop that IS the owner, and it is the best
+      // free read of who to ask for. It sat on the lead and was never sent,
+      // so the source was wired and structurally unreachable.
+      //
+      // outsideBand and aboveSizeCeiling are decisions discovery already
+      // took. Without them the contact score cannot see that a lead was
+      // demoted, so a demoted lead scores exactly like a clean one and the
+      // row says nothing about why it sorts last.
+      placeId: C.placeId || '',
+      outsideBand: C.outsideBand === true,
+      aboveSizeCeiling: C.aboveSizeCeiling === true,
     },
     keys: {
       anthropicKey: S.apiKey, firecrawlKey: S.firecrawlKey, verifierKey: S.verifierKey,
+      // Already a declared Settings field and already sent on the research
+      // path. The contact path never sent it, which is half of why the
+      // review-reply owner source could never fire.
+      apifyToken: S.apifyToken || '',
     },
     // ══ ONLY AN EXPLICIT OFF STANDS THE PAID OWNER LOOKUP DOWN ═════════════
     // The free stage of the owner ladder settles about half of leads; the paid
@@ -5526,10 +5547,29 @@ const contactFieldsFrom = (data) => {
     contactIcpOf: (typeof icp.of === 'number') ? icp.of : null,
     contactIcpWhy: icp.why || '',
     contactIcpTerms: Array.isArray(icp.terms) ? icp.terms : [],
+    // What discovery already decided about this lead, finally reaching the
+    // number a person reads. Empty on an in-band lead.
+    contactDemotions: Array.isArray(icp.demotions) ? icp.demotions : [],
+    // Whether the chain read could LOOK, not just what it concluded. A site we
+    // failed to open returns isChain:false, and the row used to render that
+    // identically to a business we proved independent.
+    contactChainMeasured: !!(d.chain && d.chain.measured === true),
     contactOwner: own.name || '',
     contactOwnerTitle: own.title || '',
     contactOwnerCanBuy: own.canBuy === true,
     contactOwnerSources: Array.isArray(own.sources) ? own.sources : [],
+    // ══ HOW SURE WE ARE THAT THIS IS HIM ═══════════════════════════════
+    // The resolver has computed canBuy, authority, sources and corroborated
+    // since it was written, and the card rendered the name and the title and
+    // threw the rest away - so a name the buying-floor gate HELD BACK looked
+    // identical to one three sources agree about, and the rep opened with it
+    // the same way.
+    //
+    // Vin's rule: the name ships, graded, and the rep can pivot. askAs is the
+    // sentence that tells him how, and it is built ONCE on the server.
+    contactOwnerGrade: own.grade || '',
+    contactOwnerGradeWhy: own.gradeWhy || '',
+    contactOwnerAskAs: own.askAs || '',
     contactEmail: em.address || '',
     contactEmailTier: (typeof em.tier === 'number') ? em.tier : null,
     contactEmailSendable: em.sendable === true,
@@ -5543,6 +5583,14 @@ const contactFieldsFrom = (data) => {
     contactEmailKind: em.kind || '',
     contactEmailOffDomain: em.offDomain === true,
     contactEmailFromCareers: em.fromCareersPage === true,
+    // The six states that used to collapse into "sendable". Decided on the
+    // server, at the one wrapper every result passes through, so nothing here
+    // has to read it back out of the label by regex.
+    contactEmailGrade: em.grade || '',
+    contactEmailGradeSay: em.gradeSay || '',
+    // Our outage, not a fault of the address. Without this a run made while
+    // the mailbox checker was down reads as a run full of weak addresses.
+    contactEmailVerifierDown: em.verifierDown === true,
     // ══ WHY IT CANNOT BE SENT TO, AND WHY WE THINK IT IS HIS ══════════════
     // The engine writes both and neither reached the row, so a rep holding an
     // address the system had refused was told only that it was refused. A
@@ -5659,6 +5707,7 @@ const FIND_CSV_COLUMNS = [
   ['company', 'Company'],
   ['owner', 'Decision-maker'],
   ['ownerTitle', 'Their title'],
+  ['ownerHowSure', 'How sure we are it is him, and what to ask'],
   ['ownerCanBuy', 'Can they authorise a purchase'],
   ['ownerFrom', 'Where we found them'],
   ['email', 'Email'],
@@ -5680,6 +5729,8 @@ const FIND_CSV_COLUMNS = [
   ['rating', 'Google rating'],
   ['readVia', 'How their site was read'],
   ['notFit', 'Not a fit, and why'],
+  ['demotedWhy', 'Why this lead was marked down'],
+  ['independence', 'Independent, or a branch of something bigger'],
   ['notes', 'What we could not do'],
 ];
 // ══ TWENTY-ONE COLUMNS, MOST OF THEM DELETED BY HAND EVERY TIME ═══════════
@@ -5698,7 +5749,12 @@ const FIND_CSV_COLUMNS = [
 // callWindow is the ninth, added at the owner's request on 2026-09-01: the
 // motion for this file is calling, and knowing a roofer is reachable before
 // he is on a roof is worth more than any other free field we hold.
-const FIND_CSV_ESSENTIAL = ['company', 'owner', 'ownerTitle', 'email', 'phone',
+// ownerHowSure and emailConfidence are in the LEAN set on purpose. The rep
+// dials from these nine, and the two things that decide how he opens the call
+// are how sure we are about the name and how sure we are about the address.
+// A confirmed owner and a name we held back are two different calls.
+const FIND_CSV_ESSENTIAL = ['company', 'owner', 'ownerTitle', 'ownerHowSure',
+  'email', 'emailConfidence', 'phone',
   'icp', 'payingForAds', 'hiringMarketing', 'callWindow'];
 const findCsvColumns = (full) => (full === true ? FIND_CSV_COLUMNS
   : FIND_CSV_COLUMNS.filter(c => FIND_CSV_ESSENTIAL.indexOf(c[0]) >= 0));
@@ -5723,17 +5779,43 @@ const findCsvColumns = (full) => (full === true ? FIND_CSV_COLUMNS
 // this project's two hard bounces both came from the second kind.
 const findRunTally = (companies) => {
   const all = Array.isArray(companies) ? companies : [];
-  const read = all.filter(c => c && c.contactReadOk === true);
+  // ══ ONE MEMBERSHIP RULE ════════════════════════════════════════════════
+  // This read the raw flag while contactTabOf reads the verdict, so a chain
+  // drop was inside "31 read" AND inside "Ruled out 4" and in no file at all.
+  // The tally now counts what the tabs and the export count.
+  const read = all.filter(c => contactTabOf(c) === 'read');
   const t = { read: read.length, ofQueue: all.length,
     owner: 0, ownerTitled: 0, ownerCanBuy: 0,
+    // ══ THE NUMBER THAT DECIDES EVERYTHING ═════════════════════════════
+    // Nothing in this project has ever counted whether the owner resolver and
+    // the email engine work. repReady is that count: a row a rep can actually
+    // pick up and dial - the company was kept, the name is one we stand
+    // behind, the address will deliver, and there is a number.
+    //
+    // pivotReady is the second honest number: a name we are NOT sure of is
+    // still workable, because the rep can ask "is John not the owner?" That
+    // was the owner's own decision about weak names, so the report has to
+    // count them rather than fold them into the failures.
+    repReady: 0, pivotReady: 0,
+    gConfirmed: 0, gStated: 0, gInferred: 0, gUnconfirmed: 0,
     email: 0, tier1: 0, tier2: 0, tier3: 0, tier4: 0, sendable: 0,
     phone: 0, verifierOff: 0 };
   for (const c of read) {
+    const _phone = !!String(c.contactPhone || c.phone || '').replace(/\D/g, '');
+    const _kept = c.contactNotFit !== true;
+    const _grade = c.contactOwnerGrade || '';
     if (c.contactOwner) {
       t.owner++;
       if (c.contactOwnerTitle) t.ownerTitled++;
       if (c.contactOwnerCanBuy) t.ownerCanBuy++;
+      if (_grade === 'confirmed') t.gConfirmed++;
+      else if (_grade === 'stated') t.gStated++;
+      else if (_grade === 'inferred') t.gInferred++;
+      else if (_grade === 'unconfirmed') t.gUnconfirmed++;
     }
+    if (_kept && (_grade === 'confirmed' || _grade === 'stated')
+        && c.contactEmailSendable === true && _phone) t.repReady++;
+    else if (_kept && c.contactOwner && _phone) t.pivotReady++;
     if (c.contactEmail) {
       t.email++;
       const tier = Number(c.contactEmailTier);
@@ -5741,12 +5823,17 @@ const findRunTally = (companies) => {
       else if (tier === 3) t.tier3++; else if (tier === 4) t.tier4++;
       if (c.contactEmailSendable === true) t.sendable++;
     }
-    if (String(c.contactPhone || c.phone || '').replace(/\D/g, '')) t.phone++;
-    if ((c.contactNotes || []).some(n => /verifier/i.test(String(n)))) t.verifierOff++;
+    if (_phone) t.phone++;
+    // The SERVER's own answer. This used to grep contactNotes for the word
+    // "verifier" and no note written anywhere on the contact path contains it,
+    // so the counter was dead and always printed nothing - on exactly the runs
+    // where every address was silently downgraded.
+    if (c.contactEmailVerifierDown === true) t.verifierOff++;
   }
   const pct = (n) => t.read ? Math.round((n / t.read) * 100) : null;
   t.ownerPct = pct(t.owner); t.emailPct = pct(t.email);
   t.sendablePct = pct(t.sendable); t.phonePct = pct(t.phone);
+  t.repReadyPct = pct(t.repReady);
   // Under twelve reads nothing here is a rate. The same floor §35 puts on the
   // call-outcome report, and for the same reason: a thin number believed is
   // worse than no number.
@@ -5758,6 +5845,11 @@ const findTallyLine = (t) => {
   const p = (n, x) => n + (t.readable && x !== null ? ' (' + x + '%)' : '');
   const parts = [
     t.read + ' read of ' + t.ofQueue,
+    // FIRST, because it is the answer to "did this run produce anything
+    // workable". A counter computed and never printed is the exact defect
+    // this round exists to fix.
+    'ready to work ' + p(t.repReady, t.repReadyPct)
+      + (t.pivotReady ? ', ' + t.pivotReady + ' more worth a call on an unconfirmed name' : ''),
     'owner ' + p(t.owner, t.ownerPct) + (t.ownerTitled ? ', ' + t.ownerTitled + ' with a title' : ''),
     'email ' + p(t.email, t.emailPct),
     'safe to send ' + p(t.sendable, t.sendablePct),
@@ -5769,7 +5861,13 @@ const findTallyLine = (t) => {
   if (t.tier3) tiers.push(t.tier3 + ' pattern-built');
   if (t.tier4) tiers.push(t.tier4 + ' a guess');
   let s = parts.join(' \u00b7 ');
-  if (tiers.length) s += '. Addresses: ' + tiers.join(', ') + '.';
+  const grades = [];
+  if (t.gConfirmed) grades.push(t.gConfirmed + ' confirmed');
+  if (t.gStated) grades.push(t.gStated + ' stated on their own site');
+  if (t.gInferred) grades.push(t.gInferred + ' likely but unconfirmed');
+  if (t.gUnconfirmed) grades.push(t.gUnconfirmed + ' we cannot stand behind');
+  if (grades.length) s += ' Owners: ' + grades.join(', ') + '.';
+  if (tiers.length) s += ' Addresses: ' + tiers.join(', ') + '.';
   if (t.verifierOff) s += ' ' + t.verifierOff + ' lead(s) were read while the email verifier was not answering, so those addresses are pattern-built at best - a fact about us, not about them.';
   if (!t.readable) s += ' Under 12 reads, so these are counts and not rates.';
   return s;
@@ -5824,6 +5922,11 @@ const findContactRows = (companies) => {
     owner: c.contactOwner || '',
     ownerTitle: c.contactOwnerTitle || (c.contactOwner ? 'no title found' : ''),
     ownerCanBuy: c.contactOwner ? (c.contactOwnerCanBuy ? 'yes' : 'not established') : '',
+    // How sure, and what to ask. Built ONCE on the server, because the card,
+    // this file and the Google Sheet describing one row three ways is exactly
+    // the two-hand-kept-copies failure. A row read by an older build carries
+    // no grade and claims nothing rather than claiming confidence.
+    ownerHowSure: c.contactOwnerAskAs || '',
     // Which sources named them. Computed on every read and rendered nowhere,
     // so a name read verbatim off a team page and a name a model proposed
     // looked identical to a rep about to say it out loud.
@@ -5833,7 +5936,14 @@ const findContactRows = (companies) => {
     email: c.contactEmail || '',
     // The tier IS the confidence. Deriving it by regex over a human-readable
     // label is how four materially different states collapse into one sentence.
+    // The SERVER decides this now, at the one wrapper every result passes
+    // through - six states rather than four, and the two that matter most are
+    // the ones the tier alone could never say: a published address that a
+    // recruiter or a front desk reads, and a catch-all domain that cannot
+    // bounce and may still not be his mailbox. The tier ladder below survives
+    // as the fallback for a row read by an older build.
     emailConfidence: !c.contactEmail ? ''
+      : c.contactEmailGradeSay ? c.contactEmailGradeSay
       : c.contactEmailTier === 1 ? 'published on their own site'
       : c.contactEmailTier === 2 ? 'the mail server confirmed the mailbox exists'
       : c.contactEmailTier === 3 ? 'built from a pattern seen at this company, not confirmed'
@@ -5856,6 +5966,18 @@ const findContactRows = (companies) => {
     // A chain outlet is dropped, and the row says which evidence dropped it -
     // a verdict with no reason on it reads as a bug rather than as a judgement.
     notFit: c.contactNotFit === true ? (c.contactNotFitWhy || 'not an owner-operated business in our range') : '',
+    // Why the score was marked down. Empty on almost every row, which is why
+    // it costs nothing to carry - and on the rows where it is not empty it is
+    // the only thing accounting for a number that moved.
+    demotedWhy: (Array.isArray(c.contactDemotions) && c.contactDemotions.length)
+      ? c.contactDemotions.map(t => t && t.why).filter(Boolean).join('; ') : '',
+    // Independent, a branch, or unknown. "We could not read their site" is not
+    // the same answer as "nothing on their site says branch", and the row used
+    // to render both as silence.
+    independence: c.contactNotFit === true ? ''
+      : c.contactChainMeasured === true ? 'independent - nothing on their site says branch'
+      : c.contactReadOk === true ? 'not established - we could not read enough of their site'
+      : '',
     phone: c.contactPhone || c.phone || '',
     // Whether their own site prints this number. Three states, and "we never
     // read a page" is not the same as "their site disagrees".
@@ -6712,6 +6834,10 @@ function FindView({
     setContactRun({ total: want, done: 0, withEmail: 0, withOwner: 0, running: [], fc: 0, usd: 0, startedAt: started, failed: 0, refused: 0, names: [] });
     let next = 0;
     let kept = 0;
+    // Claimed but not yet answered. Without it the guard below is checked by
+    // six workers at kept === want - 1 and all six draw: "read 25" came back
+    // "31 read of 31" on 2026-09-01, which is want + (CONTACT_POOL - 1).
+    let inFlight = 0;
     let transportFails = 0;
     const results = new Map();
     const one = async (co) => {
@@ -6789,13 +6915,18 @@ function FindView({
           + '). Nothing was read and nothing was spent. If it is asleep or redeploying, give it a minute and press the button again \u2014 no lead has been marked as read.');
       }
       results.set(co.name, fields);
-      // A lead the server ruled out is not one of the leads asked for, so it
-      // does not consume one of them.
+      // ══ ONLY A LEAD WE ACTUALLY READ CONSUMES ONE OF THE N ASKED FOR ═══
+      // A lead the server ruled out is not one of the leads asked for. Neither
+      // is one whose read FAILED: it stays in Not-read and the panel promises
+      // "the button above picks them up again", so charging it a slot makes
+      // that promise false. The three-strike dead-server stop is what bounds
+      // the loop when every read is failing.
       const _refused = fields.contactNotFit === true;
-      if (!_refused) kept += 1;
+      const _kept = fields.contactReadOk === true && !_refused;
+      if (_kept) kept += 1;
       setContactRun(s => s ? {
         ...s,
-        done: s.done + (_refused ? 0 : 1),
+        done: s.done + (_kept ? 1 : 0),
         refused: (s.refused || 0) + (_refused ? 1 : 0),
         // ══ WHERE THE FIVE YOU JUST RAN WENT ════════════════════════════
         // contactAt was stamped on every read and consumed by nothing, so
@@ -6820,11 +6951,14 @@ function FindView({
     const worker = async () => {
       for (;;) {
         if (contactStop.current) return;
-        // Enough good ones already, or the pool is exhausted. Both are ends.
-        if (kept >= want) return;
+        // Enough good ones already or CLAIMED, or the pool is exhausted. The
+        // reservation is what makes "read N" return N: a refusal or a failure
+        // releases it below and the worker draws again.
+        if (kept + inFlight >= want) return;
         const i = next++;
         if (i >= list.length) return;
-        await one(list[i]);
+        inFlight += 1;
+        try { await one(list[i]); } finally { inFlight -= 1; }
       }
     };
     await Promise.all(Array.from({ length: Math.min(CONTACT_POOL, want) }, worker));
@@ -7720,7 +7854,27 @@ function FindView({
               ? React.createElement('span', { style:{ fontWeight:600 } }, co.contactOwner)
               : React.createElement('span', { style:{ color:'var(--m2)' } }, 'No owner named on their site'),
             co.contactOwner && co.contactOwnerTitle ? React.createElement('span', { style:{ color:'var(--m2)' } }, ', ' + co.contactOwnerTitle) : null,
-            co.contactOwner && !co.contactOwnerTitle ? React.createElement('span', { style:{ color:'var(--m2)' } }, ' (no title found)') : null),
+            co.contactOwner && !co.contactOwnerTitle ? React.createElement('span', { style:{ color:'var(--m2)' } }, ' (no title found)') : null,
+            // ══ HOW SURE, BESIDE THE NAME ═════════════════════════════
+            // A name three sources agree about and one the buying-floor gate
+            // held back used to render identically. Red only on the one that
+            // is a stop; the rest are plain, because red marks a stop on this
+            // screen and nothing else.
+            co.contactOwner && co.contactOwnerGrade
+              ? React.createElement('span', {
+                  title: co.contactOwnerAskAs || '',
+                  style:{ marginLeft:7, fontSize:11, letterSpacing:'.03em',
+                    color: co.contactOwnerGrade === 'unconfirmed' ? '#fca5a5' : 'var(--m2)' } },
+                  co.contactOwnerGrade === 'confirmed' ? 'CONFIRMED'
+                  : co.contactOwnerGrade === 'stated' ? 'THEIR SITE SAYS SO'
+                  : co.contactOwnerGrade === 'inferred' ? 'LIKELY'
+                  : 'NOT CONFIRMED')
+              : null),
+          // What to do about a name we are not sure of. Built once on the
+          // server, so the card, the CSV and the Sheet cannot disagree.
+          (co.contactOwner && co.contactOwnerGrade && co.contactOwnerGrade !== 'confirmed')
+            ? React.createElement('div', { style:{ fontSize:11.5, color:'var(--m2)', marginTop:2 } }, co.contactOwnerAskAs)
+            : null,
           React.createElement('div', { style:Object.assign({}, _line, { marginTop:2 }) },
             co.contactEmail
               ? React.createElement('span', { title: co.contactEmailLabel || '' },
@@ -8102,10 +8256,18 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
         (contactTab === 'read' && _cStale.length) ? _band('Stale',
           React.createElement('button', {
             className:'btn btn-sm', style:{ background:'transparent', border:'1px solid var(--b)', color:'var(--t)' },
+            // ══ A RE-READ IS A SPEND, SO IT OBEYS THE SAME NUMBER ══════════
+            // This passed the WHOLE stale set as the limit, so the one control
+            // on this panel that exists after a parser fix - exactly when an
+            // operator wants to re-read a handful and compare - was all or
+            // nothing. On a queue of 53 stale reads that is ~53 leads of
+            // Firecrawl and model spend behind one confirm, and the number box
+            // directly above it was ignored.
             onClick: () => {
-              if (!window.confirm('Re-read ' + _cStale.length + ' lead(s) taken by an older build? This spends on them again.')) return;
-              runContactBatch(_cStale, _cStale.length);
-            } }, 'Re-read ' + _cStale.length),
+              const _n = Math.max(1, Math.min(Number(contactHowMany) || _cStale.length, _cStale.length));
+              if (!window.confirm('Re-read ' + _n + ' of the ' + _cStale.length + ' lead(s) taken by an older build? This spends on them again.')) return;
+              runContactBatch(_cStale, _n);
+            } }, 'Re-read ' + Math.max(1, Math.min(Number(contactHowMany) || _cStale.length, _cStale.length)) + ' of ' + _cStale.length),
           // The second number is how many reads there ARE. It printed the
           // stale count twice - "68 of these 68 reads" on a queue with 68
           // stale of 68 read, which is true by accident and false the moment
@@ -8385,7 +8547,12 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       // Same rule the Research tab's batch runner already uses. With nothing
       // ticked this behaves exactly as it did: the filtered list, score-ordered,
       // capped at fifty.
-      const _allMovable = filtered.filter(c => c && c.name && !alreadyAdded(c.name));
+      // ══ THE SAME POPULATION THE PANEL ABOVE DESCRIBES ══════════════════
+      // This read `filtered`, one link above `_cShown`, so "Move all 92"
+      // offered to move the 32 leads the scope checkbox directly above says it
+      // is hiding - and those 32 are the non-Places lanes that panel warns
+      // about by name.
+      const _allMovable = _cShown.filter(c => c && c.name && !alreadyAdded(c.name));
       const _pickedMovable = _allMovable.filter(c => findPicked.has(c.name));
       const _movable = _pickedMovable.length ? _pickedMovable : _allMovable;
       const _byPick = _pickedMovable.length > 0;

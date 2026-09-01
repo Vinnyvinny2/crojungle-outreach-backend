@@ -533,12 +533,19 @@ const runLead = async (b, over, capMs) => {
     state.mode = 'findrich'; state.biz = biz('H');
     const hBiz = state.biz;
     const h0 = fcCalls();
+    // Scoped to THIS lead's window. state.requests accumulates across every
+    // scenario and the golden lead legitimately buys a review pull, so an
+    // absolute count here measures somebody else's spend - a harness that
+    // reports the wrong scenario's numbers is worse than no assertion.
+    const apifyCalls = () => state.requests.filter(q => q.host === 'api.apify.com').length;
+    const hAp0 = apifyCalls();
     const H1 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
       company: { name: hBiz.company, website: `https://${hBiz.host}`, phone: '(214) 555-0188',
                  location: 'Dallas, TX', industry: 'roofer', reviewCount: 180, rating: 4.6 },
       keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test', verifierKey: '' },
     });
     const hFc = fcCalls() - h0;
+    const hApify = apifyCalls() - hAp0;
     const HJ = H1.json || {};
     ok(H1.code === 200, `the contact read answered ${H1.code}: ${String(HJ.error || '').slice(0, 160)}`);
     // THE HEADLINE. The whole cost case rests on this one number: a site that
@@ -574,6 +581,22 @@ const runLead = async (b, over, capMs) => {
     // THE ADDRESS, off the free contact page.
     ok(HJ.email && /pete@/.test(String(HJ.email.address || '')), `the address published on their contact page was not found: ${JSON.stringify(HJ.email)}`);
     ok(HJ.phone === '(214) 555-0188', `the phone from the listing did not survive: ${JSON.stringify(HJ.phone)}`);
+    // HOW SURE WE ARE, which the card and the CSV both read. A row that cannot
+    // tell a corroborated name from one the buying floor held back is the
+    // defect this round exists to close, and no boot fixture sees the wire.
+    ok(HJ.owner && HJ.owner.grade, `the owner arrived with no evidence grade: ${JSON.stringify(HJ.owner)}`);
+    ok(HJ.owner && /Pete/.test(String(HJ.owner.askAs || '')),
+      `the row carries no instruction for the rep about this name: ${JSON.stringify(HJ.owner && HJ.owner.askAs)}`);
+    ok(HJ.email && HJ.email.grade === 'published_personal',
+      `an address published on their own contact page graded "${HJ.email && HJ.email.grade}"`);
+    // THE FREE OWNER SOURCE MUST NOT FIRE WHEN THE FREE READ ALREADY SETTLED.
+    // H settles at stage 1 off their own team page, so the review pull is money
+    // we must not spend - the owner's rule was "only when free fails".
+    ok(hApify === 0,
+      `a lead that settled its owner for free bought ${hApify} review pull(s), so the review-reply source is billing every lead rather than only the ones the free read could not settle`);
+    // A site we READ must not be reported as unmeasured independence.
+    ok(HJ.chain && HJ.chain.measured === true,
+      `a lead whose pages we read reports its chain evidence as unmeasured: ${JSON.stringify(HJ.chain)}`);
 
     // ── H2: THE SITE REFUSES A PLAIN FETCH ──────────────────────────────
     // The ONLY case a credit may be spent, and the case in which every absence

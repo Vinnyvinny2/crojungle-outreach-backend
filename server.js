@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260922;
+const CONTRACT_VERSION = 20260923;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -10758,6 +10758,61 @@ const DM_AUTHORITY_FLOOR = 75;
 // One derivation for both, so the printed word and the decision can never
 // drift: two hand-kept copies of "how sure are we" is the disease this file
 // records most.
+// == HOW SURE ARE WE THAT THIS IS THE OWNER =================================
+//
+// Vin, on the risk: "we really need the woners name to be correct because if
+// we are asking for them and its wrong its not good but we are able to pivot
+// like is jogn not the owner?"
+//
+// That is the whole specification. The name SHIPS - dropping a real owner
+// because we are not certain costs more than a rep asking one extra question
+// - but the row has to say which kind of name it is, because a rep opens
+// differently on a name three sources agree about than on one guess.
+//
+// The resolver has computed all of this since it was written. canBuy,
+// authority, sources and corroborated all exist on the result; the card
+// rendered the name and the title and threw the rest away, so a name the
+// buying-floor gate HELD BACK looked identical to a confirmed one.
+//
+// Four grades, and the two thin ones are named rather than removed. Both
+// eponymousConfident and rosterConfident settle on deliberately weak
+// evidence and each saves ~10 Firecrawl credits; the fix is to label their
+// output, never to refuse it.
+const OWNER_GRADES = ['confirmed', 'stated', 'inferred', 'unconfirmed', 'none'];
+const ownerEvidenceGrade = (o) => {
+  const d = o || {};
+  const name = String(d.name || '').trim();
+  if (!name) return { grade: 'none', why: '' };
+  // canBuy is the buying-floor verdict the resolver already reached. A name
+  // it held back is still printed - it is usually a real person with no
+  // title found - but it is never presented as settled.
+  if (d.canBuy !== true) {
+    return { grade: 'unconfirmed', why: String(d.blockReason || 'no title we could verify, so we cannot say this person can buy') };
+  }
+  const sources = Array.isArray(d.sources) ? d.sources : [];
+  const independent = independentSourceCount(sources);
+  if (d.corroborated === true || independent >= 2) {
+    return { grade: 'confirmed', why: `${independent} independent sources agree` };
+  }
+  // The business is named after him and nothing else corroborates it. The
+  // NAME is sound; the TITLE is an assumption, because the eponymous settle
+  // deliberately carries no confidence floor at all.
+  if (d.settledBy === 'eponymous') {
+    return { grade: 'inferred', why: 'the business is named after him, and no other source names an owner' };
+  }
+  return { grade: 'stated', why: 'their own site states it, and nothing independent corroborates it' };
+};
+// What the rep should DO with each grade. One home for the sentence, so the
+// card, the CSV and the Google Sheet cannot describe one row three ways.
+const ownerAskLine = (name, grade, why) => {
+  const n = String(name || '').trim();
+  const first = n.split(/\s+/)[0] || '';
+  if (!n) return '';
+  if (grade === 'confirmed') return `Confirmed \u2014 ${why}. Ask for ${first}.`;
+  if (grade === 'stated') return `Their own site says so, nothing else confirms it. Ask for ${first}; if he is not the owner, ask who is.`;
+  if (grade === 'inferred') return `Likely, not confirmed \u2014 ${why}. Ask for ${first}; if he is not the owner, ask who is.`;
+  return `NOT confirmed \u2014 ${why || 'we could not verify this person'}. Ask for ${first}; if he is not the owner, ask who is.`;
+};
 const DM_CONFIDENCE_AT = { high: 80, medium: 50 };
 const dmConfidenceFor = (score) => {
   // typeof FIRST. Number(null) is 0 and Number.isFinite(0) is true, so an
@@ -11381,6 +11436,23 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
 
     if (_pre.length) {
       let _skipped = 0;
+      // ══ THE CAP DECIDES WHAT IS READ, SO THE ORDER IS NOT COSMETIC ═══════
+      // Each page is sliced to 6,000 characters and the whole corpus is capped
+      // at 22,000, so about three interior pages fit and everything after them
+      // contributes NOTHING. Until now the corpus was built in arrival order,
+      // which meant the truncation point was decided by whichever page happened
+      // to be fetched first - and on the free path the page that fell off the
+      // end was the SECOND team page, the one most likely to name the owner.
+      //
+      // FIND_INTENT_RANK is the same declaration that orders the fetch, so the
+      // judgement about which page names an owner lives in one table rather
+      // than in two hand-kept copies. A page with no intent (the audit path
+      // supplies none) keeps its arrival position.
+      const _rank = (p) => {
+        const r = FIND_INTENT_RANK[String((p && p.intent) || '')];
+        return Number.isFinite(r) ? r : 99;
+      };
+      _pre.sort((a, b) => _rank(a) - _rank(b));
       for (const p of _pre) {
         const _block = `\n\n--- PAGE: ${p.url} ---\n` + String(p.text).slice(0, 6000);
         pages.push(_block);
@@ -12050,6 +12122,106 @@ const PRACTICE_STAFF_RE = /\b(?:paralegal|legal\s+(?:assistant|secretary)|law\s+
 // DeVries are people rather than unparseable.
 const ROSTER_NAME_RE = /^([A-Z][a-z'’-]{1,20}(?:\s+[A-Z]\.?)?(?:\s+\([A-Z][a-z'’-]{1,20}\))?(?:\s+[A-Z][a-z'’-]{1,20})?\s+[A-Z][a-z'’-]{0,25}(?:[A-Z][a-z'’-]{1,20})?)$/;
 
+// ══ A ROLE NOUN IS NOT A SURNAME ═══════════════════════════════════════════
+// Moved up from the Find reader so the roster parser and the careers reader
+// ask ONE question rather than keeping two lists. It is load-bearing for the
+// swap rule below: "Master Plumber" and "Project Manager" are name-SHAPED by
+// every pattern in this file, and a swap that cannot refuse them turns the
+// correct row "David S Graham / Owner, Master Plumber" into a person called
+// Master Plumber.
+const FIND_ROLE_NOUN = /\b(manager|specialist|coordinator|director|representative|technician|installer|assistant|associate|supervisor|estimator|foreman|dispatcher|apprentice|designer|strategist|analyst|consultant|officer|engineer|mechanic|plumber|electrician|roofer|receptionist|admin(?:istrator)?|bookkeeper|marketer)\b/i;
+
+// Hoisted out of parseTeamRoster so the title-led reader below and the mononym
+// pass inside it share one declaration. Two copies of a declared word list is
+// the disease this file records most, and the copy that rots is always the one
+// that only runs in the case nobody tests.
+const MONONYM_RE = /^[A-Z][a-z'\u2019-]{2,15}$/;
+const NOT_A_MONONYM = new Set([
+  'about', 'careers', 'career', 'contact', 'team', 'staff', 'people', 'crew',
+  'leadership', 'management', 'services', 'service', 'products', 'shop', 'store',
+  'menu', 'blog', 'news', 'events', 'gallery', 'photos', 'videos', 'reviews',
+  'testimonials', 'pricing', 'prices', 'faq', 'faqs', 'home', 'locations',
+  'location', 'projects', 'portfolio', 'work', 'history', 'values', 'mission',
+  'vision', 'story', 'info', 'support', 'help', 'login', 'search', 'more',
+  'details', 'overview', 'summary', 'profile', 'company', 'business', 'hiring',
+  'jobs', 'apply', 'join', 'welcome', 'financing', 'warranty', 'specials',
+  'offers', 'coupons', 'estimate', 'quote', 'book', 'schedule', 'emergency',
+  'residential', 'commercial', 'maintenance', 'repair', 'installation',
+  'inspection', 'training', 'resources', 'downloads', 'privacy', 'terms',
+  'blogs', 'articles', 'press', 'media', 'awards', 'partners', 'clients',
+]);
+
+// ══ IS THIS TRAILING RUN A PERSON? ═════════════════════════════════════════
+// One question, asked by both readers below. A single token is permitted and
+// MARKED, because Ecoview's own page says "Our Owner, Carl" and we discarded
+// it and then paid ~6 Firecrawl credits to learn the surname. For a caller
+// "ask for Carl" works; nothing downstream may treat it as a settled identity,
+// and the held-back email rule already refuses to build an address from it.
+const rosterNameTailOk = (cand, kindOf) => {
+  const s = String(cand || '').trim().replace(/[.,;:]+$/, '');
+  if (!s || s.length > 40) return false;
+  if (FIND_ROLE_NOUN.test(s)) return false;
+  if (OWNER_TITLE_RE.test(s) || NON_OWNER_TITLE_RE.test(s) || PRACTITIONER_TITLE_RE.test(s)) return false;
+  if (kindOf && kindOf(s)) return false;
+  if (s.indexOf(' ') < 0) {
+    return MONONYM_RE.test(s) && !NOT_A_MONONYM.has(s.toLowerCase());
+  }
+  return ROSTER_NAME_RE.test(s) && looksLikeRealName(s);
+};
+
+// ══ A TITLE THAT CARRIES A PERSON'S NAME ═══════════════════════════════════
+// Live, JR & Co, 2026-09-01: the exported sheet named the decision-maker as
+// "Iron Sharpens Iron" with the title "President & CEO Jon Schilling", and its
+// two sibling rows had the name and the title in opposite columns too. The
+// name side is validated by SHAPE and the title side by SHAPE, and nothing
+// ever asked whether the TITLE contained a person. Returns the trailing run of
+// the title that is a real person's name, or ''.
+const nameTailOfTitle = (title, kindOf) => {
+  const words = String(title || '').trim().replace(/\s+/g, ' ').split(' ');
+  for (let take = 2; take <= 3 && take <= words.length; take++) {
+    const tail = words.slice(words.length - take).join(' ');
+    if (rosterNameTailOk(tail, kindOf)) return tail.replace(/[.,;:]+$/, '');
+  }
+  return '';
+};
+
+// ══ THE TITLE IN FRONT OF THE NAME ═════════════════════════════════════════
+// Scott Roofing's own page says "CEO Brian Scott and president Mike Scott" and
+// the parser returned NOTHING. Three forward-only decisions cause it: the name
+// is always the first comma-segment, the inline title is always what follows
+// it, and the lookahead runs strictly forward. On the 2026-09-01 run 21 of the
+// 25 sites we read returned zero name/title pairs, and on TEN of them the log
+// itself said an ownership word was on the page.
+//
+// Splitting on " and " first is what keeps the pairing honest: taken whole the
+// trailing name is Mike Scott, and the CEO is Brian.
+const titleLedPeople = (run, kindOf) => {
+  const out = [];
+  for (const part of String(run || '').split(/\s+\band\b\s+/i)) {
+    const s = part.trim().replace(/^[,;:\-\u2013\u2014\s]+/, '').replace(/[,;:\s]+$/, '');
+    if (!s || s.length > 90) continue;
+    let name = '';
+    let head = '';
+    const ci = s.lastIndexOf(',');
+    if (ci > 0 && rosterNameTailOk(s.slice(ci + 1), kindOf)) {
+      name = s.slice(ci + 1).trim().replace(/[.,;:]+$/, '');
+      head = s.slice(0, ci).trim();
+    }
+    if (!name) {
+      const tail = nameTailOfTitle(s, kindOf);
+      if (tail) {
+        name = tail;
+        head = s.slice(0, s.length - tail.length).replace(/[,;:\-\s]+$/, '').trim();
+      }
+    }
+    if (!name || !head) continue;
+    const kind = kindOf(head);
+    if (!kind) continue;
+    out.push({ name, title: head.replace(/\s+/g, ' '), isOwner: kind === 'owner', mononym: name.indexOf(' ') < 0 });
+  }
+  return out;
+};
+
 // ══ "GOOGLE REVIEWS" WENT OUT AS THE OWNER'S NAME ═══════════════════════════
 // Live, 2026-08-17, Mac Brian Doors & Window Installation. The site header
 // carries a "Leave us a review" widget. The roster parser read "Google Reviews"
@@ -12287,8 +12459,25 @@ const parseTeamRoster = (html, companyName = '') => {
     // a bare job title dressed as a name — "Managing Partner" satisfies every
     // name pattern — and only then is the title test the right question.
     const p = personFromRun(runs[i], companyName);
-    if (!p) continue;
-    if (!p.inlineTitle && titleKind(runs[i])) continue;
+    // ══ THE SHARED NAME GATE, FINALLY CALLED ═════════════════════════════
+    // looksLikeRealName holds BUSINESS_TAIL, jobWord and junkWhole - the three
+    // guards written for exactly this - and the roster was the ONE owner source
+    // that never called it. Live on 2026-09-01 that put "Trefoil Holdings" at
+    // the top of the exported file as Cooper CPA Group's decision-maker, and
+    // "Our Owner" and "Branch Manager" on rows beside it. A guard in the wrong
+    // function; one call site closes three live failures.
+    //
+    // And the title question is asked of the NAME SLOT rather than of the whole
+    // run. Asked of the run it had to be disabled whenever an inline title was
+    // present - "Jenny McDowell, Owner" reads as a title end to end - so the
+    // one guard against a job title in the name slot was switched off by a
+    // comma, which is how "Branch Manager" became a person.
+    const _pOk = !!p && looksLikeRealName(p.name) && !titleKind(p.name);
+    if (!_pOk) {
+      // The layout may simply be the other way round: a title, then the person.
+      for (const _tl of titleLedPeople(runs[i], titleKind)) out.push(_tl);
+      continue;
+    }
     const m = [p.name, p.name];
     // A section heading occupies the same position as a name and matches the
     // same shape. "About Us" reached a live email as the greeting.
@@ -12384,6 +12573,29 @@ const parseTeamRoster = (html, companyName = '') => {
   // pointed the other way.
   out = out.filter(r => looksLikeJobTitle(r.title));
 
+  // ══ TWO PEOPLE IN ONE ROW MEANS WE CANNOT SAY WHICH ONE OWNS IT ══════════
+  // JR & Co, live 2026-09-01: name "Iron Sharpens Iron", title "President &
+  // CEO Jon Schilling". The name side is validated by shape and the title side
+  // by shape, so a title-first layout ships silently with the columns swapped.
+  //
+  // Two outcomes, and the split is what keeps it safe. If the name slot is not
+  // a person at all, the person in the title IS the row and we recover it. If
+  // BOTH slots name somebody, we have no way to say which one owns the
+  // business, so the row keeps its pairing and loses its ownership claim - the
+  // model still runs, and an owner we cannot identify is better than the wrong
+  // one on a sheet somebody dials from.
+  out = out.map(r => {
+    if (r.mononym) return r;
+    const _tail = nameTailOfTitle(r.title, titleKind);
+    if (!_tail || _tail.toLowerCase() === String(r.name || '').toLowerCase()) return r;
+    if (!looksLikeRealName(r.name)) {
+      const _head = r.title.slice(0, r.title.length - _tail.length).replace(/[,;:\-\s]+$/, '').trim();
+      const _k = _head ? titleKind(_head) : null;
+      return _k ? { name: _tail, title: _head.replace(/\s+/g, ' '), isOwner: _k === 'owner' } : r;
+    }
+    return r.isOwner ? Object.assign({}, r, { isOwner: false, twoPeople: true }) : r;
+  });
+
   // ══ A ROSTER THAT NAMES ITS PEOPLE BY FIRST NAME ONLY ═════════════
   // Aqua Blue Pools, live: their page reads "Jerry Owner Kyle General Manager
   // Jim Operations Manager". ROSTER_NAME_RE structurally requires two
@@ -12402,7 +12614,8 @@ const parseTeamRoster = (html, companyName = '') => {
   //   - it is marked `mononym`, so nothing downstream may treat one first name
   //     as a settled identity. It is a candidate to be corroborated, and
   //     foldFirstNameClusters is already the mechanism that corroborates it.
-  const MONONYM_RE = /^[A-Z][a-z'\u2019-]{2,15}$/;
+  // MONONYM_RE and NOT_A_MONONYM are at module scope now, shared with the
+  // title-led reader. Same rule, one copy.
   // A single capitalised word sits in exactly the same position as a section
   // heading, and there is no dictionary in this process that can tell "Jerry"
   // from "Careers". The check caught that on its first boot: "Careers" above an
@@ -12410,20 +12623,6 @@ const parseTeamRoster = (html, companyName = '') => {
   // headings are DECLARED, the way STEM_COMPLETE_WORDS and the chain stoplist
   // are, and both directions are fixtured - a name that must survive and a
   // heading that must not.
-  const NOT_A_MONONYM = new Set([
-    'about', 'careers', 'career', 'contact', 'team', 'staff', 'people', 'crew',
-    'leadership', 'management', 'services', 'service', 'products', 'shop', 'store',
-    'menu', 'blog', 'news', 'events', 'gallery', 'photos', 'videos', 'reviews',
-    'testimonials', 'pricing', 'prices', 'faq', 'faqs', 'home', 'locations',
-    'location', 'projects', 'portfolio', 'work', 'history', 'values', 'mission',
-    'vision', 'story', 'info', 'support', 'help', 'login', 'search', 'more',
-    'details', 'overview', 'summary', 'profile', 'company', 'business', 'hiring',
-    'jobs', 'apply', 'join', 'welcome', 'financing', 'warranty', 'specials',
-    'offers', 'coupons', 'estimate', 'quote', 'book', 'schedule', 'emergency',
-    'residential', 'commercial', 'maintenance', 'repair', 'installation',
-    'inspection', 'training', 'resources', 'downloads', 'privacy', 'terms',
-    'blogs', 'articles', 'press', 'media', 'awards', 'partners', 'clients',
-  ]);
   if (!out.some(r => r.isOwner)) {
     for (let i = 0; i < runs.length - 1; i++) {
       const head = String(runs[i] || '').trim();
@@ -32491,6 +32690,13 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // run bought stage 2 anyway. Nothing printed which one was false, so the
   // question could not be answered from the log at all. It can now.
   let _settleWhy = 'settled() was never called';
+  // WHICH rule settled it, not just the prose. Two of the four settle on
+  // deliberately thin evidence - eponymousConfident carries no confidence
+  // floor at all, and rosterConfident fires on one uncorroborated roster
+  // row. Both are kept because each saves ~10 Firecrawl credits; what was
+  // missing is that their output shipped looking exactly like a name three
+  // sources agree on. The grade downstream reads this.
+  let _settledBy = '';
   const settled = () => {
     const ranked = rankOwnerCandidates(found);
     if (!ranked) { _settleWhy = 'no candidate survived ranking at all'; return null; }
@@ -32576,6 +32782,10 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     _settleWhy = `${ranked.name || 'nobody'} (${ranked.sources.join('+')}) authority=${ranked.authority} independent=${independent}`
       + ` | corroborated=${corroborated} ownSite=${ownSiteConfident} eponymous=${eponymousConfident} roster=${rosterConfident}`
       + ` | brainConfidence=${(brainHit && brainHit.confidence) || 'none'} rankedScore=${ranked.score} rankedConfidence=${dmConfidenceFor(ranked.score)} eponymousRule=${_isEponymousOwner(ranked.name, companyName, website)}`;
+    _settledBy = corroborated ? 'corroborated'
+      : ownSiteConfident ? 'ownSite'
+      : rosterConfident ? 'roster'
+      : eponymousConfident ? 'eponymous' : '';
     return (corroborated || ownSiteConfident || eponymousConfident || rosterConfident) ? ranked : null;
   };
 
@@ -32583,17 +32793,57 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   //   · their own website (the single strongest source)
   //   · Google News RSS (free)
   //   · the business name, checked against site copy (free)
-  //   · whoever signs the Google review replies (reuses the cached reviews scrape)
-  const [brain, news, bizName, reviewSig] = await Promise.all([
+  //
+  // Whoever signs the Google review replies is NOT here. It bills an Apify
+  // pull, so it runs as stage 1.5 below - only on the leads this stage could
+  // not settle, which are exactly the leads that would otherwise buy the
+  // ~10-credit stage 2. Firing it here would charge every lead for a
+  // question most of them have already answered for nothing.
+  const [brain, news, bizName] = await Promise.all([
     findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName, preFetchedPages).catch(() => null),
     findOwnerViaNews(companyName).catch(() => null),
     findOwnerViaBusinessName(companyName, homepageContent, (website || '').replace(/^https?:\/\//, '').split('/')[0], apiKey).catch(() => null),
-    (placeId && apifyToken) ? findOwnerViaReviewReplies(placeId, apifyToken, apiKey, companyName).catch(() => null) : Promise.resolve(null),
   ]);
   brainHit = brain;   // referenced by settled() to check own-site confidence
-  for (const f of [brain, news, bizName, reviewSig]) if (f) found.push(f);
+  for (const f of [brain, news, bizName]) if (f) found.push(f);
 
   let stagesRun = 1;
+  // ══ STAGE 1.5 — WHOEVER ANSWERS THE REVIEWS, WHEN NOTHING ELSE SETTLED ══
+  // At an owner-run shop the person replying to the Google reviews IS the
+  // owner, and he signs them. It is the best free-ish read of who to ask for
+  // that this system can buy, and it was wired and unreachable: the Find
+  // contact route passed '' for both placeId and apifyToken, so the guard
+  // below could never open.
+  //
+  // It sits HERE rather than in stage 1 because it bills an Apify review
+  // pull. Stage 1 is genuinely free; this runs only on the leads stage 1
+  // could not settle, which are exactly the leads about to buy the ~10-credit
+  // stage-2 wave. That is the owner's own rule for it: only when free fails.
+  //
+  // It runs on a callOnly batch too. Stage 2 is stood down there, so this is
+  // the last source that can name a person before the rep has to ask
+  // reception - and unlike stage 2 it can carry a TITLE.
+  //
+  // And it sits ABOVE the dead-site return below, not under it. A site that
+  // returned nothing is exactly the lead where their Google reviews are the
+  // ONLY place an owner's name can still come from - putting this after that
+  // return silenced the source on the leads that need it most, and the
+  // end-to-end 402 scenario caught it.
+  if (!settled()) {
+    if (placeId && apifyToken && apiKey) {
+      const _sig = await findOwnerViaReviewReplies(placeId, apifyToken, apiKey, companyName).catch(() => null);
+      if (_sig) {
+        found.push(_sig);
+        console.log(`♻ DM [${companyName}]: stage 1 did not settle, so we read who signs their Google review replies — ${_sig.name}${_sig.title ? ` (${_sig.title})` : ''}. That is the owner answering his own reviews, and it costs one review pull instead of the ~10-credit search wave.`);
+      } else {
+        console.log(`DM [${companyName}]: nobody signs their Google review replies by name, so that source had nothing to add.`);
+      }
+    } else {
+      // An absence claim needs a look. "No owner found" must never quietly
+      // mean "we could not ask the one source that would have known".
+      console.log(`DM [${companyName}]: their review replies were NOT read — ${!placeId ? 'this lead carries no Google place id' : 'no Apify token was sent'}. That is the free source that names an owner-run shop's owner, so a miss below is our blindness rather than their silence.`);
+    }
+  }
   // ══ A DEAD SITE CANNOT PRODUCE AN AUDIT — STOP SPENDING ON IT ══════════════
   // James Dougherty Construction, live, THREE times. Their homepage returned zero
   // bytes on the fetch and again on the retry. We knew that before this function
@@ -32769,6 +33019,16 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
 
   console.log(`DM [${companyName}]: ${best.name} (${best.title || '?'}) | score ${best.score} | ${confidence} | sources: ${best.sources.join('+')}${best.corroborated ? ' [CORROBORATED]' : ''}`);
 
+  // == HOW SURE, SAID ONCE ==================================================
+  // Computed HERE rather than at each consumer: every input is on `best` and
+  // on _settledBy, and a second copy of "is this the owner" is the disease
+  // this file records most. The card, the CSV and the Google Sheet all read
+  // this one answer.
+  const _blockReason = best.canBuy ? null : (best.blockWhy || `"${best.title || 'unknown title'}" cannot authorize a purchase`);
+  const _grade = ownerEvidenceGrade({
+    name: best.name, canBuy: best.canBuy, sources: best.sources,
+    corroborated: best.corroborated, settledBy: _settledBy, blockReason: _blockReason,
+  });
   return {
     name: best.name,
     title: best.title,
@@ -32780,7 +33040,11 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     authority: _authority,
     eponymousOwner: _eponymousOwner,
     canBuy: best.canBuy,
-    blockReason: best.canBuy ? null : (best.blockWhy || `"${best.title || 'unknown title'}" cannot authorize a purchase`),
+    settledBy: _settledBy,
+    evidenceGrade: _grade.grade,
+    evidenceWhy: _grade.why,
+    askAs: ownerAskLine(best.name, _grade.grade, _grade.why),
+    blockReason: _blockReason,
     // The ranker returns only the winner now, so there is no runner-up list to
     // expose. Nothing downstream read this field.
     alternates: [],
@@ -32880,13 +33144,73 @@ const _unvouchedSendGuard = (r, args) => {
       || `built from ${r.name || 'a name'}, who was held back by the authority gate \u2014 confirm the person before sending`,
   });
 };
+// == HOW SURE ARE WE THAT THIS ADDRESS REACHES HIM ==========================
+//
+// Six materially different things used to collapse into one word, sendable:
+//
+//   · published on their own site, and it is a person's mailbox
+//   · SMTP-confirmed - the mailbox provably exists
+//   · a ROLE mailbox: a careers-page recruiting@, or an address on a domain
+//     that is not even theirs. Tier 1 is unconditional on tier by decision,
+//     so this ships sendable:true and only the score and the label moved
+//   · a CATCH-ALL domain: it cannot bounce, and it may not be his box
+//   · a pattern guess
+//   · and the one that is not about the address at all - the verifier was
+//     down, so tier 2 was unreachable and every lead after it silently fell
+//     to tier 3 or 4
+//
+// Graded HERE, at the single wrapper every one of the core's ~20 returns
+// passes through, and never at a return site: one derivation, so the card,
+// the CSV and the Google Sheet cannot describe one address three ways.
+const EMAIL_GRADES = ['published_personal', 'smtp_confirmed', 'published_role', 'catch_all', 'pattern_guess', 'verifier_down', 'none'];
+const EMAIL_GRADE_SAY = {
+  published_personal: 'Published on their own site, and it is a person, not a department.',
+  smtp_confirmed:     'We checked the mailbox and it exists.',
+  published_role:     'Real and published, but a shared or recruiting inbox \u2014 somebody other than the owner reads it first.',
+  catch_all:          'Their domain accepts everything, so this cannot bounce \u2014 but we could not confirm it is his mailbox. Use his name in the first line.',
+  pattern_guess:      'Built from a pattern, not confirmed. It may bounce.',
+  verifier_down:      'Unconfirmed because our mailbox checker was unavailable on this run \u2014 that is our outage, not a fault of the address.',
+  none:               '',
+};
+const emailConfidenceGrade = (r, opts) => {
+  const e = r || {};
+  if (!e.email) return 'none';
+  const tier = Number(e.tier);
+  // typeof-guarded rather than truthy: Number(null) is 0 and 0 is finite, and
+  // an unmeasured tier read as tier 0 would grade as a guess.
+  if (typeof e.tier !== 'number' || !Number.isFinite(tier)) return 'pattern_guess';
+  if (tier === 2) return 'smtp_confirmed';
+  if (tier === 1) {
+    const role = e.kind === 'role' || e.kind === 'junk' || e.fromCareersPage === true || e.offDomain === true;
+    return role ? 'published_role' : 'published_personal';
+  }
+  if (e.catchAll === true) {
+    // The verifier being down NEVER overrides a measurement. Tier 1 and 2 are
+    // measurements; this and the guess below are not, so only they can carry
+    // the outage as their reason.
+    return (opts && opts.verifierDown === true) ? 'verifier_down' : 'catch_all';
+  }
+  return (opts && opts.verifierDown === true) ? 'verifier_down' : 'pattern_guess';
+};
 const findEmailFireproof = async (_args) => {
   const _r = _unvouchedSendGuard(await _findEmailFireproofCore(_args || {}), _args || {});
+  // Whether the mailbox checker was usable is a fact about THIS RUN, captured
+  // where the answer was produced. A missing KEY is deliberately NOT an
+  // outage: it is a setting nobody filled in, and reporting the two as one
+  // makes every run by an operator without the key read as a failure.
+  const _verifierDown = !!((_args && _args.verifierKey) && verifierBlocked());
   if (_r && _r.email && !isMailboxShape(_r.email)) {
     console.log(`\u26d4 EMAIL REJECTED [${_r.email}]: this is not a mailbox \u2014 it is shaped like a file (a retina image asset such as logo@2x.png reads as an address to every regex). Live, team-dr-vargas@2x.jpg was scored 100/100 and marked sendable. The lead now carries no address instead of a JPEG, and the bounce is not charged to the sending domain.`);
-    return { email: '', ...EMAIL_TIERS.NONE, name: _r.name || '', pattern: null, lookupBlocked: _r.lookupBlocked || null };
+    return { email: '', ...EMAIL_TIERS.NONE, name: _r.name || '', pattern: null, lookupBlocked: _r.lookupBlocked || null,
+      grade: 'none', gradeSay: '', verifierDown: _verifierDown };
   }
-  return _r;
+  // The grade rides the result from the ONE place it is decided - and a
+  // FALSY result is returned untouched. Spreading null yields {}, which is
+  // truthy, and every caller that asks `if (!em)` would silently change
+  // behaviour. Adding a field must never change whether an answer exists.
+  if (!_r) return _r;
+  const _g = emailConfidenceGrade(_r, { verifierDown: _verifierDown });
+  return { ..._r, grade: _g, gradeSay: EMAIL_GRADE_SAY[_g] || '', verifierDown: _verifierDown };
 };
 
 // ══ A NAME WE REFUSED TO VOUCH FOR MAY BE TESTED, NEVER ASSUMED ═══════════
@@ -33537,6 +33861,12 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
       console.log(`\u2713 EMAIL [${domain}] CATCH-ALL domain — every address is accepted, so ${best.email} cannot bounce. Sendable (delivery certain, recipient likely).`);
       return {
         email: best.email, tier: 3, score: 72, sendable: true, name, pattern: best.pattern,
+        // Declared, not derived. Every grade below this used to be read back
+        // out of the LABEL by regex - a fourth copy of a rule that already
+        // had three, and the one shape that matters most: a catch-all cannot
+        // bounce AND may not be his mailbox, which is not 'sendable' or
+        // 'not sendable' but a third thing.
+        catchAll: true,
         label: 'Catch-all domain — delivery is certain (it cannot bounce), but we could not confirm this exact mailbox. Address them by name in the first line.',
       };
     }
@@ -35146,6 +35476,14 @@ const CONTACT_RANK_TERMS = [
   { id: 'belowFloor', points: -12, why: 'nothing in the catalogue is affordable at this job value and volume' },
   { id: 'outOfBand',  points: -10, why: 'outside the star band discovery demotes on' },
   { id: 'aboveSize',  points: -10, why: 'above the review ceiling discovery demotes on' },
+  // ══ SOMEBODY COMPETENT IS ALREADY ON THIS ACCOUNT ═══════════════════════
+  // Conversion tracking AND call tracking AND a real booking tool, all three,
+  // is not a business that set itself up by accident. Vin's own rule: the lead
+  // to skip is the one doing marketing and doing it WELL, because there is
+  // nothing left to sell. -12 rather than -25 because it is evidence that
+  // somebody has been here, not proof they are getting a return - we are
+  // reading markup, not their ads account - so it never sinks a lead alone.
+  { id: 'dialledIn',  points: -12, why: 'their tracking and booking are already set up properly, so somebody competent is on this account' },
 ];
 const CONTACT_RANK_MAX_MODIFIER = 18;   // the three positives; asserted at boot
 
@@ -35167,6 +35505,25 @@ const CONTACT_RANK_MAX_MODIFIER = 18;   // the three positives; asserted at boot
 //
 // Reads the SAME declared table the contact ranker reads. Two hand-kept copies
 // of one penalty is how one of them stays wrong.
+// ══ ALREADY IN COMPETENT HANDS ══════════════════════════════════════════
+// All three, or nothing. Conversion tracking alone is a plugin default; call
+// tracking alone is one vendor a receptionist signed up for; a scheduler alone
+// is a trade whose software ships with one. Together they are somebody who
+// knows what they are doing, and Vin's rule is that such a business is the one
+// to skip - there is nothing left to sell them.
+//
+// HONEST NAME AND HONEST LIMIT: this says their marketing is INSTRUMENTED, not
+// that it works. We are reading markup. We cannot see their cost per lead, and
+// neither can the audit - that is inside their ads account. So it marks a lead
+// down rather than refusing it, and the row says which of the three we saw.
+const alreadyDialledIn = (s) => {
+  const d = s || {};
+  if (!(d.adsConversion === true && d.callTracking === true && d.scheduler === true)) {
+    return { points: 0, terms: [] };
+  }
+  const t = CONTACT_RANK_TERMS.find(x => x.id === 'dialledIn');
+  return t ? { points: t.points, terms: [t] } : { points: 0, terms: [] };
+};
 const demotionPenalty = (lead) => {
   const l = lead || {};
   const terms = [];
@@ -57355,6 +57712,173 @@ app.listen(PORT, () => {
       _fails.push('the practitioner test no longer shares CREDENTIAL_RE, so there are two credential lists and the newer one will drift');
     }
 
+    // == HOW SURE ARE WE THAT THIS IS THE OWNER =========================
+    // EXECUTED, both directions. The resolver has computed canBuy, authority,
+    // sources and corroborated since it was written and the card rendered only
+    // the name and the title, so a name the buying floor HELD BACK looked
+    // exactly like one three sources agree about.
+    {
+      const _grade = (o) => ownerEvidenceGrade(o).grade;
+      const _cases = [
+        ['two independent sources', { name: 'A B', canBuy: true, corroborated: true, sources: ['own_website_brain', 'web_search'] }, 'confirmed'],
+        ['their own site, uncorroborated', { name: 'A B', canBuy: true, sources: ['own_website_brain'], settledBy: 'roster' }, 'stated'],
+        ['named after him, nothing else', { name: 'A B', canBuy: true, sources: ['own_website_brain'], settledBy: 'eponymous' }, 'inferred'],
+        ['held back below the buying floor', { name: 'A B', canBuy: false, sources: ['own_website_brain'], blockReason: 'no title found' }, 'unconfirmed'],
+        ['nobody at all', { name: '', canBuy: true, sources: ['own_website_brain'] }, 'none'],
+      ];
+      for (const [_what, _o, _want] of _cases) {
+        const _got = _grade(_o);
+        if (_got !== _want) _fails.push(`an owner known from ${_what} grades "${_got}" and should grade "${_want}"`);
+      }
+      // The eponymous settle carries NO confidence floor by decision, so its
+      // output must never be indistinguishable from a corroborated name.
+      if (_grade({ name: 'A B', canBuy: true, sources: ['own_website_brain'], settledBy: 'eponymous' })
+          === _grade({ name: 'A B', canBuy: true, corroborated: true, sources: ['own_website_brain', 'web_search'] })) {
+        _fails.push('the eponymous settle and a corroborated name grade the same, so the thin evidence is invisible on the row');
+      }
+      // A name we are not sure of must tell the rep how to open, and the
+      // pivot is the owner's own instruction: ask, do not assert.
+      for (const _g of ['stated', 'inferred', 'unconfirmed']) {
+        const _say = ownerAskLine('John Smith', _g, 'because');
+        if (_say.indexOf('John') < 0 || !/ask who is/.test(_say)) {
+          _fails.push(`a ${_g} owner does not tell the rep to ask rather than assert: "${_say}"`);
+        }
+      }
+      if (/ask who is/.test(ownerAskLine('John Smith', 'confirmed', 'two sources agree'))) {
+        _fails.push('a CONFIRMED owner is still hedged, so the grade means nothing on the rows it should be strongest on');
+      }
+      if (ownerAskLine('', 'confirmed', 'x') !== '') _fails.push('a row with no owner still prints an instruction about one');
+    }
+    // Both halves of the wire, pinned at the CALL SITES: a fixture supplies its
+    // own arguments and cannot see a caller.
+    if (!_src.includes(_n('evidenceGrade: _grade.grade', ','))
+      || !_src.includes(_n('askAs: ownerAskLine(best.name, _grade.grade,', ' _grade.why),'))) {
+      _fails.push('the resolver no longer grades the owner it returns, so every consumer is back to guessing from the title');
+    }
+    if (!_src.includes(_n('grade: dm.evidenceGrade ||', " '', gradeWhy: dm.evidenceWhy || '',"))) {
+      _fails.push('the owner evidence grade stops before the row, so the card and the CSV go back to showing a held-back name and a corroborated one the same way');
+    }
+
+    // == THE FREE OWNER SOURCE MUST BE REACHABLE, AND ONLY WHEN FREE FAILS ==
+    // findOwnerViaReviewReplies is weighted 35 and the contact route passed ''
+    // for both placeId and apifyToken, so it was wired and could never fire.
+    // At an owner-run shop whoever answers the reviews IS the owner.
+    {
+      const _rr = _n('findOwnerViaReviewReplies(placeId, apifyToken,', ' apiKey, companyName)');
+      const _n1 = _src.split(_rr).length - 1;
+      if (_n1 !== 1) _fails.push(`the review-reply owner source is called ${_n1} time(s); exactly one call site is the whole point of it being bounded`);
+      const _at = _src.indexOf(_rr);
+      const _stage1 = _src.indexOf(_n('const [brain, news, bizName] = await', ' Promise.all(['));
+      const _paid = _src.indexOf(_n('DM [${companyName}]: stage 1 did not settle', ' — ${_settleWhy}. Buying the paid lookups.'));
+      if (_at < 0 || _stage1 < 0 || _paid < 0 || !(_at > _stage1 && _at < _paid)) {
+        _fails.push('the review-reply source is not between the free stage and the paid wave, so it either bills every lead or never runs on the leads that need it');
+      }
+      if (!_src.includes(_n('placeId, industry: (company &&', " company.industry) || '',"))
+        || !_src.includes(_n('apifyToken, callOnly:', ' !paidOwner,'))) {
+        _fails.push('the contact read still sends an empty placeId or Apify token, so the free owner source is structurally dead on the one list a rep dials from');
+      }
+      // The route must READ the token off the request. Reverting that one
+      // line left every assertion green: the wire above forwards a VARIABLE,
+      // and a variable hard-coded to '' satisfies it perfectly.
+      if (!_src.includes(_n('const apifyToken = (keys &&', " keys.apifyToken) || '';"))) {
+        _fails.push('the contact route no longer reads the Apify token off the request, so the token it forwards is always empty');
+      }
+      // And stage 1.5 must be LIVE rather than merely present. The position
+      // needle finds the call wherever it sits, so neutering its CONDITION
+      // left the call in place and the whole check green.
+      if (!_src.includes(_n('if (!settled()) {' + '\n', '    if (placeId && apifyToken && apiKey) {'))) {
+        _fails.push('stage 1.5 no longer runs on the leads the free read could not settle, so the review-reply source is present and unreachable');
+      }
+      // WHICH rule settled it must be RECORDED. The grade fixtures are
+      // handed settledBy directly, so they prove the reader and never the
+      // writer - reverting the write left all five of them green.
+      if (!_src.includes(_n("_settledBy = corroborated ?", " 'corroborated'"))
+        || !_src.includes(_n("      : eponymousConfident ?", " 'eponymous' : '';"))) {
+        _fails.push('the settle no longer records WHICH rule fired, so the two deliberately thin settles cannot be told apart from a corroborated name');
+      }
+    }
+
+    // == AN ABSENCE CLAIM NEEDS A LOOK ==================================
+    // readChainEvidence has computed `measured` since it was written and the
+    // consumer read only isChain, so a site we could not open was treated
+    // exactly like a business we proved independent.
+    {
+      const _blind = readChainEvidence({ pages: [], rosterTitles: [], links: [] });
+      if (_blind.measured !== false) _fails.push('a chain read with nothing to read reports itself as measured');
+      if (_blind.isChain !== false) _fails.push('a chain read with nothing to read claims a chain');
+      const _seen = readChainEvidence({ pages: [{ url: 'https://x.com', text: 'Family owned since 1998. We serve the whole county.', html: '<p>Family owned since 1998.</p>' }], rosterTitles: ['Owner'], links: ['https://x.com/about'] });
+      if (_seen.measured !== true) _fails.push('a chain read that DID read a page reports itself unmeasured, so an independent business can never be confirmed');
+      if (!_src.includes(_n('} else if (out.chain.measured !==', ' true) {'))) {
+        _fails.push('the contact read still reports silence as independence when it could not read their site at all');
+      }
+    }
+
+    // ══ THE PAGE NAMES THE OWNER AND THE PARSER COULD NOT READ IT ══════════
+    // 21 of the 25 sites read on 2026-09-01 returned zero name/title pairs, and
+    // on TEN of them the log itself said an ownership word was on the page.
+    // Seven of those ten then bought the ~10-credit paid search wave to
+    // rediscover what we were already holding. Every fixture below is a real
+    // string from that run, driven through the REAL parser.
+    {
+      const _row = (html, co) => parseTeamRoster(html, co);
+      const _owner = (rows) => (rows || []).filter(r => r.isOwner)[0] || null;
+
+      // A title in FRONT of the name. Scott Roofing's own page, and the parser
+      // returned nothing at all. Splitting on " and " is what keeps the pairing
+      // honest: taken whole the trailing name is Mike and the CEO is Brian.
+      const _scott = _owner(_row('<p>CEO Brian Scott and president Mike Scott share the inspiration</p>', 'Scott Roofing Company'));
+      if (!_scott || _scott.name !== 'Brian Scott') {
+        _fails.push(`a title in front of the name is still unreadable, so "CEO Brian Scott" names nobody: ${JSON.stringify(_scott)}`);
+      }
+
+      // The company motto in the name slot and the person inside the title.
+      // JR & Co shipped "Iron Sharpens Iron" as the decision-maker.
+      const _jr = _row('<h3>Iron Sharpens Iron</h3><p>President &amp; CEO Jon Schilling</p>', 'JR & Co.');
+      const _jrOwner = _owner(_jr);
+      if (!_jrOwner || _jrOwner.name !== 'Jon Schilling') {
+        _fails.push(`the person named inside the title is not recovered, so the motto still ships as the owner: ${JSON.stringify(_jr)}`);
+      }
+      if (_jr.some(r => r.name === 'Iron Sharpens Iron' && r.isOwner)) {
+        _fails.push('a row naming two people still claims one of them owns the business');
+      }
+
+      // The shared name gate. looksLikeRealName refuses "Trefoil Holdings" on
+      // BUSINESS_TAIL and "Our Owner" on jobWord, and the roster was the one
+      // owner source that never called it.
+      if (_row('<h3>Trefoil Holdings</h3><p>President of The Whitaker Company</p>', 'Cooper CPA Group').length) {
+        _fails.push('a company name in the name slot still ships as a person, so the roster is not calling the shared name gate');
+      }
+      if (!_src.includes(_n('const _pOk = !!p && looksLikeRealName(p.name)', ' && !titleKind(p.name);'))) {
+        _fails.push('the roster no longer gates on the shared name rule at its CALL SITE, so BUSINESS_TAIL and jobWord are unenforced on the one source that ships to a sheet');
+      }
+
+      // A first name, marked. Vin's decision 2026-09-01: for a caller "ask for
+      // Carl" works, and we were discarding it and then paying for the surname.
+      const _carl = _owner(_row('<p>Our Owner, Carl, and Factory Representative, Sean</p>', 'Ecoview Windows'));
+      if (!_carl || _carl.name !== 'Carl' || _carl.mononym !== true) {
+        _fails.push(`a first name their own page states as the owner is still discarded or unmarked: ${JSON.stringify(_carl)}`);
+      }
+
+      // MUST SURVIVE, and this is the expensive half. "Master Plumber" is
+      // name-SHAPED by every pattern in this file; a swap that cannot refuse a
+      // role noun invents a person called Master Plumber out of a correct row.
+      const _graham = _row('<h3>David S Graham</h3><p>Owner, Master Plumber</p>', "Graham's Plumbing Co. Inc.");
+      const _gOwner = _owner(_graham);
+      if (!_gOwner || _gOwner.name !== 'David S Graham') {
+        _fails.push(`a correct roster row was destroyed by the swap rule: ${JSON.stringify(_graham)}`);
+      }
+      const _jenny = _owner(_row('<h3>Jenny McDowell</h3><p>Owner</p>', 'Mid-America Contractors'));
+      if (!_jenny || _jenny.name !== 'Jenny McDowell') _fails.push('an ordinary roster row no longer parses');
+
+      // A role noun is not a surname, and one list answers that for both
+      // readers. Two copies is the disease; this is the shared one.
+      if (typeof FIND_ROLE_NOUN === 'undefined' || !FIND_ROLE_NOUN.test('Master Plumber')) {
+        _fails.push('the role-noun list is not shared with the roster parser, so the swap rule cannot refuse a trade title');
+      }
+      if (rosterNameTailOk('Master Plumber', null) !== false) _fails.push('a trade title reads as a person, so a correct title becomes a name');
+      if (rosterNameTailOk('Jon Schilling', null) !== true) _fails.push('a real person in a title is not recognised, so no swap can ever fire');
+    }
+
     if (_fails.length) {
       console.log(`⛔ OWNER TRUTH CHECK: ${_fails.join(' | ')}.`);
     } else {
@@ -57743,6 +58267,101 @@ app.listen(PORT, () => {
     // it can only ever prove the term READS it - reverting the write to a
     // bare `true` left every fixture green, which is the recorded
     // half-a-check trap and the reason this needle exists.
+    // == A DEMOTED LEAD SAYS SO IN THE NUMBER ===========================
+    // Vin: "if its already demoted ti would be shown in its overall rating out
+    // of 100". It was not - the flags never reached this route, so a demoted
+    // lead scored exactly like a clean one.
+    {
+      const _clean = { teamCount: 9, execTitles: [], adsCode: 'google', hiringAny: true, hiringMarketing: true,
+        reviewCount: 80, rating: 4.5, affordBand: 'premium', reachMeasured: true, ownerCanBuy: true, emailTier: 2 };
+      const _a = findIcpScore(_clean);
+      const _b = findIcpScore({ ..._clean, outsideBand: true });
+      const _c = findIcpScore({ ..._clean, outsideBand: true, aboveSizeCeiling: true });
+      if (!(_b.score < _a.score)) _fails.push(`a band-demoted lead scores ${_b.score} against an identical clean lead's ${_a.score} - the demotion is invisible in the number`);
+      if (!(_c.score < _b.score)) _fails.push('a lead demoted twice costs no more than one demoted once');
+      // The numbers come from the DECLARED table, not retyped here. Retyping
+      // them is how the two rankers come to disagree about one lead.
+      const _want = demotionPenalty({ outsideBand: true }).points;
+      if ((_b.score - _a.score) !== _want) {
+        _fails.push(`the contact score marks a demoted lead down by ${_b.score - _a.score} while the shared table says ${_want} - two hand-kept copies of one penalty`);
+      }
+      if (_a.demotions.length !== 0 || _b.demotions.length !== 1 || !_b.why.includes(_b.demotions[0].why)) {
+        _fails.push('the row cannot say WHY it was marked down, so a number that moved has nothing accounting for it');
+      }
+      // A string is not a boolean. Number(null) is 0 and 0 is finite; the same
+      // trap one type across.
+      if (findIcpScore({ ..._clean, outsideBand: 'true' }).score !== _a.score) {
+        _fails.push('a non-boolean demotion flag marks a lead down, so a stray string costs a good lead ten points');
+      }
+    }
+    if (!_src.includes(_n('signals.outsideBand = (company &&', ' company.outsideBand) === true;'))
+      || !_src.includes(_n('signals.aboveSizeCeiling = (company &&', ' company.aboveSizeCeiling) === true;'))) {
+      _fails.push('the contact read no longer hands the discovery demotions to the score, so the fix above is dead at the call site');
+    }
+
+    // == SIX EMAIL STATES, NOT ONE WORD =================================
+    // published-personal, SMTP-confirmed, a role mailbox, a catch-all, a
+    // guess, and our own verifier being down. They used to collapse into
+    // "sendable", and a careers-page recruiting@ on another domain shipped as
+    // tier 1 sendable with only its label saying otherwise.
+    {
+      const _eg = (r, o) => emailConfidenceGrade(r, o || {});
+      const _cases = [
+        ['a person at their own domain', { email: 'a@b.com', tier: 1, kind: 'person' }, 'published_personal'],
+        ['a recruiting inbox off their careers page', { email: 'recruiting@b.com', tier: 1, kind: 'role', fromCareersPage: true }, 'published_role'],
+        ['a published address on somebody else domain', { email: 'a@other.com', tier: 1, kind: 'person', offDomain: true }, 'published_role'],
+        ['a confirmed mailbox', { email: 'a@b.com', tier: 2, kind: 'person' }, 'smtp_confirmed'],
+        ['a catch-all domain', { email: 'a@b.com', tier: 3, catchAll: true }, 'catch_all'],
+        ['a pattern guess', { email: 'a@b.com', tier: 4 }, 'pattern_guess'],
+        ['no address at all', { email: '' }, 'none'],
+      ];
+      for (const [_what, _r, _want] of _cases) {
+        const _got = _eg(_r);
+        if (_got !== _want) _fails.push(`${_what} grades "${_got}" and should grade "${_want}"`);
+      }
+      if (new Set(_cases.map(c => _eg(c[1]))).size !== 6) {
+        _fails.push('the email grades collapse into fewer than six answers, so two materially different addresses read the same on the row');
+      }
+      // The outage may explain a GUESS. It may never override a measurement:
+      // tier 1 and tier 2 are things we checked.
+      if (_eg({ email: 'a@b.com', tier: 1, kind: 'person' }, { verifierDown: true }) !== 'published_personal'
+        || _eg({ email: 'a@b.com', tier: 2, kind: 'person' }, { verifierDown: true }) !== 'smtp_confirmed') {
+        _fails.push('a verifier outage overrides a measured tier, so an address we actually confirmed reads as unconfirmed');
+      }
+      if (_eg({ email: 'a@b.com', tier: 4 }, { verifierDown: true }) !== 'verifier_down') {
+        _fails.push('a guess made while the verifier was down does not say so, so our outage reads as a fact about the prospect');
+      }
+      // The CATCH-ALL branch has its own outage path and the tier-4 case
+      // above cannot reach it - reverting that branch alone left this whole
+      // block green.
+      if (_eg({ email: 'a@b.com', tier: 3, catchAll: true }, { verifierDown: true }) !== 'verifier_down') {
+        _fails.push('a catch-all read while the verifier was down blames the address rather than naming our own outage');
+      }
+      // An unmeasured tier must not launder into a confident grade. A STRING
+      // is the case that isolates it: the comparisons below run on Number(),
+      // so without the typeof guard tier '1' grades as a published address.
+      if (_eg({ email: 'a@b.com', tier: null }) !== 'pattern_guess') _fails.push('an unmeasured email tier grades as something better than a guess');
+      if (_eg({ email: 'a@b.com', tier: '1', kind: 'person' }) !== 'pattern_guess') {
+        _fails.push('a tier that arrived as a STRING is coerced into a measured grade, so an unmeasured address reads as published on their own site');
+      }
+      const _nSay = EMAIL_GRADES.filter(g => g !== 'none' && !EMAIL_GRADE_SAY[g]).length;
+      if (_nSay) _fails.push(`${_nSay} email grade(s) have no sentence, so the row shows a code rather than an answer`);
+    }
+    // Graded at the ONE wrapper, never at a return site. Twenty-odd returns
+    // regrading themselves is how the six answers become six opinions.
+    {
+      // The catch-all return must DECLARE itself. Every grade fixture is
+      // handed catchAll directly, so they prove the reader and not the one
+      // return site that sets it - reverting that line left them all green.
+      if (!_src.includes(_n('        catchAll:', ' true,'))) {
+        _fails.push('the catch-all return no longer declares itself, so a domain that cannot bounce collapses into an ordinary pattern guess');
+      }
+      const _egc = _src.split(_n('emailConfidenceGrade(_r, { verifierDown:', ' _verifierDown })')).length - 1;
+      if (_egc !== 1) _fails.push(`the email grade is decided at ${_egc} place(s); it must be decided once, at the wrapper every result passes through`);
+      if (!_src.includes(_n('grade: em.grade ||', " '', gradeSay: em.gradeSay || '',"))) {
+        _fails.push('the email grade stops before the row, so the client goes back to deriving confidence by regex over a human-readable label');
+      }
+    }
     if (!_src.includes(_n('signals.reachMeasured =', ' !out.notIcp;'))) {
       _fails.push('a lead dropped as a chain is scored on lookups that never ran for it, because the reach flag is set unconditionally again');
     }
@@ -57828,7 +58447,11 @@ app.listen(PORT, () => {
     //   2. the Firecrawl key is handed over ONLY when the paid stage may run -
     //      a key passed beside a stood-down stage is spend one forgotten
     //      branch away, which is how a switched-off feature bills anyway.
-    if (!_src.includes(_n('apifyToken:', " '', callOnly: !paidOwner,"))) {
+    // The Apify token IS handed over now - the review-reply source is bounded
+    // to unsettled leads INSIDE findDecisionMaker, so passing it here does not
+    // bill every lead. What this pins is the half that still matters: the
+    // paid STAGES follow the operator's switch rather than a constant.
+    if (!_src.includes(_n('apifyToken, callOnly:', ' !paidOwner,'))) {
       _fails.push('the Find owner read no longer follows the paid-lookup switch, so the operator\'s Settings choice decides nothing');
     }
     if (!_src.includes(_n('fcKey: paidOwner ?', " fcKey : '',"))) {
@@ -58726,6 +59349,131 @@ app.listen(PORT, () => {
     // penalty was extracted to fix, one round earlier.
     if (!_src.includes(_n('affordabilityBand(_aff', 'In)'))) {
       _fails.push('the card label no longer reads the same argument object the score reads, so the number and the tier can disagree about one business again');
+    }
+
+    // ══ SPENDING AND DISSATISFIED, OR MONEYED AND UNTOUCHED ═══════════════
+    // Vin's shape, 2026-09-01, backed by the research: a business already
+    // paying for ads is a GOOD lead (45% of small businesses are dissatisfied
+    // with their agency; 68% admit they are paying for marketing they know is
+    // not working). The one to skip is the one whose setup is already in
+    // competent hands. Both directions are asserted, because a rule that only
+    // marks leads down is a rule that eventually marks every lead down.
+    {
+      const _sig = (extra) => Object.assign({
+        teamCount: 9, execTitles: [], hiringAny: false, reviewCount: 120, rating: 4.6,
+        affordBand: 'premium', affordWhy: 'premium tier', reachMeasured: false,
+      }, extra || {});
+
+      // GREENFIELD. This scored 5 of 25 - twenty points behind an advertiser -
+      // so a moneyed business nobody has marketed to sorted below one that is
+      // already committed to somebody else. Proven spend still wins; the gap
+      // is now the size of the evidence difference.
+      const _spending = findIcpScore(_sig({ adsCode: true, adPlatforms: ['Google'] }));
+      const _green = findIcpScore(_sig({ adsCode: false, analytics: false, tagManager: false }));
+      if (!_green.score || !_spending.score) {
+        _fails.push('the advertising term stopped scoring, so neither archetype can be ranked at all');
+      } else {
+        if (_green.score >= _spending.score) {
+          _fails.push(`a business with no marketing at all scores ${_green.score} against an advertiser's ${_spending.score} - proven spend must still beat assumed spend, it is evidence rather than inference`);
+        }
+        if (_spending.score - _green.score > 12) {
+          _fails.push(`greenfield is ${_spending.score - _green.score} points behind an advertiser, which is the old disqualification back again - "people with a lot of moeny not doigng marketing at all" is an archetype we want`);
+        }
+      }
+      // They measure but do not advertise: somebody here thinks about it.
+      const _measures = findIcpScore(_sig({ adsCode: false, analytics: true }));
+      if (!(_measures.score > _green.score)) {
+        _fails.push('a business running analytics scores no better than one with nothing at all, so the intent signal is not being read');
+      }
+
+      // ALREADY IN COMPETENT HANDS. All three together, or nothing.
+      if (alreadyDialledIn({ adsConversion: true, callTracking: true, scheduler: true }).points !== -12) {
+        _fails.push('an account with conversion tracking, call tracking AND a booking tool is not marked down, so the lead with nothing left to sell ranks with the rest');
+      }
+      for (const _miss of ['adsConversion', 'callTracking', 'scheduler']) {
+        const _two = { adsConversion: true, callTracking: true, scheduler: true };
+        _two[_miss] = false;
+        if (alreadyDialledIn(_two).points !== 0) {
+          _fails.push(`a business missing ${_miss} is marked down as already sorted - two of the three is an ordinary small business, and a penalty that fires on it marks down the whole ICP`);
+        }
+      }
+      if (alreadyDialledIn({}).points !== 0) _fails.push('a lead whose markup we never read is marked down as already sorted, which is our blindness charged to them');
+      // The magnitude comes from the ONE declared table, so the Find score and
+      // the contact ranker cannot disagree about what it is worth.
+      const _declaredRun = (CONTACT_RANK_TERMS.find(t => t.id === 'dialledIn') || {}).points;
+      if (alreadyDialledIn({ adsConversion: true, callTracking: true, scheduler: true }).points !== _declaredRun) {
+        _fails.push('the already-sorted penalty is retyped rather than read from CONTACT_RANK_TERMS, so the two rankers can drift');
+      }
+      // And the OUTCOME, which no rewording can slip past.
+      const _sorted = findIcpScore(_sig({ adsCode: true, adPlatforms: ['Google'], adsConversion: true, callTracking: true, scheduler: true }));
+      if (!(_sorted.score < _spending.score)) {
+        _fails.push(`a business already running ads WELL scores ${_sorted.score} against ${_spending.score} for one running them blind - the blind one is the lead`);
+      }
+    }
+
+    // ══ READ AS MANY FREE PAGES AS THEY WILL GIVE US ══════════════════════
+    // Vin's decision, 2026-09-01: "if they give us 20 read 20. dont excute paid
+    // wave unless we have to." The fetch is a plain GET and costs nothing - but
+    // reading twenty pages on its own delivers exactly the same evidence as
+    // reading four, because each page is sliced to 6,000 characters and the
+    // corpus caps at 22,000. That is homepage plus about three interior pages,
+    // and the cap was ALREADY binding at the old budget: the careers page
+    // contributed zero bytes and the second team page - the one most likely to
+    // name the owner - was two-thirds read. So the page count is the least
+    // important part of this and the ORDER is the load-bearing part.
+    {
+      const _links = [];
+      for (let i = 0; i < 14; i++) _links.push(`https://x.com/about-${i}`);
+      for (let i = 0; i < 6; i++) _links.push(`https://x.com/contact-${i}`);
+      _links.push('https://x.com/careers');
+      const _free = pickFindPages(_links, 'https://x.com', FIND_MAX_FREE_PAGES);
+      const _paid = pickFindPages(_links, 'https://x.com', FIND_MAX_PAGES);
+      if (_free.length <= FIND_MAX_PAGES) {
+        _fails.push(`the free page read returns ${_free.length} page(s) from a 21-link site - the plain fetch costs nothing, so the small budget belongs to the Firecrawl fallback and not here`);
+      }
+      if (_free.length > FIND_MAX_FREE_PAGES) _fails.push('the free page read is unbounded, so a site with a thousand links reads a thousand pages');
+      // The paid path is where a page is a CREDIT, and it must not have moved.
+      if (_paid.length > FIND_MAX_PAGES) {
+        _fails.push(`the Firecrawl fallback now reads ${_paid.length} page(s) at one credit each - the wider budget was for the free path only`);
+      }
+      // The team/about family FIRST: it is what makes the early exit fire, and
+      // it is what survives the corpus cap.
+      if (!_free.length || _free[0].intent !== 'team') {
+        _fails.push(`the first page read is "${_free.length ? _free[0].intent : 'none'}" rather than the team/about family - that is the page that names an owner, so reading it later means the early exit never fires and the cap truncates the evidence`);
+      }
+      const _careersAt = _free.findIndex(p => p.intent === 'careers');
+      if (_careersAt >= 0 && _careersAt < _free.length - 1) {
+        _fails.push('the careers page is not read last, and a job advert is a name-shaped line followed by a job title - which is what a roster row looks like');
+      }
+      if (!Number.isFinite(FIND_INTENT_RANK.team) || !(FIND_INTENT_RANK.team < FIND_INTENT_RANK.careers)) {
+        _fails.push('the intent rank no longer puts the owner-likely pages first, so the corpus sort and the fetch order have stopped agreeing');
+      }
+    }
+    // The call sites: a fixture supplies its own arguments and cannot see a
+    // caller, and every one of these lives inside the route.
+    for (const _needle of [_n('_pre.sort((a, b) => _rank(a)', ' - _rank(b));'),
+                           _n('pickFindPages(links, pages[0].url, viaFirecrawl ? FIND_MAX_PAGES', ' : FIND_MAX_FREE_PAGES)'),
+                           _n('if (fp && _seenFp.has(fp)) { _dupPages', ' += 1; return false; }'),
+                           _n('if (Date.now() - _readStartedAt >', ' FIND_FREE_READ_MS) {'),
+                           _n('if (parseTeamRoster(_soFar, name).some(r =>', ' r.isOwner)) {')]) {
+      if (!_src.includes(_needle)) {
+        _fails.push('the free page read lost a call site: ' + _needle.slice(0, 46));
+      }
+    }
+
+    // ══ THE FIVE SIGNALS WERE ALREADY IN OUR HANDS ════════════════════════
+    // readFindIcpSignals tested three of the eight keys in AD_TAG_SIGNATURES
+    // and ignored the rest, so every "is somebody already here" signal was a
+    // regex this file owned, run against markup this read was already holding,
+    // and never asked. Zero extra requests.
+    for (const _needle of [_n('const adsConversion = anyMarkup ? AD_TAG_SIGNATURES.hasAdsConversion', '.test(allHtml) : null;'),
+                           _n('const callTracking = anyMarkup ? AD_TAG_SIGNATURES.hasCallTracking', '.test(allHtml) : null;'),
+                           _n('const analytics = anyMarkup ? AD_TAG_SIGNATURES.hasAnalytics', '.test(allHtml) : null;'),
+                           _n('const scheduler = anyMarkup ? SCHEDULER_SIGNATURES', '.test(allHtml) : null;'),
+                           _n('adsConversion, callTracking, analytics,', ' liveChat, scheduler,')]) {
+      if (!_src.includes(_needle)) {
+        _fails.push('the free read no longer measures ' + _needle.slice(6, 30) + ' - it is a regex we already own over markup we already hold, so not asking is the only cost');
+      }
     }
 
     if (_fails.length) {
@@ -73830,8 +74578,20 @@ const findPlainFetch = async (url, timeoutMs = 12000) => {
 // page carries the roster and the headcount, a careers page carries the hiring
 // signal. Ranking them together would let three about-pages crowd out the only
 // careers page on the site.
+// ══ ORDERED BY WHO IS LIKELIEST TO NAME THE OWNER ════════════════════════
+// Vin, 2026-09-01: "cant we make it so the less likley pages are read first to
+// sopeed it up?" - the right instinct, and the order below is the answer. The
+// team/about family is read FIRST because that is where an owner is named, so
+// the early exit fires on the first wave and a site that says who runs it never
+// buys the other pages OR the ~10-credit paid wave. It also decides what goes
+// into the corpus: the cap binds at about three interior pages, so arrival
+// order was silently deciding which evidence the parser and the model ever saw.
+//
+// freeWant is the plain-fetch budget and want is the Firecrawl-fallback budget.
+// They differ because a page is free on one path and a credit on the other.
 const FIND_PAGE_INTENTS = [
-  { key: 'contact', re: /(contact|get-?in-?touch|reach-?us)/i, want: 1 },
+  { key: 'team',    re: /(team|our-?team|staff|people|leadership|management|about|our-?story|who-?we-?are|meet|owner|founder|president|principal|history|our-?company)/i, want: 2, freeWant: 12 },
+  { key: 'contact', re: /(contact|get-?in-?touch|reach-?us)/i, want: 1, freeWant: 3 },
   // ══ TWO, BECAUSE THE OWNER IS ON WHICHEVER ONE WE DID NOT READ ═════
   // One regex covers /about AND /our-team AND /leadership, and only the
   // top-ranked of them was ever fetched. A business commonly names its owner
@@ -73839,19 +74599,41 @@ const FIND_PAGE_INTENTS = [
   // decision-maker on about half the list. A page on the plain path is FREE,
   // so the second one costs nothing on the leads this is for; it costs one
   // credit only on a site that refused a plain fetch.
-  { key: 'team',    re: /(team|our-?team|staff|people|leadership|management|about|our-?story|who-?we-?are|meet)/i, want: 2 },
   // The SAME constant the roster rule refuses on. Two copies of these words
   // would drift, and the drift that matters is a page picked as careers here
   // that rosterEligiblePage does not refuse - which is the exact hole that put
-  // a job title on a call sheet as the owner's.
-  { key: 'careers', re: CAREERS_PAGE_RE, want: 1 },
+  // a job title on a call sheet as the owner's. Last on purpose: a job advert
+  // is a name-shaped line followed by a job title, which is what a roster row
+  // looks like, so it is the page we least want filling the corpus.
+  { key: 'careers', re: CAREERS_PAGE_RE, want: 1, freeWant: 1 },
 ];
+// The order of the table IS the owner-likelihood order, so one declaration
+// drives the fetch order, the early exit and the corpus order rather than three
+// hand-kept copies of the same judgement.
+const FIND_INTENT_RANK = FIND_PAGE_INTENTS.reduce((m, t, i) => { m[t.key] = i; return m; }, {});
 // Bounded by construction: at most one page per intent, at most FIND_MAX_PAGES
 // in total. The bound is the cost model - every page here is free on the plain
 // path and one credit on the Firecrawl fallback, so an unbounded list is an
 // unbounded bill on exactly the leads whose sites are hardest to read.
 const FIND_MAX_PAGES = 4;
-const pickFindPages = (links, homepageUrl) => {
+// ══ THE FREE PATH IS NOT THE PAID PATH ═══════════════════════════════════
+// Vin's decision, 2026-09-01: "read as many free pages as they will give us of
+// course if they give us 20 read 20. dont excute paid wave unless we have to."
+// A plain GET costs nothing, so the only real bounds are wall clock and the
+// corpus cap - both handled where they belong (a parallel pool with a ceiling,
+// and a ranked corpus) rather than by refusing to look.
+const FIND_MAX_FREE_PAGES = parseInt(process.env.FIND_MAX_FREE_PAGES || '20', 10);
+// How many free pages go out at once, and the wall clock on the whole read.
+// The pool is what makes twenty pages affordable: read one after another at 10s
+// each they are +160s a lead, and the observed leads already run 40-275s. The
+// ceiling is the backstop for a site that keeps answering slowly - it bounds
+// the READ, not each page, because a per-page timeout times twenty pages is the
+// number that made the sequential version impossible.
+const FIND_FREE_POOL = parseInt(process.env.FIND_FREE_POOL || '5', 10);
+const FIND_FREE_READ_MS = parseInt(process.env.FIND_FREE_READ_MS || '120000', 10);
+const pickFindPages = (links, homepageUrl, budget) => {
+  const cap = Number.isFinite(Number(budget)) && Number(budget) > 0 ? Number(budget) : FIND_MAX_PAGES;
+  const free = cap > FIND_MAX_PAGES;
   const home = String(homepageUrl || '').replace(/\/$/, '').toLowerCase();
   const pool = (Array.isArray(links) ? links : []).filter(u => String(u).toLowerCase() !== home);
   const out = [];
@@ -73860,7 +74642,7 @@ const pickFindPages = (links, homepageUrl) => {
     // rankUrlsByIntent is the ranker the audit path already uses, with its
     // recorded fixes: a whole path SEGMENT rather than a substring, so
     // "/blog/how-to-talk-about-infertility" is not read as an about page.
-    const ranked = rankUrlsByIntent(pool, intent.re, 6);
+    const ranked = rankUrlsByIntent(pool, intent.re, free ? 24 : 6);
     // `want` was DECLARED on every row of the table above and read by nobody:
     // this loop broke after the first hit whatever it said. Honoured now, so
     // the table is the thing that decides how many pages an intent is worth.
@@ -73870,9 +74652,9 @@ const pickFindPages = (links, homepageUrl) => {
       taken.add(u);
       out.push({ url: u, intent: intent.key });
       got += 1;
-      if (got >= (intent.want || 1) || out.length >= FIND_MAX_PAGES) break;
+      if (got >= ((free ? intent.freeWant : intent.want) || 1) || out.length >= cap) break;
     }
-    if (out.length >= FIND_MAX_PAGES) break;
+    if (out.length >= cap) break;
   }
   return out;
 };
@@ -73882,7 +74664,8 @@ const pickFindPages = (links, homepageUrl) => {
 // role. Bounded to a DECLARED list of role nouns: guessing a title out of prose
 // is how a page heading becomes a job opening. Positive evidence only - a page
 // with no recognisable role produces NO hiring claim rather than a false one.
-const FIND_ROLE_NOUN = /\b(manager|specialist|coordinator|director|representative|technician|installer|assistant|associate|supervisor|estimator|foreman|dispatcher|apprentice|designer|strategist|analyst|consultant|officer|engineer|mechanic|plumber|electrician|roofer|receptionist|admin(?:istrator)?|bookkeeper|marketer)\b/i;
+// FIND_ROLE_NOUN is declared beside the roster parser, which needs the same
+// question answered. One list.
 const FIND_HIRING_CONTEXT = /\b(now hiring|we(?:'|’)?re hiring|we are hiring|open positions?|current openings?|job openings?|apply now|join our team|careers?)\b/i;
 const titlesFromCareersText = (text) => {
   const out = [];
@@ -74014,6 +74797,27 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
   const googleAds = anyMarkup ? AD_TAG_SIGNATURES.hasGoogleAdsTag.test(allHtml) : null;
   const metaPixel = anyMarkup ? AD_TAG_SIGNATURES.hasMetaPixel.test(allHtml) : null;
   const tagManager = anyMarkup ? AD_TAG_SIGNATURES.hasTagManager.test(allHtml) : null;
+  // ══ IS SOMEBODY COMPETENT ALREADY ON THIS ACCOUNT? ═══════════════════════
+  // Vin's shape, 2026-09-01: a business already spending is a GOOD lead - the
+  // research is blunt about it, 68% of businesses say they are paying for
+  // marketing they already know is not working, and the average agency
+  // relationship lasts 2.5 years across 3-5 agencies. What we do NOT want is
+  // the one whose setup is visibly already in good hands.
+  //
+  // These five regexes were already in this file, already tested against markup
+  // this read is ALREADY HOLDING, and readFindIcpSignals tested three of the
+  // eight keys in the same object and ignored the rest. Zero extra requests.
+  //
+  // HONEST NAME: this measures whether their marketing is INSTRUMENTED, not
+  // whether it performs. We cannot see their cost per lead or their return -
+  // that needs the audit, and even the audit cannot see inside their ads
+  // account. Conversion tracking plus call tracking plus a real booking tool is
+  // evidence that somebody who knows what they are doing has been here.
+  const adsConversion = anyMarkup ? AD_TAG_SIGNATURES.hasAdsConversion.test(allHtml) : null;
+  const callTracking = anyMarkup ? AD_TAG_SIGNATURES.hasCallTracking.test(allHtml) : null;
+  const analytics = anyMarkup ? AD_TAG_SIGNATURES.hasAnalytics.test(allHtml) : null;
+  const liveChat = anyMarkup ? CHAT_SIGNATURES.test(allHtml) : null;
+  const scheduler = anyMarkup ? SCHEDULER_SIGNATURES.test(allHtml) : null;
   let adsCode = null;
   const adPlatforms = [];
   if (googleAds) adPlatforms.push('Google');
@@ -74107,6 +74911,7 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
     pagesRead: read.length,
     markupRead: anyMarkup,
     adsCode, adPlatforms, tagManager, adsWhy,
+    adsConversion, callTracking, analytics, liveChat, scheduler,
     teamCount, teamNames, teamPageUrl, execTitles, teamTitles,
     hiringAny, hiringMarketing, hiringTitles,
     hiringMarketingTitles: lanes.marketing,
@@ -74149,10 +74954,27 @@ const FIND_ICP_TERMS = [
     },
   },
   {
-    id: 'ads', max: 25, label: 'whether they already pay for advertising',
+    id: 'ads', max: 25, label: 'whether they invest in marketing at all',
+    // ══ SPENDING IS GOOD. ALREADY SORTED IS NOT. ═══════════════════════════
+    // Vin, 2026-09-01, and the research backs every word: a business already
+    // running ads "sees the beauty of spending on ads and the neccesity but
+    // they dont know if theyre preforming well." 45% of small businesses are
+    // dissatisfied with the agency they hired (Clutch 2024), 48% switch over
+    // failure to deliver, and 68% admit they are paying for marketing they
+    // already know is not working. That is a market of people with a budget
+    // and a grievance.
+    //
+    // What changed: "no ad code" scored 5 of 25, so a moneyed business nobody
+    // has marketed to lost twenty points against one already advertising -
+    // backwards for the second archetype he named, "people with a lot of moeny
+    // not doigng marketing at all". Proven spend still beats assumed spend,
+    // because it is evidence rather than inference, but the gap is now the size
+    // of that difference and not a disqualification. The already-sorted case is
+    // priced separately, after the ratio.
     score: (s) => {
       if (s.adsCode === true) return { points: 25, say: `${s.adPlatforms.join(' and ')} ad code on their site - they already spend on advertising` };
-      if (s.adsCode === false) return { points: 5, say: 'no ad code we could see, so no proof of an advertising budget' };
+      if (s.analytics === true || s.tagManager === true) return { points: 20, say: 'no ad code, but they measure their traffic - somebody here thinks about marketing' };
+      if (s.adsCode === false) return { points: 18, say: 'nothing marketing-related on their site at all - untouched, and the whole budget is still to play for' };
       return null;
     },
   },
@@ -74265,11 +75087,35 @@ const findIcpScore = (signals) => {
       why: 'nothing about this business could be measured, so it has no score - not a low one' };
   }
   const measured = terms.filter(t => t.measured).length;
+  // ══ A DEMOTED LEAD MUST SAY SO IN THE NUMBER ══════════════════
+  // Vin, asked what the list should do with a lead discovery demoted: "i mean
+  // if its already demoted ti would be shown in its overall rating out of 100".
+  // It was not. outsideBand and aboveSizeCeiling never reached this route at
+  // all, so a 4.9-star business the star band demoted scored exactly like an
+  // in-band one and the row said nothing about why it sorts last.
+  //
+  // demotionPenalty reads CONTACT_RANK_TERMS - the SAME declared table the
+  // contact ranker reads - so the two can never disagree about what a demotion
+  // costs. Two hand-kept copies of one penalty is how one of them stays wrong.
+  //
+  // Applied AFTER the ratio and never as a term: a negative max would change
+  // the DENOMINATOR, so a demoted lead would be scored out of a different
+  // total than a clean one and the two numbers would stop being comparable.
+  const _base = Math.round((points / possible) * 100);
+  // Post-ratio for exactly the reason above, and read from the same declared
+  // table, so the Find score and the contact ranker cannot disagree about what
+  // an already-instrumented business is worth.
+  const _dem = demotionPenalty(s);
+  const _run = alreadyDialledIn(s);
+  const _marks = _dem.terms.concat(_run.terms);
+  const _off = _dem.points + _run.points;
   return {
-    score: Math.max(0, Math.min(100, Math.round((points / possible) * 100))),
+    score: Math.max(0, Math.min(100, _base + _off)),
     measured, of: FIND_ICP_TERMS.length, terms,
+    demotions: _marks,
     why: `scored on the ${measured} of ${FIND_ICP_TERMS.length} signals we could measure`
-       + (measured < FIND_ICP_TERMS.length ? '; the rest are left out rather than counted as zero' : ''),
+       + (measured < FIND_ICP_TERMS.length ? '; the rest are left out rather than counted as zero' : '')
+       + (_marks.length ? `, then marked down ${Math.abs(_off)} for ${_marks.map(t => t.why).join(' and ')}` : ''),
   };
 };
 
@@ -74318,6 +75164,16 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   const apiKey = (keys && keys.anthropicKey) || '';
   const fcKey = (keys && keys.firecrawlKey) || '';
   const verifierKey = (keys && keys.verifierKey) || '';
+  // == THE TOKEN THAT MAKES THE FREE OWNER SOURCE REACHABLE ==============
+  // findOwnerViaReviewReplies is weighted 35 and is guarded on
+  // (placeId && apifyToken). This route passed '' for both for its whole
+  // life, so the source was wired and structurally unreachable - and at an
+  // owner-run shop whoever answers the Google reviews IS the owner, which
+  // is the single best free read of who to ask for.
+  //
+  // Both values already existed on the lead. Neither was sent.
+  const apifyToken = (keys && keys.apifyToken) || '';
+  const placeId = String((company && company.placeId) || '').trim();
   const notes = [];
 
   const phoneDigits = String((company && company.phone) || '').replace(/\D/g, '');
@@ -74377,17 +75233,70 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   let links = [];
   if (pages.length) {
     links = sameHostLinks(pages[0].html, pages[0].url);
-    const picks = pickFindPages(links, pages[0].url);
     const viaFirecrawl = out.readVia.indexOf('Firecrawl') === 0;
-    for (const pick of picks) {
-      const got = await findPlainFetch(pick.url, 10000);
-      if (got.ok) { pages.push({ url: pick.url, intent: pick.intent, html: got.html, text: got.text }); continue; }
-      if (viaFirecrawl && fcKey && !fcCreditsBlocked()) {
-        let _h = '';
-        const md = await firecrawlScrape(fcKey, pick.url, 30000, FC_CACHE_MS, { shot: false, capture: (h) => { _h = h || ''; } });
-        if (md || _h) pages.push({ url: pick.url, intent: pick.intent, html: _h, text: _h ? plainTextFromHtml(_h) : String(md) });
+    // The free path reads deep; the Firecrawl fallback keeps the small budget,
+    // because there every page is a credit.
+    const picks = pickFindPages(links, pages[0].url, viaFirecrawl ? FIND_MAX_PAGES : FIND_MAX_FREE_PAGES);
+    // ══ THE SAME PAGE AT TWENTY URLS IS ONE PAGE ═════════════════════════
+    // The Find path deduped by URL only. A soft 404, a redirect to the homepage
+    // and an unrendered single-page app all return the homepage's text at a
+    // different address, pass every check in findPlainFetch, and eat a full
+    // 6,000-character block of a 22,000-character corpus as though they were
+    // distinct evidence. At a budget of four that wasted a page; at twenty it
+    // could make every block the homepage. pageFingerprint is the audit path's
+    // own rule, so this is one rule rather than a second copy.
+    const _seenFp = new Set();
+    const _homeFp = pageFingerprint(pages[0].text);
+    if (_homeFp) _seenFp.add(_homeFp);
+    let _dupPages = 0;
+    const _keep = (url, intent, html, text) => {
+      const fp = pageFingerprint(text);
+      if (fp && _seenFp.has(fp)) { _dupPages += 1; return false; }
+      if (fp) _seenFp.add(fp);
+      pages.push({ url, intent, html, text });
+      return true;
+    };
+    // ══ READ THE LIKELIEST PAGES FIRST AND STOP WHEN WE HAVE HIM ═════════
+    // Vin, 2026-09-01: "cant we make it so the less likley pages are read first
+    // to sopeed it up?" The table above is ordered by owner-likelihood, so the
+    // team/about family arrives in wave one. parseTeamRoster is pure and free -
+    // no model call - so asking it after each wave costs nothing and lets a site
+    // that plainly names its owner skip every remaining page.
+    //
+    // The ceiling is the backstop for a site that never settles, and it is a
+    // WALL CLOCK on the whole read rather than a per-page timeout, because a
+    // per-page timeout multiplied by twenty pages is what made the sequential
+    // version unaffordable.
+    const _readStartedAt = Date.now();
+    const _wave = viaFirecrawl ? 1 : FIND_FREE_POOL;
+    for (let i = 0; i < picks.length; i += _wave) {
+      if (Date.now() - _readStartedAt > FIND_FREE_READ_MS) {
+        console.log(`\u{1F50E} FIND READ [${name}]: stopped at ${pages.length} page(s) - the read passed its ${Math.round(FIND_FREE_READ_MS / 1000)}s ceiling with ${picks.length - i} page(s) unread. Everything below is measured on what we DID read.`);
+        break;
+      }
+      const batch = picks.slice(i, i + _wave);
+      const got = await Promise.all(batch.map(async (pick) => {
+        const r = await findPlainFetch(pick.url, 10000);
+        if (r.ok) return { pick, html: r.html, text: r.text };
+        if (viaFirecrawl && fcKey && !fcCreditsBlocked()) {
+          let _h = '';
+          const md = await firecrawlScrape(fcKey, pick.url, 30000, FC_CACHE_MS, { shot: false, capture: (h) => { _h = h || ''; } });
+          if (md || _h) return { pick, html: _h, text: _h ? plainTextFromHtml(_h) : String(md) };
+        }
+        return null;
+      }));
+      for (const g of got) if (g) _keep(g.pick.url, g.pick.intent, g.html, g.text);
+      // Free, pure, no model call: if their own pages already name an owner we
+      // can stop reading and the paid wave is never bought.
+      if (!viaFirecrawl && i + _wave < picks.length) {
+        const _soFar = pages.filter(rosterEligiblePage).map(p => String(p.text || '')).join('\n');
+        if (parseTeamRoster(_soFar, name).some(r => r.isOwner)) {
+          console.log(`\u{1F50E} FIND READ [${name}]: their own pages name an owner after ${pages.length} page(s), so the remaining ${picks.length - i - _wave} were not read and no paid lookup is needed.`);
+          break;
+        }
       }
     }
+    if (_dupPages) out.duplicatePages = _dupPages;
     console.log(`\u{1F50E} FIND READ [${name}]: ${pages.length} page(s) via ${out.readVia} — ${pages.map(p => p.intent).join(', ')}. ${links.length} same-host link(s) came off their own navigation, so no sitemap call was bought.`);
   }
   out.pagesRead = pages.map(p => ({ url: p.url, intent: p.intent, chars: (p.text || '').length }));
@@ -74466,6 +75375,17 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     out.icpReason = 'chain';
     out.icpWhy = out.chain.why;
     notes.push(`this is a branch of a larger operation \u2014 ${out.chain.why}. The branch manager does not own the marketing, so there is nothing here to sell him.`);
+  } else if (out.chain.measured !== true) {
+    // == AN ABSENCE CLAIM NEEDS A LOOK =====================================
+    // readChainEvidence has computed `measured` since it was written and
+    // nothing read it. A site we could not open returns measured:false and
+    // isChain:false, and the consumer treated that identically to a business
+    // we proved independent. "We did not look" has never meant "it is fine"
+    // anywhere else in this file.
+    //
+    // It does NOT score against the lead: charging a business for our own
+    // blindness is the guard-too-tight failure. It says what is unknown.
+    notes.push('we could not read enough of their site to tell an independent business from a branch of a bigger one \u2014 that is a gap in what we read, not a finding about them');
   }
 
 
@@ -74495,8 +75415,13 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         fcKey: paidOwner ? fcKey : '', apiKey,
         homepageContent: homeText,
         location: (company && company.location) || '',
-        placeId: '', industry: (company && company.industry) || '',
-        apifyToken: '', callOnly: !paidOwner,
+        // The two values that make stage 1.5 reachable. Both existed on the
+        // lead and both were hard-coded empty here, so the review-reply
+        // source - the best free read of an owner-run shop's owner - could
+        // never open its guard. It is bounded to unsettled leads inside
+        // findDecisionMaker, so this does not bill every lead.
+        placeId, industry: (company && company.industry) || '',
+        apifyToken, callOnly: !paidOwner,
         preFetchedPages: interior,
       });
       if (dm && dm.name) {
@@ -74504,6 +75429,10 @@ const runFindContactRead = async (company, keys, opts = {}) => {
           name: dm.name, title: dm.title || '', confidence: dm.confidence || '',
           sources: dm.sources || [], authority: dm.authority ?? null,
           canBuy: dm.canBuy === true, blockReason: dm.blockReason || '',
+          // How sure, and what the rep should do about it. Both come from
+          // the resolver's one derivation - nothing is re-decided here.
+          grade: dm.evidenceGrade || '', gradeWhy: dm.evidenceWhy || '',
+          askAs: dm.askAs || '', settledBy: dm.settledBy || '',
         };
       } else {
         notes.push('no owner-level person is named anywhere on the pages we read');
@@ -74580,6 +75509,11 @@ const runFindContactRead = async (company, keys, opts = {}) => {
           kind: em.mailboxKind || (em.email ? mailboxKind(em.email) : ''),
           offDomain: em.offDomain === true,
           fromCareersPage: em.fromCareersPage === true,
+          // How sure, from the one place it is decided. The client used to
+          // derive this by regex over the LABEL, which is a fourth copy of a
+          // rule that already had three.
+          grade: em.grade || '', gradeSay: em.gradeSay || '',
+          verifierDown: em.verifierDown === true,
         };
         if (!em.email) notes.push('no address could be resolved for this business');
       }
@@ -74625,6 +75559,11 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // so the term leaves the denominator rather than scoring a confident 1 -
   // the unmeasured-as-zero class, which every other term here already avoids.
   signals.reachMeasured = !out.notIcp;
+  // The two verdicts discovery already reached about this lead. They ride the
+  // request now; without them the score could not see a demotion at all, so a
+  // 4.9-star business the star band demoted scored exactly like an in-band one.
+  signals.outsideBand = (company && company.outsideBand) === true;
+  signals.aboveSizeCeiling = (company && company.aboveSizeCeiling) === true;
   signals.ownerCanBuy = !!(out.owner && out.owner.canBuy === true);
   signals.emailTier = (out.email && typeof out.email.tier === 'number') ? out.email.tier : null;
   out.icp = findIcpScore(signals);
