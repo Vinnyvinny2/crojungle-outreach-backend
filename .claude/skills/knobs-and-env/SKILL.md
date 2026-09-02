@@ -1,10 +1,10 @@
 ---
 name: knobs-and-env
-description: "Every environment variable and daily budget knob on Render - FC_DAILY_BUDGET, PLACES_DAILY_BUDGET, ANTHROPIC_DAILY_BUDGET_USD, APIFY_DAILY_BUDGET, DATAFORSEO_LOGIN/PASSWORD, APIFY_MAX_REVIEWS, REVIEW_CORPUS_CHARS, APIFY_ACTOR, SITUATION_EFFORT, PAGESPEED_KEY, RENDER_ENV, FAKE_UPSTREAM - with defaults, what each does, and what breaks when it is unset or sized for the wrong plan. Use when a log shows a budget refusal or 'no position on this run', a lead has no search position, or a setting needs changing."
+description: "KNOW: Every environment variable and daily budget knob on Render - FC_DAILY_BUDGET, PLACES_DAILY_BUDGET, ANTHROPIC_DAILY_BUDGET_USD, APIFY_DAILY_BUDGET, DATAFORSEO_LOGIN/PASSWORD, APIFY_MAX_REVIEWS, REVIEW_CORPUS_CHARS, APIFY_ACTOR, SITUATION_EFFORT, PAGESPEED_KEY, RENDER_ENV, FAKE_UPSTREAM - with defaults, what each does, and what breaks when it is unset or sized for the wrong plan. Use when a log shows a budget refusal or 'no position on this run', a lead has no search position, or a setting needs changing."
 ---
 # Knobs and environment variables
 
-**Goal:** List every setting the server reads, its default, and what goes wrong when it is missing or set for the wrong plan, so a refusal in a log can be traced to the knob that caused it.
+**Goal:** After reading this, Claude can trace any budget refusal or "not measured" line in a log to the setting that caused it.
 
 Copied verbatim from CLAUDE.md (commit b01d952) lines 10624-10646 (PART 8, the knobs table). The client handshake (CONTRACT_VERSION / CLIENT_CONTRACT) lives in the `ship-round` skill; the one-time Render / GitHub / Netlify steps live in `deploy-and-accounts`. Where every API KEY comes from is declared in code as `KEY_SOURCES` in server.js and checked at boot — search for it rather than guessing.
 

@@ -1,10 +1,10 @@
 ---
 name: business-and-icp
-description: "Business context for CROJungle outreach: what is sold and at what price (premium $35k sites, $10k/mo retainers, AI builds; the never-advertised lower tier), who buys (founder-led $800k-$15M trades and owner-operated practices where the owner reads his own email), and why the cold email's only job is to earn a reply, with the one email that did. Use when asked what we sell, whether a lead or finding fits the ICP, whether a finding is sellable, or what a good email looks like."
+description: "KNOW: Business context for CROJungle outreach: what is sold and at what price (premium $35k sites, $10k/mo retainers, AI builds; the never-advertised lower tier), who buys (founder-led $800k-$15M trades and owner-operated practices where the owner reads his own email), and why the cold email's only job is to earn a reply, with the one email that did. Use when asked what we sell, whether a lead or finding fits the ICP, whether a finding is sellable, or what a good email looks like."
 ---
 # Business and ICP — what CROJungle sells, to whom, and what the email must do
 
-**Goal:** Say what CROJungle sells, to whom, at what price, and what the one cold email has to do, so every lead and every finding is judged against the business and not against the code.
+**Goal:** After reading this, Claude can decide whether a lead or a finding fits what CROJungle sells, and at which price tier.
 
 Copied verbatim from CLAUDE.md (commit b01d952) lines 10-87 (PART 1). The seven non-negotiable rules stay in CLAUDE.md; what is PROVEN by real replies is the skill `evidence-and-priorities`.
 

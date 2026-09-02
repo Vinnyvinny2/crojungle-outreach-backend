@@ -1,10 +1,10 @@
 ---
 name: pipeline-how-it-works
-description: "How the outreach pipeline works end to end - Find, Research, Audit, Generate, Send - the stack (Render, Netlify, Supabase, Hunter, Google Places, Firecrawl, Apify, DataForSEO, Anthropic) and where each stage lives in server.js and index.html: routes, key functions, declared tables, with line numbers in map.md. Use when asked how the system works, where a stage or measurement happens, or which function or table to open."
+description: "KNOW: How the outreach pipeline works end to end - Find, Research, Audit, Generate, Send - the stack (Render, Netlify, Supabase, Hunter, Google Places, Firecrawl, Apify, DataForSEO, Anthropic) and where each stage lives in server.js and index.html: routes, key functions, declared tables, with line numbers in map.md. Use when asked how the system works, where a stage or measurement happens, or which function or table to open."
 ---
 # Pipeline — how it works, and where each stage lives
 
-**Goal:** Explain Find → Research → Audit → Generate → Send and name the component in `server.js` or `index.html` that does each step.
+**Goal:** After reading this, Claude can name the stage, the function and the file for any behaviour someone describes.
 
 Copied verbatim from CLAUDE.md (commit b01d952) lines 93-161 (PART 2). Some counts in it are stale (server.js is ~79,000 lines, not ~29,800; index.html IS in this repo) — left as written; `map.md` beside this file carries the current line map and is the thing to trust for numbers.
 

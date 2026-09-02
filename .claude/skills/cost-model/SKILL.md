@@ -1,10 +1,10 @@
 ---
 name: cost-model
-description: "What a lead, an audit, a Find press and a contact read cost, from MEASURED meter lines (ANTHROPIC TOTAL, FIRECRAWL SPEND, GOOGLE PLACES, FIND CONTACT, OWNER WAVE), which single model call dominates the bill, and the DO-NOT-CUT list of measurements that must never be traded for savings. Use when asked what something costs, how to lower the bill, whether a cut is safe, or which meter line to read."
+description: "KNOW: What a lead, an audit, a Find press and a contact read cost, from MEASURED meter lines (ANTHROPIC TOTAL, FIRECRAWL SPEND, GOOGLE PLACES, FIND CONTACT, OWNER WAVE), which single model call dominates the bill, and the DO-NOT-CUT list of measurements that must never be traded for savings. Use when asked what something costs, how to lower the bill, whether a cut is safe, or which meter line to read."
 ---
 # Cost model — what a lead costs, measured
 
-**Goal:** Answer "what does this cost" from measured meter lines rather than arithmetic, and name what must never be cut to save money.
+**Goal:** After reading this, Claude can give a per-lead cost from a meter line, and refuse any cut on the DO-NOT-CUT list.
 
 New text (2026-09-02), distilled from the rounds cited; every figure below was measured on a live lead in the round named. Numbers drift with every change, so **before repeating one, run one lead and read the meter lines listed here.**
 

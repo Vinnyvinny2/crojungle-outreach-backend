@@ -1,10 +1,10 @@
 ---
 name: evidence-and-priorities
-description: "What is actually proven by real human replies (the 4.2-4.85 rating band; review pain wins but say the fault, never the source; a finding lands when it contradicts something the owner did on purpose) and the ordered list of what would move the reply rate. Use when deciding what to work on next, or whether a filter, rung, finding or email change has evidence behind it or is inference."
+description: "KNOW: What is actually proven by real human replies (the 4.2-4.85 rating band; review pain wins but say the fault, never the source; a finding lands when it contradicts something the owner did on purpose) and the ordered list of what would move the reply rate. Use when deciding what to work on next, or whether a filter, rung, finding or email change has evidence behind it or is inference."
 ---
 # Evidence and priorities — what is proven, and what would move it
 
-**Goal:** State the only things proven by real replies, and the order of what would actually move results, so nothing is tuned against inference.
+**Goal:** After reading this, Claude can tell a proven fact from an inference before anything is tuned, and pick the next move in the proven order.
 
 Copied verbatim from CLAUDE.md (commit b01d952) lines 10361-10383 (PART 5) and 10527-10543 (PART 7). "Working with Vin" from PART 7 stays in CLAUDE.md.
 
