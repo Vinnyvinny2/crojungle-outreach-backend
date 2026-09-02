@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260925;
+const CONTRACT_VERSION = 20260926;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -10480,9 +10480,34 @@ const isMailboxShape = (e) => {
 const MAILBOX_SUFFIX_RE = /[._-](?:us|usa|uk|ca|team|desk|dept|department|group|inbox|mail)$/;
 const MAILBOX_JUNK_RE = /^(?:noreply|donotreply|postmaster|hostmaster|maildaemon|mailerdaemon|bounce|bounces|abuse|webmaster|dmca|unsubscribe|privacy|legal|test|testing|example|user|username|name|email|youremail|your|sentry)$/;
 const MAILBOX_ROLE_RE = /^(?:info|contact|hello|hi|hey|ask|team|office|admin|administration|sales|support|help|helpdesk|service|services|customer|customers|customerservice|customercare|care|enquiry|enquiries|inquiry|inquiries|mail|general|reception|frontdesk|frontoffice|mainoffice|account|accounts|accounting|billing|invoice|invoices|payment|payments|finance|hr|humanresources|jobs|job|careers|career|recruit|recruiting|recruitment|recruiter|hiring|talent|apply|application|applications|employment|press|media|marketing|compliance|order|orders|shop|store|studio|book|booking|bookings|schedule|scheduling|appointment|appointments|estimate|estimates|quote|quotes|dispatch|newpatient|newpatients|patient|patients|client|clients|connect|talk|reach|getstarted|contactus|emailus|callus|getintouch|letstalk|scheduler|estimator|requestaquote|getaquote|freequote|freeestimate)$/;
+// ══ THE COMPANY'S OWN MAILBOX IS NOT A PERSON'S ═══════════════════════════
+// Live, 2026-09-02: cpa@jtccpas.com, aardconcrete@aol.com (Aard Cement),
+// parklanedentalortho@d4c.com and aanddcontracting@aol.com all printed as
+// [person]. The three lists above are anchored whole-string, so anything not
+// on a list falls through to 'person', and nothing ever compared the local
+// part to the COMPANY's own name or its trade. With the company name and the
+// site host in hand the question is answerable; without them this function
+// behaves exactly as before, so no caller changes by accident.
+const TRADE_MAILBOX_RE = /^(?:cpa|cpas|dental|dentist|dentistry|dds|ortho|orthodontics|roofing|roofer|plumbing|plumber|hvac|heating|cooling|electric|electrical|electrician|concrete|cement|paving|asphalt|contracting|contractor|construction|builder|builders|landscaping|landscape|lawn|painting|painter|cleaning|pest|law|legal|realty|insurance|auto|garage|pool|pools|fence|fencing|tree|solar|septic|flooring|floors|remodeling|restoration|accounting|tax|taxes|bookkeeping|clinic|pharmacy|vet|salon|spa|studio|windows|doors|siding|gutters|kitchen|kitchens|bath|baths|design|designs)$/;
+const companyMailboxLocal = (flat, ctx) => {
+  const f = String(flat || '');
+  if (!f || !ctx) return false;
+  const hostLabel = String(ctx.host || '').toLowerCase().replace(/^www\./, '').split('.')[0].replace(/[^a-z0-9]/g, '');
+  if (hostLabel.length >= 4 && f === hostLabel) return true;
+  if (TRADE_MAILBOX_RE.test(f)) return true;
+  const raw = String(ctx.companyName || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if (raw.length >= 2 && f === raw.join('')) return true;
+  const toks = companyDistinctiveTokens(ctx.companyName);
+  const hits = toks.filter(t => f.includes(t));
+  if (hits.length >= 2) return true;
+  // One company word in front of a trade word: aardconcrete@ at Aard Cement.
+  if (hits.length === 1 && f.indexOf(hits[0]) === 0 && TRADE_MAILBOX_RE.test(f.slice(hits[0].length))) return true;
+  return false;
+};
 // Takes a whole address OR a bare local part, because the five call sites this
-// replaces had already split it three different ways.
-const mailboxKind = (addressOrLocal) => {
+// replaces had already split it three different ways. ctx is optional: with
+// { companyName, host } it can also answer 'company'.
+const mailboxKind = (addressOrLocal, ctx = null) => {
   const raw = String(addressOrLocal || '').trim().toLowerCase();
   if (!raw) return 'unknown';
   const at = raw.indexOf('@');
@@ -10501,6 +10526,7 @@ const mailboxKind = (addressOrLocal) => {
   if (!cands.some(Boolean)) return 'unknown';
   if (cands.some(c => c && MAILBOX_JUNK_RE.test(c))) return 'junk';
   if (cands.some(c => c && MAILBOX_ROLE_RE.test(c))) return 'role';
+  if (ctx && cands.some(c => c && companyMailboxLocal(c, ctx))) return 'company';
   return 'person';
 };
 
@@ -10903,6 +10929,30 @@ const authorityScore = (title) => {
   return 30;
 };
 
+// ══ WHICH OWNER ROW WINS ═══════════════════════════════════════════════════
+// Ten Key's page names three owners and the sheet printed a fourth that was
+// not a person. Two rules, both executed at boot: a row whose name slot fails
+// the shared name rule can never win (a title that slipped past the parser is
+// not promoted by the pick), and among real owners the one whose title says
+// MORE about ownership wins - "Owner, CEO" over a bare "Owner". authorityScore
+// returns the FIRST rung a title matches, so both scored 100 and the tie went
+// to the shorter string, which is the bare word. ownershipDepth counts the
+// senior rungs a title carries; the shorter-title tiebreak survives below it,
+// for the reason recorded at the roster pick: prose that happens to carry an
+// ownership word is always longer than a real title.
+const ownershipDepth = (title) => {
+  const t = String(title || '');
+  let n = 0;
+  for (const r of TITLE_AUTHORITY) if (r.rank >= 85 && r.re.test(t)) n += 1;
+  return n;
+};
+const rankRosterOwners = (roster) => (Array.isArray(roster) ? roster : [])
+  .filter(r => r && r.isOwner && r.name && (r.mononym || (looksLikeRealName(r.name) && !allRoleWords(r.name) && !FIND_ROLE_NOUN.test(r.name))))
+  .sort((a, b) => (authorityScore(b.title) - authorityScore(a.title))
+               || (ownershipDepth(b.title) - ownershipDepth(a.title))
+               || (String(a.title).length - String(b.title).length));
+const pickRosterOwner = (roster) => rankRosterOwners(roster)[0] || null;
+
 // Generic inboxes: at a 15-person company info@ often IS the owner's desk, so
 // it beats reaching a junior employee. At a 200-person company it's a black hole.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -11248,6 +11298,35 @@ const isEponymousOwnerRule = (personName, coName, siteUrl) => {
   }
   return false;
 };
+// ══ ONE EPONYMOUS MAILBOX RULE ════════════════════════════════════════════
+// Two hand-kept copies of this lived in the email engine, and both tested
+// whether ANY token of the name sat inside the domain root and then mailed
+// the FIRST token. "The WowFix Team" at wowfix.us became the@wowfix.us. The
+// rule above is the one the owner resolver trusts - surname against the
+// company name and the domain, with a four-letter floor on the domain half -
+// and neither copy called it. One function now, and the first name it mails
+// has to be a real given-name token.
+//
+// The first-name half is kept on purpose: "Dr. Amaka Nwubah" at
+// amakaaesthetics.com is eponymous on her FIRST name, and that is the recorded
+// case the old copies were written for. Four letters, because "ray" inside
+// raymondplumbing.com is the false positive the surname floor already exists
+// for. DISCLOSED LIMIT: "Bill Zoeller" at zoellerpumps.com still passes,
+// because Bill Zoeller genuinely is the eponymous chief of a company named
+// Zoeller - that row is wrong because a manufacturer is outside the ICP,
+// which is a scope question this rule cannot answer.
+const EPONYMOUS_NOT_A_FIRST_NAME = /^(?:the|and|our|your|team|office|info|sales|admin|staff|crew|family|group)$/;
+const eponymousMailboxFor = (personName, companyName, domain) => {
+  const dom = String(domain || '').trim().toLowerCase();
+  if (!dom || !looksLikeRealName(personName)) return '';
+  const parts = cleanPersonForEmail(personName);
+  const first = parts[0] || '';
+  if (!/^[a-z]{3,}$/.test(first) || EPONYMOUS_NOT_A_FIRST_NAME.test(first)) return '';
+  const domRoot = dom.split('.')[0];
+  const eponymous = isEponymousOwnerRule(personName, companyName, 'https://' + dom)
+    || (first.length >= 4 && domRoot.includes(first));
+  return eponymous ? `${first}@${dom}` : '';
+};
 // ══ A LICENCE HIT MUST TIE THE NAME TO THIS COMPANY ═════════════════════════
 // Pure and module-scope for the same reason. true = some hit line carries the
 // surname AND a distinctive word of the company's name; false = no hit ties
@@ -11577,9 +11656,7 @@ const _ownerFromCorpus = async (corpus, companyName, website, apiKey, rosterCorp
       // uses, so one rule decides who outranks whom everywhere. The tiebreak is
       // the SHORTER title, because a real title is "Founder & CEO" and prose
       // that happens to carry an ownership word is always longer.
-      const _owners = _roster.filter(r => r.isOwner)
-        .sort((a, b) => (authorityScore(b.title) - authorityScore(a.title))
-                     || (String(a.title).length - String(b.title).length));
+      const _owners = rankRosterOwners(_roster);
       if (_owners.length) {
         const _pick = _owners[0];
         const _others = _roster.filter(r => r.name !== _pick.name);
@@ -11974,7 +12051,7 @@ const PROFESSIONAL_OWNER_RE = /\b(?:shareholder|managing\s+(?:attorney|sharehold
 // one of these, and the participles that DO open real titles - Managing,
 // Acting, Interim, Founding - are deliberately absent, so "Managing Partner"
 // and "Acting President" are untouched.
-const CTA_VERB_RE = /^\s*(?:meet|become|becoming|join|contact|see|find|ask|talk|speak|learn|discover|explore|request|schedule|book|call|email|message|hire|choose|select|view|read|watch|get|start|apply|submit|download|subscribe|follow|visit|browse|shop|order|buy|try|click|tap|register|sign|enter|search|compare|calculate|estimate|report|refer|nominate|donate|give|support|partner\s+with|work\s+with|connect\s+with)\b/i;
+const CTA_VERB_RE = /^\s*(?:let(?:'s|\s+s)?|chat|meet|become|becoming|join|contact|see|find|ask|talk|speak|learn|discover|explore|request|schedule|book|call|email|message|hire|choose|select|view|read|watch|get|start|apply|submit|download|subscribe|follow|visit|browse|shop|order|buy|try|click|tap|register|sign|enter|search|compare|calculate|estimate|report|refer|nominate|donate|give|support|partner\s+with|work\s+with|connect\s+with)\b/i;
 const titleHeadIs = (title, pattern) => {
   const s = String(title || '').trim();
   // The head is the VERB, and the ownership or professional word is whatever it
@@ -12205,6 +12282,43 @@ const ROSTER_NAME_RE = /^([A-Z][a-z'’-]{1,20}(?:\s+[A-Z]\.?)?(?:\s+\([A-Z][a-z
 // Master Plumber.
 const FIND_ROLE_NOUN = /\b(manager|specialist|coordinator|director|representative|technician|installer|assistant|associate|supervisor|estimator|foreman|dispatcher|apprentice|designer|strategist|analyst|consultant|officer|engineer|mechanic|plumber|electrician|roofer|receptionist|admin(?:istrator)?|bookkeeper|marketer)\b/i;
 
+// ══ A NAME SLOT MADE ENTIRELY OF ROLE WORDS IS A TITLE ═══════════════════
+// Live, Ten Key Home & Kitchen Remodels, 2026-09-02: the run "Owner, Client
+// Connection Lead" has no name in it, so the title-led reader took the words
+// after the last comma as the person - and "Client Connection Lead" clears
+// every shape test in this file: three capitalised words, no role noun
+// anybody had written down ("lead" was not in FIND_ROLE_NOUN), no title
+// pattern. It shipped as the decision-maker while three real owners sat on
+// the same page. The same rule kills "Connection Lead" and "Client
+// Onboarding", which the two-people pass was reading as a SECOND person
+// inside a correct row - and stripping the real owner's claim for it.
+//
+// A name with ONE role word survives on purpose: "Ann Lead" is a person. A
+// filter loosened until it catches nothing is the cheap failure; one
+// tightened until it eats real names is the expensive one.
+const ROLE_WORDS = new Set([
+  'lead', 'client', 'clients', 'customer', 'customers', 'connection', 'connections', 'relations',
+  'success', 'onboarding', 'experience', 'account', 'accounts', 'sales', 'marketing',
+  'operations', 'project', 'projects', 'office', 'field', 'senior', 'junior', 'head',
+  'chief', 'vice', 'general', 'regional', 'region', 'branch', 'associate', 'assistant',
+  'manager', 'director', 'coordinator', 'specialist', 'support', 'service', 'services',
+  'team', 'crew', 'development', 'business', 'quality', 'safety', 'production', 'finance',
+  'hr', 'people', 'talent',
+]);
+const allRoleWords = (s) => {
+  const w = normalizeTitleWords(s).split(' ').filter(Boolean);
+  return w.length > 0 && w.every(x => ROLE_WORDS.has(x));
+};
+// ══ THE HEAD OF A TITLE-LED SPLIT MUST BE A WHOLE TITLE ═══════════════════
+// "Director of Client Onboarding" was cut into the name "Client Onboarding"
+// and the title "Director of". A title that ends on a preposition or a
+// conjunction is a title cut in half, and half a title is never a job.
+const titleHeadComplete = (head) => {
+  const s = String(head || '').trim().replace(/[,;:\-\s]+$/, '');
+  if (!s) return false;
+  return !/(?:^|\s)(?:of|for|to|at|in|on|with|and|or|the|a|an|&)$/i.test(s);
+};
+
 // Hoisted out of parseTeamRoster so the title-led reader below and the mononym
 // pass inside it share one declaration. Two copies of a declared word list is
 // the disease this file records most, and the copy that rots is always the one
@@ -12224,6 +12338,29 @@ const NOT_A_MONONYM = new Set([
   'inspection', 'training', 'resources', 'downloads', 'privacy', 'terms',
   'blogs', 'articles', 'press', 'media', 'awards', 'partners', 'clients',
 ]);
+
+// ══ A REVIEW SIGNATURE MUST BE A PERSON'S NAME ════════════════════════════
+// Live, WOWFIX Windows and Doors, 2026-09-02: "The WowFix Team" signs their
+// Google review replies eight times, the review-reply source accepted it as
+// the owner at authority 100, and the eponymous mailbox rule then built
+// the@wowfix.us from the word "The". The only check on a signer was that its
+// first token appeared somewhere in the replies, which "the" always does. One
+// question, asked of every signer: is this a person, or a team, a department
+// or the business itself. A bare first name is a person (Annie, dave - the
+// owner-run shops this source exists for); a company word is not.
+const reviewSignerOk = (name, companyName = '') => {
+  const s = String(name || '').trim();
+  if (!s) return false;
+  const parts = s.split(/\s+/);
+  if (parts.length === 2 && /^[A-Z]\.?$/.test(parts[1])) return reviewSignerOk(parts[0], companyName);
+  if (parts.length > 1) return looksLikeRealName(s);
+  const cap = s.charAt(0).toUpperCase() + s.slice(1);
+  if (!MONONYM_RE.test(cap)) return false;
+  const low = s.toLowerCase();
+  if (NOT_A_MONONYM.has(low)) return false;
+  if (companyWordsOf(companyName).has(low)) return false;
+  return true;
+};
 
 // ══ IS THIS TRAILING RUN A PERSON? ═════════════════════════════════════════
 // One question, asked by both readers below. A single token is permitted and
@@ -12260,6 +12397,7 @@ const rosterNameTailOk = (cand, kindOf, companyName = '') => {
   const s = String(cand || '').trim().replace(/[.,;:]+$/, '');
   if (!s || s.length > 40) return false;
   if (tailIsCompanyWords(s, companyName)) return false;
+  if (allRoleWords(s)) return false;
   if (FIND_ROLE_NOUN.test(s)) return false;
   if (OWNER_TITLE_RE.test(s) || NON_OWNER_TITLE_RE.test(s) || PRACTITIONER_TITLE_RE.test(s)) return false;
   if (kindOf && kindOf(s)) return false;
@@ -12314,7 +12452,7 @@ const titleLedPeople = (run, kindOf, companyName = '') => {
         head = s.slice(0, s.length - tail.length).replace(/[,;:\-\s]+$/, '').trim();
       }
     }
-    if (!name || !head) continue;
+    if (!name || !head || !titleHeadComplete(head)) continue;
     const kind = kindOf(head);
     if (!kind) continue;
     out.push({ name, title: head.replace(/\s+/g, ' '), isOwner: kind === 'owner', mononym: name.indexOf(' ') < 0 });
@@ -12623,7 +12761,12 @@ const parseTeamRoster = (html, companyName = '') => {
       // nothing is the next entry too. Only a run whose title reading is the
       // ONLY reading - a bare title - belongs to the person we are building.
       const _next = personFromRun(t, companyName);
-      if (_next && (_next.inlineTitle || !kind)) break;   // the next person
+      // And a run that is a title WITH the next person's name inside it -
+      // "Tax Associate Christina Sears" - is the next entry too, not this
+      // person's title. Live, JTC CPAs: the heading "Winter Park" was paired
+      // with it, because a four-token run fails the name pattern and so the
+      // next-person test above could not fire.
+      if ((_next && (_next.inlineTitle || !kind)) || nameTailOfTitle(t, titleKind, companyName)) break;   // the next person
       if (t.length > 70) continue;
       // ══ AN OWNER TOKEN WINS OVER A C-SUITE ONE ═══════════════════════
       // "CO-OWNER/CFO" is Misty Pyle at Hannah Custom Homes. Checking the
@@ -12706,7 +12849,7 @@ const parseTeamRoster = (html, companyName = '') => {
     if (!_tail || _tail.toLowerCase() === String(r.name || '').toLowerCase()) return r;
     if (!looksLikeRealName(r.name)) {
       const _head = r.title.slice(0, r.title.length - _tail.length).replace(/[,;:\-\s]+$/, '').trim();
-      const _k = _head ? titleKind(_head) : null;
+      const _k = (_head && titleHeadComplete(_head)) ? titleKind(_head) : null;
       return _k ? { name: _tail, title: _head.replace(/\s+/g, ' '), isOwner: _k === 'owner' } : r;
     }
     return r.isOwner ? Object.assign({}, r, { isOwner: false, twoPeople: true }) : r;
@@ -27099,7 +27242,7 @@ const callWindowFor = (hoursText, tradeWord, utcOffsetMinutes = null) => {
   })();
   if (!rows.length) return { checked: false, why: 'their Google listing publishes no opening hours, so there is nothing to read here' };
   if (rows.some(r => /open 24 hours/i.test(r))) {
-    return { checked: true, open24: true, say: 'They publish 24-hour availability, so there is no closed window to work around. That also means an after-hours finding is false for them.' };
+    return { checked: true, open24: true, short: '24h', say: 'They publish 24-hour availability, so there is no closed window to work around. That also means an after-hours finding is false for them.' };
   }
   // The earliest opening across the week, read from their own text.
   let earliest = null;
@@ -27119,18 +27262,21 @@ const callWindowFor = (hoursText, tradeWord, utcOffsetMinutes = null) => {
   // CPA shipped exactly that on 2026-08-21.
   const _withWhom = /attorney|lawyer|account|cpa/.test(t) ? 'clients' : 'patients';
   const open = Number.isFinite(earliest) ? earliest : 8;
+  // The short form for the sheet: "7-8am", one suffix when both halves share it.
+  const _a = clockHour(open), _b = clockHour(open + 1);
+  const _span = (_a.slice(-2) === _b.slice(-2) ? _a.slice(0, -2) : _a) + '-' + _b;
   if (onSite) {
-    return { checked: true, open24: false,
+    return { checked: true, open24: false, short: _span,
       // "on a roof or under a house" printed on a PAVING contractor and a kitchen
       // remodeler on 2026-08-24 — roofer imagery hardcoded for thirty trades.
       // "out on a job" is true of every one of them.
       say: `Their listing opens around ${clockHour(open)}.${_zone} On a trade like this the owner is usually reachable in the first half hour before crews go out, or late afternoon once they are back. Mid-morning is the worst window: he is out on a job.` };
   }
   if (inRooms) {
-    return { checked: true, open24: false,
+    return { checked: true, open24: false, short: `before ${clockHour(open)} / lunch`,
       say: `Their listing opens around ${clockHour(open)}.${_zone} A practice owner is with ${_withWhom} through the day, so the realistic windows are before the first ${_withWhom === 'clients' ? 'meeting' : 'appointment'} and over lunch. The person who answers will be front desk, and the owner's name is the only thing that gets past them.` };
   }
-  return { checked: true, open24: false,
+  return { checked: true, open24: false, short: `from ${clockHour(open)}`,
     say: `Their listing opens around ${clockHour(open)}.${_zone} Early is usually better than late for an owner-operated business.` };
 };
 
@@ -32486,6 +32632,10 @@ ${replies.join('\n---\n').slice(0, 9000)}` }]
       console.log(`DM/reviews [${companyName}]: discarded "${parsed.name}" — not actually signed in the replies`);
       return null;
     }
+    if (!reviewSignerOk(parsed.name, companyName)) {
+      console.log(`DM/reviews [${companyName}]: discarded "${parsed.name}" \u2014 signs the replies but is not a person's name (a team, a department or the business itself)`);
+      return null;
+    }
     console.log(`DM/reviews [${companyName}]: \u2713 ${parsed.name}${parsed.title ? ' (' + parsed.title + ')' : ''} signs their Google review replies (${parsed.timesSeen || 1}x) \u2014 at an owner-run business that IS the owner`);
     return {
       name: parsed.name,
@@ -33453,7 +33603,11 @@ const emailConfidenceGrade = (r, opts) => {
   if (typeof e.tier !== 'number' || !Number.isFinite(tier)) return 'pattern_guess';
   if (tier === 2) return 'smtp_confirmed';
   if (tier === 1) {
-    const role = e.kind === 'role' || e.kind === 'junk' || e.fromCareersPage === true || e.offDomain === true;
+    // mailboxKind is what the tier-1 return actually writes; `kind` is set
+    // later, in the route, so reading only `kind` here left this half dead
+    // and cpa@jtccpas.com graded as "a person, not a department".
+    const _k = e.mailboxKind || e.kind;
+    const role = _k === 'role' || _k === 'junk' || _k === 'company' || e.fromCareersPage === true || e.offDomain === true;
     return role ? 'published_role' : 'published_personal';
   }
   if (e.catchAll === true) {
@@ -33512,9 +33666,12 @@ const findEmailFireproof = async (_args) => {
 //
 // Defaults to true so every existing caller behaves exactly as before; only a
 // caller that has a canBuy verdict in hand passes it.
-const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched = true, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, siteIsDown = false, industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '', freePages = [] }) => {
+const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched = true, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, siteIsDown = false, companyName = '', industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '', freePages = [] }) => {
   const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '').toLowerCase();
   const name = ceoName || hunterName || '';
+  // The company name and their own host travel with every mailboxKind
+  // question below, so the company's own mailbox can be told from a person's.
+  const _mbCtx = { companyName, host: domain };
   // One predicate, read by every gate below, so the three of them cannot
   // disagree about whether this name is good enough to build on.
   const _vouched = ceoVouched !== false;
@@ -33670,7 +33827,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
   // prior address is generic AND we know who the owner is, fall through: the
   // published address is on their site and will be found again a few lines
   // below, so nothing is lost, and the owner's mailbox gets its chance first.
-  const _priorIsShared = priorEmail && mailboxKind(priorEmail) === 'role' && !!ceoName;
+  const _priorIsShared = priorEmail && ['role', 'company'].includes(mailboxKind(priorEmail, _mbCtx)) && !!ceoName;
   if (_priorIsShared) {
     console.log(`EMAIL [${domain}]: ${priorEmail} was proven on an earlier run, but it is a shared inbox and we know the owner is ${ceoName}. Not locking onto it — the published address is still on their site and will be found again if nothing better verifies.`);
   }
@@ -33711,9 +33868,9 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // then a generic one (at a 15-person company, info@ often IS the owner).
     const nameParts = name.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 2);
     const nameMatch = scraped.emails.find(e => nameParts.some(p => e.split('@')[0].includes(p)));
-    const personal  = scraped.emails.find(e => mailboxKind(e) === 'person');
+    const personal  = scraped.emails.find(e => mailboxKind(e, _mbCtx) === 'person');
     let best = nameMatch || personal || scraped.emails[0];
-    let isGeneric = mailboxKind(best) === 'role';
+    let isGeneric = ['role', 'company'].includes(mailboxKind(best, _mbCtx));
 
     // ══ A SHARED INBOX IS NOT THE OWNER ══════════════════════════════════════
     // When the only address a site publishes is info@, this returned it and
@@ -33763,11 +33920,12 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // site - and the LABEL was not, so the label is what changes. A rep
     // reading the row now knows who the address reaches before he types a
     // first name into it.
-    const _kind = mailboxKind(best);
+    const _kind = mailboxKind(best, _mbCtx);
     const _fromCareers = scraped.source === 'careers_page';
     const _offDomain = scraped.offDomain === true || !String(best).endsWith('@' + domain);
     const _marks = [];
     if (_fromCareers) _marks.push('their careers page, so a recruiter reads it');
+    else if (_kind === 'company') _marks.push("the company's own mailbox, not a person");
     else if (isGeneric) _marks.push('a shared inbox, not a person');
     if (_offDomain) _marks.push('on a different domain from their website');
     const _label = _marks.length
@@ -33959,14 +34117,11 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
       // cleanPersonForEmail() already strips honorifics and punctuation and is
       // used by every other mailbox path. This one was building its own parts and
       // skipping it, so the fix is to stop having a second implementation.
-      const nameParts = cleanPersonForEmail(name).filter(w => w.length > 2);
-      const domRoot = domain.split('.')[0].toLowerCase();
-      const eponymous = nameParts.some(w => domRoot.includes(w));
-      const firstName = nameParts[0];
-      if (!firstName) {
-        console.log(`EMAIL [${domain}]: "${name}" reduces to nothing usable once titles and punctuation are stripped, so no eponymous mailbox can be built from it.`);
-      }
-      const epEmail = firstName ? `${firstName}@${domain}` : '';
+      // ONE rule, shared with the branch below: a real person's name, the
+      // surname (or a four-letter first name) in the business name or the
+      // domain, and a first name that is a given name rather than an article.
+      const epEmail = eponymousMailboxFor(name, companyName, domain);
+      const eponymous = !!epEmail;
       // The gate is now this ONE address, not the whole batch. If the server
       // explicitly refused this mailbox we honour that and fall through; if it
       // refused some other pattern, that is not evidence about this one.
@@ -34156,10 +34311,8 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // honorific and the punctuation, so "Dr. Amaka Nwubah" yields amaka and not
     // the malformed "dr." local part. Two copies of this logic existed and only
     // one would have been fixed if this were done inline.
-    const nameParts = cleanPersonForEmail(name).filter(w => w.length > 2);
-    const domRoot = domain.split('.')[0].toLowerCase();
-    if (nameParts.length && nameParts.some(w => domRoot.includes(w))) {
-      const epEmail = `${nameParts[0]}@${domain}`;
+    const epEmail = eponymousMailboxFor(name, companyName, domain);
+    if (epEmail) {
       console.log(`✓ EMAIL [${domain}] EPONYMOUS: the company is named after ${name}, so ${epEmail} on their own domain is the owner's mailbox`);
       return {
         // TIER 3 for the same reason as the other eponymous path: inferred from
@@ -43420,6 +43573,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       try {
         emailResult = await findEmailFireproof({
           website,
+          companyName: company,
           ceoName: (decisionMaker && decisionMaker.name) || verifiedCEO,
           ceoTitle: (decisionMaker && decisionMaker.title) || verifiedCEOTitle,
           employees: verifiedEmployees,
@@ -57733,12 +57887,11 @@ app.listen(PORT, () => {
     // Ordered so the WRONG answer is first in the document.
     const _order = '<div><h3>Zed Nav</h3><p>Partner, Marketing</p></div>'
       + '<div><h3>Ann Real</h3><p>Founder &amp; CEO</p></div>';
-    const _own3 = parseTeamRoster(_order, 'X Co').filter(r => r.isOwner)
-      .sort((a, b) => (authorityScore(b.title) - authorityScore(a.title)) || (a.title.length - b.title.length));
+    const _own3 = rankRosterOwners(parseTeamRoster(_order, 'X Co'));
     if (!_own3.length || !/Ann Real/.test(_own3[0].name)) {
       _fails.push('the roster still picks the FIRST owner-ish row rather than the most senior one');
     }
-    if (!_src.includes(_n('.sort((a, b) => (authorityScore(b.title) - authorityScore(a.title))', '\n                     || (String(a.title).length - String(b.title).length'))) {
+    if (!_src.includes(_n('const _owners =', ' rankRosterOwners(_roster);'))) {
       _fails.push('the roster owner pick is back on document order, which is what put a nav label above a Co-Founder & CEO');
     }
 
@@ -58246,8 +58399,14 @@ app.listen(PORT, () => {
       // The headline that must not argue with the pairs beneath it. A row
       // whose ownership claim was stripped downstream reads as a parser
       // failure unless the line says what happened to it.
-      const _two = _row('<h3>Iron Sharpens Iron</h3><p>President &amp; CEO Jon Schilling</p>', 'JR & Co')
+      // Round 106: on the h3/p shape the lookahead now ENDS the motto's entry
+      // when the next run carries a person, so no motto row exists to mark.
+      // The inline shape is the one that still reaches the two-people pass.
+      const _two = _row('<p>Iron Sharpens Iron, President &amp; CEO Jon Schilling</p>', 'JR & Co')
         .some(r => r && r.twoPeople === true);
+      if (_row('<h3>Iron Sharpens Iron</h3><p>President &amp; CEO Jon Schilling</p>', 'JR & Co').some(r => r.name === 'Iron Sharpens Iron')) {
+        _fails.push('the motto above a title-led run is still read as a person');
+      }
       if (!_two) _fails.push('a title carrying a second person no longer marks the row, so the ROSTER line cannot explain the demotion it just made');
       if (!_src.includes(_n('const _demoted = _roster.filter(r => r &&', ' r.twoPeople).length;'))
         || !_src.includes(_n('of them named a SECOND person', ' inside the title'))) {
@@ -58275,6 +58434,122 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ OWNER TRUTH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ---- SHEET TRUTH (ROUND 106) ------------------------------------------
+  // Twenty leads read live on 2026-09-02, and the exported sheet named four
+  // things that are not true: a job title as the decision-maker, a team
+  // signature as the owner with an address built from the word "The", the
+  // company's own mailbox labelled as a person's, and a 65/100 on a site that
+  // returned 258 characters. Every fixture below is the live string, driven
+  // through the REAL function, in both directions.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _src = selfSourceNoCommentsLF();
+    const _row = (html, co) => parseTeamRoster(html, co);
+
+    // 1. A title in the name slot. Ten Key's page, three real owners.
+    const _tk = _row('<h3>Chris Reed</h3><p>Owner, Client Connection Lead</p><h3>Mike Kahn</h3><p>Owner</p><h3>Rebecca Muller</h3><p>Owner, CEO</p>', 'Ten Key Home & Kitchen Remodels OKC');
+    if (_tk.some(r => /Client Connection Lead|Connection Lead/.test(r.name))) _fails.push('"Client Connection Lead" is still a person - the tail of a comma-joined title is being promoted to the name slot');
+    const _chris = _tk.find(r => r.name === 'Chris Reed');
+    if (!_chris || _chris.isOwner !== true) _fails.push('Chris Reed lost his ownership claim to the words of his own title, which the two-people pass read as a second person');
+    const _tkPick = pickRosterOwner(_tk);
+    if (!_tkPick || _tkPick.name !== 'Rebecca Muller') _fails.push(`the owner pick is ${_tkPick && _tkPick.name} - "Owner, CEO" must beat a bare "Owner", and a bare "Owner" was winning on the shorter-title tiebreak`);
+    if (allRoleWords('Ann Lead')) _fails.push('one role word is refusing a real name - "Ann Lead" is a person');
+    if (!allRoleWords('Client Connection Lead') || !allRoleWords('Client Onboarding')) _fails.push('the all-role-words rule does not catch the live strings');
+    const _annLead = _row('<h3>Ann Lead</h3><p>Owner</p>', 'X Co');
+    if (!_annLead.some(r => r.name === 'Ann Lead' && r.isOwner)) _fails.push('a real owner whose surname is a role word is refused');
+    // A head cut in half is not a title.
+    const _dir = _row('<h3>Jane Doe</h3><p>Director of Client Onboarding</p>', 'X Co');
+    if (_dir.length !== 1 || _dir[0].name !== 'Jane Doe' || !/Director of Client Onboarding/.test(_dir[0].title)) _fails.push(`"Director of Client Onboarding" no longer stays whole: ${JSON.stringify(_dir)}`);
+    const _half = _row('<p>Assistant to Mary Ellen</p>', 'X Co');
+    if (_half.length) _fails.push(`"Assistant to" was accepted as a whole title: ${JSON.stringify(_half)}`);
+    if (titleHeadComplete('Director of') || !titleHeadComplete('Owner') || !titleHeadComplete('Founder & CEO')) _fails.push('titleHeadComplete is wrong about a preposition-ended head or a real title');
+    // A title run that swallows the next person ends the entry above it.
+    const _wp = _row('<h3>Winter Park</h3><p>Tax Associate Christina Sears</p>', 'JTC CPAs');
+    if (_wp.some(r => r.name === 'Winter Park')) _fails.push('a location heading still pairs with the run below it when that run carries the NEXT person');
+    const _cs = _wp.find(r => r.name === 'Christina Sears');
+    if (!_cs || _cs.isOwner || !/Tax Associate/.test(_cs.title)) _fails.push(`Christina Sears is not read on her own: ${JSON.stringify(_wp)}`);
+    // The chat widget.
+    const _chat = _row("<h3>Let's Chat</h3><p>WowFix assistant</p>", 'WOWFIX Windows and Doors');
+    if (_chat.length) _fails.push(`a live-chat label is still a person: ${JSON.stringify(_chat)}`);
+    // The pick cannot be won by a name that fails the shared rule, and depth beats a bare word.
+    const _pk = pickRosterOwner([{ name: 'Client Connection Lead', title: 'Owner', isOwner: true }, { name: 'Chris Reed', title: 'Owner, Client Connection Lead', isOwner: true }]);
+    if (!_pk || _pk.name !== 'Chris Reed') _fails.push('a row whose name slot fails the shared name rule can still win the owner pick');
+    const _tie = pickRosterOwner([{ name: 'Zed Nav', title: 'Founder, CEO and chief bottle washer of this company', isOwner: true }, { name: 'Ann Real', title: 'Founder & CEO', isOwner: true }]);
+    if (!_tie || _tie.name !== 'Ann Real') _fails.push('at equal ownership depth the shorter title no longer wins');
+    if (ownershipDepth('Owner, CEO') !== 2 || ownershipDepth('Owner') !== 1) _fails.push('ownershipDepth does not count the senior rungs a title carries');
+    // Real rosters must survive: the three-person crew page and its owner.
+    const _sv = _row('<h3>Pete Barnes</h3><p>Owner</p><h3>Dana Willis</h3><p>Operations Manager</p><h3>Ray Alonzo</h3><p>Lead Estimator</p>', 'Scenario H Roofing');
+    if (_sv.length !== 3 || !_sv.some(r => r.name === 'Pete Barnes' && r.isOwner) || !_sv.some(r => r.name === 'Ray Alonzo')) _fails.push(`an ordinary three-person roster stopped parsing: ${JSON.stringify(_sv)}`);
+    for (const _need of [
+      [_n('if (tailIsCompanyWords(s, companyName)) return false;\n', '  if (allRoleWords(s)) return false;'), 'rosterNameTailOk no longer refuses a name slot made entirely of role words'],
+      [_n('if ((_next && (_next.inlineTitle || !kind)) ||', ' nameTailOfTitle(t, titleKind, companyName)) break;'), 'the lookahead no longer ends an entry when the next run carries the next person inside a title'],
+      [_n('if (!name || !head ||', ' !titleHeadComplete(head)) continue;'), 'the title-led reader accepts a head cut in half again'],
+      [_n('const _owners =', ' rankRosterOwners(_roster);'), 'the roster owner pick is not the shared ranker'],
+    ]) { if (!_src.includes(_need[0])) _fails.push(_need[1]); }
+
+    // 2. A review signature must be a person.
+    for (const [_nm, _co, _want] of [['The WowFix Team', 'WOWFIX Windows and Doors', false], ['Team', 'X', false], ['Wowfix', 'WOWFIX Windows and Doors', false],
+      ['Mike', 'WOWFIX Windows and Doors', true], ['Mike Kahn', 'X', true], ['dave', 'Aard Cement Inc', true], ['Sarah M.', 'X', true], ['Annie', 'New Generation Kitchen & Bath', true]]) {
+      if (reviewSignerOk(_nm, _co) !== _want) _fails.push(`reviewSignerOk("${_nm}") is ${!_want} - ${_want ? 'a real signer is refused' : 'a team or the business itself is accepted as the owner'}`);
+    }
+    if (!_src.includes(_n('if (!reviewSignerOk(parsed.name,', ' companyName)) {'))) _fails.push('the review-reply source no longer asks whether the signer is a person, so "The WowFix Team" is an owner again');
+
+    // 3. One eponymous mailbox rule.
+    for (const [_nm, _co, _dom, _want] of [
+      ['The WowFix Team', 'WOWFIX Windows and Doors', 'wowfix.us', ''],
+      ['Jane Ray', 'Raymond Plumbing', 'raymondplumbing.com', ''],
+      // Each guard needs the case only IT can refuse: the article list cannot
+      // see a team name, and the name rule cannot see an article.
+      ['Wowfix Support Team', 'WOWFIX Windows and Doors', 'wowfix.us', ''],
+      ['The Fixer', 'The Fixer Handyman', 'thefixer.com', ''],
+      ['Claude Reynolds', 'Claude Reynolds Insurance', 'claudereynoldsinsurance.com', 'claude@claudereynoldsinsurance.com'],
+      ['Dr. Amaka Nwubah', 'Amaka Aesthetics', 'amakaaesthetics.com', 'amaka@amakaaesthetics.com'],
+      ['Julie L Stante', 'Julie L Stante, DDS', 'juliestantedds.com', 'julie@juliestantedds.com'],
+    ]) {
+      const _got = eponymousMailboxFor(_nm, _co, _dom);
+      if (_got !== _want) _fails.push(`eponymousMailboxFor("${_nm}", ${_dom}) is "${_got}" and should be "${_want}"`);
+    }
+    {
+      const _calls = _src.split(_n('eponymousMailboxFor', '(name, companyName, domain)')).length - 1;
+      if (_calls !== 2) _fails.push(`the email engine has ${_calls} call(s) to the shared eponymous rule and two eponymous branches - a branch is keeping its own copy`);
+      if (_src.includes(_n('nameParts.some(w => domRoot', '.includes(w))'))) _fails.push('the any-token domain substring test is back in the email engine, which is what built the@wowfix.us');
+    }
+
+    // 4. The company's own mailbox is not a person's, and the grade reads the field that is written.
+    for (const [_addr, _ctx, _want] of [
+      ['cpa@jtccpas.com', { companyName: 'JTC CPAs - Boise, ID', host: 'jtccpas.com' }, 'company'],
+      ['aardconcrete@aol.com', { companyName: 'Aard Cement Inc', host: 'aardcementboise.com' }, 'company'],
+      ['parklanedentalortho@d4c.com', { companyName: 'Park Lane Pediatric Dentistry and Orthodontics', host: 'parklanedentalortho.com' }, 'company'],
+      ['aanddcontracting@aol.com', { companyName: 'A and D Contracting', host: 'expressbathsnc.com' }, 'company'],
+      ['tony@tonyconforticpa.com', { companyName: 'Tony Conforti CPA', host: 'tonyconforticpa.com' }, 'person'],
+      ['sam.glass@x.com', { companyName: 'Glass Masters', host: 'x.com' }, 'person'],
+      ['lee@leeplumbing.com', { companyName: 'Lee Plumbing', host: 'leeplumbing.com' }, 'person'],
+      ['info@x.com', { companyName: 'X Co', host: 'x.com' }, 'role'],
+      ['cpa@jtccpas.com', null, 'person'],
+    ]) {
+      const _got = mailboxKind(_addr, _ctx);
+      if (_got !== _want) _fails.push(`mailboxKind("${_addr}"${_ctx ? ' with the company in hand' : ''}) is "${_got}" and should be "${_want}"`);
+    }
+    if (emailConfidenceGrade({ email: 'cpa@jtccpas.com', tier: 1, mailboxKind: 'role' }) !== 'published_role') _fails.push('a tier-1 role mailbox grades as a person - the grade is reading `kind`, which the tier-1 return never writes');
+    if (emailConfidenceGrade({ email: 'aardconcrete@aol.com', tier: 1, mailboxKind: 'company' }) !== 'published_role') _fails.push('a company mailbox grades as a person');
+    if (emailConfidenceGrade({ email: 'a@b.com', tier: 1, mailboxKind: 'person' }) !== 'published_personal') _fails.push('a personal tier-1 mailbox no longer grades as personal');
+    if (!_src.includes(_n('const _kind = mailboxKind(best,', ' _mbCtx);'))) _fails.push('the tier-1 site no longer hands the company to mailboxKind, so cpa@ is a person again');
+
+    // 5. An absence needs a page we read; reach needs a readable site.
+    if (!_src.includes(_n('signals.reachMeasured = (_ownerAttempted', ' || _emailAttempted) && !out.notIcp && (signals.readable === true || !website);'))) _fails.push('reachMeasured no longer needs a readable site, so a 258-character page scores its reach term on lookups that had nothing to read');
+    const _thinHtml = '<html><head><title>x</title><script>' + 'var a=1;'.repeat(80) + '</script></head><body><p>' + 'Floor Gurus. '.repeat(20) + '</p></body></html>';
+    const _thin = readFindIcpSignals([{ url: 'https://x.com/about', intent: 'team', html: _thinHtml, text: 'Floor Gurus. '.repeat(20) }]);
+    if (_thin.markupRead !== true || _thin.readable !== false || _thin.adsCode !== null || _thin.analytics !== null || _thin.hiringAny !== null) _fails.push(`a 258-character page asserts an absence: markup=${_thin.markupRead} readable=${_thin.readable} ads=${_thin.adsCode} analytics=${_thin.analytics} hiring=${_thin.hiringAny}`);
+    // 6. The short calling window reaches the route.
+    if (!_src.includes(_n("out.callWindow = _win && _win.checked ? { say: _win.say || '', open24: !!_win.open24,", " short: _win.short || '' } : null;"))) _fails.push('the short calling window does not leave the server, so the lean sheet has nothing but a sentence to print');
+
+    if (_fails.length) console.log(`⛔ SHEET TRUTH CHECK: ${_fails.join(' | ')}.`);
+    else console.log(`✓ SHEET TRUTH CHECK: the four things the 2026-09-02 sheet said that were not true are refused by the real functions and the real rosters beside them survive. A name slot made entirely of role words is a title, so "Client Connection Lead" is nobody and Chris Reed keeps his ownership; among three real owners "Owner, CEO" beats a bare "Owner"; a head cut at a preposition is not a job; a title run carrying the next person ends the entry above it; and a chat widget's label is not a person. A review signature has to be a person's name, so "The WowFix Team" cannot be the owner, and the two eponymous mailbox branches read ONE rule that mails a real first name only when the surname is in the business name or the domain. The company's own mailbox - cpa@, aardconcrete@, parklanedentalortho@ - is graded as the department it is, read off the field the tier-1 return actually writes. And an absence needs readable text: a 258-character page asserts nothing about ads, analytics, hiring or reach. DISCLOSED: bill@zoellerpumps.com still passes the eponymous rule, because Bill Zoeller genuinely runs a company named Zoeller - that row is wrong on scope, not on the mailbox.`);
+  } catch (e) {
+    console.log(`⛔ SHEET TRUTH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ---- GOOD LEADS IN --------------------------------------------------
@@ -58405,12 +58680,12 @@ app.listen(PORT, () => {
       [_nd('freePages: pages.map(p => ({ url: p.url, text: p.text,', ' intent: p.intent })),'), 'the page intent is dropped again, so the extractor cannot tell a careers page from a contact page'],
       [_nd('priorLeads:', ' _bench,'), 'the chain detector lost the cross-run memory the bench already holds'],
       [_nd('licenseQualifier:', ' _isQualifier,'), 'the licence search stopped telling a QUALIFIER from an owner - that is the tradesman who holds the company licence, and it used to come back stamped "Owner"'],
-      [_nd('const _kind =', ' mailboxKind(best);'), 'a tier-1 address no longer says who it reaches, so a recruiting inbox ships as "Published on their site" at score 100 again'],
+      [_nd('const _kind =', ' mailboxKind(best, _mbCtx);'), 'a tier-1 address no longer says who it reaches, so a recruiting inbox ships as "Published on their site" at score 100 again'],
       // Reverting THIS line to the old thirteen-word list left every mailbox
       // fixture green: they exercise mailboxKind and this is the call site.
       // Tenth recorded instance of a check that does not assert its call site.
-      [_nd('let isGeneric = mailboxKind(best)', " === 'role';"), 'the tier-1 generic decision is back on its own private word list, so the six lists have become two again'],
-      [_nd("const personal  = scraped.emails.find(e => mailboxKind(e)", " === 'person');"), 'the pick of which scraped address to prefer is back on its own private word list'],
+      [_nd("let isGeneric = ['role', 'company'].includes(mailboxKind(best,", ' _mbCtx));'), 'the tier-1 generic decision is back on its own private word list, so the six lists have become two again'],
+      [_nd("const personal  = scraped.emails.find(e => mailboxKind(e, _mbCtx)", " === 'person');"), 'the pick of which scraped address to prefer is back on its own private word list'],
     ];
     // == AND THE SITEMAP HAS TO REACH IT ================================
     // The rule above can only see a locations index if somebody hands it one.
@@ -58568,7 +58843,17 @@ app.listen(PORT, () => {
     const _withAds = readFindIcpSignals([{ url: 'https://x.com', intent: 'home', html: _adsHtml, text: 'x' }]);
     if (_withAds.adsCode !== true) _fails.push('a Google ad tag in the markup does not read as ad spend');
     const _noAds = readFindIcpSignals([{ url: 'https://x.com', intent: 'home', html: '<html><body>' + 'y'.repeat(600) + '</body></html>', text: 'y' }]);
-    if (_noAds.adsCode !== false) _fails.push('a readable page with no ad tag does not report the absence, so a real negative is indistinguishable from an unread site');
+    // 600 bytes of markup and one character of text is the Floor Gurus shape:
+    // a page with a <head> and nothing to read. It must assert NOTHING.
+    if (_noAds.adsCode !== null || _noAds.analytics !== null || _noAds.hiringAny !== null) _fails.push('a page with markup but no readable text asserts an absence (ads, analytics or hiring), which is how a 258-character page scored 65/100 on six signals');
+    const _navHtml = '<html><body><a href="/a">a</a><a href="/b">b</a><a href="/c">c</a>' + 'y'.repeat(600) + '</body></html>';
+    const _noAdsRead = readFindIcpSignals([{ url: 'https://x.com', intent: 'home', html: _navHtml, text: 'y '.repeat(500) }]);
+    if (_noAdsRead.adsCode !== false) _fails.push('a readable page with no ad tag does not report the absence, so a real negative is indistinguishable from an unread site');
+    if (_noAdsRead.hiringAny !== false) _fails.push('a readable homepage with a navigation and no roles does not report "not hiring"');
+    const _noNav = readFindIcpSignals([{ url: 'https://x.com', intent: 'home', html: '<html><body>' + 'y'.repeat(600) + '</body></html>', text: 'y '.repeat(500) }]);
+    if (_noNav.hiringAny !== null) _fails.push('a page with no navigation and no careers page asserts "not hiring" - nobody looked where the roles would be');
+    const _careersEmpty = readFindIcpSignals([{ url: 'https://x.com/careers', intent: 'careers', html: '<html><body>' + 'y'.repeat(600) + '</body></html>', text: 'We are a great place to work. '.repeat(30) }]);
+    if (_careersEmpty.hiringAny !== false) _fails.push('a careers page we read with no roles on it does not report "not hiring"');
     const _blind = readFindIcpSignals([]);
     if (_blind.adsCode !== null) _fails.push('an unread site reports FALSE for ads rather than null — that is the unmeasured-as-zero failure on a claim about their money');
     if (_blind.teamCount !== null || _blind.hiringAny !== null) _fails.push('an unread site reports a measured team size or hiring answer');
@@ -58751,7 +59036,7 @@ app.listen(PORT, () => {
         _fails.push('the email grade stops before the row, so the client goes back to deriving confidence by regex over a human-readable label');
       }
     }
-    if (!_src.includes(_n('signals.reachMeasured = (_ownerAttempted', ' || _emailAttempted) && !out.notIcp;'))) {
+    if (!_src.includes(_n('signals.reachMeasured = (_ownerAttempted', ' || _emailAttempted) && !out.notIcp && (signals.readable === true || !website);'))) {
       _fails.push('reachMeasured no longer means the lookups RAN - a lead with no website scores its reach term on lookups nobody made, which is how ten name-only leads scored 53/100');
     }
     if (!_src.includes(_n('_ownerAttempted', ' = true;')) || !_src.includes(_n('_emailAttempted', ' = true;'))) {
@@ -60117,10 +60402,10 @@ app.listen(PORT, () => {
     // and ignored the rest, so every "is somebody already here" signal was a
     // regex this file owned, run against markup this read was already holding,
     // and never asked. Zero extra requests.
-    for (const _needle of [_n('const adsConversion = anyMarkup ? AD_TAG_SIGNATURES.hasAdsConversion', '.test(allHtml) : null;'),
-                           _n('const callTracking = anyMarkup ? AD_TAG_SIGNATURES.hasCallTracking', '.test(allHtml) : null;'),
-                           _n('const analytics = anyMarkup ? AD_TAG_SIGNATURES.hasAnalytics', '.test(allHtml) : null;'),
-                           _n('const scheduler = anyMarkup ? SCHEDULER_SIGNATURES', '.test(allHtml) : null;'),
+    for (const _needle of [_n('const adsConversion = _abs(AD_TAG_SIGNATURES.hasAdsConversion', '.test(allHtml));'),
+                           _n('const callTracking = _abs(AD_TAG_SIGNATURES.hasCallTracking', '.test(allHtml));'),
+                           _n('const analytics = _abs(AD_TAG_SIGNATURES.hasAnalytics', '.test(allHtml));'),
+                           _n('const scheduler = _abs(SCHEDULER_SIGNATURES', '.test(allHtml));'),
                            _n('adsConversion, callTracking, analytics,', ' liveChat, scheduler,')]) {
       if (!_src.includes(_needle)) {
         _fails.push('the free read no longer measures ' + _needle.slice(6, 30) + ' - it is a regex we already own over markup we already hold, so not asking is the only cost');
@@ -67674,6 +67959,11 @@ app.listen(PORT, () => {
       _fails.push('a practice gets no advice about the gatekeeper, who is the whole problem on that call');
     }
     if (String(_trade.say) === String(_rooms.say)) _fails.push('every trade gets the same calling advice, so the trade is not being read');
+    // The SHORT form, for a sheet that has no cell for a sentence.
+    if (_trade.short !== '7-8am') _fails.push(`the short calling window for a 7am trade is "${_trade.short}", not "7-8am"`);
+    if (_rooms.short !== 'before 9am / lunch') _fails.push(`the short calling window for a practice is "${_rooms.short}"`);
+    if (_open24.short !== '24h') _fails.push('a 24-hour listing has no short window for the sheet');
+    if (_noHours.short) _fails.push('a listing with no hours was given a short window');
 
     // 2. WHAT HE WILL SAY BACK. Already written by the prospect model and
     //    previously used as a pass/fail signal and discarded.
@@ -75434,10 +75724,29 @@ const readChainEvidence = ({ pages, rosterTitles, links } = {}) => {
 };
 
 // pages: [{ url, intent, html, text }] - whatever we managed to read, however.
+// ══ AN ABSENCE NEEDS A PAGE WE ACTUALLY READ ══════════════════════════════
+// anyMarkup below is a 500-byte floor on RAW HTML, and a rendered page whose
+// readable text is 258 characters clears it on its <head> alone. Floor Gurus,
+// 2026-09-02: the owner resolver called the site unreadable and this function,
+// in the same run, asserted "no ad code", "measures its traffic" and "no open
+// roles" off that page - six of seven signals, 65/100. A positive is a
+// positive on any page; an ABSENCE needs readable text, the same floor class
+// readRecurringOffer carries for the same reason.
+const FIND_ABSENCE_TEXT_FLOOR = 800;
 const readFindIcpSignals = (pages, now = Date.now()) => {
   const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
   const anyMarkup = read.some(p => String(p.html || '').length >= 500);
   const allHtml = read.map(p => String(p.html || '')).join('\n');
+  const _textOf = (p) => {
+    const t = String(p.text || '');
+    if (t.length >= 200) return t.length;
+    const fromHtml = String(p.html || '').replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().length;
+    return Math.max(t.length, fromHtml);
+  };
+  const textChars = read.reduce((n, p) => n + _textOf(p), 0);
+  const readable = anyMarkup && textChars >= FIND_ABSENCE_TEXT_FLOOR;
+  const _abs = (hit) => (hit ? true : (readable ? false : null));
 
   // ADS. A tag proves an ad ACCOUNT, never a live campaign - that bound is
   // recorded all over this file and it is not being loosened here. What it does
@@ -75445,9 +75754,9 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
   // stood up paid advertising infrastructure: somebody set up a budget.
   // Absence rides did-we-look, exactly as every other absence claim in this
   // file: with no readable markup the answer is null, never "no".
-  const googleAds = anyMarkup ? AD_TAG_SIGNATURES.hasGoogleAdsTag.test(allHtml) : null;
-  const metaPixel = anyMarkup ? AD_TAG_SIGNATURES.hasMetaPixel.test(allHtml) : null;
-  const tagManager = anyMarkup ? AD_TAG_SIGNATURES.hasTagManager.test(allHtml) : null;
+  const googleAds = _abs(AD_TAG_SIGNATURES.hasGoogleAdsTag.test(allHtml));
+  const metaPixel = _abs(AD_TAG_SIGNATURES.hasMetaPixel.test(allHtml));
+  const tagManager = _abs(AD_TAG_SIGNATURES.hasTagManager.test(allHtml));
   // ══ IS SOMEBODY COMPETENT ALREADY ON THIS ACCOUNT? ═══════════════════════
   // Vin's shape, 2026-09-01: a business already spending is a GOOD lead - the
   // research is blunt about it, 68% of businesses say they are paying for
@@ -75464,16 +75773,16 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
   // that needs the audit, and even the audit cannot see inside their ads
   // account. Conversion tracking plus call tracking plus a real booking tool is
   // evidence that somebody who knows what they are doing has been here.
-  const adsConversion = anyMarkup ? AD_TAG_SIGNATURES.hasAdsConversion.test(allHtml) : null;
-  const callTracking = anyMarkup ? AD_TAG_SIGNATURES.hasCallTracking.test(allHtml) : null;
-  const analytics = anyMarkup ? AD_TAG_SIGNATURES.hasAnalytics.test(allHtml) : null;
-  const liveChat = anyMarkup ? CHAT_SIGNATURES.test(allHtml) : null;
-  const scheduler = anyMarkup ? SCHEDULER_SIGNATURES.test(allHtml) : null;
+  const adsConversion = _abs(AD_TAG_SIGNATURES.hasAdsConversion.test(allHtml));
+  const callTracking = _abs(AD_TAG_SIGNATURES.hasCallTracking.test(allHtml));
+  const analytics = _abs(AD_TAG_SIGNATURES.hasAnalytics.test(allHtml));
+  const liveChat = _abs(CHAT_SIGNATURES.test(allHtml));
+  const scheduler = _abs(SCHEDULER_SIGNATURES.test(allHtml));
   let adsCode = null;
   const adPlatforms = [];
   if (googleAds) adPlatforms.push('Google');
   if (metaPixel) adPlatforms.push('Facebook');
-  if (anyMarkup) adsCode = adPlatforms.length > 0;
+  adsCode = adPlatforms.length > 0 ? true : (readable ? false : null);
   let adsWhy;
   if (adsCode === true) adsWhy = `${adPlatforms.join(' and ')} ad code is on the pages we read`;
   else if (adsCode === false && tagManager === true) adsWhy = 'no ad code on the pages we read, but a tag container is installed and it can hold one we cannot see';
@@ -75554,13 +75863,18 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
   // role is a marketing role. A second answer to that question here is exactly
   // how the hiring clock came to date a marketing manager off a dispatcher.
   const lanes = signalsFromTitles(hiringTitles);
-  const sawCareersPage = !!careers || read.length > 0;
-  const hiringAny = hiringTitles.length > 0 ? true : (sawCareersPage && anyMarkup ? false : null);
+  // "Not hiring" needs somewhere the roles would have been: a careers page we
+  // actually read, or a homepage whose navigation we read. Any page at all
+  // used to count, so a 258-character /about asserted no open roles.
+  const careersRead = !!careers && String(careers.text || '').length >= 200;
+  const homeNavRead = read.some(p => p.intent === 'home' && (String(p.html || '').match(/<a\s/gi) || []).length >= 3);
+  const hiringAny = hiringTitles.length > 0 ? true : ((readable && (careersRead || homeNavRead)) ? false : null);
   const hiringMarketing = hiringTitles.length > 0 ? lanes.marketing.length > 0 : (hiringAny === false ? false : null);
 
   return {
     pagesRead: read.length,
     markupRead: anyMarkup,
+    textChars, readable,
     adsCode, adPlatforms, tagManager, adsWhy,
     adsConversion, callTracking, analytics, liveChat, scheduler,
     teamCount, teamNames, teamPageUrl, execTitles, teamTitles,
@@ -76550,6 +76864,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         || (FIND_EMAIL_FIRECRAWL === 'fallback' && pages.length === 0);
       const em = await findEmailFireproof({
         website,
+        companyName: name,
         ceoName: (out.owner && out.owner.name) || '',
         ceoTitle: (out.owner && out.owner.title) || '',
         // The authority gate's verdict, carried rather than discarded. It used
@@ -76635,13 +76950,17 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // the honest answer rather than assuming the caller's own clock.
   const _win = callWindowFor(((company && company.publishedHours) || {}).lines,
     (company && company.industry) || '', null);
-  out.callWindow = _win && _win.checked ? { say: _win.say || '', open24: !!_win.open24 } : null;
+  out.callWindow = _win && _win.checked ? { say: _win.say || '', open24: !!_win.open24, short: _win.short || '' } : null;
   out.callWindowWhy = _win && !_win.checked ? (_win.why || '') : '';
   // The lookups actually RAN, so "we did not find an owner" is a measurement
   // and not an absence of one. A lead dropped as a chain never reached them,
   // so the term leaves the denominator rather than scoring a confident 1 -
   // the unmeasured-as-zero class, which every other term here already avoids.
-  signals.reachMeasured = (_ownerAttempted || _emailAttempted) && !out.notIcp;
+  // And only on a site we could READ, or a lead with no site to read: a lookup
+  // that ran over 258 characters measured nothing, and scoring its reach term
+  // on that is the Floor Gurus 65/100. A lead with NO website measured its
+  // reach on the sources it has (their listing, their reviews), which is honest.
+  signals.reachMeasured = (_ownerAttempted || _emailAttempted) && !out.notIcp && (signals.readable === true || !website);
   // The two verdicts discovery already reached about this lead. They ride the
   // request now; without them the score could not see a demotion at all, so a
   // 4.9-star business the star band demoted scored exactly like an in-band one.
@@ -77118,6 +77437,7 @@ app.post('/api/test-contact-engine', async (req, res) => {
     const s6 = Date.now();
     out.email = await findEmailFireproof({
       website,
+      companyName: company,
       ceoName: out.decisionMaker?.name,
       ceoTitle: out.decisionMaker?.title,
       fcKey: firecrawlKey,
