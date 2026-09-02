@@ -1,0 +1,4 @@
+node_modules/
+# temp copies of server.js written by fuzzcore.js / auditfuzz.js and deleted on success
+.probe.js
+.probe3.js
