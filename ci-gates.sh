@@ -43,6 +43,14 @@ if want static; then
   run node scopecheck.js --selftest
   run node scopecheck.js server.js
   run node scopecheck.js index.html
+  # The notes are checked like the code (2026-09-02): the archive must still re-join
+  # byte-for-byte to the pre-split CLAUDE.md, and every skill note must match a fresh
+  # regeneration from the tree (line map, niche tables, CSV columns, env vars) — so a
+  # server.js change that forgets `node docs/gen-refs.js` goes red here, not in a
+  # session six weeks later reading a stale number. Needs full git history (gates.yml
+  # checks out with fetch-depth: 0; verify-split.sh also fetches the backup branch).
+  run bash docs/history/verify-split.sh
+  run node docs/lint-skills.js --check-refs
 fi
 
 if want checks; then
