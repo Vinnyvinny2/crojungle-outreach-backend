@@ -32,7 +32,7 @@ The list of checks is **`ci-gates.sh`** and nothing else — this note never re-
 
 ## Why the list is what it is
 
-The reasons written beside CLAUDE.md's gate list (commit b01d952, lines 10389-10431), with the COMMANDS deliberately left out — the executable list is `ci-gates.sh` and it must exist in exactly one place:
+The reasons written beside CLAUDE.md's gate list (commit b01d952, the comment lines of the gate block that starts at line 10389), with the COMMANDS deliberately left out — the executable list is `ci-gates.sh` and it must exist in exactly one place:
 
 > # Run these before proposing any change
 >   These two are the only gates that RUN index.html. It deploys to Netlify by
