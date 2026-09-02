@@ -34,6 +34,7 @@ This is the top of the structure. **Vin makes the decisions in this table; nothi
 - **One data file per niche** — the right end state for the trade tables; a later round because it touches `server.js`.
 - **Per-stage notes for research, audit, email, send** — written when those stages are run for real; paraphrasing 11,000 lines of history early is where errors come from.
 - **Tuning the email prompt** — not until real replies exist (`what-not-to-do`).
+- **Replacing the code with a Claude agent driven by skills** — ruled out by Vin, 2026-09-02 (Mike had asked whether "JavaScript is still needed"). A skill is a note Claude reads, not a thing that runs: the code runs a Find press unattended, enforces the budgets, and serves the rep's screen, and a contact read costs about $0.0076 of model time in code against $0.10–0.30 when a chat drives it by hand — roughly $8 versus $100–300 a month at 1,100 reads. The top rule, "instructional guards do not hold", is why the 274 mechanical boot checks exist; skills are instructions, not enforcement. What Mike is right about: nobody writes the JavaScript by hand any more — Claude does, under the Level 3 rules. Revisit only if volume falls under ~50 leads a month.
 
 ## How to change a decision
 
