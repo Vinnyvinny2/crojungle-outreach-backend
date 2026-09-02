@@ -1321,7 +1321,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20260925;
+const CLIENT_CONTRACT = 20260926;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5606,6 +5606,54 @@ const websiteProvenanceCell = (c) => (c && c.contactWebsiteResolved === true)
   ? (' [the website' + (c.contactWebsite ? ' ' + c.contactWebsite : '') + ' was found by us from the name, not published by them'
      + (c.contactWebsiteConfirmed === true ? '; their own pages name the business]' : '; NOT confirmed - nothing read from it was kept]'))
   : '';
+// ══ THE LEAN SHEET SAYS IT AS A GRADE, NOT A SENTENCE ═══════════════════
+// Vin, 2026-09-02, reading the live file: "lean out the export column only
+// essentila info and long sentences dont work use ratings instead." Every
+// sentence cell had a short TOKEN sibling on the lead that no cell read -
+// contactOwnerGrade, contactEmailGrade - so the grade is a rendering of the
+// token, and the sentence stays one tick away in the full export. One function
+// per grade, shared by the card chip and both export destinations, so the
+// screen and the file cannot describe one row two ways.
+//
+// Owner: A two independent sources agree; B their own site says so; C likely
+// (the business is named after them); D the buying-floor gate held the name
+// back. Email: A the mailbox was confirmed or published as a person's; B a
+// real, published, shared mailbox; C a catch-all domain (delivers, recipient
+// unknown); D a guess, or a run on which our checker was down.
+const OWNER_GRADE_RATING = { confirmed: 'A', stated: 'B', inferred: 'C', unconfirmed: 'D' };
+const ownerGradeRating = (c) => (c && c.contactOwner && OWNER_GRADE_RATING[c.contactOwnerGrade]) || '';
+const EMAIL_GRADE_RATING = { published_personal: 'A', smtp_confirmed: 'A', published_role: 'B', catch_all: 'C', pattern_guess: 'D', verifier_down: 'D' };
+const emailGradeRating = (c) => {
+  if (!c || !c.contactEmail) return '';
+  const g = c.contactEmailGrade;
+  if (g && EMAIL_GRADE_RATING[g]) return EMAIL_GRADE_RATING[g] + (g === 'verifier_down' ? ' (checker down)' : '');
+  // A row read by an older build carries only its tier.
+  const t = c.contactEmailTier;
+  const k = c.contactEmailKind;
+  if (t === 1) return (k === 'role' || k === 'company' || k === 'junk' || c.contactEmailFromCareers === true || c.contactEmailOffDomain === true) ? 'B' : 'A';
+  if (t === 2) return 'A';
+  if (t === 3) return c.contactEmailVerifierDown === true ? 'D (checker down)' : 'C';
+  if (t === 4) return 'D';
+  return '';
+};
+// The provenance of a domain WE resolved rides the owner grade, because that
+// cell is lean and `website` is not (Round 105's rule): a rep must never
+// download an owner without knowing the domain was ours to begin with.
+const ownerGradeCell = (c) => {
+  const prov = (c && c.contactWebsiteResolved === true)
+    ? (c.contactWebsiteConfirmed === true ? '(site found by us)' : '(site found by us, unconfirmed)') : '';
+  return [ownerGradeRating(c), prov].filter(Boolean).join(' ');
+};
+// "7-8am", never the sentence. The server writes the short form beside the
+// sentence; a row read by an older build gets the opening hour off the
+// sentence, and a listing with no hours gets an EMPTY cell, never a guess.
+const bestTimeCell = (c) => {
+  if (!c) return '';
+  if (c.contactCallWindowShort) return c.contactCallWindowShort;
+  const m = String(c.contactCallWindow || '').match(/opens around (\d+(?::\d+)?\s*[ap]m)/i);
+  return m ? ('from ' + m[1].replace(/\s+/g, '')) : '';
+};
+const exportedDateCell = (c) => (c && c.exportedAt) ? String(c.exportedAt).slice(0, 10) : '';
 const contactFieldsFrom = (data) => {
   const d = data || {};
   const icp = d.icp || {};
@@ -5721,6 +5769,7 @@ const contactFieldsFrom = (data) => {
     // hours and the trade. callWindowFor already writes this for Mike's audit
     // sheet; it had no source on this path until the hours were sent.
     contactCallWindow: (d.callWindow && d.callWindow.say) || '',
+    contactCallWindowShort: (d.callWindow && d.callWindow.short) || '',
     contactCallWindowWhy: d.callWindowWhy || '',
     // The server's own verdict, when it read the pages and found a chain.
     contactNotFit: d.notIcp === true,
@@ -5821,23 +5870,27 @@ const contactTabOf = (c) => {
   return 'unread';
 };
 const FIND_CSV_COLUMNS = [
-  ['icp', 'ICP score out of 100 (our fit score, not a Google position)'],
+  ['icp', 'Fit /100 (not a Google position)'],
   ['icpWhy', 'What that score was measured on'],
   ['company', 'Company'],
   ['owner', 'Decision-maker'],
   ['ownerTitle', 'Their title'],
   ['ownerHowSure', 'How sure we are it is him, and what to ask'],
+  ['ownerGrade', 'Owner grade (A-D)'],
   ['ownerCanBuy', 'Can they authorise a purchase'],
   ['ownerFrom', 'Where we found them'],
   ['email', 'Email'],
   ['emailConfidence', 'How confident we are in that address'],
+  ['emailGrade', 'Email grade (A-D)'],
   ['emailSafeToSend', 'Safe to send'],
   ['emailWhyUnconfirmed', 'If it is unconfirmed, why'],
   ['emailGoesTo', 'Who opens it'],
   ['phone', 'Phone'],
   ['phoneOnSite', 'Does their own site print this number'],
   ['callWindow', 'When to call'],
-  ['exported', 'Already exported (when, and where)'],
+  ['bestTime', 'Best time'],
+  ['exported', 'Exported (date)'],
+  ['exportedTo', 'Exported to'],
   ['affordTier', 'What they can afford'],
   ['payingForAds', 'Already paying for ads'],
   ['adsWhy', 'What we saw on their site'],
@@ -5877,14 +5930,14 @@ const FIND_CSV_COLUMNS = [
 // dials from these nine, and the two things that decide how he opens the call
 // are how sure we are about the name and how sure we are about the address.
 // A confirmed owner and a name we held back are two different calls.
-const FIND_CSV_ESSENTIAL = ['company', 'owner', 'ownerTitle', 'ownerHowSure',
-  'email', 'emailConfidence', 'phone',
-  // hiringPosted joins the lean set beside hiringMarketing, because a date is
-  // what turns "they are hiring" into a reason to call THIS week. It is empty
-  // on every lead that carries no posting, so it costs nothing on those rows.
-  'icp', 'payingForAds', 'hiringMarketing', 'hiringPosted', 'callWindow',
+// Round 106: the lean set is GRADES. ownerHowSure, emailConfidence, callWindow
+// and hiringPosted are sentences and left the lean file; each has a short
+// sibling here (ownerGrade, emailGrade, bestTime, and the posting age rides
+// hiringMarketing as "yes (11d ago)"). The sentences are one tick away.
+const FIND_CSV_ESSENTIAL = ['icp', 'company', 'owner', 'ownerTitle', 'ownerGrade',
+  'email', 'emailGrade', 'phone', 'bestTime', 'payingForAds', 'hiringMarketing',
   // exported is lean because it answers the one question the file could not:
-  // has this row already been handed out, and where.
+  // has this row already been handed out.
   'exported'];
 const findCsvColumns = (full) => (full === true ? FIND_CSV_COLUMNS
   : FIND_CSV_COLUMNS.filter(c => FIND_CSV_ESSENTIAL.indexOf(c[0]) >= 0));
@@ -6057,6 +6110,7 @@ const findContactRows = (companies) => {
     // the two-hand-kept-copies failure. A row read by an older build carries
     // no grade and claims nothing rather than claiming confidence.
     ownerHowSure: (c.contactOwnerAskAs || '') + websiteProvenanceCell(c),
+    ownerGrade: ownerGradeCell(c),
     // Which sources named them. Computed on every read and rendered nowhere,
     // so a name read verbatim off a team page and a name a model proposed
     // looked identical to a rep about to say it out loud.
@@ -6079,6 +6133,7 @@ const findContactRows = (companies) => {
       : c.contactEmailTier === 3 ? 'built from a pattern seen at this company, not confirmed'
       : c.contactEmailTier === 4 ? 'a guess from a common pattern, nothing confirmed it'
       : (c.contactEmailLabel || 'unknown'),
+    emailGrade: emailGradeRating(c),
     // ══ OUR OUTAGE, NOT A FAULT OF THE ADDRESS ═══════════════════════════
     // On the 2026-09-01 run the mailbox checker ran out of credits twice, and
     // every address resolved while it was down falls to tier 3 at best. Only
@@ -6098,6 +6153,9 @@ const findContactRows = (companies) => {
     // the fallback for a row read by an older build, and the two now agree.
     emailGoesTo: !c.contactEmail ? ''
       : c.contactEmailFromCareers ? 'their CAREERS page - a recruiter reads this, not the owner'
+      : c.contactEmailKind === 'company'
+        ? ("the company's own mailbox, not a person"
+           + (c.contactEmailOffDomain ? ', and on a different domain from their website' : ''))
       : (c.contactEmailKind === 'role' || (!c.contactEmailKind && isGenericMailbox(c.contactEmail)))
         ? ('a shared front-desk mailbox, not their own'
            + (c.contactEmailOffDomain ? ', and on a different domain from their website' : ''))
@@ -6135,17 +6193,22 @@ const findContactRows = (companies) => {
     // blank cell reads as a bug in the file.
     callWindow: c.contactCallWindow
       || (c.contactCallWindowWhy ? ('no window: ' + c.contactCallWindowWhy) : ''),
+    bestTime: bestTimeCell(c),
     // Read from the server's band. Never a dollar figure and never re-derived
     // here: an empty cell means nobody measured enough to say, which is a
     // different thing from a business that cannot pay.
     affordTier: affordLabel(c) || 'not enough measured to say',
-    payingForAds: contactYesNo(c.contactAdsCode, 'yes', 'none found'),
+    payingForAds: contactYesNo(c.contactAdsCode, 'yes', 'no'),
     // The four phrasings behind that yes or no, including the one that says a
     // tag container could be hiding a tag we cannot see. Computed on every
     // contact read since the day it shipped and rendered nowhere at all.
     adsWhy: c.contactAdsWhy || '',
     teamSize: (typeof c.contactTeamCount === 'number') ? String(c.contactTeamCount) : 'not published',
-    hiringMarketing: contactYesNo(c.contactHiringMarketing, 'yes', 'no'),
+    // The posting's age rides the yes, so the lean file keeps the clock
+    // without the sentence column.
+    hiringMarketing: c.contactHiringMarketing === true
+      ? ('yes' + (typeof c.contactHiringDaysAgo === 'number' ? ' (' + c.contactHiringDaysAgo + 'd ago)' : ''))
+      : contactYesNo(c.contactHiringMarketing, 'yes', 'no'),
     hiringRoles: (c.contactHiringTitles || []).join('; '),
     // Straight from the lane that found them. "not dated" rather than a guess:
     // searchTheirStack refuses to invent recency for an undated posting and
@@ -6161,7 +6224,8 @@ const findContactRows = (companies) => {
       ? ((c.contactWebsite || '') + ' (found by us from the name, not published by them'
          + (c.contactWebsiteConfirmed === true ? '; their pages name the business)' : '; NOT confirmed)'))
       : (c.website || ''),
-    exported: exportedCell(c),
+    exported: exportedDateCell(c),
+    exportedTo: (c.exportedTo || []).join(' and '),
     location: c.location || '',
     reviews: (typeof c.reviewCount === 'number') ? String(c.reviewCount) : '',
     rating: (typeof c.rating === 'number') ? String(c.rating) : '',
@@ -8071,10 +8135,11 @@ function FindView({
                   title: co.contactOwnerAskAs || '',
                   style:{ marginLeft:7, fontSize:11, letterSpacing:'.03em',
                     color: co.contactOwnerGrade === 'unconfirmed' ? '#fca5a5' : 'var(--m2)' } },
-                  co.contactOwnerGrade === 'confirmed' ? 'CONFIRMED'
+                  (ownerGradeRating(co) ? ownerGradeRating(co) + ' \u00b7 ' : '')
+                  + (co.contactOwnerGrade === 'confirmed' ? 'CONFIRMED'
                   : co.contactOwnerGrade === 'stated' ? 'THEIR SITE SAYS SO'
                   : co.contactOwnerGrade === 'inferred' ? 'LIKELY'
-                  : 'NOT CONFIRMED')
+                  : 'NOT CONFIRMED'))
               : null),
           // What to do about a name we are not sure of. Built once on the
           // server, so the card, the CSV and the Sheet cannot disagree.
