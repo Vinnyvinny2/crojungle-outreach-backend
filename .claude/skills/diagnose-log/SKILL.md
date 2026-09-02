@@ -1,0 +1,27 @@
+---
+name: diagnose-log
+description: "DO: Turn a pasted Render log, exported CSV or call sheet into a verified list of defects with no fixes applied: check the contract number first (deployed vs undeployed), read every line, reproduce each suspect by EXECUTING the real function on the exact string, classify by bug class, search docs/history for a recurrence, and report deployed / undeployed / not-a-defect separately in terms of what happened to the lead. Use whenever Vin pastes output and asks what went wrong or why a lead got that result."
+argument-hint: [log or csv file]
+---
+# Diagnose from a pasted log, CSV or sheet
+
+**Goal:** After reading this, Claude can turn a pasted Render log, CSV or call sheet into a verified list of defects, each reproduced by running the real code, with nothing fixed until asked.
+
+New text (2026-09-02): the method the rounds converged on, each rule citing the round that earned it. **Diagnosis is the deliverable; fixing is a separate ask.** Vin catches real bugs by reading live output, and the answer is usually in what he pasted — explain it in terms of what the system did to a lead, never which line changed (CLAUDE.md, "Working with Vin").
+
+## The method, in order
+
+1. **Deployed or not, first.** Find `CONTRACT_VERSION` / `CLIENT_CONTRACT` in the log or screen, and `git log` on `main`. Two of three complaints in one live run were already fixed on the branch and never merged or never dragged into Netlify — a push is not a deploy ([§37](../../../docs/history/round-037.md), [§98](../../../docs/history/round-098.md), [§104](../../../docs/history/round-104.md)). Say plainly which of the symptoms are on a build that predates the fix.
+2. **Read every line.** Not the ones that look wrong — every one. The two worst defects in one run were the ones nobody had reported because nothing said anything ([§24](../../../docs/history/round-024.md)). Count things: leads submitted vs `JOB` lines, credits per lead, `Read 0 name/title pair(s)`, how many `FIRECRAWL RATE LIMITED` on how many leads.
+3. **Reproduce by executing, never by reading.** Lift the real function out of `server.js` (`node -e` with the exact string from the log) and watch it return the wrong thing. Reading the code has been wrong about the cause repeatedly; execution has not ([§102](../../../docs/history/round-102.md), [§104](../../../docs/history/round-104.md)). If it cannot be reproduced from source, say so rather than guessing — one live block was diagnosed as "unknown, here is the grep for next time" ([§84](../../../docs/history/round-084.md)).
+4. **Trust the source's own line over a downstream symptom.** Check a source's own log line before writing it off; a Firecrawl refusal reads exactly like an empty page and a throttled call like an empty balance ([§1](../../../docs/history/round-001.md), [§43](../../../docs/history/round-043.md)). A log line that names a cause may be guessing — the SMTP timeout and the "table exists" lines both were ([§3](../../../docs/history/round-003.md), [§16](../../../docs/history/round-016.md)).
+5. **Classify** with `bug-classes` / `check-writing-traps`, then **search history**: `grep -ril '<phrase>' docs/history` (the `history-lookup` note). A bug that has come back is a class; say which rounds it recurred in.
+6. **Separate three piles in the report:** defects on the deployed build; things already fixed and undeployed; things that are not defects (a top-up needed, a permission, a paused server, an environment variable never set on the instance — `DFS AUTH PROBE` absent means the credentials never reached Render, [§58](../../../docs/history/round-058.md), [§64](../../../docs/history/round-064.md)).
+7. **Money and quality flags come first.** A lead that spent a full research cycle and produced nothing, four of five audits refused after paying, a fabricated person on a call sheet: those lead the report ([§44](../../../docs/history/round-044.md), [§104](../../../docs/history/round-104.md)).
+8. **Do not fix.** List, with the reproducing command for each. When asked to fix, the `editing-server-js`, `falsify` and `ship-round` notes take over.
+
+## What the paste usually is
+
+- A Render log: read it with `log-vocabulary.md` beside this note (the named lines, what each measures, what a bad value looks like).
+- A CSV from the Find tab: `find-and-contact-list/csv-columns.md` says what every column means; a name that is not a person, an address on the wrong domain, a "not scored" row are the recorded shapes ([§100](../../../docs/history/round-100.md), [§104](../../../docs/history/round-104.md), [§105](../../../docs/history/round-105.md)).
+- A call sheet / audit export: two verdicts about one measurement on one page is the recorded contradiction class ([§41](../../../docs/history/round-041.md), [§61](../../../docs/history/round-061.md), [§84](../../../docs/history/round-084.md), [§85](../../../docs/history/round-085.md)); "Do not say" carrying true sentences is noise, not safety ([§45](../../../docs/history/round-045.md), [§50](../../../docs/history/round-050.md)).

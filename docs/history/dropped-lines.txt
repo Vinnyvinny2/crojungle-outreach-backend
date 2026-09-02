@@ -1,0 +1,33 @@
+# Lines of the pre-split CLAUDE.md (commit fd76271) that deliberately exist NOWHERE after the
+# slim of 2026-09-02. verify-split.sh step 3 fails on any dropped line NOT listed here.
+# Three kinds, and nothing else:
+#   (1) the old title and two-line intro of the monolith, replaced by the new start-here intro;
+#   (2) PART / section HEADINGS whose contents moved whole into a skill under that skill's title
+#       (PART 3 is kept verbatim; PART 4's heading is quoted in docs/history/INDEX.md);
+#   (3) the gate COMMAND lines, which now exist in exactly one place: ci-gates.sh.
+CROJungle Outreach — everything you need to know
+One file. Business context, how the system works, what is broken, what to do next,
+and how to work here without breaking it. Read it all before touching anything.
+PART 1 — WHAT THIS IS FOR
+PART 2 — HOW IT WORKS
+PART 5 — WHAT IS PROVEN
+PART 6 — HOW TO WORK HERE
+PART 7 — WHAT WOULD ACTUALLY MOVE IT
+PART 8 — DEPLOYING WITHOUT HANDS
+The bug classes that actually happen
+The duplicate-key baseline is 0, and that is the point
+What NOT to do
+```bash
+node --check server.js                  # syntax
+node tdz.js server.js                   # reads before declaration — MUST be 0
+node dupkeys.js server.js               # duplicate object keys — MUST be 0
+node dupkeys.js index.html              # MUST be 0
+node scopecheck.js server.js            # a name used outside the block it was declared in
+node clientcheck.js                     # the client's request/merge contract — EXECUTES the merge
+node batchcheck.js                      # runs 50 leads through the bulk audit with a fake network
+node fetchtest.js                       # the one helper all 60 outbound calls use
+node servercheck.js                     # the research route DRIVEN over a fake network
+node fuzzcore.js 20000                  # 11 gates, in-process
+node fuzz.js 500                        # composes emails over HTTP
+node pngscale.js --selftest             # 21 assertions on the screenshot scaler
+PORT=4000 timeout 420 node --max-old-space-size=256 server.js   # 227 boot checks
