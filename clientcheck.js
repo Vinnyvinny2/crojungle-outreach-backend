@@ -2351,6 +2351,9 @@ let contactTally = null;
                  // Round 105: the view state, the run id, the export stamp and the
                  // resolved-domain provenance are pure so they can be executed here.
                  'FIND_VIEW_DEFAULTS', 'mergeFindView', 'latestRunIdOf', 'stampExportedRows', 'exportedCell', 'websiteProvenanceCell',
+                 // Round 106: the lean sheet is grades, and each grade is one pure
+                 // function shared by the card chip and both export destinations.
+                 'OWNER_GRADE_RATING', 'ownerGradeRating', 'EMAIL_GRADE_RATING', 'emailGradeRating', 'ownerGradeCell', 'bestTimeCell', 'exportedDateCell',
                  // A front-desk mailbox is kept on the sheet and marked, and the
                  // resolver's source ids are said the way a rep would say them.
                  'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN'];
@@ -2370,6 +2373,7 @@ let contactTally = null;
         + '\nreturn { tabOf: contactTabOf, tabs: CONTACT_TABS, cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
         + ' mergeView: mergeFindView, latestRun: latestRunIdOf, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
+        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
         + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
         + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT,'
         + ' generic: isGenericMailbox };')();
@@ -2471,6 +2475,10 @@ let contactTally = null;
           if (_st[1].exportedAt !== '2026-09-02T00:00:00Z' || _st[1].exportedTo.join() !== 'csv,sheet') fails.push('the export stamp did not record when and where a row was handed out');
           if (M.stamp(_st, new Set(['B']), 'sheet', '2026-09-03T00:00:00Z')[1].exportedTo.join() !== 'csv,sheet') fails.push('a second export to the same place duplicates the destination');
           if (M.exportedCell({ exportedAt: '2026-09-02T10:00:00Z', exportedTo: ['csv'] }) !== '2026-09-02 to csv') fails.push('the exported cell does not say when and where');
+          if (M.exportedDate({ exportedAt: '2026-09-02T10:00:00Z', exportedTo: ['csv'] }) !== '2026-09-02') fails.push('the lean exported cell is not the date alone');
+          if (M.exportedDate({}) !== '') fails.push('a never-exported row carries an export date');
+          const _xr = M.rows([{ contactReadOk: true, name: 'X', contactEmail: 'a@b.com', exportedAt: '2026-09-02T10:00:00Z', exportedTo: ['csv'] }])[0];
+          if (!_xr || _xr.exported !== '2026-09-02' || _xr.exportedTo !== 'csv') fails.push('the lean exported cell is not the date alone, or the destination column is gone');
           if (M.lean.indexOf('exported') < 0) fails.push('"exported" is not in the lean CSV, so the file a rep downloads cannot answer whether a row was already handed out');
           // The run survives a refresh: the newest run id in the data is the run.
           if (M.latestRun([{ contactRunId: 'run_1a' }, { contactRunId: 'run_zz' }, { contactRunId: 'bogus' }, {}]) !== 'run_zz') fails.push('the newest run id is not recovered from the data, so "the 10 you just read" dies on refresh');
@@ -2483,6 +2491,9 @@ let contactTally = null;
           const _pr = [{ name: 'Acme Roofing', contactReadOk: true, contactOwner: 'Bob Acme', contactPhone: '5551234567',
                          contactWebsiteResolved: true, contactWebsite: 'https://acmeroofing.com', contactWebsiteConfirmed: true }];
           if (M.csv(_pr, false).indexOf('found by us') < 0) fails.push('the lean CSV carries an owner read off a domain we resolved with no word about where the domain came from');
+          if (!/found by us/.test(String(M.rows(_pr)[0].ownerGrade || ''))) fails.push('the owner grade cell does not carry the resolved-domain provenance, and it is the lean cell that has to');
+          if (M.ownerGradeCell({ contactOwner: 'A B', contactOwnerGrade: 'unconfirmed', contactWebsiteResolved: true, contactWebsiteConfirmed: false }) !== 'D (site found by us, unconfirmed)') fails.push('the owner grade cell does not say the resolved domain was NOT confirmed');
+          if (M.ownerGradeCell({ contactOwner: 'A B', contactOwnerGrade: 'confirmed' }) !== 'A') fails.push('a plain confirmed owner does not grade A');
           if (M.csv(_pr, true).indexOf('found by us from the name') < 0) fails.push('the full CSV website cell does not say the domain was resolved');
           if (M.prov({ contactWebsiteResolved: false }) !== '') fails.push('a published domain gets a provenance note it does not need');
         }
@@ -2594,17 +2605,26 @@ let contactTally = null;
         if (!_rows.length || !/ask who is/.test(String(_rows[0].ownerHowSure || ''))) {
           fails.push('an unconfirmed owner reaches the CSV with no instruction to ask rather than assert');
         }
-        if (M.lean.indexOf('ownerHowSure') < 0) {
-          fails.push('how sure we are about the name is not one of the lean columns, so the file the rep dials from does not carry it');
+        // Round 106: the lean file carries the GRADE and the sentence stays in
+        // the full export. Both directions, because a lean set that quietly
+        // grew the sentence back is the busy file this round exists to end.
+        if (M.lean.indexOf('ownerGrade') < 0 || M.lean.indexOf('ownerHowSure') >= 0) {
+          fails.push('the lean file does not carry the owner GRADE, or it carries the owner sentence again');
         }
-        if (M.lean.indexOf('emailConfidence') < 0) {
-          fails.push('how sure we are about the address is not one of the lean columns');
+        if (M.lean.indexOf('emailGrade') < 0 || M.lean.indexOf('emailConfidence') >= 0) {
+          fails.push('the lean file does not carry the email GRADE, or it carries the email sentence again');
         }
+        if (_rows[0].ownerGrade !== 'D') fails.push(`a held-back owner grades "${_rows[0].ownerGrade}", not D`);
+        if (M.ownerGrade({ contactOwner: 'A B', contactOwnerGrade: 'stated' }) !== 'B' || M.ownerGrade({ contactOwner: 'A B', contactOwnerGrade: 'inferred' }) !== 'C') fails.push('the owner grade letters drifted');
+        if (M.ownerGrade({ contactOwnerGrade: 'confirmed' }) !== '') fails.push('a row with no owner still grades the owner');
         // The card. A fixture cannot see a renderer, so the call site is pinned
         // with a needle assembled at runtime.
         const _nk = (a, b) => a + b;
         if (src.indexOf(_nk('co.contactOwnerGrade ===', " 'unconfirmed' ? '#fca5a5'")) < 0) {
           fails.push('the contact card no longer marks an unconfirmed owner, so the one row that needs a second question looks like every other');
+        }
+        if (src.indexOf(_nk('(ownerGradeRating(co) ? ownerGradeRating(co)', " + ' \\u00b7 ' : '')")) < 0) {
+          fails.push('the contact card chip no longer carries the owner grade letter, so the card and the sheet grade one row differently');
         }
       }
 
@@ -2620,6 +2640,11 @@ let contactTally = null;
         if (!_r || !/recruiting inbox/.test(String(_r.emailConfidence || ''))) {
           fails.push("the server's own answer about an address does not reach the exported row");
         }
+        if (!_r || _r.emailGrade !== 'B') fails.push(`a published shared inbox grades "${_r && _r.emailGrade}", not B`);
+        const _co = M.rows([{ ..._em('published_role', 'x'), contactEmailKind: 'company', contactReadOk: true, name: 'C Co' }])[0];
+        if (!_co || _co.emailGrade !== 'B' || !/company's own mailbox/.test(String(_co.emailGoesTo || ''))) fails.push("a company's own mailbox is not graded B and named as the company's");
+        const _dn = M.rows([{ ..._em('verifier_down', 'x'), contactReadOk: true, name: 'D Co' }])[0];
+        if (!_dn || _dn.emailGrade !== 'D (checker down)') fails.push('an address resolved while the checker was down does not say so on its grade');
         // A row read by an OLDER build has no grade and must still say
         // something rather than going blank.
         const _old = M.rows([{ contactReadOk: true, name: 'B Co', contactEmail: 'a@b.com', contactEmailTier: 2 }])[0];
@@ -2709,14 +2734,20 @@ let contactTally = null;
         if (!_ph || !Array.isArray(_ph.lines) || _ph.lines.length !== 1) {
           fails.push('the contact request no longer sends the published hours, so the server can compute neither a calling window nor the staffed half of the affordability band');
         }
-        if (M.lean.indexOf('callWindow') < 0) fails.push('the calling window is not one of the lean CSV columns, so the file the rep dials from does not carry it');
+        if (M.lean.indexOf('bestTime') < 0 || M.lean.indexOf('callWindow') >= 0) fails.push('the lean file does not carry the short calling window, or it carries the sentence again');
         const _r = M.rows([{ contactReadOk: true, name: 'A Co', contactPhone: '+1 555 0100', contactCallWindow: 'Try 7-8am, before jobs start.' }])[0];
         if (!_r || _r.callWindow !== 'Try 7-8am, before jobs start.') fails.push('the server calling window does not reach the exported row');
+        const _bt = M.rows([{ contactReadOk: true, name: 'A Co', contactPhone: '+1 555 0100', contactCallWindow: 'x', contactCallWindowShort: '7-8am' }])[0];
+        if (!_bt || _bt.bestTime !== '7-8am') fails.push('the short calling window does not reach the lean row');
+        if (M.fields({ signals: {}, notes: [], callWindow: { say: 'x', open24: false, short: '7-8am' } }).contactCallWindowShort !== '7-8am') fails.push('the short calling window stops at the merge');
+        const _btOld = M.rows([{ contactReadOk: true, name: 'A Co', contactPhone: '+1 555 0100', contactCallWindow: 'Their listing opens around 8am. Early is usually better.' }])[0];
+        if (!_btOld || _btOld.bestTime !== 'from 8am') fails.push('a row read by an older build gets no short window off its sentence');
         // A listing with no hours gets an EMPTY cell, never a guess. An
         // invented "any time is fine" is the unmeasured-as-measured class on
         // the one field a caller acts on directly.
         const _r2 = M.rows([{ contactReadOk: true, name: 'B Co', contactPhone: '+1 555 0101' }])[0];
         if (!_r2 || _r2.callWindow !== '') fails.push('a lead whose listing publishes no hours is given a calling window anyway');
+        if (!_r2 || _r2.bestTime !== '') fails.push('a lead whose listing publishes no hours is given a short window anyway');
       }
 
       // TWO — the ORDER, with the trap that matters. A MEASURED zero must sort
@@ -2744,6 +2775,8 @@ let contactTally = null;
         fails.push('two different email tiers get the same confidence sentence in the contact CSV, which is the defect the audit captions already have');
       }
       if (s4.emailSafeToSend.indexOf('NO') !== 0) fails.push('a tier-4 address does not report as unsafe to send, and the row reads like any other');
+      if ([s1.emailGrade, s2.emailGrade, s3.emailGrade, s4.emailGrade].join() !== 'A,A,C,D') fails.push(`a row read by an older build grades its tiers as ${[s1.emailGrade, s2.emailGrade, s3.emailGrade, s4.emailGrade].join()} rather than A,A,C,D`);
+      if (M.rows([{ contactReadOk: true, name: 'X', contactOwner: 'A B' }])[0].emailGrade !== '') fails.push('a lead with no address still carries an email grade');
       if (M.rows([{ contactReadOk: true, name: 'X', contactOwner: 'A B' }])[0].emailConfidence !== '') fails.push('a lead with no address still carries an email-confidence sentence');
 
       // FOUR — the three-state answers. "no" about a thing we never looked at
@@ -3006,6 +3039,11 @@ let contactTally = null;
         if (!withClock || !/11 days ago/.test(String(withClock.hiringPosted || ''))) {
           fails.push('a dated marketing posting no longer reaches the file, so the rep loses the one reason to call THIS week');
         }
+        const dated = M.rows([{ name: 'Acme', contactReadOk: true, contactOwner: 'Jo Smith', contactEmail: 'jo@acme.com',
+          contactHiringMarketing: true, contactHiringDaysAgo: 11 }])[0];
+        if (!dated || dated.hiringMarketing !== 'yes (11d ago)') fails.push(`the lean hiring cell reads "${dated && dated.hiringMarketing}" - the clock must ride the yes now that the sentence column left the lean file`);
+        const undatedYes = M.rows([{ name: 'Acme', contactReadOk: true, contactOwner: 'Jo Smith', contactEmail: 'jo@acme.com', contactHiringMarketing: true }])[0];
+        if (!undatedYes || undatedYes.hiringMarketing !== 'yes') fails.push('an undated marketing hire invents an age');
         const undated = M.rows([{ name: 'B', contactReadOk: true, contactOwner: 'Jo Smith',
           contactEmail: 'jo@b.com', contactHiringRoles: ['Marketing Manager'] }])[0];
         if (!undated || /days ago/.test(String(undated.hiringPosted || '')) || !undated.hiringPosted) {
@@ -3547,6 +3585,6 @@ Promise.all(PENDING).then(() => {
   notes.forEach(n => console.log(n));
   if (findStat) console.log(`\u2713 index.html: the Find run's clock, queue cap and card were EXECUTED, not read \u2014 the browser's wall sits above the server's own sweep so a healthy run is never killed by the wrong file, the submit goes through the poller and exactly one call site still touches the synchronous door as the old-server fallback, the queue cap is one number rather than three, and a lead we have actually read stops showing the name-based guess beside the owner, email and phone we measured. A demoted lead now says why it was sorted last: "${findStat.demoted}". And the card answers what a business can afford instead of inventing a revenue band from its review count: "${findStat.prem}".`);
   if (contactTally) console.log(`\u2713 index.html: the contact run TALLY was executed \u2014 the first thing in this project that has ever counted whether the owner resolver and the email engine work. Rates are over leads actually READ, the email tier split is reported rather than one "found" number because a published address and a guess are not the same thing, a run under twelve reads says its numbers are counts and not rates, and a run made while the verifier was down says so. On the fixture queue: ${contactTally}`);
-  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the CSV writes the ${contactStat.lean} columns a rep dials and sends from, with all ${contactStat.cols} one tick away and the Google Sheet reading the same choice. It neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, gives each email tier its own confidence sentence, and reports an unmeasured signal as "not checked" rather than as a definite no. Every call site is pinned too: the panel starts the run, the run posts to /api/find-contact, it saves after every lead so a Stop keeps what was paid for, the card strip renders only on a lead that was read, and the Research batch cannot reach any of it. The panel itself now reads as four bands - what this is, what the next press covers, what to press, what came back - with every spending and destroying control still wired, and the three counts that used to describe three different populations on one screen now read one.`);
+  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the CSV writes the ${contactStat.lean} columns a rep dials and sends from, with all ${contactStat.cols} one tick away and the Google Sheet reading the same choice. It neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, writes the lean file as GRADES (owner A-D, email A-D, best time, the posting age riding the hiring yes) with every sentence one tick away, still gives each email tier its own confidence sentence in the full file, and reports an unmeasured signal as "not checked" rather than as a definite no. Every call site is pinned too: the panel starts the run, the run posts to /api/find-contact, it saves after every lead so a Stop keeps what was paid for, the card strip renders only on a lead that was read, and the Research batch cannot reach any of it. The panel itself now reads as four bands - what this is, what the next press covers, what to press, what came back - with every spending and destroying control still wired, and the three counts that used to describe three different populations on one screen now read one.`);
   if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
 }).catch((e) => { console.log('\n\u2717 index.html: the checks could not finish \u2014 ' + (e && e.message)); process.exit(1); });
