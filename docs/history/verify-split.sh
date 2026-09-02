@@ -38,7 +38,7 @@ if [ "$n" = 12295 ] && [ "$b" = 725701 ]; then ok "1. the saved original CLAUDE.
 count=$(ls docs/history/round-*.md 2>/dev/null | wc -l)
 [ "$count" -ge 105 ] && ok "2a. $count round files present (105 from the split, plus any archived since)" || bad "2a. $count round files (expected at least 105)"
 JOIN=$(mktemp)
-for f in $(for f in docs/history/round-*.md; do s=$(sed -n '2p' "$f" | sed -E 's/^Source: CLAUDE.md lines ([0-9]+)-.*/\1/'); echo "$s $f"; done | sort -n | awk '{print $2}'); do
+for f in $(for f in $(grep -l "from commit $BASE" docs/history/round-*.md); do s=$(sed -n '2p' "$f" | sed -E 's/^Source: CLAUDE.md lines ([0-9]+)-.*/\1/'); echo "$s $f"; done | sort -n | awk '{print $2}'); do
   tail -n +4 "$f" >> "$JOIN"          # the first three lines of every file are the header added at the move
 done
 if diff <(sed -n '206,10358p;10655,12295p' "$ORIG") "$JOIN" > /dev/null; then
