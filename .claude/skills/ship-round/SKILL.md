@@ -25,7 +25,7 @@ The ruling since [§104](../../../docs/history/round-104.md): **a round that cha
 
 ## 3. The round note
 
-- File: `docs/history/round-NNN.md`, NNN = the next § number after the highest in `docs/history/INDEX.md` (105 at the split). Use `round-note-template.md` beside this note; the heading form is `## N. <title> — YYYY-MM-DD` and the header lines the archive uses are in the template.
+- File: `docs/history/round-NNN.md`, NNN = the next § number after the highest in `docs/history/INDEX.md` (105 at the split). Use `round-note-template.md` beside this note; the heading form is `## N. <title> — YYYY-MM-DD`; the two header lines above it come from the template (the second must start `Written YYYY-MM-DD`, which is how verify-split.sh knows the note was written, not moved).
 - Voice: what Vin reported (his words, quoted), what was found — reproduced by execution, each defect in terms of what it did to a lead — what changed and why at the root, "what the falsification runs found in the checks themselves", the boot-check count, and the closing line stating whether `index.html` changed and therefore needs the Netlify drag-in (every round since [§25](../../../docs/history/round-025.md) ends on it).
 - Add one line to `docs/history/INDEX.md` (§, date, title, stage, file). **Never paste round history back into CLAUDE.md.**
 - Any new Supabase table or column: the SQL goes in the note AND in `deploy-and-accounts/schema.sql`, because `SCHEMA PROBE` points the operator there ([§42](../../../docs/history/round-042.md), [§49](../../../docs/history/round-049.md)).

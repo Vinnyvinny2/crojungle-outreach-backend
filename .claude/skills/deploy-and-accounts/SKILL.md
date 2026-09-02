@@ -70,3 +70,7 @@ nothing and touches no lead Vin is calling.
 - GitHub: the `gates` check appears as REQUIRED on a PR, and the merge button is disabled while it is red.
 - Netlify: the site's deploy log shows `mkdir -p dist && cp index.html dist/index.html` from `netlify.toml`, and a merge to `main` produces a Netlify deploy without a drag-in.
 - Supabase: `SCHEMA PROBE` in the boot log names nothing missing; `LEAD BENCH` and the query memory report writes, not refusals (row-level security OFF on the tables the server writes, [§93](../../../docs/history/round-093.md)).
+
+## The SCHEMA PROBE line, and what schema.sql covers (verified 2026-09-02)
+
+The boot's `SCHEMA PROBE` log line still tells the operator that each missing table or column "has its exact CREATE/ALTER statement in CLAUDE.md" — that sentence is in `server.js` and was not edited (it is a server change, see `what-not-to-do`); the statements are in `schema.sql` beside this note. The probe expects exactly what `SB_EXPECTED_SCHEMA` declares: the tables `places_query_state`, `lead_bench`, `business_observations`, `call_outcomes`, `lead_pages`, `send_log`, and two columns on `leads` (`held_back_contact`, `corpus_read`). All eight have their statement in `schema.sql`. If a future probe names something not in that file, the SQL is written from the server's own column list and added here with its round pointer — never guessed.

@@ -50,15 +50,19 @@ fi
 # 2c. EVERY round file (including ones added after the split) re-joins byte-for-byte to
 #     the commit its own header names — so a round archived later is proven the same way
 n2c=0; bad2c=0
+nskip=0
 for f in docs/history/round-*.md; do
   hdr=$(sed -n '2p' "$f")
+  # A note WRITTEN for the archive (ship-round template: "Written YYYY-MM-DD ...") was never cut
+  # from CLAUDE.md, so there is nothing to re-join it to; count it and move on.
+  if ! echo "$hdr" | grep -qE '^Source: CLAUDE.md lines [0-9]+-[0-9]+, moved verbatim'; then nskip=$((nskip+1)); continue; fi
   a=$(echo "$hdr" | sed -E 's/^Source: CLAUDE.md lines ([0-9]+)-([0-9]+).*/\1/')
   b=$(echo "$hdr" | sed -E 's/^Source: CLAUDE.md lines ([0-9]+)-([0-9]+).*/\2/')
   c=$(echo "$hdr" | sed -E 's/.*from commit ([0-9a-f]+).*/\1/')
   if ! git show "$c:CLAUDE.md" 2>/dev/null | sed -n "${a},${b}p" | diff -q - <(tail -n +4 "$f") > /dev/null; then echo "   ✗ $f does not match commit $c lines $a-$b"; bad2c=$((bad2c+1)); fi
   n2c=$((n2c+1))
 done
-[ "$bad2c" = 0 ] && ok "2c. all $n2c round files match the commit and lines their own header names" || bad "2c. $bad2c round file(s) differ from their source (listed above)"
+[ "$bad2c" = 0 ] && ok "2c. all $n2c moved round files match the commit and lines their own header names ($nskip written directly, not moved — skipped)" || bad "2c. $bad2c round file(s) differ from their source (listed above)"
 
 # 3. after the slim: every unique line of the original still lives somewhere
 if [ "$(wc -l < CLAUDE.md)" -lt 1000 ]; then

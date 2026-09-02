@@ -52,6 +52,7 @@ New text (2026-09-02). Short on purpose: it points at the rules rather than rest
 
 ## Before pushing
 
+0. `node docs/gen-refs.js` — regenerates the four reference files the skills transcribe from the code (line map, niche tables, CSV columns, env vars); the static gates go red if you skip it.
 1. `bash ci-gates.sh` — all stages. The boot stage needs the heap cap (`--max-old-space-size=256`) and a port; `ci-gates.sh` sets both. Green means `BOOT VERDICT: GREEN`, not "no errors scrolled past".
 2. **Falsify the fix**: revert it alone against the green baseline and watch its guard go red (the `falsify` skill). A guard that stays green with its fix reverted is not a guard.
 3. Never: skip, disable or quarantine a check to get green; set the dup-key baseline above 0; push an empty commit to kick CI; split `server.js` (`what-not-to-do`).

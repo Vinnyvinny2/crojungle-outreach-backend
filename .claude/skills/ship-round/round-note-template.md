@@ -1,5 +1,5 @@
 # §N — <title> — YYYY-MM-DD
-Source: written YYYY-MM-DD for docs/history (the archive keeps one file per round; CLAUDE.md carries none).
+Written YYYY-MM-DD for docs/history (one file per round; CLAUDE.md carries no history). Not a moved section: verify-split.sh skips it.
 
 ## N. <title> — YYYY-MM-DD
 

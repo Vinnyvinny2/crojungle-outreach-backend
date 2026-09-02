@@ -32,6 +32,8 @@ for clicks the three names above you get for nothing, **if those ads are live**"
 — not a vaguer sentence that hides it. The conditional is also a reply: it asks
 him something only he knows.
 
+**What "the ladder" means, so the rule above is read as intended (added 2026-09-02):** the ladder is `HARM_LADDER` in `server.js` — the ranked list of measured findings an audit or an email may lead with, one rung per finding, each rung declared in several tables. The rule forbids adding rungs or changing their order without real replies to justify it. It says nothing about fixing how a lead is READ (owner picking, the roster parser, email grades, the export); those are not rungs, and Round 106's owner-pick fix was correct to proceed.
+
 ## And one more, recorded 2026-09-02
 
 **Do not split `server.js` into modules.** About 80 of its 161 boot checks read the file's own source through `selfSource()`, which reads `__filename` — one file, whole. `BOOT HEAP CHECK` asserts exactly one such read exists and that `selfSource` is declared with that exact text; the verdict goes RED under 150 printed checks, so checks cannot be moved out of the boot path either; and every sibling tool (`tdz.js`, `dupkeys.js`, `scopecheck.js`, `clientcheck.js`, `fetchtest.js`, `fuzzcore.js`, `auditfuzz.js`, `servercheck.js`) hard-codes the single filename. Moving one asserted function to a second file produces a false RED and a 503 on `/healthz`. A split is a separate project whose FIRST step is redefining `selfSource()` to concatenate a declared list of files and re-aiming those assertions — before a single line of logic moves. Until that step exists, the answer to "should we break up server.js" is no.
