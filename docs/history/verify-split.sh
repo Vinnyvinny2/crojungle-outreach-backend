@@ -64,7 +64,10 @@ done
 if [ "$(wc -l < CLAUDE.md)" -lt 1000 ]; then
   ALLOW=docs/history/dropped-lines.txt; touch "$ALLOW"
   FULLF=$(mktemp); git show "$FULL:CLAUDE.md" > "$FULLF" || { bad "3. cannot read CLAUDE.md at $FULL"; FULLF="$ORIG"; }
-  MISSING=$(sort -u "$FULLF" | comm -23 - <(cat CLAUDE.md docs/history/*.md .claude/skills/*/*.md .claude/skills/*/*.sql 2>/dev/null | sort -u) | grep -vxF -f "$ALLOW" | grep -v '^\s*$' | grep -vx -- '---')
+  # A line quoted in a note ("> text") or a gate comment ("#   text") still counts as present:
+  # both sides are compared with leading quote/comment markers and whitespace stripped.
+  norm() { sed -E 's/^[[:space:]]*((> |#+ ?)[[:space:]]*)*//; s/[[:space:]]+$//'; }
+  MISSING=$(norm < "$FULLF" | sort -u | comm -23 - <(cat CLAUDE.md docs/history/*.md .claude/skills/*/*.md .claude/skills/*/*.sql 2>/dev/null | norm | sort -u) | grep -vxF -f <(norm < "$ALLOW") | grep -v '^\s*$' | grep -vx -- '---')
   if [ -z "$MISSING" ]; then ok "3. every unique line of the last complete CLAUDE.md ($FULL) exists in CLAUDE.md, docs/history or .claude/skills (allowlist: $(grep -c . "$ALLOW") lines, see $ALLOW)"; else bad "3. lines of the original that exist NOWHERE now:"; echo "$MISSING" | head -40; fi
 else
   ok "3. skipped — CLAUDE.md has not been slimmed yet ($(wc -l < CLAUDE.md) lines), so nothing has left it"
