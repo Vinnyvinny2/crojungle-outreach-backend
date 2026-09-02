@@ -2,7 +2,7 @@
 // Run: node docs/lint-skills.js   (exits non-zero on any failure)
 // Throwaway lint for .claude/skills: format, size, goal line, referenced files, verbatim copies.
 const fs = require('fs'), path = require('path');
-const ROOT = '/home/user/crojungle-outreach-backend';
+const ROOT = path.resolve(__dirname, '..'); // the repo root, wherever this checkout lives (CI runs elsewhere)
 const SK = path.join(ROOT, '.claude', 'skills');
 const orig = require('child_process').execSync('git -C ' + ROOT + ' show b01d952:CLAUDE.md', { maxBuffer: 1 << 26 }).toString('utf8').split('\n'); // the commit every verbatim claim cites
 let fails = 0; const bad = m => { console.log('✗ ' + m); fails++; };
