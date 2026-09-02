@@ -1,6 +1,6 @@
 ---
 name: evidence-and-priorities
-description: "KNOW: What is actually proven by real human replies (the 4.2-4.85 rating band; review pain wins but say the fault, never the source; a finding lands when it contradicts something the owner did on purpose) and the ordered list of what would move the reply rate. Use when deciding what to work on next, or whether a filter, rung, finding or email change has evidence behind it or is inference."
+description: "KNOW: What is actually proven by real human replies (the 4.85 rating ceiling — the 4.2 floor was retired in §94; review pain wins but say the fault, never the source; a finding lands when it contradicts something the owner did on purpose) and the ordered list of what would move the reply rate. Use when deciding what to work on next, or whether a filter, rung, finding or email change has evidence behind it or is inference."
 ---
 # Evidence and priorities — what is proven, and what would move it
 
@@ -33,6 +33,8 @@ The wider pattern behind both: a finding lands when it **contradicts something t
 owner did on purpose** — his customers said it twice, two things he set up
 disagree, or he built a page that reaches nobody. It fails when it is merely
 suboptimal.
+
+**Correction, 2026-09-02 (measured from the code):** the text above still says the 4.2–4.85 band is the one filter with evidence. The 4.2 FLOOR was retired in [§94](../../../docs/history/round-094.md) — the code's own comment calls it "reasoning dressed as a finding", because a low rating is pain to mine, not a reason to skip the lead. What remains is the 4.85 CEILING, applied as a demotion (nothing left to mine), never a deletion. The band's evidence was about replies to the EMAIL, and no email has been sent since the pivot to the contact list.
 
 ## What would actually move it (PART 7)
 

@@ -13,7 +13,7 @@ New text (2026-09-02). The 105 numbered round entries that used to be PART 4 of 
 
 - A code comment saying `CLAUDE.md §79`, `PART 4 §8`, `section 25` or `round 25` means `docs/history/round-079.md` etc. — zero-pad to three digits. Open it and quote the paragraph.
 - `PART 1/2/3/5/6/7/8` citations resolve through the "where everything moved" table in CLAUDE.md (PART 3 and "Working with Vin" are still IN CLAUDE.md).
-- **Two counters warning:** some round TITLES carry an older counter — "Round 100" is §77, "Round 102" is §79, "Round 106" is §84, "Round 107" is §85. The § number in the heading is the only key; the commit messages' "Round N" does not always match it.
+- **Two counters warning:** some round TITLES carry an older, separate counter — the title of §77 says "Round 100", §79 says "Round 102", §84 says "Round 106", §85 says "Round 107". Those are NOT the § numbers: the real Round 106 is `round-106.md` (§106), the real Round 100 is §100. The § number in the file name is the only key; a "Round N" in a title or a commit message is a hint, never an address.
 
 ## By keyword
 
