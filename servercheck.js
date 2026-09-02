@@ -195,6 +195,7 @@ const anthropicAnswer = (bodyText, b) => {
     return wrap({ prices: [], services: ['roof repair', 'roof replacement'], booking: 'online_booking', hasCapture: false, ownerStory: null });
   }
   if (/WHAT WE KNOW ABOUT THE TARGET COMPANY/.test(t)) {
+    if (state.mode === 'findstranger') return wrap({ match: 'no', confidence: 'high', reason: 'an unrelated widget supplier', trade: '' });
     return wrap({ match: 'yes', confidence: 'high', reason: 'name and trade on page', trade: 'roofer' });
   }
   return wrap({});
@@ -212,6 +213,9 @@ const FIND_HOME_HTML = (b) => `<!doctype html><html><head><title>${b.company}</t
   + `<h1>${b.company}</h1><p>Roof repair and replacement for Dallas homeowners, since 1998.</p>`
   + `<p>${'We answer the phone ourselves and we stand behind our work. '.repeat(12)}</p>`
   + `<footer>&copy; 2026 ${b.company}</footer></body></html>`;
+const FIND_STRANGER_HTML = () => `<!doctype html><html><head><title>Zeta Widgets Supply</title></head><body><h1>Zeta Widgets Supply</h1>`
+  + `<p>${'Industrial widgets, flanges and fittings for the trade, shipped same day from our Dallas warehouse. '.repeat(8)}</p>`
+  + `<footer>&copy; 2026 Zeta Widgets Supply</footer></body></html>`;
 const FIND_TEAM_HTML = (b) => `<!doctype html><html><body><h1>Our Team</h1>`
   + `<div><h3>Pete Barnes</h3><p>Owner</p></div>`
   + `<div><h3>Dana Willis</h3><p>Operations Manager</p></div>`
@@ -274,10 +278,25 @@ const fake = http.createServer(async (req, res) => {
 
   if (host === 'api.hunter.io') return send(res, 200, { data: { emails: [], pattern: null } });
 
+  // ── THE FREE NAME-TO-DOMAIN SLATE (round 105) ─────────────────────────────
+  // 'findtwin' hands back two different hosts under one name, which is the
+  // ambiguity the resolver must refuse; every other mode names the fixture host.
+  if (host === 'autocomplete.clearbit.com') {
+    if (state.mode === 'findnoresolve') return send(res, 200, []);
+    if (state.mode === 'findtwin') return send(res, 200, [{ name: b.company, domain: b.host }, { name: b.company, domain: b.host.replace('roofing.example', 'roofingco.example') }]);
+    return send(res, 200, [{ name: b.company, domain: b.host }]);
+  }
+  if (host === 'api.thecompaniesapi.com') {
+    if (/by-name/.test(path)) return send(res, 200, { companies: (state.mode === 'findtwin' || state.mode === 'findnoresolve') ? [] : [{ about: { name: b.company }, domain: { domain: b.host } }] });
+    return send(res, 404, {});
+  }
+
   if (host === b.host || /\.example$/.test(host)) {
     // findblocked: the site refuses a plain fetch outright, which is the ONLY
     // case in which the contact read is allowed to spend a Firecrawl credit.
     if (state.mode === 'findblocked') return send(res, 403, '<html><body>Access Denied. You have been blocked.</body></html>');
+    // A resolved domain serving SOMEBODY ELSE'S site: never names the business.
+    if (state.mode === 'findstranger') return send(res, 200, FIND_STRANGER_HTML());
     if (state.mode === 'findrich') {
       if (/our-team/.test(path)) return send(res, 200, FIND_TEAM_HTML(b));
       if (/contact/.test(path)) return send(res, 200, FIND_CONTACT_HTML(b));
@@ -298,6 +317,8 @@ const bootServer = (extraEnv) => new Promise((resolve, reject) => {
       PORT: String(SRV_PORT),
       FAKE_UPSTREAM: `http://127.0.0.1:${FAKE_PORT}`,
       GOOGLE_PLACES_KEY: 'gp_servercheck',
+      // The one free name-to-domain source with a real match standard.
+      COMPANIES_API_KEY: 'capi_servercheck',
       // The pace is deliberately NOT overridden: the first attempt set
       // FC_GAP_UNKNOWN_MS=40 and FIRECRAWL PACING CHECK went red on it -
       // "1500 requests a minute against a free tier that allows 10" - which is
@@ -621,7 +642,11 @@ const runLead = async (b, over, capMs) => {
     // No website at all. Every site-derived signal must be null, the score must
     // rest only on what Find already knew, and nothing may report a definite no.
     console.log('── scenario H3: no website — every site signal is null, never false');
-    state.mode = 'findrich'; state.biz = biz('H3');
+    // 'findnoresolve': the free slate finds NOTHING for this name, so the lead
+    // stays website-less. Round 105 made a name-only lead resolvable, and in
+    // 'findrich' this fixture resolved, read the site and correctly reported
+    // ads, a team and hiring - which is the feature working, not this scenario.
+    state.mode = 'findnoresolve'; state.biz = biz('H3');
     const h3 = fcCalls();
     const H3 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
       company: { name: state.biz.company, website: '', phone: '(214) 555-0199', reviewCount: 90, rating: 4.5 },
@@ -692,6 +717,57 @@ const runLead = async (b, over, capMs) => {
       });
       ok(!(J2.code === 422 && J2.json && J2.json.notIcp === true),
         `an owner-operated pool company was refused as out of ICP - the name gate has been widened until it deletes the leads this pipeline exists to find`);
+    }
+
+    console.log('── scenario K: a name-only lead resolves a website, or is refused before a slot is taken');
+    {
+      const kCalls = () => state.requests.length;
+      // K1: no website, no listing, no distinctive word -> refused, zero calls, NOT retired.
+      const k1c = kCalls();
+      const K1 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, { company: { name: 'Premier Solutions' }, keys: { anthropicKey: 'k-test' } });
+      ok(K1.code === 422 && K1.json && K1.json.unreadable === true && K1.json.notIcp !== true,
+        `a name-only lead with no distinctive word was not refused as nothing-to-read (got ${K1.code}: ${String((K1.json && K1.json.error) || '').slice(0, 120)})`);
+      ok(kCalls() === k1c, `the nothing-to-read refusal still made ${kCalls() - k1c} network call(s)`);
+      // K2: the free slate resolves, both sources corroborate, the page confirms,
+      // the read continues as a weak-confidence domain and the listing is recovered.
+      state.mode = 'findrich'; state.biz = biz('K');
+      const kb = state.biz;
+      const k2c = kCalls();
+      const K2 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, { company: { name: kb.company, location: 'Dallas, TX' }, keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test' } });
+      const KJ = K2.json || {};
+      ok(K2.code === 200, `the name-only read answered ${K2.code}: ${String(KJ.error || '').slice(0, 160)}`);
+      ok(KJ.websiteResolved === true && KJ.website === 'https://' + kb.host, `the free slate did not resolve ${kb.host} (website=${JSON.stringify(KJ.website)}, proof=${JSON.stringify(KJ.websiteProof)})`);
+      ok(KJ.websiteProof && KJ.websiteProof.confirmedByPages === true, `their own pages did not confirm the resolved domain: ${JSON.stringify(KJ.websiteProof)}`);
+      ok(KJ.websiteProof && KJ.websiteProof.corroboration >= 2, `only ${KJ.websiteProof && KJ.websiteProof.corroboration} source(s) corroborated - the Companies API by-name source is not reaching the slate`);
+      const kReq = state.requests.slice(k2c);
+      ok(kReq.some(q => q.host === 'autocomplete.clearbit.com') && kReq.some(q => q.host === 'api.thecompaniesapi.com'), 'the free slate did not ask both free sources');
+      ok((KJ.pagesRead || []).length >= 1, 'a resolved and confirmed domain was not read');
+      ok(KJ.owner && KJ.owner.name === 'Pete Barnes', `the owner was not read off the resolved site (${JSON.stringify(KJ.owner && KJ.owner.name)})`);
+      ok(/found by us/.test(String((KJ.owner && KJ.owner.gradeWhy) || '')), 'the owner how-sure cell does not say the domain was found by us');
+      ok(KJ.listingRecovered === true && KJ.listingFromResolvedDomain === true, `the confirmed domain did not recover the listing (recovered=${KJ.listingRecovered}, fromResolved=${KJ.listingFromResolvedDomain})`);
+      ok(KJ.websiteConfidence === 'weak', 'a resolved domain does not carry the weak confidence mark');
+      // K3: the page never names the business -> un-stamped, nothing site-derived
+      // survives, the listing is NOT recovered, and the lead is NOT retired.
+      state.mode = 'findstranger'; state.biz = biz('L');
+      const lb = state.biz;
+      const k3c = kCalls();
+      const K3 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, { company: { name: lb.company, location: 'Dallas, TX' }, keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test' } });
+      const LJ = K3.json || {};
+      ok(K3.code === 200, `the stranger read answered ${K3.code}: ${String(LJ.error || '').slice(0, 120)}`);
+      ok(LJ.websiteResolved === true && LJ.websiteProof && LJ.websiteProof.confirmedByPages === false, `a page that never names the business was not un-stamped: ${JSON.stringify(LJ.websiteProof)}`);
+      ok(LJ.website === '' && LJ.owner === null && LJ.email === null && (LJ.pagesRead || []).length === 0,
+        `site-derived facts survived the un-stamp (website=${JSON.stringify(LJ.website)}, owner=${JSON.stringify(LJ.owner && LJ.owner.name)}, pages=${(LJ.pagesRead || []).length})`);
+      ok(!state.requests.slice(k3c).some(q => q.host === 'places.googleapis.com'), "the listing recovery ran on a domain the page contradicted - a stranger's rating, hours and phone can reach the row");
+      ok(LJ.notIcp !== true, 'an un-stamped lead was retired as not-ICP, which deletes a lead that only needs a URL');
+      // K4: two accepted hosts with equal corroboration -> resolve nothing, read nothing.
+      state.mode = 'findtwin'; state.biz = biz('M');
+      const mb = state.biz;
+      const k4c = kCalls();
+      const K4 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, { company: { name: mb.company, location: 'Dallas, TX' }, keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test' } });
+      const MJ = K4.json || {};
+      ok(K4.code === 200 && MJ.websiteResolved === false && MJ.website === '', `two plausible domains were not refused as ambiguous (resolved=${MJ.websiteResolved}, website=${JSON.stringify(MJ.website)})`);
+      ok(!state.requests.slice(k4c).some(q => q.host === mb.host || /roofingco\.example$/.test(q.host)), 'an ambiguous resolution still read one of the two candidate sites');
+      state.mode = '';
     }
 
     console.log('── scenario I: the Find run outlives the request that started it');
