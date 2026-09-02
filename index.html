@@ -1321,7 +1321,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20260924;
+const CLIENT_CONTRACT = 20260925;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5546,11 +5546,66 @@ const contactRequestBody = (company, settings) => {
     // absent when it is off - so an unset setting on a fresh browser BUYS the
     // owner, which is the behaviour the operator asked for.
     paidOwnerLookup: S.findPaidOwner !== false,
+    // Opt-in and default OFF on the server too: 2 Firecrawl credits PLUS a full
+    // lead read, on the lane least likely to be in the ICP.
+    resolveWebsiteSearch: !!(settings && settings.resolveWebsiteSearch === true),
   };
 };
 
 // What the server sent, flattened onto the company. ONE place, so the panel,
 // the card and the CSV cannot disagree about what a lead knows.
+// ══ THE VIEW STATE SURVIVES A REFRESH ═════════════════════════════════════
+// Seven useState values decided which leads were visible and readable and none
+// of them survived a reload. verifiedOnly defaults to true: Vin had clicked
+// "Show all 420", refreshed, and the population went 420 -> 92 with nothing on
+// screen saying why - and the export dropped to 62. One key, one merge.
+const FIND_VIEW_KEY = 'cj_find_view_v1';
+const FIND_VIEW_DEFAULTS = { activeTab: 'all', verifiedOnly: true, winFilter: 'any', contactPlacesOnly: false,
+  contactSort: false, contactScope: 'queue', contactTab: 'unread', pullFilters: null };
+// Pure, so the check can execute it: a saved key wins, an absent one keeps its default.
+const mergeFindView = (saved) => {
+  const out = Object.assign({}, FIND_VIEW_DEFAULTS);
+  if (!saved || typeof saved !== 'object') return out;
+  for (const k of Object.keys(FIND_VIEW_DEFAULTS)) if (saved[k] !== undefined && saved[k] !== null) out[k] = saved[k];
+  return out;
+};
+const loadFindView = () => { try { return mergeFindView(JSON.parse(localStorage.getItem(FIND_VIEW_KEY) || 'null')); } catch { return mergeFindView(null); } };
+const saveFindView = (v) => { try { localStorage.setItem(FIND_VIEW_KEY, JSON.stringify(v)); } catch { /* storage may be unavailable */ } };
+// ══ A RUN SURVIVES A REFRESH ══════════════════════════════════════════════
+// contactRun was useState-only, so after a reload the run/queue toggle did not
+// even render and "the 10 you just read" was unrecoverable - while contactAt
+// had persisted on every one of them the whole time. Every lead in a run now
+// carries the run's id, and the newest id present in the data IS the last run.
+const latestRunIdOf = (list) => {
+  let best = '', bestN = -1;
+  for (const c of (Array.isArray(list) ? list : [])) {
+    const id = c && typeof c.contactRunId === 'string' ? c.contactRunId : '';
+    if (!/^run_[0-9a-z]+$/.test(id)) continue;
+    const n = parseInt(id.slice(4), 36);
+    if (Number.isFinite(n) && n > bestN) { bestN = n; best = id; }
+  }
+  return best;
+};
+// ══ WHAT WAS EXPORTED, STAMPED ON THE ROW ══════════════════════════════════
+// "i have no clue which ones ive already exported and which i dont." Nothing
+// recorded it - not a field, not a flag, nothing written back. Vin's decision:
+// stamp the date and where it went, show it, and keep exporting the full set.
+// Pure, over the whole queue, so the check can execute it.
+const stampExportedRows = (list, names, dest, nowIso) => (Array.isArray(list) ? list : []).map(x => {
+  if (!x || !names || !names.has(x.name)) return x;
+  const to = Array.isArray(x.exportedTo) ? x.exportedTo.slice() : [];
+  if (dest && to.indexOf(dest) < 0) to.push(dest);
+  return Object.assign({}, x, { exportedAt: nowIso, exportedTo: to });
+});
+const exportedCell = (c) => (c && c.exportedAt)
+  ? (String(c.exportedAt).slice(0, 10) + ' to ' + ((c.exportedTo || []).join(' and ') || 'a file')) : '';
+// Provenance for a domain WE found, in the two "how sure" cells that are in the
+// lean CSV - `website` is not, so without this a rep downloads an owner and an
+// address with no way to tell the domain was ours to begin with.
+const websiteProvenanceCell = (c) => (c && c.contactWebsiteResolved === true)
+  ? (' [the website' + (c.contactWebsite ? ' ' + c.contactWebsite : '') + ' was found by us from the name, not published by them'
+     + (c.contactWebsiteConfirmed === true ? '; their own pages name the business]' : '; NOT confirmed - nothing read from it was kept]'))
+  : '';
 const contactFieldsFrom = (data) => {
   const d = data || {};
   const icp = d.icp || {};
@@ -5685,6 +5740,18 @@ const contactFieldsFrom = (data) => {
     contactHiringDaysAgo: (d.hiring && typeof d.hiring.daysAgo === 'number') ? d.hiring.daysAgo : null,
     contactHiringPostingUrl: (d.hiring && d.hiring.postingUrl) || '',
     contactVerifiedEmployees: (typeof sig.verifiedEmployees === 'number') ? sig.verifiedEmployees : null,
+    // ══ A DOMAIN WE FOUND IS NOT A DOMAIN THEY PUBLISHED ════════════════
+    // Deliberately NOT written to c.website: that field is where discovery's
+    // own measurements live, and writing it would make the research modal's
+    // "we have a website" branch true for a domain nobody vouched for.
+    contactWebsite: d.website || '',
+    contactWebsiteResolved: d.websiteResolved === true,
+    contactWebsiteConfirmed: !!(d.websiteProof && d.websiteProof.confirmedByPages === true),
+    contactWebsiteProof: d.websiteProof ? ((d.websiteProof.rule || '') + (d.websiteProof.source ? ' via ' + d.websiteProof.source : '')) : '',
+    // A successful answer is never "nothing to read": that flag is written only
+    // from the server's 422, in the runner.
+    contactUnreadable: false,
+    contactUnreadableWhy: '',
   };
 };
 
@@ -5741,10 +5808,15 @@ const findCsvCell = (v) => {
 //          failure under 'out'; that is wrong and it is the failure a hundred
 //          leads were retired by on 2026-08-28. A dead server is something that
 //          might work next time, so it has to come back.
-const CONTACT_TABS = [['unread', 'Not read'], ['read', 'Read'], ['out', 'Ruled out']];
+//   noread the server said there is NOTHING TO READ - no website, no Google
+//          listing, and a name with no distinctive word to find one by. Not a
+//          verdict about the business and not a failure: it needs a human to
+//          paste a URL, and until then it must never be drawn again.
+const CONTACT_TABS = [['unread', 'Not read'], ['read', 'Read'], ['out', 'Ruled out'], ['noread', 'Nothing to read']];
 const contactTabOf = (c) => {
   if (!c || !c.name) return null;
   if (c.contactNotFit === true) return 'out';
+  if (c.contactUnreadable === true) return 'noread';
   if (c.contactReadOk === true) return 'read';
   return 'unread';
 };
@@ -5765,6 +5837,7 @@ const FIND_CSV_COLUMNS = [
   ['phone', 'Phone'],
   ['phoneOnSite', 'Does their own site print this number'],
   ['callWindow', 'When to call'],
+  ['exported', 'Already exported (when, and where)'],
   ['affordTier', 'What they can afford'],
   ['payingForAds', 'Already paying for ads'],
   ['adsWhy', 'What we saw on their site'],
@@ -5809,7 +5882,10 @@ const FIND_CSV_ESSENTIAL = ['company', 'owner', 'ownerTitle', 'ownerHowSure',
   // hiringPosted joins the lean set beside hiringMarketing, because a date is
   // what turns "they are hiring" into a reason to call THIS week. It is empty
   // on every lead that carries no posting, so it costs nothing on those rows.
-  'icp', 'payingForAds', 'hiringMarketing', 'hiringPosted', 'callWindow'];
+  'icp', 'payingForAds', 'hiringMarketing', 'hiringPosted', 'callWindow',
+  // exported is lean because it answers the one question the file could not:
+  // has this row already been handed out, and where.
+  'exported'];
 const findCsvColumns = (full) => (full === true ? FIND_CSV_COLUMNS
   : FIND_CSV_COLUMNS.filter(c => FIND_CSV_ESSENTIAL.indexOf(c[0]) >= 0));
 // ══ THE FIRST MEASUREMENT OF WHETHER ANY OF THIS WORKS ══════════════════════
@@ -5980,7 +6056,7 @@ const findContactRows = (companies) => {
     // this file and the Google Sheet describing one row three ways is exactly
     // the two-hand-kept-copies failure. A row read by an older build carries
     // no grade and claims nothing rather than claiming confidence.
-    ownerHowSure: c.contactOwnerAskAs || '',
+    ownerHowSure: (c.contactOwnerAskAs || '') + websiteProvenanceCell(c),
     // Which sources named them. Computed on every read and rendered nowhere,
     // so a name read verbatim off a team page and a name a model proposed
     // looked identical to a rep about to say it out loud.
@@ -6079,7 +6155,13 @@ const findContactRows = (companies) => {
          : c.contactHiringDaysAgo === 1 ? 'yesterday'
          : c.contactHiringDaysAgo + ' days ago')
       : ((c.contactHiringRoles || []).length ? 'posted, but the listing carried no usable date' : ''),
-    website: c.website || '',
+    // A resolved domain says so in the cell. A rep reading a bare URL cannot
+    // tell one we found from one they published, and only one of them is proof.
+    website: c.contactWebsiteResolved === true
+      ? ((c.contactWebsite || '') + ' (found by us from the name, not published by them'
+         + (c.contactWebsiteConfirmed === true ? '; their pages name the business)' : '; NOT confirmed)'))
+      : (c.website || ''),
+    exported: exportedCell(c),
     location: c.location || '',
     reviews: (typeof c.reviewCount === 'number') ? String(c.reviewCount) : '',
     rating: (typeof c.rating === 'number') ? String(c.rating) : '',
@@ -6198,6 +6280,9 @@ const leadFromCompany = (company) => {
       // does not pay twice for the same owner and the same address.
       contactReadOk: company.contactReadOk === true,
       contactAt: company.contactAt || null,
+      contactWebsite: company.contactWebsite || '',
+      contactWebsiteResolved: company.contactWebsiteResolved === true,
+      contactWebsiteConfirmed: company.contactWebsiteConfirmed === true,
       contactIcp: (typeof company.contactIcp === 'number') ? company.contactIcp : null,
       contactOwner: company.contactOwner || '',
       contactOwnerTitle: company.contactOwnerTitle || '',
@@ -6264,15 +6349,17 @@ function FindView({
   const [findStep, setFindStep] = useState('firecrawl');
   const [expandedLead, setExpandedLead] = useState(null);
   // These were incorrectly inside an IIFE in the render — React error #310
-  const [activeTab, setActiveTab] = React.useState('all');
-  const [verifiedOnly, setVerifiedOnly] = React.useState(true); // default: show only trustworthy leads
-  const [winFilter, setWinFilter] = React.useState('any');
+  // Read ONCE, before any of the seven states below is declared. See mergeFindView.
+  const _fv = React.useMemo(loadFindView, []);
+  const [activeTab, setActiveTab] = React.useState(_fv.activeTab);
+  const [verifiedOnly, setVerifiedOnly] = React.useState(_fv.verifiedOnly !== false); // default: show only trustworthy leads
+  const [winFilter, setWinFilter] = React.useState(_fv.winFilter);
   // ══ FIND FILTERS ═════════════════════════════════════════════════════════
   // Two jobs from one piece of state. On a pull these narrow the Places grid
   // BEFORE any query runs, so a single-niche single-city run costs a fraction
   // of a national one. On leads already in hand they narrow what is displayed,
   // so an existing pool can be worked without re-running anything.
-  const [pullFilters, setPullFilters] = React.useState({
+  const [pullFilters, setPullFilters] = React.useState(() => Object.assign({
     niches: [], cities: [], minRating: '', maxRating: '',
     minReviews: '', websiteShape: 'any',   // any | none | builder | real
     // Vin, 2026-08-28, on the tier label: "a filter to toggle to just lower
@@ -6286,7 +6373,7 @@ function FindView({
     // review floor, the capacity class and the affordability band all have
     // nothing to read and the lead is scored as though they had.
     extraLanes: false,
-  });
+  }, (_fv.pullFilters && typeof _fv.pullFilters === 'object') ? _fv.pullFilters : {}));
   const [showFilters, setShowFilters] = React.useState(false);
   // == THE CONTACT RUN ======================================================
   // Its own state, in the Find tab, sharing nothing with the Research batch.
@@ -6294,7 +6381,7 @@ function FindView({
   // by different people, and a shared runner is how one becomes the other.
   const [contactRun, setContactRun] = React.useState(null);
   const [contactErr, setContactErr] = React.useState('');
-  const [contactSort, setContactSort] = React.useState(false);
+  const [contactSort, setContactSort] = React.useState(_fv.contactSort === true);
   // How many to read on the next press. A number, because 50 is the daily rate
   // and 5 is what you press when you want to see whether it works before
   // spending on fifty.
@@ -6319,12 +6406,15 @@ function FindView({
   // national brands come from, so the control stays; what changed is that a
   // lead without a listing now gets the same read, so hiding it by default
   // costs quality it no longer buys.
-  const [contactPlacesOnly, setContactPlacesOnly] = React.useState(false);
-  const [contactTab, setContactTab] = React.useState('unread');
+  const [contactPlacesOnly, setContactPlacesOnly] = React.useState(_fv.contactPlacesOnly === true);
+  const [contactTab, setContactTab] = React.useState(_fv.contactTab);
   // 'run' shows only the leads the last press read; 'queue' shows everything
   // that has ever been read. Both are real questions and the panel could only
   // ever answer the second one.
-  const [contactScope, setContactScope] = React.useState('queue');
+  const [contactScope, setContactScope] = React.useState(_fv.contactScope);
+  // Every state that decides what is visible or readable, written on change.
+  React.useEffect(() => saveFindView({ activeTab, verifiedOnly, winFilter, contactPlacesOnly, contactSort, contactScope, contactTab, pullFilters }),
+    [activeTab, verifiedOnly, winFilter, contactPlacesOnly, contactSort, contactScope, contactTab, pullFilters]);
   // ══ THE LEADS YOU JUST PAID TO READ MUST BE THE ONES THAT MOVE ══════
   // "i have no way to move them to the research phase yet after we do a run so
   // no i cant audit". The button existed and it took the top-50 of whatever the
@@ -6895,6 +6985,13 @@ function FindView({
   // A small pool against a route that reads one lead per request. Six at once
   // matches the server's own FIND_CONTACT_CONCURRENCY headroom and leaves it
   // room to refuse a second tab rather than silently doubling the spend rate.
+  // Stamp the rows a press just handed out. Through the same write-through
+  // the contact read uses, so it lands in localStorage and the extra jsonb.
+  const _stamp = (rows, dest) => {
+    const names = new Set((rows || []).map(c => c && c.name).filter(Boolean));
+    const merged = stampExportedRows(loadDiscovered(), names, dest, new Date().toISOString());
+    saveDiscovered(merged); setDiscovered(merged);
+  };
   const CONTACT_POOL = 6;
   // ══ A REFUSED LEAD DOES NOT COST A SLOT ══════════════════════════════
   // Vin's ruling, 2026-08-31: a chain is dropped AND the slot is refunded, so
@@ -6911,9 +7008,10 @@ function FindView({
     contactStop.current = false;
     contactAbort.current = new AbortController();
     const started = Date.now();
+    const runId = 'run_' + started.toString(36);
     // total is what the operator ASKED FOR. Refusals are counted separately so
     // the bar cannot read as "5 of 5 done" on a run that returned two leads.
-    setContactRun({ total: want, done: 0, withEmail: 0, withOwner: 0, running: [], fc: 0, usd: 0, startedAt: started, failed: 0, refused: 0, names: [] });
+    setContactRun({ runId, total: want, done: 0, withEmail: 0, withOwner: 0, running: [], fc: 0, usd: 0, startedAt: started, failed: 0, refused: 0, names: [] });
     let next = 0;
     let kept = 0;
     // Claimed but not yet answered. Without it the guard below is checked by
@@ -6948,8 +7046,13 @@ function FindView({
           // comes back on the next press, which is what stops a paused server
           // permanently retiring a hundred leads.
           const _verdict = d.notIcp === true;
-          fields = { contactReadOk: false, contactFailedAt: new Date().toISOString(),
+          // NOTHING TO READ is its own state: not a verdict about the business
+          // (nothing was measured), not a failure (retrying cannot change it).
+          // It leaves the draw pool until somebody pastes a website.
+          const _unreadable = d.unreadable === true;
+          fields = { contactReadOk: false, contactFailedAt: _unreadable ? null : new Date().toISOString(),
                      contactNotFit: _verdict,
+                     contactUnreadable: _unreadable, contactUnreadableWhy: _unreadable ? (d.unreadableWhy || '') : '',
                      contactNotes: [d.error || ('the server answered ' + r.status)] };
           // 502/503/504 and a plain refusal are TRANSPORT failures - the server
           // is down, restarting, or unreachable. Nothing about this lead caused
@@ -6996,6 +7099,8 @@ function FindView({
         setContactErr('The server is not answering (' + ((fields.contactNotes || [])[0] || 'no response')
           + '). Nothing was read and nothing was spent. If it is asleep or redeploying, give it a minute and press the button again \u2014 no lead has been marked as read.');
       }
+      // The run's id rides every lead it touched, so the set survives a refresh.
+      fields = Object.assign({ contactRunId: runId }, fields);
       results.set(co.name, fields);
       // ══ ONLY A LEAD WE ACTUALLY READ CONSUMES ONE OF THE N ASKED FOR ═══
       // A lead the server ruled out is not one of the leads asked for. Neither
@@ -7003,7 +7108,7 @@ function FindView({
       // "the button above picks them up again", so charging it a slot makes
       // that promise false. The three-strike dead-server stop is what bounds
       // the loop when every read is failing.
-      const _refused = fields.contactNotFit === true;
+      const _refused = fields.contactNotFit === true || fields.contactUnreadable === true;
       const _kept = fields.contactReadOk === true && !_refused;
       if (_kept) kept += 1;
       setContactRun(s => s ? {
@@ -7614,8 +7719,13 @@ function FindView({
       });
       // Rank by reachability FIRST — research is the expensive step, so the leads
       // most likely to yield a contactable owner belong at the top.
+      // A lead with something to read sorts above one with nothing, BEFORE
+      // reachability is consulted: predictReach scores off the name shape
+      // alone, so ten name-only leads with personal-sounding names sat at the
+      // top of the draw and were read first, and read nothing.
+      const _readable = (c) => (c && (c.website || c.placeId)) ? 1 : 0;
       const sorted = [...withReach].sort((a,b) =>
-        ((b.reachPredict||0) - (a.reachPredict||0)) || ((b.icpScore||0) - (a.icpScore||0)));
+        (_readable(b) - _readable(a)) || ((b.reachPredict||0) - (a.reachPredict||0)) || ((b.icpScore||0) - (a.icpScore||0)));
       const tabCounts = { all: sorted.length, ai: 0, funded: 0, trigger: 0, sale: 0 };
       sorted.forEach(c => {
         const k = SRC_TAB[c.source]; if (k) tabCounts[k]++;
@@ -7783,7 +7893,7 @@ function FindView({
       const _hasListing = (c) => !!(c && c.placeId);
       const _cShown = contactPlacesOnly ? filtered.filter(_hasListing) : filtered;
       const _cHidden = contactPlacesOnly ? (filtered.length - _cShown.length) : 0;
-      const _tabCount = { unread: 0, read: 0, out: 0 };
+      const _tabCount = { unread: 0, read: 0, out: 0, noread: 0 };
       for (const c of _cShown) { const t = contactTabOf(c); if (t) _tabCount[t]++; }
       // THE LIST IS THE TAB. Counting alone would leave "a read lead leaves the
       // pool" true of the numbers and false of the screen, which is the whole
@@ -7935,7 +8045,8 @@ function FindView({
           React.createElement('div', { style:{ fontFamily:'Syne', fontWeight:700, fontSize:19, lineHeight:1,
             color: _fit === null ? 'var(--m)' : _fit >= 70 ? 'var(--a)' : 'var(--t)' } },
             _fit === null ? '—' : String(_fit)),
-          React.createElement('div', { style:{ fontSize:9.5, color:'var(--m2)', marginTop:3, letterSpacing:'.04em' } }, 'FIT/100'),
+          React.createElement('div', { style:{ fontSize:9.5, color:'var(--m2)', marginTop:3, letterSpacing:'.04em' } },
+            (_fit === null && /^not scored/.test(co.contactIcpWhy || '')) ? 'NOT SCORED' : 'FIT/100'),
           // The denominator, on the face of the number rather than only in its
           // tooltip. "45 of 7 signals" and "45 of 3 signals" are different
           // statements and the score alone cannot tell them apart.
@@ -7983,6 +8094,10 @@ function FindView({
             co.contactCallWindow ? React.createElement('span', { style:{ color:'var(--a)' } },
               _dot, co.contactCallWindow) : null),
           _bits.length ? React.createElement('div', { style:{ fontSize:12, color:'var(--m2)', marginTop:3 } }, _bits.join('  ·  ')) : null,
+          // A domain WE found says so, beside what was read from it.
+          co.contactWebsiteResolved ? React.createElement('div', { style:{ fontSize:11.5, color: co.contactWebsiteConfirmed ? 'var(--t)' : '#fca5a5', marginTop:3 } },
+            'Website found by us: ' + (co.contactWebsite || '?') + (co.contactWebsiteConfirmed ? ' \u2014 their pages name the business' : ' \u2014 NOT confirmed, nothing read from it was kept')) : null,
+          co.exportedAt ? React.createElement('div', { style:{ fontSize:11.5, color:'var(--m2)', marginTop:3 } }, 'Exported ' + exportedCell(co)) : null,
           // What we could NOT do. On a lead whose site refused us, every signal
           // above is "not checked" and the reason is the useful thing on the row.
           (co.contactNotes && co.contactNotes.length && !co.contactOwner && !co.contactEmail)
@@ -8231,7 +8346,10 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       // made. There was no view of a RUN anywhere in the app, and contactAt was
       // stamped on every read and consumed by nothing.
       const _runNames = new Set((contactRun && contactRun.names) || []);
-      const _cRunSet = _cShown.filter(c => c && _runNames.has(c.name));
+      // The live run while it runs; the newest run id in the DATA after a
+      // refresh, which is what makes "the 10 you just read" recoverable.
+      const _runId = (contactRun && contactRun.runId) || latestRunIdOf(_cShown);
+      const _cRunSet = _runId ? _cShown.filter(c => c && c.contactRunId === _runId) : _cShown.filter(c => c && _runNames.has(c.name));
       const _scoped = (contactScope === 'run' && _cRunSet.length) ? _cRunSet : _cShown;
       const _scopeWord = _scoped === _cRunSet ? 'in this run' : 'in the queue';
       // contactTabOf, matching the export and the tab row. The raw flag is true
@@ -8242,7 +8360,8 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       // A lead the server ruled out is not unread. It is answered, and asking
       // again cannot change the answer.
       const _cNotFit = _scoped.filter(c => c && c.contactNotFit === true);
-      const _cUnread = _cShown.filter(c => c && c.contactReadOk !== true && c.contactNotFit !== true && c.name);
+      const _cUnread = _cShown.filter(c => c && c.contactReadOk !== true && c.contactNotFit !== true && c.contactUnreadable !== true && c.name);
+      const _cNoRead = _cShown.filter(c => contactTabOf(c) === 'noread');
       // A FAILURE is something that might work next time. A VERDICT is not, and
       // saying "could not be read" about a deliberate zero-cost refusal frames a
       // correct decision as a fault.
@@ -8476,13 +8595,26 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
                + (((_cFailed[0].contactNotes || [])[0]) || 'no reason recorded')
                + '. They are still counted as not read, so the button above picks them up again.')) : null,
 
+          // ── NOTHING TO READ ─────────────────────────────────────────────
+          (contactTab === 'noread' && _cNoRead.length) ? _band('Nothing to read',
+            _cap(_cNoRead.length + ' lead(s) arrived with no website and no Google listing, and their names carry no distinctive word to find one by, so a read cannot produce anything. Paste a website on the lead and it can be read.'),
+            React.createElement('button', {
+              className:'btn btn-sm', style:{ background:'transparent', color:'var(--m2)', border:'1px solid var(--b)' },
+              onClick: () => {
+                const names = new Set(_cNoRead.map(c => c.name));
+                const back = loadDiscovered().map(x => (x && names.has(x.name)) ? Object.assign({}, x, { contactUnreadable: false, contactUnreadableWhy: '' }) : x);
+                saveDiscovered(back); setDiscovered(back);
+              },
+            }, 'Put ' + _cNoRead.length + ' back in Not read')) : null,
           (contactTab === 'read' && (_cExportable.length || _cRead.length)) ? _band('Export',
+            // The button did not vanish - it had nothing to export, and said nothing.
+            (_cRead.length && !_cExportable.length) ? _cap('Nothing to export: ' + _cRead.length + ' read lead(s) produced no owner, no address and no number.') : null,
             _cExportable.length ? React.createElement('button', {
               className:'btn btn-g btn-sm',
               title: csvFull
                 ? 'All ' + FIND_CSV_COLUMNS.length + ' columns.'
                 : 'The ' + FIND_CSV_ESSENTIAL.length + ' columns you dial and send from. Tick "every column" for the rest.',
-              onClick: () => { const n = downloadFindContacts(_cExportable, csvFull); if (!n) setContactErr('Nothing to export yet.'); },
+              onClick: () => { const n = downloadFindContacts(_cExportable, csvFull); if (!n) setContactErr('Nothing to export yet.'); if (n) _stamp(_cExportable, 'csv'); },
             }, 'Download CSV (' + _cExportable.length + ')') : null,
             _cExportable.length ? React.createElement('button', {
               className:'btn btn-g btn-sm',
@@ -8503,6 +8635,9 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
                   else {
                     setSheetNote(d.written + ' row' + (d.written === 1 ? '' : 's') + ' added to the sheet'
                       + (d.skipped ? ', ' + d.skipped + ' already there' : '') + '.');
+                    // Stamped as SENT: the script answers only with counts, never which
+                    // rows, so a row the sheet deduped is still marked as handed out.
+                    _stamp(_cExportable, 'sheet');
                   }
                 } catch (e) {
                   setContactErr('Could not reach the server to send the sheet (' + ((e && e.message) || 'no response') + ').');
@@ -10085,6 +10220,12 @@ function ResearchView({
   // Step 1: Find website and show confirmation modal before running research
   const handleRunResearch = async () => {
     let website = websiteOverride || lead.website || '';
+    // A domain the contact read resolved and CONFIRMED arrives with its
+    // provenance visible. Never silently: this modal is the one place a human
+    // looks at a domain before money moves, and "Found automatically" would
+    // make it indistinguishable from one Google published.
+    let _resolvedSrc = false;
+    if (!website && lead.contactWebsite && lead.contactWebsiteResolved && lead.contactWebsiteConfirmed) { website = lead.contactWebsite; _resolvedSrc = true; }
     // If we already have a confirmed website, skip lookup and go straight to modal
     if (!website || website.includes('company.com') || website.includes('support.google')) {
       // Try Clearbit autocomplete first
@@ -10126,6 +10267,10 @@ function ResearchView({
     }
     if (website && !domainSuspicious) modalSource = 'Found automatically — verify before running';
     else if (website) modalSource = 'Found but needs verification';
+    if (_resolvedSrc) {
+      modalSource = 'Found by us from the company name and confirmed by its own pages — NOT published by them';
+      modalWarning = modalWarning || 'This domain was resolved from the company name, not read off a Google listing. Verify it is theirs before running.';
+    }
     setWebsiteModal({
       website: website || '',
       source: modalSource,

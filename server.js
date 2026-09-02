@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260924;
+const CONTRACT_VERSION = 20260925;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -4100,6 +4100,30 @@ const enrichViaCompaniesAPI = async (domain, apiKey, useCredit = false) => {
   }
 };
 
+// ══ THE PIECES OF A NAME-TO-DOMAIN PROOF, AT MODULE SCOPE ═══════════════════
+// These lived inside searchCompaniesAPIByName's .find() callback, where nothing
+// else in the file could reach them - so the two other free name-to-domain
+// sources (Clearbit, and the HEAD guess in /api/find-website) ran with NO match
+// standard at all: Clearbit's first row was taken unconditionally. One
+// predicate now, and every source's candidate is judged by it rather than by
+// its own verdict. See websiteProofFor beside runFindContactRead.
+const WEBSITE_TLD_REFUSE = /^(xyz|info|online|site|top|click|link|live|fun|shop)$/i;
+const WEBSITE_SCAM_NAME = /\d{3}[\s-]?\d{3}[\s-]?\d{4}|reservations|phone number|customer service number|helpline|toll.?free|1-8\d\d/i;
+const CAPI_SUFFIX_WORDS = new Set(['inc','llc','ltd','corp','corporation','company','group','holdings','holding','co','plc','llp','lp','the','and','of']);
+const cleanCompanyName = (n) => String(n || '').replace(/\s*\(cik\s*\d+\)\s*/gi, '').replace(/,?\s*(Inc|LLC|Corp|Ltd|LLP|Co)\.?$/gi, '').trim();
+// WORD-LEVEL, not substring, plus a superstring guard. Substring wrongly
+// accepted BILL->Billboard and Kean->Keanes; ignoring extra words wrongly
+// accepted Digitas->Digitas Liquorice. Those are different entities.
+const nameWordsMatch = (queryName, sourceName) => {
+  const queryWords = cleanCompanyName(queryName).toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 3);
+  const capiWords = String(sourceName || '').toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(Boolean);
+  const capiSig = capiWords.filter(w => w.length > 3 && !CAPI_SUFFIX_WORDS.has(w));
+  const wordHit = w => capiWords.some(cw => cw === w || (cw.startsWith(w) && cw.length - w.length <= 1) || (w.startsWith(cw) && w.length - cw.length <= 1));
+  const allPresent = queryWords.length > 0 && queryWords.filter(wordHit).length === queryWords.length;
+  const extraDistinct = capiSig.filter(cw => !queryWords.some(w => cw === w || cw.startsWith(w) || w.startsWith(cw)));
+  return { match: allPresent && extraDistinct.length === 0, queryWords, extraDistinct };
+};
+
 // Name-based lookup — resolves domain (free), then does a full 1-credit enrich
 // for REAL headcount. Strict name matching to avoid wrong-company domains.
 const searchCompaniesAPIByName = async (companyName, apiKey) => {
@@ -4129,9 +4153,9 @@ const searchCompaniesAPIByName = async (companyName, apiKey) => {
 
       // REJECT scam/junk signals outright
       // 1. Suspicious TLDs used by scam/spam sites
-      if (/^(xyz|info|online|site|top|click|link|live|fun|shop)$/i.test(tld)) return false;
+      if (WEBSITE_TLD_REFUSE.test(tld)) return false;
       // 2. Name contains phone numbers or scam phrases (fake "customer service" sites)
-      if (/\d{3}[\s-]?\d{3}[\s-]?\d{4}|reservations|phone number|customer service number|helpline|toll.?free|1-8\d\d/i.test(rawName)) return false;
+      if (WEBSITE_SCAM_NAME.test(rawName)) return false;
       // 3. Domain has extra words bolted onto the company name (unitedairway vs united)
       //    Real match: domain base closely matches a query word. Reject if domain
       //    is much longer than the name words (indicates a different entity).
@@ -4139,14 +4163,8 @@ const searchCompaniesAPIByName = async (companyName, apiKey) => {
       // Name match — WORD-LEVEL, not substring, plus a superstring guard.
       // Substring wrongly accepted BILL->Billboard and Kean->Keanes; ignoring extra
       // words wrongly accepted Digitas->Digitas Liquorice. Those are different entities.
-      const CAPI_SUFFIX = new Set(['inc','llc','ltd','corp','corporation','company','group','holdings','holding','co','plc','llp','lp','the','and','of']);
-      const capiWords = capiName.split(/\s+/).filter(Boolean);
-      const capiSig = capiWords.filter(w => w.length > 3 && !CAPI_SUFFIX.has(w));
-      const wordHit = w => capiWords.some(cw => cw === w || (cw.startsWith(w) && cw.length - w.length <= 1) || (w.startsWith(cw) && w.length - cw.length <= 1));
-      const nameMatchCount = queryWords.filter(wordHit).length;
-      const allQueryWordsPresent = queryWords.length > 0 && nameMatchCount === queryWords.length;
-      const extraDistinct = capiSig.filter(cw => !queryWords.some(w => cw === w || cw.startsWith(w) || w.startsWith(cw)));
-      const nameMatch = allQueryWordsPresent && extraDistinct.length === 0;
+      // The shared word-level rule; websiteProofFor judges every other source by it.
+      const nameMatch = nameWordsMatch(cleanName, rawName).match;
 
       // Domain match: the domain base must START WITH the first query word AND
       // be a tight length match (prevents "unitedairway" matching "united")
@@ -13018,6 +13036,14 @@ Return ONLY JSON:
   }
 };
 
+// ══ ONE BLOCKLIST, NOT TWO ═══════════════════════════════════════════════════
+// findWebsiteViaSearch kept its own copy of this; websiteProofFor needs the
+// same list, and it needs every NEWS host on it - the news lane's lead name
+// came out of a headline, so a search on that name finds the article first,
+// and the old title clause would accept it as their website every time.
+// Generic words carry their TLD (angi.com, porch.com, patch.com) so a roofer
+// called "Angie's" or "Porch Pros" is not refused on a substring.
+const WEBSITE_BAD_HOST = /(linkedin|facebook|twitter|instagram|tiktok|yelp|bbb\.org|manta|buzzfile|dnb\.com|indeed|glassdoor|crunchbase|bloomberg|zoominfo|wikipedia|youtube|mapquest|yellowpages|angi\.com|angieslist|homeadvisor|thumbtack|houzz|porch\.com|nextdoor|alignable|chamberofcommerce|apollo\.io|rocketreach|signalhire|leadiq|growjo|pitchbook|owler|opencorporates|bizapedia|sec\.gov|prnewswire|businesswire|globenewswire|newswire|prweb|nytimes|wsj\.com|reuters|forbes|cnbc|cnn\.com|bbc\.|apnews|usatoday|washingtonpost|businessinsider|techcrunch|fiercebiotech|biospace|endpts|statnews|axios\.com|patch\.com|bizjournals|medium\.com|substack|news\.google|google\.com|sites\.google|wixsite|godaddysites|business\.site|myshopify|square\.site|weebly|squarespace\.com|wordpress\.com|blogspot)/i;
 const findWebsiteViaSearch = async (companyName, fcKey, location) => {
   if (!companyName || !fcKey) return null;
   try {
@@ -13025,7 +13051,7 @@ const findWebsiteViaSearch = async (companyName, fcKey, location) => {
     const results = await firecrawlSearch(fcKey, q, 4, false); // no content = cheaper
     if (results.length === 0) return null;
 
-    const BAD_HOST = /(linkedin|facebook|twitter|instagram|yelp|bbb\.org|manta|buzzfile|dnb\.com|indeed|glassdoor|crunchbase|bloomberg|zoominfo|wikipedia|youtube|mapquest|yellowpages)/i;
+    const BAD_HOST = WEBSITE_BAD_HOST;
     const nameWords = companyName.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
 
     for (const r of results) {
@@ -33122,7 +33148,11 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   if (_siteIsDead && !settled()) {
     console.log(`DM [${companyName}]: their website returned nothing, so no audit can be produced for this lead. Stopping before the paid owner lookups \u2014 that ladder costs ~15 Firecrawl credits and an owner name is worth nothing without an audit to put in front of him. Everything free was still measured. Fix or replace the website URL and re-run.`);
     console.log(`DM [${companyName}]: ${ownerStageSay(stagesRun)}`);
-    return rankOwnerCandidates(found) || null;
+    // The other three returns carry stagesRun; this one did not, so the route
+    // read null and the OWNER WAVE line printed "the resolver did not run on
+    // this lead" when stage 1 had run. Same shape as the no-name returns below.
+    { const _r = rankOwnerCandidates(found);
+      return _r ? { ..._r, stagesRun } : { name: null, title: null, score: 0, sources: [], corroborated: false, confidence: 'none', stagesRun }; }
   }
   if (settled()) {
     console.log(`DM [${companyName}]: settled at stage 1 — skipped web search, licence and registry lookups (~10 Firecrawl credits saved)`);
@@ -57722,13 +57752,13 @@ app.listen(PORT, () => {
     // FIVE - a leadership page is not a headcount. Alliance scored 75/100, the
     // HIGHEST in that run, because fourteen names read as a fourteen-person
     // business; the fourteen were a CFO, a COO and three SVPs.
-    const _big = findIcpScore({ teamCount: 14, execTitles: ['CFO & Chief Development Officer', 'Chief Operating Officer', 'Senior Vice President, Strategy'], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: null, rating: null });
-    const _small = findIcpScore({ teamCount: 14, execTitles: [], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: null, rating: null });
+    const _big = findIcpScore({ teamCount: 14, execTitles: ['CFO & Chief Development Officer', 'Chief Operating Officer', 'Senior Vice President, Strategy'], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6 });
+    const _small = findIcpScore({ teamCount: 14, execTitles: [], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6 });
     if (!(_big.score < _small.score)) {
       _fails.push(`a fourteen-name leadership page carrying a CFO, a COO and an SVP scores ${_big.score} against ${_small.score} for a fourteen-person crew - a deep org chart is still reading as an ICP-sized business`);
     }
     // One VP at a fifty-person contractor is ordinary. The bar is two.
-    const _oneVp = findIcpScore({ teamCount: 12, execTitles: ['Vice President, Operations'], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: null, rating: null });
+    const _oneVp = findIcpScore({ teamCount: 12, execTitles: ['Vice President, Operations'], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6 });
     if (_oneVp.score !== _small.score) _fails.push('a single VP is being treated as a corporate org chart, which would demote ordinary contractors');
 
     // ══ SIX - A CONTACT FORM IS NOT A ROSTER ═════════════════════════════
@@ -58721,12 +58751,146 @@ app.listen(PORT, () => {
         _fails.push('the email grade stops before the row, so the client goes back to deriving confidence by regex over a human-readable label');
       }
     }
-    if (!_src.includes(_n('signals.reachMeasured =', ' !out.notIcp;'))) {
-      _fails.push('a lead dropped as a chain is scored on lookups that never ran for it, because the reach flag is set unconditionally again');
+    if (!_src.includes(_n('signals.reachMeasured = (_ownerAttempted', ' || _emailAttempted) && !out.notIcp;'))) {
+      _fails.push('reachMeasured no longer means the lookups RAN - a lead with no website scores its reach term on lookups nobody made, which is how ten name-only leads scored 53/100');
     }
-    const _thin = findIcpScore({ teamCount: 12, adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: null, rating: null });
-    if (_thin.score !== 100) _fails.push(`a lead measured on ONE signal it scores full marks on came out at ${_thin.score} — the unmeasured terms are being counted as zero rather than left out`);
-    if (_thin.measured !== 1) _fails.push('the thin fixture reports more measured signals than it has');
+    if (!_src.includes(_n('_ownerAttempted', ' = true;')) || !_src.includes(_n('_emailAttempted', ' = true;'))) {
+      _fails.push('one of the two attempt flags is never written, so reachMeasured is false on every lead and the reach term is dead');
+    }
+    if (!_src.includes(_n('return _r ? { ..._r, stagesRun } : { name: null, title: null, score: 0, sources: [], corroborated: false,', " confidence: 'none', stagesRun }; }"))) {
+      _fails.push('the dead-site early return in findDecisionMaker dropped stagesRun again, so the OWNER WAVE line says "the resolver did not run" on a lead where stage 1 ran');
+    }
+    // Three terms, full marks on each: the unmeasured four LEAVE the denominator.
+    const _three = findIcpScore({ teamCount: 12, adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6 });
+    if (_three.score !== 100) _fails.push(`a lead measured on THREE signals it scores full marks on came out at ${_three.score} — the unmeasured terms are being counted as zero rather than left out`);
+    if (_three.measured !== 3) _fails.push('the three-term fixture reports a different measured count than it has');
+    // == BELOW THREE TERMS THERE IS NO SCORE ================================
+    // Vin's decision after ten name-only leads scored 53 on one term each.
+    for (const [_f, _k] of [[{ teamCount: 12 }, 1], [{ teamCount: 12, reviewCount: 200 }, 2]]) {
+      const _t = findIcpScore(_f);
+      if (_t.score !== null || _t.thin !== true) _fails.push(`a lead with ${_k} of ${FIND_ICP_TERMS.length} signals measured is given a numeric score (${_t.score}) - a ratio over ${_k} term(s) is not a fit score and it sorts a lead nobody looked at into the middle of the list`);
+      if (_t.measured !== _k) _fails.push('the thin fixture reports a different measured count than it has');
+      if (!/not scored/.test(_t.why || '')) _fails.push('a thin read does not SAY it is not scored, so the row shows a dash with no reason');
+    }
+    // == THE TIER IS READ STRICTLY ========================================
+    // Number(null) is 0 and 0 is finite, so an absent tier read as "solid" and
+    // the term printed "a published or mailbox-confirmed address" about a lead
+    // with no address. Asserted on the SENTENCE, because a fixture asserting
+    // only the number passes on a build that scores 53 for another reason.
+    const _noAddr = findIcpScore({ ..._sameFive, reachMeasured: true, ownerCanBuy: false, emailTier: null }).terms.find(t => t.id === 'reach');
+    if (!_noAddr || !_noAddr.measured) _fails.push('the reach term did not score a measured lead with no address');
+    else {
+      if (_noAddr.points !== 1) _fails.push(`a measured lead with NO address scores ${_noAddr.points} on the reach term, not 1 - the null tier is being laundered into a confirmed one`);
+      if (/published or mailbox-confirmed/.test(_noAddr.say)) _fails.push('the reach term claims a published or mailbox-confirmed address on a lead that has no address at all');
+    }
+
+    // ══ A NAME-ONLY LEAD GETS A WEBSITE, OR STAYS UNREAD ══════════════════
+    // Ten Form D filers and news hits read in twelve seconds on 2026-09-01
+    // because their lanes build a lead with a name and nothing else. Vin's
+    // decision: resolve a website first. Every guard here is EXECUTED, and
+    // the acceptance table carries ACCEPT cases beside the refusals - a
+    // refuse-only table is green on a build where the predicate refuses
+    // everything, which is a silently disabled feature, not a safe one.
+    {
+      const _wp = (leadName, candidateHost, sourceName, source) => websiteProofFor({ leadName, candidateHost, sourceName, source });
+      const _refuse = [
+        ['United Airlines', 'unitedairway.xyz', 'United Airway Reservations 1-800-555-1234', 'companiesapi', /tld|scam-name/],
+        ['BILL', 'billboard.com', 'Billboard', 'clearbit', /tightness/],
+        ['Digitas', 'digitas.com', 'Digitas Liquorice', 'clearbit', /name-mismatch/],
+        ['Lennar', 'lennarhomesdallasdealer.com', 'Lennar Homes Dallas Dealer', 'clearbit', /tightness/],
+        ['Ram Jack Durham', 'ramjackusa.com', '', 'search', /no-proof/],
+        ['Acme Roofing', 'prnewswire.com', 'Acme Roofing raises a round', 'search', /blocklist/],
+        ['Acme Roofing', 'dallas.acme.com', 'Acme', 'clearbit', /host/],
+        ['Acme Roofing', 'acmeroofing.wixsite.com', 'Acme', 'clearbit', /host/],
+      ];
+      for (const [n, h, sn, src, rule] of _refuse) {
+        const p = _wp(n, h, sn, src);
+        if (p.accept) _fails.push(`websiteProofFor ACCEPTED ${n} -> ${h} (${src}), the recorded wrong-company shape it exists to refuse`);
+        else if (!rule.test(p.rule)) _fails.push(`websiteProofFor refused ${n} -> ${h} on rule "${p.rule}", not ${rule} - a refusal for the wrong reason is a guard that will move`);
+      }
+      const _guess = _wp('Acme Roofing', 'acmeroofing.com', '', 'guess');
+      if (_guess.accept || _guess.provisional !== true) _fails.push('a self-derived guess is ACCEPTED on the domain-spells-name rule, which is circular for it - only the page can confirm a guess');
+      const _accept = [
+        ['Thrive Dental and Orthodontics', 'thrivedentalandorthodontics.com', '', 'search', 'domain-spells-name'],
+        ['Acme Roofing', 'acmeroofing.com', 'Acme Roofing', 'clearbit', 'source-name'],
+        ['Truly Nolen Pest Control', 'trulynolen.com', 'Truly Nolen Pest Control', 'companiesapi', 'source-name'],
+      ];
+      for (const [n, h, sn, src, rule] of _accept) {
+        const p = _wp(n, h, sn, src);
+        if (!p.accept) _fails.push(`websiteProofFor REFUSED ${n} -> ${h} (${src}) on "${p.rule}": ${p.why} - a predicate that refuses the real case is a disabled feature, not a safe one`);
+        else if (p.rule !== rule) _fails.push(`websiteProofFor accepted ${n} -> ${h} on "${p.rule}", not "${rule}"`);
+      }
+      // Rung 0: no distinctive token, no resolution, and the lead is NOT refused.
+      for (const n of ['Premier Solutions', 'Advanced Construction', 'Florida Title Loan Company']) {
+        if (resolveAllowedFor(n).ok) _fails.push(`"${n}" is allowed to resolve - every word in it is a trade, a place or a legal form, so any domain would be a coin flip`);
+      }
+      // Three-letter words (Bob, Ray) are deliberately NOT tokens - the same floor the corpus guard has always used.
+      for (const n of ['Truly Nolen Pest Control', 'Epicrispr Biotechnologies, Inc.', 'The Roof Detective']) {
+        if (!resolveAllowedFor(n).ok) _fails.push(`"${n}" is refused resolution, and it carries a distinctive word`);
+      }
+      // Ambiguity: two DIFFERENT hosts with equal corroboration resolve nothing.
+      // Two candidates on the SAME host would pass on a broken build (host
+      // dedupe makes it one candidate), so the fixture is two hosts.
+      const _j = (source, host, accept = true) => ({ source, host, proof: { accept, host, rule: 'source-name' } });
+      const _amb = pickResolvedHost([_j('clearbit', 'acmeroofing.com'), _j('companiesapi', 'acme-roofing.net')]);
+      if (_amb.host || _amb.ambiguous !== true) _fails.push(`two accepted hosts with equal corroboration resolved "${_amb.host}" - two companies share this name and the picker guessed`);
+      const _cor = pickResolvedHost([_j('clearbit', 'acmeroofing.com'), _j('companiesapi', 'acmeroofing.com'), _j('clearbit', 'acme-roofing.net')]);
+      if (_cor.host !== 'acmeroofing.com' || _cor.corroboration !== 2) _fails.push(`a host named by two sources did not win over a host named by one (got ${_cor.host} at ${_cor.corroboration})`);
+      const _prov = pickResolvedHost([{ source: 'guess', host: 'acmeroofing.com', proof: { accept: false, provisional: true, host: 'acmeroofing.com', rule: 'provisional' } }]);
+      if (_prov.host !== 'acmeroofing.com' || _prov.provisional !== true) _fails.push('a lone answered guess did not ship as PROVISIONAL');
+      const _corro = pickResolvedHost([_j('clearbit', 'acmeroofing.com'), { source: 'guess', host: 'acmeroofing.com', proof: { accept: false, provisional: true, host: 'acmeroofing.com', rule: 'provisional' } }]);
+      if (_corro.corroboration !== 2) _fails.push('a guess landing on an accepted host does not count as a second look');
+      // The confirmation is word-boundary and strips the domain first. The
+      // parking-page fixture MUST carry the domain string: on ordinary prose
+      // substring and word-boundary agree, so any other fixture passes on a
+      // broken build.
+      const _pad = ' This domain may be for sale. Buy this premium domain today from the registrar; contact us to make an offer on this name and many others like it in our catalogue of available names. Premium domains are priced on request and transfers complete within a week of payment clearing with the registry.';
+      const _park = corpusNamesLead('acmeroofing.com - acmeroofing.com is available.' + _pad, 'Acme Roofing', 'acmeroofing.com');
+      if (_park !== 'contradicted') _fails.push(`a parking page printing acmeroofing.com reads as "${_park}" - the substring test is back, and it confirms exactly the case it exists to catch`);
+      const _real = corpusNamesLead('Welcome to Acme Roofing, serving the valley since 1998. Call us for a free estimate on any residential or commercial roof.' + _pad, 'Acme Roofing', 'acmeroofing.com');
+      if (_real !== 'confirmed') _fails.push(`a page that plainly names Acme Roofing reads as "${_real}"`);
+      if (corpusNamesLead('Acme Roofing.', 'Acme Roofing', 'acmeroofing.com') !== 'unmeasured') _fails.push('a page too thin to tell reports a verdict rather than "unmeasured"');
+      // The un-stamp is a named function over a declared list. Every field
+      // asserted individually: asserting only website === '' is green on the
+      // section-82 broken build.
+      const _o = { company: 'Acme Roofing', website: 'https://acmeroofing.com', pagesRead: [{ url: 'x' }], readVia: 'a plain fetch (free)', readWhy: '',
+        owner: { name: 'Bob Acme' }, email: { address: 'bob@acmeroofing.com' }, chain: { isChain: false }, phoneOnSite: true, signals: { teamCount: 3 },
+        hiring: { roles: ['x'] }, icp: { score: 80 }, websiteResolved: true, websiteProof: { host: 'acmeroofing.com', confirmedByPages: null } };
+      const _st = { pages: [{ url: 'x' }], links: ['a'] };
+      unstampResolvedWebsite(_o, _st);
+      if (_o.website !== '') _fails.push('the un-stamp left the resolved website on the row');
+      for (const k of ['owner', 'email', 'chain', 'phoneOnSite', 'signals', 'hiring', 'icp']) if (_o[k] !== null) _fails.push(`the un-stamp left ${k} alive - a stranger's ${k} reaches the row`);
+      if (_o.pagesRead.length) _fails.push('the un-stamp left pagesRead');
+      if (_st.pages.length || _st.links.length) _fails.push('the un-stamp left the pages or the links in scope, which is the section-82 failure exactly');
+      if (_o.company !== 'Acme Roofing' || _o.websiteResolved !== true || _o.websiteProof.confirmedByPages !== false) _fails.push('the un-stamp destroyed the name or the record of what happened');
+      for (const k of ['owner', 'email', 'signals', 'pagesRead']) if (!RESOLVED_SITE_FIELDS.includes(k)) _fails.push(`${k} is not on the declared un-stamp list`);
+      // wrongCompanyOverruled must be unreachable from the resolution path: it
+      // WOULD overrule (proven here), and for a guessed domain its first half
+      // is true by construction. Behavioural half plus a source half.
+      if (wrongCompanyOverruled('Advanced Cosmetic Surgery', 'advancedcosmeticsurgerykc.com', 'Advanced Cosmetic Surgery welcomes you to Kansas City.', 'Kansas City, MO', '') !== true) {
+        _fails.push('wrongCompanyOverruled no longer overrules the recorded Advanced Cosmetic Surgery case, so the danger this guard exists for cannot be proven');
+      }
+      const _rs = _src.indexOf(_n('const resolveWebsiteForName', ' = async ('));
+      // Searched FROM _rs: contactRankFor has the same line earlier in the file, and an
+      // empty second half was the self-matching needle - both found by running this.
+      const _re = _rs < 0 ? -1 : _src.indexOf(_n('const _aff = affordabilityBand', '({'), _rs);
+      if (_rs < 0 || _re < 0 || _re < _rs) _fails.push('the resolution block could not be located, so its guards were not checked');
+      else if (_src.slice(_rs, _re).includes(_n('wrongCompanyOverruled', '('))) _fails.push('wrongCompanyOverruled is consulted on the resolution path, where a guessed domain makes its first half true by construction');
+      // Call-site needles - a fixture supplies its own arguments and cannot see a caller.
+      if (!_src.includes(_n('resolveWebsiteSearch: b.resolveWebsiteSearch', ' === true };'))) _fails.push('the paid search rung is no longer opt-in (=== true) - a one-token revert to !== false turns 2 credits plus a full lead read on by default');
+      if (!_src.includes(_n('&& (!out.websiteResolved || (out.websiteProof && out.websiteProof.confirmedByPages', ' === true))) {'))) _fails.push('the listing recovery runs on a resolved domain the page did not confirm, so a stranger\'s rating, hours and phone can land on the row');
+      if (!_src.includes(_n('const _cleared = unstampResolvedWebsite(out,', ' { pages, links });'))) _fails.push('the un-stamp is not called at the confirmation, so a contradicted domain keeps its pages in scope');
+      if (!_src.includes(_n('if (!website && name &&', ' !out.notIcp) {'))) _fails.push('the resolver no longer sits behind a hard if (!website) - a || fallback could overwrite a website discovery measured');
+      if (!_src.includes(_n('WEBSITE RESOLVE [${name}]: resolved NOTHING', ' - ${_res.why}.'))) _fails.push('a lead that resolves nothing is silent, so the resolution rate cannot be read off a batch');
+      if (!_src.includes(_n('const _own = leadNameTokens', '(name);'))) _fails.push('the Round-104 corpus guard keeps its own token list again, so a lead can be accepted on a token the guard refuses to look for');
+      if (!_src.includes(_n('out.owner.gradeWhy = (out.owner.gradeWhy', " ? out.owner.gradeWhy + '. ' : '') + _prov;"))) _fails.push('the resolved-domain provenance no longer reaches the owner\'s how-sure cell, so the lean CSV hides where the domain came from');
+      // The route refuses a lead with nothing to read BEFORE the slot is taken.
+      const _rt = _src.indexOf(_n("app.post('/api/find-contact',", ' async (req, res) => {'));
+      const _un = _rt < 0 ? -1 : _src.indexOf(_n('preflightStopped: true, unreadable: true,', ' unreadableWhy: _allow.why,'), _rt);
+      const _sl = _rt < 0 ? -1 : _src.indexOf(_n('_findInFlight', ' += 1;'), _rt);
+      if (_un < 0) _fails.push('the route no longer refuses a lead with no website, no listing and no distinctive word, so ten of them can eat a run of ten again');
+      else if (_sl >= 0 && _un > _sl) _fails.push('the nothing-to-read refusal sits AFTER the concurrency slot is taken, so a refused lead still costs one');
+    }
     const _none = findIcpScore({});
     if (_none.score !== null) _fails.push('a business we could measure NOTHING about is given a numeric score, which reads as "we checked and it is bad"');
     // Null laundering, the trap this file records most: Number(null) is 0 and
@@ -58816,7 +58980,7 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('fcKey: paidOwner ?', " fcKey : '',"))) {
       _fails.push('the Find owner read is handed a Firecrawl key regardless of the switch, so turning the paid lookup off no longer bounds what it can spend');
     }
-    if (!_src.includes(_n('const _opts = { paidOwnerLookup:', ' b.paidOwnerLookup !== false };'))) {
+    if (!_src.includes(_n('const _opts = { paidOwnerLookup:', ' b.paidOwnerLookup !== false,'))) {
       _fails.push('the find-contact route no longer defaults the paid owner lookup ON, so a client that predates the Settings field silently stops finding owners');
     }
 
@@ -75563,7 +75727,11 @@ const FIND_ICP_TERMS = [
     // risks, and both of this project's hard bounces came from the third kind.
     score: (s) => {
       if (s.reachMeasured !== true) return null;
-      const t = Number(s.emailTier);
+      // strictNum, never Number: Number(null) is 0 and 0 is finite, so an ABSENT
+      // tier read as tier 0 - "solid" - and line below awarded 8 points while
+      // printing "a published or mailbox-confirmed address" on a lead with no
+      // address and no website. Live 2026-09-01, ten leads, ICP 53 each.
+      const t = strictNum(s.emailTier);
       const solid = Number.isFinite(t) && t <= 2;
       const anyAddr = Number.isFinite(t) && t <= 4;
       if (s.ownerCanBuy === true && solid) return { points: 15, say: 'a named decision-maker who clears the buying floor, and an address that is published or mailbox-confirmed' };
@@ -75575,6 +75743,14 @@ const FIND_ICP_TERMS = [
     },
   },
 ];
+// ══ A RATIO OVER ONE TERM IS NOT A FIT SCORE ══════════════════════════════
+// Ten name-only leads scored 53/100 on 2026-09-01 with ONE of seven terms
+// measured, and 53 sorted them into the middle of a list a rep works from.
+// Vin's decision: below three measured terms there is NO score - it says
+// "not scored" and sorts under every scored lead. Not a low score: a low
+// score says we checked and it is a bad fit, which is the opposite of what
+// happened.
+const FIND_ICP_MIN_TERMS = 3;
 const findIcpScore = (signals) => {
   const s = signals || {};
   const terms = [];
@@ -75597,6 +75773,10 @@ const findIcpScore = (signals) => {
       why: 'nothing about this business could be measured, so it has no score - not a low one' };
   }
   const measured = terms.filter(t => t.measured).length;
+  if (measured < FIND_ICP_MIN_TERMS) {
+    return { score: null, thin: true, measured, of: FIND_ICP_TERMS.length, terms,
+      why: `not scored - only ${measured} of ${FIND_ICP_TERMS.length} signals could be measured, and a ratio over ${measured === 1 ? 'one term' : 'two terms'} is not a fit score` };
+  }
   // ══ A DEMOTED LEAD MUST SAY SO IN THE NUMBER ══════════════════
   // Vin, asked what the list should do with a lead discovery demoted: "i mean
   // if its already demoted ti would be shown in its overall rating out of 100".
@@ -75647,6 +75827,195 @@ const FIND_EMAIL_FIRECRAWL = String(process.env.FIND_EMAIL_FIRECRAWL || 'fallbac
 const FIND_CONTACT_CONCURRENCY = Math.max(1, Number(process.env.FIND_CONTACT_CONCURRENCY || 8) || 8);
 let _findInFlight = 0;
 
+// ══ A NAME-ONLY LEAD GETS A WEBSITE, OR IT STAYS UNREAD ══════════════════════
+// Live 2026-09-01: ten leads read in under twelve seconds and every one came
+// back "their website returned nothing". They were Form D filers and news hits,
+// and those lanes build a lead with a NAME AND NOTHING ELSE - no website, no
+// location, no place id - so the read had nothing to fetch and stopped before
+// the parser ever ran. Vin's decision: resolve a website first.
+//
+// It is also the most dangerous thing on this route. resolvePlaceId's own
+// header says why: "Resolving the WRONG business would be the most damaging
+// thing this system could do." A wrong domain does not put one wrong field on
+// a row - it re-parents the whole read: owner, email, phone, rating, score,
+// handed to a rep who dials it. So:
+//
+//   * a SLATE of free sources runs in parallel, never a ladder that stops on
+//     the first plausible answer - two independent sources naming the same
+//     host is corroboration, and it is free;
+//   * NO source's own verdict is read. Clearbit's confident flag is discarded;
+//     the Companies API's internal accept is discarded. Every candidate is
+//     judged by ONE predicate, websiteProofFor;
+//   * two accepted hosts with equal corroboration resolve NOTHING. Two
+//     plausible domains is evidence that two companies share this name, which
+//     is exactly when resolving is most dangerous. Refusing is free;
+//   * a self-derived guess ({name}.com answers a HEAD) is PROVISIONAL, never
+//     accepted - the domain-spells-name proof is circular for it. Only the
+//     page itself can confirm it, in corpusNamesLead below;
+//   * the paid rung (a Firecrawl search, 2 credits) is opt-in, default OFF;
+//   * the Places text search is DELIBERATELY NOT a source. resolvePlaceId's
+//     entire safety argument is that the website is the INPUT and the proof.
+//     Taking its output as the website inverts that into "Google's name
+//     relevance decided which business this is" - on a lane with no location,
+//     against a global index. Its role is corroborator, never source.
+const RESOLVE_GENERIC_WORDS = new Set(['the','and','of','for','llc','inc','pllc','pc','ltd','co','company','companies','group',
+  'services','service','center','centre','associates','partners','solutions','plastic','surgery','dental',
+  'law','office','offices','firm','clinic','practice','construction','contractor','contractors',
+  'premier','advanced','quality','professional','national','american','united','general','global','international',
+  'home','homes','auto','transport','rental','equipment','title','loan','loans','lifestyle','holdings','capital',
+  'biotechnologies','biotechnology','biotech','sciences','lifesciences','therapeutics','health','healthcare','medical',
+  'roofing','plumbing','hvac','electric','electrical','painting','landscaping','cleaning','remodeling','restoration',
+  'consulting','management','marketing','technologies','technology','systems','enterprises','industries','properties',
+  ...Object.values(US_STATE_NAMES).map(x => x.toLowerCase())]);
+// One tokeniser for both directions - the free acceptance and the page
+// confirmation - so a lead cannot be accepted on a token the confirmation then
+// refuses to look for. The Round-104 corpus guard reads this too.
+const leadNameTokens = (name) => String(name || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
+  .filter(w => w.length >= 4 && !RESOLVE_GENERIC_WORDS.has(w));
+// Rung 0, free and no network: a name with no distinctive token cannot be
+// resolved by any source without a coin flip. Refusing to RESOLVE is not
+// refusing the LEAD - it stays unread, exactly as before.
+const resolveAllowedFor = (name) => {
+  const toks = leadNameTokens(name);
+  if (!toks.length) return { ok: false, why: `"${name}" has no distinctive word - every word in it is a trade, a place or a legal form, so any domain found for it would be a coin flip` };
+  return { ok: true, tokens: toks };
+};
+const RESOLVED_HOST_HOSTED = /(^|\.)(wixsite\.com|godaddysites\.com|business\.site|myshopify\.com|square\.site|weebly\.com|wordpress\.com|blogspot\.com|sites\.google\.com|webflow\.io|carrd\.co|linktr\.ee)$/i;
+const registrableHostOf = (urlOrHost) => {
+  let h = String(urlOrHost || '').trim().toLowerCase();
+  try { if (/^https?:\/\//.test(h)) h = new URL(h).hostname; } catch { return ''; }
+  h = h.replace(/^www\./, '').replace(/[/?#].*$/, '');
+  if (!h || !/^[a-z0-9.-]+\.[a-z]{2,}$/.test(h)) return '';
+  if (RESOLVED_HOST_HOSTED.test(h)) return '';
+  // Exactly one label before the TLD: dallas.acme.com is a branch page or a
+  // subdomain somebody else controls, never proof of the business itself.
+  if (h.split('.').length !== 2) return '';
+  return h;
+};
+// The ONE acceptance predicate. Every clause must hold; the source's own
+// confidence is evidence for nothing.
+const websiteProofFor = ({ leadName, candidateHost, sourceName, source }) => {
+  const host = registrableHostOf(candidateHost);
+  if (!host) return { accept: false, rule: 'host', why: `"${String(candidateHost || '').slice(0, 60)}" is not a bare registrable host - a subdomain, a hosted builder page, or not a host at all` };
+  if (WEBSITE_BAD_HOST.test(host)) return { accept: false, rule: 'blocklist', why: `${host} is a directory, a social network, a news site or a builder host, never a business's own site`, host };
+  const tld = host.split('.').slice(1).join('.');
+  if (WEBSITE_TLD_REFUSE.test(tld)) return { accept: false, rule: 'tld', why: `.${tld} is the TLD the unitedairway.xyz scam site was on`, host };
+  if (sourceName && WEBSITE_SCAM_NAME.test(sourceName)) return { accept: false, rule: 'scam-name', why: `${source} returned a name carrying a phone number or a customer-service phrase`, host };
+  if (source === 'guess') return { accept: false, provisional: true, rule: 'provisional', why: `${host} answered a HEAD, but a guess built from the name proves nothing about who owns it - only the page can`, host };
+  const compact = cleanCompanyName(leadName).replace(/[^a-z0-9]/gi, '').toLowerCase();
+  const base = host.split('.')[0];
+  if (!(base.length <= compact.length + 4)) return { accept: false, rule: 'tightness', why: `"${base}" is much longer than the name - the unitedairway-for-United shape`, host };
+  if (domainSpellsLeadName(leadName, host)) return { accept: true, rule: 'domain-spells-name', why: `${host} spells out the business name`, host };
+  if (sourceName) {
+    const m = nameWordsMatch(leadName, sourceName);
+    if (m.match) return { accept: true, rule: 'source-name', why: `${source} returned "${sourceName}" - every word of the name and nothing extra`, host };
+    return { accept: false, rule: 'name-mismatch', host,
+      why: m.extraDistinct.length ? `${source} returned "${sourceName}", which carries extra words (${m.extraDistinct.join(', ')}) - the Digitas Liquorice shape`
+                                  : `${source} returned "${sourceName}", which does not carry every word of the name` };
+  }
+  return { accept: false, rule: 'no-proof', why: `${host} does not spell the name and ${source} gave no name to compare`, host };
+};
+// Pure: given every judged candidate, which host wins. Separate so the
+// ambiguity rule can be executed at boot rather than read.
+const pickResolvedHost = (judged) => {
+  const byHost = new Map();
+  const provisional = [];
+  for (const j of Array.isArray(judged) ? judged : []) {
+    if (!j || !j.proof) continue;
+    if (j.proof.provisional && j.proof.host) { provisional.push(j.proof.host); continue; }
+    if (!j.proof.accept || !j.proof.host) continue;
+    const e = byHost.get(j.proof.host) || { host: j.proof.host, sources: new Set(), rules: new Set() };
+    e.sources.add(j.source); e.rules.add(j.proof.rule);
+    byHost.set(j.proof.host, e);
+  }
+  // A guess that lands on an accepted host is a free, independent second look.
+  for (const h of provisional) if (byHost.has(h)) byHost.get(h).sources.add('guess');
+  const ranked = [...byHost.values()].map(e => ({ host: e.host, corroboration: e.sources.size, sources: [...e.sources], rule: [...e.rules][0] }))
+    .sort((a, b) => b.corroboration - a.corroboration);
+  if (!ranked.length) {
+    // Only a guess answered. It ships PROVISIONAL and the page decides.
+    const g = [...new Set(provisional)];
+    if (g.length === 1) return { host: g[0], corroboration: 0, sources: ['guess'], rule: 'provisional', provisional: true };
+    return { host: '', why: g.length ? 'two different guessed hosts both answered, which is two companies, not one' : 'no source produced a host that passed the proof' };
+  }
+  if (ranked.length > 1 && ranked[0].corroboration === ranked[1].corroboration) {
+    return { host: '', ambiguous: true, why: `two different hosts passed with equal corroboration (${ranked[0].host}, ${ranked[1].host}) - two companies share this name, and resolving either would be a guess` };
+  }
+  return ranked[0];
+};
+let _resolveNoKeyWarnedAt = 0;
+const resolveWebsiteForName = async ({ name, companiesKey, fcKey, location, allowSearch, budgetOk }) => {
+  const res = { host: '', source: '', rule: '', corroboration: 0, provisional: false, judged: [], why: '' };
+  const allow = resolveAllowedFor(name);
+  if (!allow.ok) { res.why = allow.why; return res; }
+  if (!companiesKey && Date.now() - _resolveNoKeyWarnedAt > 3600000) {
+    _resolveNoKeyWarnedAt = Date.now();
+    console.log(`\u26A0 WEBSITE RESOLVE: COMPANIES_API_KEY is not set on this instance, so the ONE free source with a real name-match standard cannot run. The other two still go through websiteProofFor, but corroboration is weaker without it. It is free - set it in Render.`);
+  }
+  const clean = cleanCompanyName(name);
+  const guessBase = clean.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const guesses = (guessBase.length >= 4 && guessBase.length <= 30) ? [`https://${guessBase}.com`] : [];
+  const settled = await Promise.allSettled([
+    companiesKey
+      ? searchCompaniesAPIByName(clean, companiesKey).then(r => (r && r.website) ? [{ source: 'companiesapi', host: r.website, sourceName: r.name || '' }] : [])
+      : Promise.resolve([]),
+    fetchT(`https://autocomplete.clearbit.com/v1/companies/suggest?query=${encodeURIComponent(clean)}`, { headers: { 'Accept': 'application/json' } }, 5000)
+      .then(safeJson).then(d => Array.isArray(d) ? d.slice(0, 3).filter(x => x && x.domain).map(x => ({ source: 'clearbit', host: x.domain, sourceName: x.name || '' })) : []),
+    Promise.all(guesses.map(u => fetchT(u, { method: 'HEAD' }, 4000).then(r => (r && r.ok) ? { source: 'guess', host: u, sourceName: '' } : null).catch(() => null))).then(a => a.filter(Boolean)),
+  ]);
+  const cands = [].concat(...settled.map(x => x.status === 'fulfilled' && Array.isArray(x.value) ? x.value : []));
+  res.judged = cands.map(c => ({ ...c, proof: websiteProofFor({ leadName: name, candidateHost: c.host, sourceName: c.sourceName, source: c.source }) }));
+  let pick = pickResolvedHost(res.judged);
+  // Rung 4, paid, opt-in. Only when nothing free was accepted (a provisional
+  // guess is not an acceptance), only when asked, only under the ceiling.
+  if (!pick.host || pick.provisional) {
+    if (allowSearch && fcKey && (typeof budgetOk !== 'function' || budgetOk())) {
+      const found = await findWebsiteViaSearch(clean, fcKey, location || '').catch(() => null);
+      if (found) {
+        res.judged.push({ source: 'search', host: found, sourceName: '', proof: websiteProofFor({ leadName: name, candidateHost: found, sourceName: '', source: 'search' }) });
+        pick = pickResolvedHost(res.judged);
+      }
+    }
+  }
+  if (!pick.host) { res.why = pick.why || 'no source produced a host that passed the proof'; return res; }
+  Object.assign(res, { host: pick.host, source: (pick.sources || []).join('+'), rule: pick.rule, corroboration: pick.corroboration, provisional: pick.provisional === true });
+  return res;
+};
+// Three states, and "unmeasured" counts as NOT confirmed. Word-boundary, never
+// substring, and the domain string is removed first: a parking page or a
+// registrar's for-sale page prints acmeroofing.com in its footer, which a
+// substring test reads as the words "acme" and "roofing" - so the substring
+// version reports CONFIRMED on precisely the case this exists to catch.
+const RESOLVED_CONFIRM_MIN_CHARS = 300;
+const corpusNamesLead = (corpus, leadName, host) => {
+  let text = String(corpus || '').toLowerCase();
+  const h = String(host || '').toLowerCase().replace(/^www\./, '');
+  if (h) { text = text.split(h).join(' '); const label = h.replace(/\.[a-z]+$/, ''); if (label.length >= 4) text = text.split(label).join(' '); }
+  const own = leadNameTokens(leadName);
+  if (!own.length) return 'unmeasured';
+  if (text.replace(/\s+/g, ' ').trim().length < RESOLVED_CONFIRM_MIN_CHARS) return 'unmeasured';
+  return own.some(w => new RegExp('\\b' + w + '\\b').test(text)) ? 'confirmed' : 'contradicted';
+};
+// Everything site-derived goes, not just the URL. Section 82 records the
+// failure this closes: blanking website and domain alone left the markdown in
+// scope and the brain audited the wrong company anyway. A NAMED function with
+// a DECLARED list, so the boot check can call it and assert every field.
+const RESOLVED_SITE_FIELDS = ['pagesRead', 'readVia', 'readWhy', 'duplicatePages', 'nameNotOnSite', 'owner', 'email', 'chain', 'phoneOnSite', 'signals', 'hiring', 'listingRecovered', 'listingFromResolvedDomain', 'icp'];
+const unstampResolvedWebsite = (out, state) => {
+  const cleared = [];
+  out.website = '';
+  for (const k of RESOLVED_SITE_FIELDS) {
+    if (out[k] === undefined) continue;
+    out[k] = Array.isArray(out[k]) ? [] : (typeof out[k] === 'string' ? '' : null);
+    cleared.push(k);
+  }
+  out.readVia = 'nothing read';
+  if (out.websiteProof) out.websiteProof.confirmedByPages = false;
+  if (state && Array.isArray(state.pages)) state.pages.length = 0;
+  if (state && Array.isArray(state.links)) state.links.length = 0;
+  return cleared;
+};
+
 const runFindContactRead = async (company, keys, opts = {}) => {
   const t0 = Date.now();
   // ══ THE OWNER IS THE POINT OF THIS LIST ═════════════════════════════
@@ -75670,7 +76039,10 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // reading of nothing here is "the old client, which expected the owner to
   // be found", not "the operator asked us to save money".
   const name = String((company && company.name) || '').trim();
-  const website = String((company && company.website) || '').trim();
+  // let, not const: a name-only lead can RESOLVE one below. Filled only when
+  // absent - a hard if, never a || fallback, because overwriting a website
+  // discovery measured is the Lennar failure run in reverse.
+  let website = String((company && company.website) || '').trim();
   const apiKey = (keys && keys.anthropicKey) || '';
   const fcKey = (keys && keys.firecrawlKey) || '';
   const verifierKey = (keys && keys.verifierKey) || '';
@@ -75707,6 +76079,33 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     signals: null,
     notes,
   };
+
+  // ── A WEBSITE FOR A LEAD THAT ARRIVED WITHOUT ONE ─────────────────────────
+  out.websiteResolved = false;
+  out.websiteProof = null;
+  out.websiteConfidence = '';
+  if (!website && name && !out.notIcp) {
+    const _res = await resolveWebsiteForName({
+      name, companiesKey: process.env.COMPANIES_API_KEY || '', fcKey,
+      location: (company && company.location) || '',
+      allowSearch: opts.resolveWebsiteSearch === true,
+      budgetOk: () => !budgetRefusal(['fc', 'anthropicUsd']) && !fcCreditsBlocked(),
+    });
+    const _tried = _res.judged.map(j => `${j.source}:${j.proof && j.proof.host ? j.proof.host : '?'} ${j.proof && j.proof.accept ? 'ACCEPTED' : (j.proof && j.proof.provisional ? 'provisional' : 'refused')} (${j.proof ? j.proof.rule : '-'})`).join('; ');
+    if (_res.host) {
+      website = 'https://' + _res.host;
+      out.website = website;
+      out.websiteResolved = true;
+      // The same word sizeConfidence already uses for a name-derived headcount,
+      // so a second confidence vocabulary is not invented and left to disagree.
+      out.websiteConfidence = 'weak';
+      out.websiteProof = { source: _res.source, rule: _res.rule, corroboration: _res.corroboration, host: _res.host, provisional: _res.provisional, confirmedByPages: null };
+      console.log(`\u{1F310} WEBSITE RESOLVE [${name}]: ${_res.provisional ? 'PROVISIONAL' : 'resolved'} ${_res.host} on rule ${_res.rule}, corroboration ${_res.corroboration} (${_res.source}). ${_tried ? 'Candidates: ' + _tried + '. ' : ''}Nothing downstream may treat this as a domain they published until their own pages name the business - see the confirmation below. Grep this line across a batch: how often a name-only lead resolves IS the rate that decides whether the paid search rung is worth turning on.`);
+    } else {
+      console.log(`\u{1F310} WEBSITE RESOLVE [${name}]: resolved NOTHING - ${_res.why}.${_tried ? ' Candidates: ' + _tried + '.' : ''} The lead stays unread; nothing was spent on it.`);
+      notes.push(`no website is published for this lead and none could be resolved: ${_res.why}`);
+    }
+  }
 
   // ── THE PAGES ────────────────────────────────────────────────────────────
   const pages = [];
@@ -75846,15 +76245,48 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // reading the row; it changes nothing about what we buy.
   {
     const _corpus = pages.map(p => String(p.text || '')).join(' ').toLowerCase();
-    const _GENERIC = new Set(['the','and','of','for','llc','inc','pllc','pc','ltd','co','company','group','and',
-      'services','service','center','centre','associates','partners','solutions','plastic','surgery','dental',
-      'law','office','offices','firm','clinic','practice','construction','contractor','contractors']);
-    const _own = String(name || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').split(/\s+/)
-      .filter(w => w.length >= 4 && !_GENERIC.has(w));
+    // One tokeniser with the resolver's acceptance predicate, so a lead cannot
+    // be accepted on a token this guard then refuses to look for.
+    const _own = leadNameTokens(name);
     if (_corpus.length > 800 && _own.length && !_own.some(w => _corpus.includes(w))) {
       out.nameNotOnSite = true;
       notes.push(`not one distinctive word of "${name}" appears anywhere on the pages we read — the site may belong to a different business, or they may trade under another brand. Worth a look before dialling.`);
       console.log(`\u{26A0} FIND READ [${name}]: the pages we read never name this business. Distinctive words looked for: ${_own.join(', ')}. Not a drop — a rebrand reads the same way — but the owner and the address below may belong to somebody else.`);
+    }
+  }
+
+  // ── A RESOLVED DOMAIN IS CONFIRMED BY THE PAGE, OR IT IS UN-STAMPED ──────
+  // One test, two verdicts, keyed on provenance. The guard above FLAGS a
+  // published domain, because somebody other than us believed it belonged to
+  // this company and a rebrand explains a miss. A domain WE resolved on a name
+  // match has no such belief behind it, so a miss un-stamps it - and everything
+  // site-derived goes with it, before a single downstream reader runs.
+  //
+  // Un-stamping is never a drop: out.notIcp is not touched, so the lead goes
+  // back to the unread pool minus the cost, rather than being retired.
+  if (out.websiteResolved) {
+    const _corpus = pages.map(p => String(p.text || '')).join(' ');
+    let _verdict = corpusNamesLead(_corpus, name, out.websiteProof.host);
+    let _how = `their own pages ${_verdict === 'confirmed' ? 'name the business' : _verdict === 'contradicted' ? 'never name the business' : 'were too thin to tell'}`;
+    // Only when the free test could not confirm: one Haiku call, no credit.
+    // wrongCompanyOverruled is deliberately NOT consulted here - its first
+    // half is domainSpellsLeadName, which for a guessed domain is true by
+    // construction, so it would let a guess overrule the model's "no".
+    if (_verdict !== 'confirmed' && apiKey && pages[0] && String(pages[0].text || '').length >= 100) {
+      const _m = await confirmDomainMatch(name, String(pages[0].text || '').slice(0, 6000),
+        { location: (company && company.location) || '', industry: (company && company.industry) || '', signal: (company && company.jobTitle) || '' }, apiKey).catch(() => null);
+      if (_m && _m.match === 'yes' && _m.confidence !== 'low') { _verdict = 'confirmed'; _how = `the model read the homepage and confirmed it (${_m.reason || 'no reason given'})`; }
+      else _how += `, and the model ${_m ? `said ${_m.match} (${_m.confidence})` : 'could not be asked'}`;
+    }
+    if (_verdict === 'confirmed') {
+      out.websiteProof.confirmedByPages = true;
+      notes.push(`the website was found by us, not published by them - ${_how}`);
+      console.log(`\u{1F310} WEBSITE RESOLVE [${name}]: CONFIRMED ${out.websiteProof.host} - ${_how}. The read continues on it as a weak-confidence domain; the row says where it came from.`);
+    } else {
+      const _cleared = unstampResolvedWebsite(out, { pages, links });
+      website = '';
+      notes.push(`a website was found for the name (${out.websiteProof.host}) and UN-STAMPED, because ${_how} - nothing read from it reaches this row`);
+      console.log(`\u{1F310} WEBSITE RESOLVE [${name}]: UN-STAMPED ${out.websiteProof.host} - ${_how}. Cleared: ${_cleared.join(', ')}. The lead stays unread; the owner, address and every signal below are measured on nothing, which is the honest state.`);
     }
   }
 
@@ -75978,7 +76410,13 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // It sits AFTER the chain refusal: a lead we have already decided not to
   // keep must not buy anything, and it sits BEFORE the owner block because the
   // place id is what opens stage 1.5.
-  if (!placeId && !out.notIcp && website && process.env.GOOGLE_PLACES_KEY) {
+  // And never on a resolved domain the page did not confirm: resolvePlaceId is
+  // safe against the wrong LISTING given the right domain, and silently
+  // catastrophic given the wrong domain - it finds whoever owns that domain
+  // and quotes a stranger's rating, hours, address and phone onto this row.
+  if (!placeId && !out.notIcp && website && process.env.GOOGLE_PLACES_KEY
+      && (!out.websiteResolved || (out.websiteProof && out.websiteProof.confirmedByPages === true))) {
+    if (out.websiteResolved) out.listingFromResolvedDomain = true;
     const _rec = await resolvePlaceId({
       companyName: name, website, location: (company && company.location) || '',
       placesKey: process.env.GOOGLE_PLACES_KEY,
@@ -76022,6 +76460,11 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // null means the resolver never ran on this lead, which is a different thing
   // from "it ran and bought nothing". Undefined would read as the second.
   out.ownerStagesRun = null;
+  // Whether a lookup actually COMPLETED. reachMeasured used to be !out.notIcp -
+  // "we were not dropped as a chain" - so on a lead with no website the reach
+  // term scored a lead nobody looked up. Set only after the await returns; a
+  // throw leaves it false, because a lookup that died did not measure anything.
+  let _ownerAttempted = false, _emailAttempted = false;
   if (apiKey && name && !out.notIcp) {
     try {
       const dm = await findDecisionMaker({
@@ -76045,6 +76488,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         apifyToken, callOnly: !paidOwner,
         preFetchedPages: interior,
       });
+      _ownerAttempted = true;
       // The FACT, not a threshold over total spend. See the OWNER WAVE line.
       // It is recorded whether or not a name came back, because "the wave was
       // bought and found nobody" is the most expensive outcome there is and it
@@ -76124,6 +76568,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         // a page fetched on purpose as a careers page was a careers page.
         freePages: pages.map(p => ({ url: p.url, text: p.text, intent: p.intent })),
       });
+      _emailAttempted = true;
       if (em) {
         out.email = {
           address: em.email || '', tier: em.tier ?? null, sendable: em.sendable === true,
@@ -76144,6 +76589,17 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         if (!em.email) notes.push('no address could be resolved for this business');
       }
     } catch (e) { notes.push(`the address lookup failed (${e && e.message})`); }
+  }
+
+  // ── PROVENANCE IN THE LEAN CELLS ─────────────────────────────────────────
+  // `website` is not in the lean CSV a rep downloads, so a resolved domain's
+  // provenance rides the two "how sure" cells that ARE - or the file carries an
+  // owner and an address with no way to tell the domain was ours to begin with.
+  if (out.websiteResolved && out.websiteProof && out.websiteProof.confirmedByPages === true) {
+    const _prov = `the website (${out.websiteProof.host}) was found by us from the name, not published by them; their own pages name the business`;
+    out.websiteProvenance = _prov;
+    if (out.owner) out.owner.gradeWhy = (out.owner.gradeWhy ? out.owner.gradeWhy + '. ' : '') + _prov;
+    if (out.email) out.email.gradeSay = (out.email.gradeSay ? out.email.gradeSay + '. ' : '') + _prov;
   }
 
   // == THE SCORE, NOW THAT THE READ IS FINISHED ============================
@@ -76185,7 +76641,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // and not an absence of one. A lead dropped as a chain never reached them,
   // so the term leaves the denominator rather than scoring a confident 1 -
   // the unmeasured-as-zero class, which every other term here already avoids.
-  signals.reachMeasured = !out.notIcp;
+  signals.reachMeasured = (_ownerAttempted || _emailAttempted) && !out.notIcp;
   // The two verdicts discovery already reached about this lead. They ride the
   // request now; without them the score could not see a demotion at all, so a
   // 4.9-star business the star band demoted scored exactly like an in-band one.
@@ -76384,6 +76840,22 @@ app.post('/api/find-contact', async (req, res) => {
     console.log(`\u{1F6D1} FIND CONTACT [${who}]: REFUSED AT THE DAY CEILING — ${ceiling.message}`);
     return res.status(429).json({ error: ceiling.message, budgetStopped: true });
   }
+  // ══ A LEAD WITH NOTHING TO READ IS REFUSED BEFORE IT TAKES A SLOT ═══════
+  // No website, no Google listing, and a name with no distinctive word: the
+  // resolver would refuse it too, so the read cannot produce anything and ten
+  // of them consumed a run of ten on 2026-09-01. 422 with unreadable:true - NOT
+  // notIcp, which retires a lead permanently. This one only needs a human to
+  // paste a URL, and the client keeps it out of the draw until somebody does.
+  if (!company.website && !company.placeId) {
+    const _allow = resolveAllowedFor(company.name);
+    if (!_allow.ok) {
+      console.log(`\u{1F6D1} FIND CONTACT [${who}]: NOTHING TO READ - no website, no Google listing, and ${_allow.why}. Refused before a slot was taken; nothing was spent.`);
+      return res.status(422).json({
+        error: `Nothing to read for "${String(company.name).slice(0, 60)}": no website, no Google listing, and ${_allow.why}. Paste a website on the lead and read it again.`,
+        preflightStopped: true, unreadable: true, unreadableWhy: _allow.why,
+      });
+    }
+  }
   if (_findInFlight >= FIND_CONTACT_CONCURRENCY) {
     return res.status(429).json({
       error: `${_findInFlight} contact reads are already running (the ceiling is FIND_CONTACT_CONCURRENCY=${FIND_CONTACT_CONCURRENCY}). Nothing was spent; retry in a moment.`,
@@ -76397,7 +76869,12 @@ app.post('/api/find-contact', async (req, res) => {
     // stands the paid stage down. A client that predates the Settings field
     // sends nothing, and "nothing" here means the old client - which expected
     // the owner to be found - and never "they asked us to save money".
-    const _opts = { paidOwnerLookup: b.paidOwnerLookup !== false };
+    const _opts = { paidOwnerLookup: b.paidOwnerLookup !== false,
+      // === true, the INVERSE direction of paidOwnerLookup. A wrong NAME is one
+      // wrong word a rep corrects on the phone; a wrong DOMAIN re-parents the
+      // whole read. And the real marginal cost is 2 credits PLUS a full lead
+      // read, so silence means nobody asked for it.
+      resolveWebsiteSearch: b.resolveWebsiteSearch === true };
     const out = await runWithLead(who, () =>
       FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0, places: 0, anthropicUsd: 0, apify: 0 },
         () => runFindContactRead(company, keys, _opts)));

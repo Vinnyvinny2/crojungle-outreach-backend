@@ -2348,6 +2348,9 @@ let contactTally = null;
                  // the full set is a tick box - and both destinations have to
                  // read the same chooser or the CSV and the sheet drift.
                  'FIND_CSV_ESSENTIAL', 'findCsvColumns', 'FIND_SHEET_SCRIPT',
+                 // Round 105: the view state, the run id, the export stamp and the
+                 // resolved-domain provenance are pure so they can be executed here.
+                 'FIND_VIEW_DEFAULTS', 'mergeFindView', 'latestRunIdOf', 'stampExportedRows', 'exportedCell', 'websiteProvenanceCell',
                  // A front-desk mailbox is kept on the sheet and marked, and the
                  // resolver's source ids are said the way a rep would say them.
                  'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN'];
@@ -2366,6 +2369,7 @@ let contactTally = null;
       M = new Function(NEED2.map(k => got2[k]).join('\n')
         + '\nreturn { tabOf: contactTabOf, tabs: CONTACT_TABS, cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
+        + ' mergeView: mergeFindView, latestRun: latestRunIdOf, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
         + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
         + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT,'
         + ' generic: isGenericMailbox };')();
@@ -2456,8 +2460,34 @@ let contactTally = null;
           [{ name: 'Failed Co', contactFailedAt: Date.now(), contactNotes: ['no response'] }, 'unread'],
           [{ name: '' }, null],
         ];
+        // ══ ROUND 105: THE FIND TAB REMEMBERS, AND NOTHING-TO-READ IS ITS OWN STATE ══
+        {
+          if (!M.tabs.some(t => t[0] === 'noread')) fails.push('the Nothing-to-read tab is gone, so a lead with no website and no listing has nowhere to go but back into the draw');
+          if (M.tabOf({ name: 'x', contactUnreadable: true }) !== 'noread') fails.push('a lead the server said has nothing to read is not filed under Nothing to read, so it is drawn again on every press');
+          if (M.tabOf({ name: 'x', contactUnreadable: true, contactNotFit: true }) !== 'out') fails.push('a verdict no longer beats the nothing-to-read state');
+          // The export stamp: pure, over the whole queue, never a duplicate destination.
+          const _st = M.stamp([{ name: 'A' }, { name: 'B', exportedTo: ['csv'] }], new Set(['B']), 'sheet', '2026-09-02T00:00:00Z');
+          if (_st[0].exportedAt) fails.push('the export stamp touched a row that was not exported');
+          if (_st[1].exportedAt !== '2026-09-02T00:00:00Z' || _st[1].exportedTo.join() !== 'csv,sheet') fails.push('the export stamp did not record when and where a row was handed out');
+          if (M.stamp(_st, new Set(['B']), 'sheet', '2026-09-03T00:00:00Z')[1].exportedTo.join() !== 'csv,sheet') fails.push('a second export to the same place duplicates the destination');
+          if (M.exportedCell({ exportedAt: '2026-09-02T10:00:00Z', exportedTo: ['csv'] }) !== '2026-09-02 to csv') fails.push('the exported cell does not say when and where');
+          if (M.lean.indexOf('exported') < 0) fails.push('"exported" is not in the lean CSV, so the file a rep downloads cannot answer whether a row was already handed out');
+          // The run survives a refresh: the newest run id in the data is the run.
+          if (M.latestRun([{ contactRunId: 'run_1a' }, { contactRunId: 'run_zz' }, { contactRunId: 'bogus' }, {}]) !== 'run_zz') fails.push('the newest run id is not recovered from the data, so "the 10 you just read" dies on refresh');
+          if (M.latestRun([]) !== '') fails.push('an empty queue yields a run id');
+          // The view state: a saved key wins, an absent or null one keeps its default.
+          if (M.mergeView({ verifiedOnly: false }).verifiedOnly !== false) fails.push('a saved "Show all" does not survive the merge, so a refresh silently narrows the queue again');
+          if (M.mergeView({ verifiedOnly: false }).activeTab !== 'all') fails.push('an absent saved key lost its default');
+          if (M.mergeView(null).verifiedOnly !== true || M.mergeView({ verifiedOnly: null }).verifiedOnly !== true) fails.push('a null saved key overrode its default');
+          // Provenance for a domain WE found reaches the LEAN file, not only the full one.
+          const _pr = [{ name: 'Acme Roofing', contactReadOk: true, contactOwner: 'Bob Acme', contactPhone: '5551234567',
+                         contactWebsiteResolved: true, contactWebsite: 'https://acmeroofing.com', contactWebsiteConfirmed: true }];
+          if (M.csv(_pr, false).indexOf('found by us') < 0) fails.push('the lean CSV carries an owner read off a domain we resolved with no word about where the domain came from');
+          if (M.csv(_pr, true).indexOf('found by us from the name') < 0) fails.push('the full CSV website cell does not say the domain was resolved');
+          if (M.prov({ contactWebsiteResolved: false }) !== '') fails.push('a published domain gets a provenance note it does not need');
+        }
         const _keys = M.tabs.map(t => t[0]);
-        if (_keys.join(',') !== 'unread,read,out') fails.push('the contact tabs are no longer not-read / read / ruled-out, so the panel and this check disagree about what the tabs are');
+        if (_keys.join(',') !== 'unread,read,out,noread') fails.push('the contact tabs are no longer not-read / read / ruled-out / nothing-to-read, so the panel and this check disagree about what the tabs are');
         for (const [_c, _want] of _cases) {
           const _got = M.tabOf(_c);
           if (_got !== _want) fails.push(`a lead the panel calls "${_c.name || '(nameless)'}" lands in the ${_got} tab and belongs in ${_want}`);
@@ -3016,7 +3046,7 @@ let contactTally = null;
   if (html.indexOf(_nn("const _hasListing = (c) => !!(c && c.pla", "ceId)")) < 0) {
     fails.push('the Google-listing filter has its source escape hatch back, so it passes leads with no place id while claiming to filter on a listing');
   }
-  if (html.indexOf(_nn('const [contactPlacesOnly, setContactPlacesOnly] = React.useState(', 'false);')) < 0) {
+  if (html.indexOf(_nn('const [contactPlacesOnly, setContactPlacesOnly] = React.useState(', '_fv.contactPlacesOnly === true);')) < 0) {
     fails.push('the Google-listing filter no longer defaults OFF, so the other lanes are hidden by default again');
   }
   if (html.indexOf(_nn("BACKEND + '/api/find", "-contact'")) < 0) {
@@ -3056,6 +3086,23 @@ let contactTally = null;
   // Both read contactTabOf now: the raw contactReadOk flag is TRUE on a lead the
   // server RULED OUT - a chain drop is read and answered - so counting it made
   // the tally and the exported file describe different sets of leads.
+  // ══ ROUND 105 CALL SITES ═══════════════════════════════════════════════
+  // A fixture supplies its own arguments and cannot see a caller.
+  for (const [why, a, b] of [
+    ['the draw pool no longer excludes a lead with nothing to read, so it is asked again on every press', '&& c.contactUnreadable !== true', ' && c.name);'],
+    ['a lead with something to read no longer sorts above one with nothing, so name-only leads lead the draw again', 'const sorted = [...withReach].sort((a,b) =>\n        (_readable(b) - _readable(a))', ' || ((b.reachPredict||0)'],
+    ['the CSV download no longer stamps the rows it handed out', "if (n) _stamp(_cExportable,", " 'csv'); },"],
+    ['the sheet send no longer stamps the rows it handed out', "_stamp(_cExportable, 'sheet'", ');'],
+    ['the view state is no longer written on change, so a refresh resets Show all', 'React.useEffect(() => saveFindView({ activeTab, verifiedOnly, winFilter,', ' contactPlacesOnly, contactSort, contactScope, contactTab, pullFilters }),'],
+    ['the run id no longer rides every lead a run touched', "fields = Object.assign({ contactRunId: runId },", ' fields);'],
+    ['the run set is no longer recovered from the data after a refresh', "const _runId = (contactRun && contactRun.runId) ||", ' latestRunIdOf(_cShown);'],
+    ['the export band no longer says why it has nothing to export', "(_cRead.length && !_cExportable.length) ? _cap('Nothing to export: '", " + _cRead.length"],
+    ['the runner no longer reads the server\'s nothing-to-read verdict', 'const _unreadable = d.unreadable', ' === true;'],
+    ['a resolved domain reaches the research modal without its provenance', "modalSource = 'Found by us from the company name and confirmed by its own pages", " — NOT published by them';"],
+    ['the request no longer sends the paid-search opt-in, so the server can never be asked for it', 'resolveWebsiteSearch: !!(settings && settings.resolveWebsiteSearch', ' === true),'],
+  ]) {
+    if (html.indexOf(_nn(a, b)) < 0) fails.push(why);
+  }
   if (html.indexOf(_nn("const _cExportable = _scoped.filter(c => contactTabOf(c) === 'read'", ' && hasContactData(c));')) < 0
       || html.indexOf(_nn("const _cRead = _scoped.filter(c => contactTabOf(c)", " === 'read');")) < 0) {
     fails.push('the CSV count is taken from a different population than the read count beside it, so the two numbers on the panel contradict each other');
@@ -3063,7 +3110,8 @@ let contactTally = null;
   // And the run-scoped view has to exist at all: contactAt was stamped on every
   // read and consumed by nothing, so "where did the five I just ran go" had no
   // answer anywhere in the app.
-  if (html.indexOf(_nn('const _cRunSet = _cShown.filter(c => c &&', ' _runNames.has(c.name));')) < 0) {
+  // Round 105: the set is keyed on the run id stamped on every lead, so it survives a refresh.
+  if (html.indexOf(_nn('const _cRunSet = _runId ? _cShown.filter(c => c && c.contactRunId === _runId)', ' : _cShown.filter(c => c && _runNames.has(c.name));')) < 0) {
     fails.push('there is no run-scoped view of a contact press, so every number on the panel is a cumulative queue total again');
   }
   // ══ THE PANEL HAS A GRAMMAR, AND THE COUNTS AGREE ═══════════════════════
@@ -3161,7 +3209,7 @@ let contactTally = null;
   // failure must still come back, which is what stops a paused server retiring
   // a hundred leads.
   if (html.indexOf(_nn('const _cUnread = _cShown.filter(c => c && c.contactReadOk !== true && c.contactNotFit !==',
-                       ' true && c.name);')) < 0) {
+                       ' true && c.contactUnreadable !== true && c.name);')) < 0) {
     fails.push('the panel decides what is unread from something other than the read flag and the ruled-out flag — either a failed request retires a lead permanently, or a lead the server already ruled out is re-asked on every press forever');
   }
   // A verdict is written ONLY where the server said notIcp. Anything wider and
