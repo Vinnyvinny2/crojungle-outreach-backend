@@ -7,12 +7,12 @@ user-invocable: false
 
 **Goal:** After reading this, Claude can recognise a change that would re-earn an old bug and refuse it, naming the rule and the round that earned it.
 
-The first section is copied verbatim from CLAUDE.md (commit b01d952) lines 10491-10510 (PART 6, "What NOT to do"). Its "227 boot checks" is a stale count (273 at the split); left as written. The second section adds the one prohibition that was established during the split itself.
+The first section is copied from CLAUDE.md (commit b01d952) lines 10491 to 10510 (PART 6, "What NOT to do"), with one stale count corrected in place on 2026-09-02 (listed at the end). The second section adds the one prohibition that was established during the split itself.
 
 ## The four standing rules (verbatim)
 
 **Do not refactor for its own sake.** 30,000 lines in one file is hard to work in
-and caused none of this week's failures. The 227 boot checks and the comments above
+and caused none of this week's failures. The ~160 named boot checks and the comments above
 them are the asset — each records a specific live failure and why the fix is shaped
 as it is. A rewrite loses that and re-earns the bugs.
 
@@ -35,3 +35,11 @@ him something only he knows.
 ## And one more, recorded 2026-09-02
 
 **Do not split `server.js` into modules.** About 80 of its 161 boot checks read the file's own source through `selfSource()`, which reads `__filename` — one file, whole. `BOOT HEAP CHECK` asserts exactly one such read exists and that `selfSource` is declared with that exact text; the verdict goes RED under 150 printed checks, so checks cannot be moved out of the boot path either; and every sibling tool (`tdz.js`, `dupkeys.js`, `scopecheck.js`, `clientcheck.js`, `fetchtest.js`, `fuzzcore.js`, `auditfuzz.js`, `servercheck.js`) hard-codes the single filename. Moving one asserted function to a second file produces a false RED and a 503 on `/healthz`. A split is a separate project whose FIRST step is redefining `selfSource()` to concatenate a declared list of files and re-aiming those assertions — before a single line of logic moves. Until that step exists, the answer to "should we break up server.js" is no.
+
+## Corrections made 2026-09-02, measured from the code
+
+The text above was copied from CLAUDE.md and these lines were stale; each was corrected in place and the original is kept here so the split proof still finds it.
+
+- was: `> and caused none of this week's failures. The 227 boot checks and the comments above`
+  now: and caused none of this week's failures. The ~160 named boot checks and the comments above
+  measured: 162 distinct `✓ NAME CHECK` strings in server.js

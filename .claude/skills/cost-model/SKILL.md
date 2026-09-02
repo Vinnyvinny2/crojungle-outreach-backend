@@ -33,6 +33,7 @@ Three separate sessions proposed cuts to a bill nobody had measured, and each ca
 
 - **A Find press:** 60 Places queries = **$2.10**; four presses a month sit inside Google's free 1,000-call allowance, so Find is effectively free per month.
 - **A contact read:** **6.33 Firecrawl credits and $0.0076 of model**, averaged over nine leads. At 50 a day, 22 days a month, that is ~6,970 credits — the Standard Firecrawl plan, and **Firecrawl is ~75% of the contact bill.**
+- **Newest live measurement (round-106, twenty leads):** owner settled on the free read on 5 of 10 Places leads and 4 of 10 other-lane leads; the paid wave was bought on the rest (35 and 46 credits); **3.5 credits per Places lead, 4.6 per other-lane lead** — well under the 6.33 of the nine-lead run above, because the R102–R104 roster fixes had landed (docs/history/round-106.md).
 - **The one number that moves it is the free-settle rate:** the share of leads whose owner is found on their own pages without the ~10-credit paid search wave. At 22% the month is ~6,970 credits; at 60% it is ~3,520 (the $16 plan). Owner-parser fixes are therefore cost fixes (round-099, round-100). The Firecrawl free tier is 1,000 credits ONE TIME, about 150 contact reads, ever.
 
 ## DO NOT CUT — round-081's quality map, kept so no cost round re-derives it
