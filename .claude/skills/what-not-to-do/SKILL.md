@@ -40,6 +40,7 @@ him something only he knows.
 
 The text above was copied from CLAUDE.md and these lines were stale; each was corrected in place and the original is kept here so the split proof still finds it.
 
-- was: `> and caused none of this week's failures. The 227 boot checks and the comments above`
-  now: and caused none of this week's failures. The ~160 named boot checks and the comments above
-  measured: 162 distinct `✓ NAME CHECK` strings in server.js
+> and caused none of this week's failures. The 227 boot checks and the comments above
+
+now: and caused none of this week's failures. The ~160 named boot checks and the comments above — measured: 162 distinct `✓ NAME CHECK` strings in server.js
+

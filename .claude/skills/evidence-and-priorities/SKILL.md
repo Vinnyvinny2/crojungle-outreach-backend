@@ -36,6 +36,8 @@ suboptimal.
 
 ## What would actually move it (PART 7)
 
+**Sequencing confirmed by Vin, 2026-09-02:** the list below is the plan AFTER the cold-calling rep is fully set up on the Find contact list. Until then the priority is the contact list and logged call outcomes; email comes back after that, in this order.
+
 In order:
 
 1. **Fix the input supply.** Top up Apify and Firecrawl. Several recent audits ran

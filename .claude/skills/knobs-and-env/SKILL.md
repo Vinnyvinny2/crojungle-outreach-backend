@@ -36,6 +36,7 @@ zero before the ceiling speaks. When the plan is small, set the ceiling small.
 
 The text above was copied from CLAUDE.md and these lines were stale; each was corrected in place and the original is kept here so the split proof still finds it.
 
-- was: `> | `REVIEW_CORPUS_CHARS` | 30000 |`
-  now: | `REVIEW_CORPUS_CHARS` | 36000 |
-  measured: `REVIEW_CORPUS_CHARS` defaults to 36,000 since §59
+> | `REVIEW_CORPUS_CHARS` | 30000 | how many of them the pain miner actually reads. Raise the pull without raising this and you are paying for reviews no model sees — see §54 |
+
+now: | `REVIEW_CORPUS_CHARS` | 36000 | — measured: `REVIEW_CORPUS_CHARS` defaults to 36,000 since §59
+

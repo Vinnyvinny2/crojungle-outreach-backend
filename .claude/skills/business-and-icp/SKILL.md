@@ -86,3 +86,7 @@ And a real prospect who replied told us what nearly lost him:
 > seconds instead of almost deleting it."
 
 The finding belongs in the first twelve words. Reply rate is decided there.
+
+## Confirmed and added by Vin, 2026-09-02
+
+The prices, the people and the ICP above were re-confirmed as correct on 2026-09-02. Two directions were added the same day: **the niche list still needs a deeper pass to confirm every searched trade is correct and ideal** (see the `new-niche-playbook` skill for the tables that define it), and **the ICP will eventually move up toward the higher end, probably $3M+ revenue** — when that happens the affordability band, the review floors and the size gate in `server.js` move with it, and this note is updated first.
