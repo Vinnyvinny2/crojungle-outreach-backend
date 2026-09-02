@@ -10494,7 +10494,7 @@ const MAILBOX_JUNK_RE = /^(?:noreply|donotreply|postmaster|hostmaster|maildaemon
 // The recruiting subset of the role list: graded and scored as a careers-page
 // address wherever it is found, and picked last among shared inboxes.
 const RECRUIT_LOCAL_RE = /^(?:jobs?|careers?|recruit|recruiting|recruitment|recruiter|hiring|talent|apply|applications?|employment|hr|humanresources)$/;
-const MAILBOX_ROLE_RE = /^(?:info|contact|hello|hi|hey|ask|team|office|admin|administration|sales|support|help|helpdesk|service|services|customer|customers|customerservice|customercare|care|enquiry|enquiries|inquiry|inquiries|mail|general|reception|frontdesk|frontoffice|mainoffice|account|accounts|accounting|billing|invoice|invoices|payment|payments|finance|hr|humanresources|jobs|job|careers|career|recruit|recruiting|recruitment|recruiter|hiring|talent|apply|application|applications|employment|press|media|marketing|compliance|order|orders|shop|store|studio|book|booking|bookings|schedule|scheduling|appointment|appointments|estimate|estimates|quote|quotes|dispatch|newpatient|newpatients|patient|patients|client|clients|connect|talk|reach|getstarted|contactus|emailus|callus|getintouch|letstalk|scheduler|estimator|requestaquote|getaquote|freequote|freeestimate)$/;
+const MAILBOX_ROLE_RE = /^(?:info|contact|hello|hi|hey|ask|team|office|attorneys|lawyers|doctors|dentists|staff|clinic|admin|administration|sales|support|help|helpdesk|service|services|customer|customers|customerservice|customercare|care|enquiry|enquiries|inquiry|inquiries|mail|general|reception|frontdesk|frontoffice|mainoffice|account|accounts|accounting|billing|invoice|invoices|payment|payments|finance|hr|humanresources|jobs|job|careers|career|recruit|recruiting|recruitment|recruiter|hiring|talent|apply|application|applications|employment|press|media|marketing|compliance|order|orders|shop|store|studio|book|booking|bookings|schedule|scheduling|appointment|appointments|estimate|estimates|quote|quotes|dispatch|newpatient|newpatients|patient|patients|client|clients|connect|talk|reach|getstarted|contactus|emailus|callus|getintouch|letstalk|scheduler|estimator|requestaquote|getaquote|freequote|freeestimate)$/;
 // ══ THE COMPANY'S OWN MAILBOX IS NOT A PERSON'S ═══════════════════════════
 // Live, 2026-09-02: cpa@jtccpas.com, aardconcrete@aol.com (Aard Cement),
 // parklanedentalortho@d4c.com and aanddcontracting@aol.com all printed as
@@ -32697,6 +32697,7 @@ ${replies.join('\n---\n').slice(0, 9000)}` }]
       name: parsed.name,
       title: parsed.title || 'Owner (signs their own review replies)',
       confidence: (parsed.timesSeen || 1) >= 2 ? 'high' : 'medium',
+      timesSeen: Number(parsed.timesSeen) || 1,
       source: 'google_review_replies',
     };
   } catch(e) { console.log('findOwnerViaReviewReplies failed:', e.message); return null; }
@@ -33009,6 +33010,8 @@ ${content}` }]
 //      guess here would attach a real source to the wrong person.
 // sameName itself is deliberately untouched: a false yes there sends an email
 // addressed to the owner by name into a stranger's mailbox.
+const DM_REGISTRY = /^(?:1|true|on|yes)$/i.test(String(process.env.DM_REGISTRY || ''));
+const DM_SIGNATURE_PROMOTE_AT = 3;   // signatures of the same first name before it outranks a weak site title
 const foldFirstNameClusters = (clusters) => {
   for (let i = clusters.length - 1; i >= 0; i--) {
     const c = clusters[i];
@@ -33036,6 +33039,15 @@ const foldFirstNameClusters = (clusters) => {
     // site names - that is CORROBORATION, and corroboration does not get to
     // promote anybody. The title is filled only where there was none.
     if (c.title && !String(host.title || '').trim()) host.title = c.title;
+    // Vin, 2026-09-02: a name that signs the review replies three or more
+    // times IS the owner answering his own reviews, and that beats a weak
+    // site title ("registered contractor", authority 30). Below three it stays
+    // corroboration, exactly as above. Never lowers a title.
+    if ((c.sources || []).includes('google_review_replies') && Number(c.timesSeen) >= DM_SIGNATURE_PROMOTE_AT
+        && authorityScore(host.title) < DM_AUTHORITY_FLOOR && authorityScore(c.title) >= DM_AUTHORITY_FLOOR) {
+      host.title = c.title;
+      host.promotedBySignature = true;
+    }
     if (c.evidence && !host.evidence) host.evidence = c.evidence;
     clusters.splice(i, 1);
   }
@@ -33053,10 +33065,15 @@ const foldFirstNameClusters = (clusters) => {
 // because foldFirstNameClusters already handles it as corroboration.
 const OWNER_WORD_RE = /^(?:owner|owners|co-owner|founder|founders|co-founder|president|ceo|coo|cfo|principal|principals|proprietor|operator|operators|partner|partners|manager|managers|director|directors|team|staff|office|admin|administrator|management|leadership|company|business|the|our|and|of|&)$/i;
 const _ownerDoorSaid = new Set();
+// Live 2026-09-02 (second run): a page heading "Who We Are" was paired with
+// the title "Our Founder" and shipped as the decision-maker. A pronoun or a
+// navigation word is never part of a person's name.
+const NAV_WORD_RE = /^(?:who|we|are|what|why|how|meet|about|our|your|the|team|story|us|contact|home|welcome|services|careers)$/i;
 const ownerNameDoor = (name, companyName = '') => {
   const s = String(name || '').trim();
   if (!s) return 'empty';
   const toks = s.split(/[\s\/\-]+/).filter(Boolean);
+  if (toks.some(t => NAV_WORD_RE.test(t))) return 'not-a-name';
   if (toks.every(t => OWNER_WORD_RE.test(t) || ROLE_WORDS.has(t.toLowerCase()))) return 'title';
   if (allRoleWords(s)) return 'title';
   const _flat = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').replace(/^the /, '').trim();
@@ -33092,6 +33109,7 @@ const rankOwnerCandidates = (found, companyName = '') => {
       clusters.push({
         name: f.name, title: f.title, evidence: f.evidence || '',
         sources: [f.source], score: DM_SOURCE_WEIGHT[f.source] || 10,
+        timesSeen: Number(f.timesSeen) || 0,
       });
     }
   }
@@ -33437,9 +33455,15 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
       // agents rather than owners; on real runs it returned "Principal
       // ContactsMr" and "Principal Executive Office". Only worth buying when
       // every other source came back completely empty.
-      stagesRun = 3;
-      const registry = await findOwnerViaRegistry(companyName, fcKey).catch(() => null);
-      if (registry) found.push(registry);
+      // 2026-09-02, 50-lead run: 0 for 11 at 2 credits each. Off unless
+      // DM_REGISTRY=1 on Render; the log says so once per lead it would have run.
+      if (!DM_REGISTRY) {
+        console.log(`DM [${companyName}]: the state registry lookup is switched off (DM_REGISTRY unset) \u2014 it found nobody on 11 of 11 leads on 2026-09-02, so its 2 credits are not bought.`);
+      } else {
+        stagesRun = 3;
+        const registry = await findOwnerViaRegistry(companyName, fcKey).catch(() => null);
+        if (registry) found.push(registry);
+      }
     } else {
       console.log(`DM [${companyName}]: have a candidate but not corroborated — skipping the registry (low yield, mostly filing agents)`);
     }
@@ -58776,6 +58800,8 @@ app.listen(PORT, () => {
     const _npCases = [
       ['a page stating 501(c)(3)', { pages: [_pg('https://x.org/', 'Hope Recovery is a 501(c)(3) nonprofit organization.')], links: [] }, true],
       ['a tax-deductible line', { pages: [_pg('https://x.org/', 'Your gift is tax-deductible to the extent allowed by law.')], links: [] }, true],
+      // 1st Rate Remodeling, live 2026-09-02: energy upgrades, not a charity.
+      ['a remodeler whose upgrades are tax-deductible', { pages: [_pg('https://x.com/', 'Energy-efficient window upgrades may be tax-deductible. Call for a free estimate.')], links: [] }, false],
       ['a donate page in their own nav', { pages: [_pg('https://x.org/', 'Serving families since 1990.')], links: ['https://x.org/donate'] }, true],
       ['a donate link in the html', { pages: [{ url: 'https://x.org/', text: 'Welcome.', html: '<a href="/donate-now">Give</a>' }], links: [] }, true],
       ['an ordinary treatment centre', { pages: [_pg('https://x.com/', 'Lakeside Addiction Treatment Center accepts most insurance. Call for a free consultation.')], links: ['https://x.com/admissions'] }, false],
@@ -58798,6 +58824,11 @@ app.listen(PORT, () => {
       ['a private-equity portfolio company', { pages: [_pg('https://x.com/', 'We are proud to be a portfolio company focused on growth.')] }, 'owned'],
       ['backed by a capital firm', { pages: [_pg('https://x.com/', 'Backed by Ridgeline Capital since 2021.')] }, 'owned'],
       ['a franchisee disclosure', { pages: [_pg('https://x.com/', 'This franchise is independently owned and operated.')] }, 'franchise'],
+      // The four live 2026-09-02 drops: membership of a trade body is not ownership.
+      ['a member of a chamber', { pages: [_pg('https://x.com/', 'We are proud to be a member of the Ohio Chamber of Commerce.')] }, ''],
+      ['a member of an institute', { pages: [_pg('https://x.com/', 'Wilson Harris is a member of the American Institute of CPAs.')] }, ''],
+      ['a member of a contractors association', { pages: [_pg('https://x.com/', 'AirMakers is a member of the Air Conditioning Contractors of America.')] }, ''],
+      ['a member of a council', { pages: [_pg('https://x.com/', 'Our attorneys are a member of the Estate Planning Council of Dallas.')] }, ''],
       ['serving nationwide', { pages: [_pg('https://x.com/', 'Serving customers nationwide from our Ohio headquarters.')] }, 'national'],
       ['locally owned, no franchise word', { pages: [_pg('https://x.com/', 'We are independently owned and operated, right here in Austin.')] }, ''],
       ['an ordinary contractor', { pages: [_pg('https://x.com/', 'Family-owned since 1998. We serve the whole metro area.')] }, ''],
@@ -59272,6 +59303,7 @@ app.listen(PORT, () => {
         const _got = _eg({ email: _em, tier: 1, mailboxKind: 'person' }, { ownerName: _who });
         if (_got !== _want) _fails.push(`${_msg} (${_em} for "${_who}" graded ${_got})`);
       }
+      if (mailboxKind('attorneys@ashmorelaw.com') !== 'role') _fails.push('attorneys@ is read as a person\'s mailbox');
       if (!RECRUIT_LOCAL_RE.test('jobs') || !RECRUIT_LOCAL_RE.test('careers') || RECRUIT_LOCAL_RE.test('info') || RECRUIT_LOCAL_RE.test('bob')) {
         _fails.push('the recruiting mailbox list is wrong in one direction, so jobs@ is picked ahead of info@ or a person is read as a recruiter');
       }
@@ -73539,7 +73571,26 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (_syn) _fails.push('the business\'s own name is ranked as its decision-maker - "Synergy Ministry" would be dialled as a person');
     const _lone = rankOwnerCandidates([_mk('Owner-Operator', 'google_review_replies')], 'Barnes Plumbing');
     if (_lone) _fails.push('a bare title with nobody beside it is ranked as a person');
+    // 8. A REPEATED SIGNATURE PROMOTES A WEAK SITE TITLE (Vin, 2026-09-02: three or more).
+    const _sig = (n) => rankOwnerCandidates([
+      _mk('Carlton J. Robinson II', 'own_website_brain', 'registered contractor'),
+      Object.assign(_mk('Carlton', 'google_review_replies', 'Owner (signs their own review replies)'), { timesSeen: n }),
+    ], 'Rockin Remodeling');
+    const _sig4 = _sig(4), _sig1 = _sig(1);
+    if (!_sig4 || _sig4.authority < DM_AUTHORITY_FLOOR || !_sig4.promotedBySignature) _fails.push(`four signed replies do not promote "registered contractor" past the buying floor (authority ${_sig4 && _sig4.authority})`);
+    if (!_sig1 || _sig1.authority >= DM_AUTHORITY_FLOOR) _fails.push('a single signed reply promotes the title - one signature is corroboration, not ownership');
+    if (!_sig4.sources.includes('google_review_replies')) _fails.push('the signature source was lost in the fold');
+    {
+      const _s5 = selfSourceNoCommentsLF();
+      const _n5 = (a, b) => a + b;
+      const _r0 = _s5.indexOf(_n5('if (!DM_', 'REGISTRY) {'));
+      const _r1 = _s5.indexOf(_n5('findOwnerViaRegistry(companyName,', ' fcKey).catch'));
+      if (_r0 < 0 || _r1 < 0 || _r1 < _r0) _fails.push('the state registry lookup is bought without the DM_REGISTRY knob in front of it');
+      if (!_s5.includes(_n5('timesSeen: Number(parsed.timesSeen)', ' || 1,'))) _fails.push('the review-signature source no longer reports how many times the name signed, so the promotion rule can never fire');
+    }
     const _doorCases = [
+      ['Who We Are', 'GMG Construction of South Texas', 'not-a-name', 'a page heading is accepted as a person - "Who We Are" shipped as the decision-maker on 2026-09-02'],
+      ['Meet The Team', 'X Co', 'not-a-name', 'a navigation label is accepted as a person'],
       ['Bob Webb', 'Bob Webb Homes', null, 'an eponymous owner is refused as the company name'],
       ['Rick', 'Miller\'s Fancy Bath', null, 'a bare first name is refused, so the review signature can never corroborate again'],
       ['Client Connection Lead', 'Ten Key', 'title', 'a string made only of role words is accepted as a person'],
@@ -76036,7 +76087,7 @@ const CHAIN_STATE_ONLY_MIN = 3;
 // own page: a donate link, "501(c)(3)", "tax-deductible", a board of
 // directors. Same shape as readChainEvidence: pure, measured:false when we
 // read nothing, a denial guard, and the caller drops before it spends.
-const NONPROFIT_TEXT_RE = /\b(?:501\s*\(?\s*c\s*\)?\s*\(?\s*3\s*\)?|tax[- ]deductible|make a donation|donate (?:now|today|online)|your donation|our donors|non-?profit organi[sz]ation|charitable organi[sz]ation|registered charity|ein[:# ]+\d{2}-\d{7})\b/i;
+const NONPROFIT_TEXT_RE = /\b(?:501\s*\(?\s*c\s*\)?\s*\(?\s*3\s*\)?|(?:donations?|gifts?|contributions?) (?:is|are) (?:fully )?tax[- ]deductible|tax[- ]deductible (?:donations?|gifts?|contributions?)|make a donation|donate (?:now|today|online)|your donation|our donors|non-?profit organi[sz]ation|charitable organi[sz]ation|registered charity|ein[:# ]+\d{2}-\d{7})\b/i;
 const NONPROFIT_LINK_RE = /\/(?:donate|donations|donate-now|give-now|make-a-gift|ways-to-give)(?:[\/?#]|$)/i;
 const NONPROFIT_DENIAL_RE = /\b(?:not a (?:non-?profit|charity)|for-profit (?:business|company|organi[sz]ation)|privately owned and operated)\b/i;
 const readNonprofitEvidence = ({ pages, links } = {}) => {
@@ -76346,7 +76397,11 @@ const estimateScaleBand = (s) => {
 // customers nationwide" is not a local business; and "independently owned and
 // operated" next to the word "franchise" is a franchisee's required
 // disclosure. Pure, measured:false when nothing was read.
-const OWNED_TELL_RE = /\b(?:a (?:division|subsidiary|member|part) of (?:the )?[A-Z][\w&'.-]+(?: [A-Z][\w&'.-]+){0,3}|portfolio company|[Bb]acked by [A-Z][\w&'.-]+(?: [A-Z][\w&'.-]+){0,2} (?:Capital|Partners|Equity|Group|Ventures)|part of the [A-Z][\w&'.-]+ family of (?:brands|companies))\b/;
+// Live 2026-09-02: "a member of the Ohio Chamber" / "the American Institute" /
+// "Air Conditioning Contractors" dropped four real leads. Membership of a
+// trade body is not ownership; only division / subsidiary / the family-of-
+// companies shape says somebody else owns them.
+const OWNED_TELL_RE = /\b(?:a (?:division|subsidiary) of (?:the )?[A-Z][\w&'.-]+(?: [A-Z][\w&'.-]+){0,3}|portfolio company|[Bb]acked by [A-Z][\w&'.-]+(?: [A-Z][\w&'.-]+){0,2} (?:Capital|Partners|Equity|Group|Ventures)|part of the [A-Z][\w&'.-]+ family of (?:brands|companies))\b/;
 const NATIONAL_TELL_RE = /\b(?:serving (?:customers |clients |homeowners |businesses )?nationwide|in all 50 states|coast to coast|nationwide network of)\b/i;
 const FRANCHISEE_TELL_RE = /\bindependently owned and operated\b/i;
 const readOwnershipTells = ({ pages } = {}) => {

@@ -46,27 +46,27 @@ Counts now: **53 searched categories** (`GP_CATEGORIES`), **23 metros** (`GP_CIT
 | `TRADE_MONEY_EXEMPT` | 25787 | trades with no honest single job value | TRADE TABLE COVERAGE CHECK |
 | `FINANCING_RE` | 25804 | consumer-financing vendors and offer text | SIGNAL TRUTH CHECK |
 | `BIG_TICKET_TRADE_RE` | 25825 | trades where missing financing is a gap | MONEY SIGNAL CHECK |
-| `ICP_STAFFING` | 37099 | staffing / recruiting — not our ICP | ICP FILTER, STEM MATCH |
-| `ICP_INSTITUTION` | 37100 | institutions — blocked | ICP FILTER, STEM MATCH |
-| `ICP_SMALL_PRACTICE` | 37111 | the small-practice escape from the health block | ICP FILTER, STEM MATCH |
-| `ICP_BIG_HEALTH` | 37115 | hospitals / health systems — blocked | ICP FILTER, STEM MATCH |
-| `STEM_COMPLETE_WORDS` | 37143 | every bare stem a list may end on | STEM MATCH CHECK |
-| `BRAND_LEGAL_SUFFIX_RE` | 37169 | legal suffixes stripped before a brand compare | ICP FILTER CHECK |
-| `BLOCKED_COMPANIES` | 37197 | brand set 1 (whole-name match) | ICP FILTER CHECK |
-| `STAFFING_BRANDS` | 37263 | brand set 2 | ICP FILTER CHECK |
-| `ENTERPRISE_BRANDS` | 37276 | brand set 3 | ICP FILTER CHECK |
-| `NATIONAL_BRANDS` | 37286 | brand set 4 | ICP FILTER CHECK |
-| `TRADE_WORDS` | 39351 | word → trade lookup | — |
-| `TRADE_MODIFIERS` | 39925 | specialisms that narrow a search | TRADE PHRASE CHECK |
-| `TRADE_SYNONYM_GROUPS` | 40355 | trade words that count as the same word | — |
-| `SLUG_PRODUCT_LINE` | 41173 | product-line URL slugs | page checks |
-| `CHAIN_ROLE_RE` | 76003 | franchisee role titles on their own pages | CHAIN OUTLET CHECK |
-| `CHAIN_SELF_RE` | 76004 | franchise self-description | CHAIN OUTLET CHECK |
-| `CHAIN_DENIAL_RE` | 76006 | "locally owned, not a franchise" — never fires the drop | CHAIN OUTLET CHECK |
-| `FIND_ICP_TERMS` | 76376 | the contact-list FIT score terms | FIND ICP GATE CHECK |
-| `FIND_ICP_MIN_TERMS` | 76583 | below this many measured terms a lead is "not scored" | FIND ICP GATE CHECK |
+| `ICP_STAFFING` | 37123 | staffing / recruiting — not our ICP | ICP FILTER, STEM MATCH |
+| `ICP_INSTITUTION` | 37124 | institutions — blocked | ICP FILTER, STEM MATCH |
+| `ICP_SMALL_PRACTICE` | 37135 | the small-practice escape from the health block | ICP FILTER, STEM MATCH |
+| `ICP_BIG_HEALTH` | 37139 | hospitals / health systems — blocked | ICP FILTER, STEM MATCH |
+| `STEM_COMPLETE_WORDS` | 37167 | every bare stem a list may end on | STEM MATCH CHECK |
+| `BRAND_LEGAL_SUFFIX_RE` | 37193 | legal suffixes stripped before a brand compare | ICP FILTER CHECK |
+| `BLOCKED_COMPANIES` | 37221 | brand set 1 (whole-name match) | ICP FILTER CHECK |
+| `STAFFING_BRANDS` | 37287 | brand set 2 | ICP FILTER CHECK |
+| `ENTERPRISE_BRANDS` | 37300 | brand set 3 | ICP FILTER CHECK |
+| `NATIONAL_BRANDS` | 37310 | brand set 4 | ICP FILTER CHECK |
+| `TRADE_WORDS` | 39375 | word → trade lookup | — |
+| `TRADE_MODIFIERS` | 39949 | specialisms that narrow a search | TRADE PHRASE CHECK |
+| `TRADE_SYNONYM_GROUPS` | 40379 | trade words that count as the same word | — |
+| `SLUG_PRODUCT_LINE` | 41197 | product-line URL slugs | page checks |
+| `CHAIN_ROLE_RE` | 76054 | franchisee role titles on their own pages | CHAIN OUTLET CHECK |
+| `CHAIN_SELF_RE` | 76055 | franchise self-description | CHAIN OUTLET CHECK |
+| `CHAIN_DENIAL_RE` | 76057 | "locally owned, not a franchise" — never fires the drop | CHAIN OUTLET CHECK |
+| `FIND_ICP_TERMS` | 76431 | the contact-list FIT score terms | FIND ICP GATE CHECK |
+| `FIND_ICP_MIN_TERMS` | 76638 | below this many measured terms a lead is "not scored" | FIND ICP GATE CHECK |
 
 ## Company identity (what a full company swap would touch)
 
-- server.js: "CROJungle" appears 54 times (first at lines 1131, 1144, 1282, 3222, 4245, 4271, 4297, 4444 …); the audit system prompt `BRAIN_STATIC` is declared at line 7820; `$800k` at lines 5551, 5560, 5626, 5688, 5789, 38548, 42936, 76142, 76326, 76371, 77687; `$15M` at lines 14663, 16674, 59114, 72317, 76142, 76326, 76371, 77687; the 200-employee gate at lines 4352, 36278, 36279, 37662, 38144; the sending user agent `crojungleteam.com` at line 4245; the Hunter sequence id comes from Settings, read in the send route (first `sequenceId` after `/api/send-to-hunter`, line 78082).
+- server.js: "CROJungle" appears 54 times (first at lines 1131, 1144, 1282, 3222, 4245, 4271, 4297, 4444 …); the audit system prompt `BRAIN_STATIC` is declared at line 7820; `$800k` at lines 5551, 5560, 5626, 5688, 5789, 38572, 42960, 76193, 76377, 76426, 77742; `$15M` at lines 14663, 16674, 59145, 72349, 76193, 76377, 76426, 77742; the 200-employee gate at lines 4352, 36302, 36303, 37686, 38168; the sending user agent `crojungleteam.com` at line 4245; the Hunter sequence id comes from Settings, read in the send route (first `sequenceId` after `/api/send-to-hunter`, line 78137).
 - index.html: "CROJungle" appears 12 times (lines 6, 3984, 4123, 4166, 4361, 5022, 5085, 9740, 11336, 14175, 16757, 17376); `PILLAR_PRODUCT` at line 2861, `LAYER_PLAIN` at line 2828; the never-cold-email-from-CROJungle.com warning at line 16757.
