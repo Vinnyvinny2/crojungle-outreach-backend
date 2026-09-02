@@ -1,6 +1,6 @@
 ---
 name: bug-classes
-description: "RULE: The classes of bug this app actually produces, each with the check that catches it and the rounds where it recurred: computed-but-not-passed, line order is not scope, unmeasured treated as zero, null laundering (Number(null) is 0 and 0 is finite), a guard in the wrong function, a shared helper is 60 bugs, two hand-kept copies of one rule, a stem with a word boundary after it, CRLF in server.js, a mechanism no fixture can reach, duplicate object keys (baseline 0). Use before proposing any code change, when reviewing a diff, or when a symptom looks familiar."
+description: "L3 RULES: The classes of bug this app actually produces, each with the check that catches it and the rounds where it recurred: computed-but-not-passed, line order is not scope, unmeasured treated as zero, null laundering (Number(null) is 0 and 0 is finite), a guard in the wrong function, a shared helper is 60 bugs, two hand-kept copies of one rule, a stem with a word boundary after it, CRLF in server.js, a mechanism no fixture can reach, duplicate object keys (baseline 0). Use before proposing any code change, when reviewing a diff, or when a symptom looks familiar."
 user-invocable: false
 ---
 # Bug classes — the ways this app actually breaks

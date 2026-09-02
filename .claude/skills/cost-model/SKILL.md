@@ -1,6 +1,6 @@
 ---
 name: cost-model
-description: "KNOW: What a lead, an audit, a Find press and a contact read cost, from MEASURED meter lines (ANTHROPIC TOTAL, FIRECRAWL SPEND, GOOGLE PLACES, FIND CONTACT, OWNER WAVE), which single model call dominates the bill, and the DO-NOT-CUT list of measurements that must never be traded for savings. Use when asked what something costs, how to lower the bill, whether a cut is safe, or which meter line to read."
+description: "L1 STRATEGY: What a lead, an audit, a Find press and a contact read cost, from MEASURED meter lines (ANTHROPIC TOTAL, FIRECRAWL SPEND, GOOGLE PLACES, FIND CONTACT, OWNER WAVE), which single model call dominates the bill, and the DO-NOT-CUT list of measurements that must never be traded for savings. Use when asked what something costs, how to lower the bill, whether a cut is safe, or which meter line to read."
 ---
 # Cost model — what a lead costs, measured
 

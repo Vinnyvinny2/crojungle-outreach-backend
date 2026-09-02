@@ -1,6 +1,6 @@
 ---
 name: business-and-icp
-description: "KNOW: Business context for CROJungle outreach: what is sold and at what price (premium $35k sites, $10k/mo retainers, AI builds; the never-advertised lower tier), who buys (founder-led $800k-$15M trades and owner-operated practices where the owner reads his own email), and why the cold email's only job is to earn a reply, with the one email that did. Use when asked what we sell, whether a lead or finding fits the ICP, whether a finding is sellable, or what a good email looks like."
+description: "L1 STRATEGY: Business context for CROJungle outreach: what is sold and at what price (premium $35k sites, $10k/mo retainers, AI builds; the never-advertised lower tier), who buys (founder-led $800k-$15M trades and owner-operated practices where the owner reads his own email), and why the cold email's only job is to earn a reply, with the one email that did. Use when asked what we sell, whether a lead or finding fits the ICP, whether a finding is sellable, or what a good email looks like."
 ---
 # Business and ICP — what CROJungle sells, to whom, and what the email must do
 

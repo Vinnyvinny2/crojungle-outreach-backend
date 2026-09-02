@@ -1,6 +1,6 @@
 ---
 name: what-not-to-do
-description: "RULE: The standing prohibitions in this repo and why each exists: no refactor for its own sake, no new or reordered ladder rungs, no email-prompt tuning until real replies exist, no precision bought with words the owner cannot read, and no splitting server.js while its boot checks grep their own source. Use whenever a change is a cleanup, a restructure, a rewrite, a rung change, a prompt tweak or a file split."
+description: "L3 RULES: The standing prohibitions in this repo and why each exists: no refactor for its own sake, no new or reordered ladder rungs, no email-prompt tuning until real replies exist, no precision bought with words the owner cannot read, and no splitting server.js while its boot checks grep their own source. Use whenever a change is a cleanup, a restructure, a rewrite, a rung change, a prompt tweak or a file split."
 user-invocable: false
 ---
 # What NOT to do — the standing prohibitions

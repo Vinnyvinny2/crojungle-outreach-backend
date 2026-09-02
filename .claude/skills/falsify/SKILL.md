@@ -1,6 +1,6 @@
 ---
 name: falsify
-description: "DO: Prove that a fix's guard actually guards, by reverting that one fix alone against a baseline proven green and demanding the guard go red on its own named assertion: green baseline first, the revert must reproduce the original defect, restore byte for byte, NO VERDICT is never a pass, one revert at a time. Use after any fix that added or relies on a boot check, before it is called done."
+description: "L4 JOBS: Prove that a fix's guard actually guards, by reverting that one fix alone against a baseline proven green and demanding the guard go red on its own named assertion: green baseline first, the revert must reproduce the original defect, restore byte for byte, NO VERDICT is never a pass, one revert at a time. Use after any fix that added or relies on a boot check, before it is called done."
 disable-model-invocation: true
 argument-hint: [fix to revert]
 ---

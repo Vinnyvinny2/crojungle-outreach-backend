@@ -1,6 +1,6 @@
 ---
 name: history-lookup
-description: "DO: Find the round note that recorded a bug, a decision, a check or a log line - from a §N / 'PART 4 section N' / 'round N' citation in a code comment, or by searching the 105 notes in docs/history by keyword - and quote it rather than re-deriving it. Use when a comment cites a section number, a symptom looks familiar, or the user asks when or why something was changed."
+description: "L4 JOBS: Find the round note that recorded a bug, a decision, a check or a log line - from a §N / 'PART 4 section N' / 'round N' citation in a code comment, or by searching the 105 notes in docs/history by keyword - and quote it rather than re-deriving it. Use when a comment cites a section number, a symptom looks familiar, or the user asks when or why something was changed."
 argument-hint: [§N or keyword]
 ---
 # History lookup — find the round that recorded it

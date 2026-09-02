@@ -1,6 +1,6 @@
 ---
 name: pipeline-how-it-works
-description: "KNOW: How the outreach pipeline works end to end - Find, Research, Audit, Generate, Send - the stack (Render, Netlify, Supabase, Hunter, Google Places, Firecrawl, Apify, DataForSEO, Anthropic) and where each stage lives in server.js and index.html: routes, key functions, declared tables, with line numbers in map.md. Use when asked how the system works, where a stage or measurement happens, or which function or table to open."
+description: "L2 OPERATIONS: How the outreach pipeline works end to end - Find, Research, Audit, Generate, Send - the stack (Render, Netlify, Supabase, Hunter, Google Places, Firecrawl, Apify, DataForSEO, Anthropic) and where each stage lives in server.js and index.html: routes, key functions, declared tables, with line numbers in map.md. Use when asked how the system works, where a stage or measurement happens, or which function or table to open."
 ---
 # Pipeline — how it works, and where each stage lives
 

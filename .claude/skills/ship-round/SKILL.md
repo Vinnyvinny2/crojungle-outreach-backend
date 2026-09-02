@@ -1,6 +1,6 @@
 ---
 name: ship-round
-description: "DO: Close a round the way this repo does: write docs/history/round-NNN.md in the house shape, add its INDEX.md line, bump CONTRACT_VERSION (server.js) and CLIENT_CONTRACT (index.html) together whenever index.html changed, shape the commit message and the PR, and hand over what needs hands (Netlify drag-in, Supabase SQL, Render env vars, credit top-ups). Use when a change is ready to merge or the user says ship, close the round, write the round note."
+description: "L4 JOBS: Close a round the way this repo does: write docs/history/round-NNN.md in the house shape, add its INDEX.md line, bump CONTRACT_VERSION (server.js) and CLIENT_CONTRACT (index.html) together whenever index.html changed, shape the commit message and the PR, and hand over what needs hands (Netlify drag-in, Supabase SQL, Render env vars, credit top-ups). Use when a change is ready to merge or the user says ship, close the round, write the round note."
 disable-model-invocation: true
 argument-hint: [round number]
 ---
