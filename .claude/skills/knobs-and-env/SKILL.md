@@ -1,6 +1,6 @@
 ---
 name: knobs-and-env
-description: "KNOW: The daily budget knobs and main settings on Render (the full list of all 81 process.env names is generated into env-vars.md) - FC_DAILY_BUDGET, PLACES_DAILY_BUDGET, ANTHROPIC_DAILY_BUDGET_USD, APIFY_DAILY_BUDGET, DATAFORSEO_LOGIN/PASSWORD, APIFY_MAX_REVIEWS, REVIEW_CORPUS_CHARS, APIFY_ACTOR, SITUATION_EFFORT, PAGESPEED_KEY, RENDER_ENV, FAKE_UPSTREAM - with defaults, what each does, and what breaks when it is unset or sized for the wrong plan. Use when a log shows a budget refusal or 'no position on this run', a lead has no search position, or a setting needs changing."
+description: "L2 OPERATIONS: The daily budget knobs and main settings on Render (the full list of all 81 process.env names is generated into env-vars.md) - FC_DAILY_BUDGET, PLACES_DAILY_BUDGET, ANTHROPIC_DAILY_BUDGET_USD, APIFY_DAILY_BUDGET, DATAFORSEO_LOGIN/PASSWORD, APIFY_MAX_REVIEWS, REVIEW_CORPUS_CHARS, APIFY_ACTOR, SITUATION_EFFORT, PAGESPEED_KEY, RENDER_ENV, FAKE_UPSTREAM - with defaults, what each does, and what breaks when it is unset or sized for the wrong plan. Use when a log shows a budget refusal or 'no position on this run', a lead has no search position, or a setting needs changing."
 ---
 # Knobs and environment variables
 

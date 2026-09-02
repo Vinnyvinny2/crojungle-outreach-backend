@@ -1,6 +1,6 @@
 ---
 name: diagnose-log
-description: "DO: Turn a pasted Render log, exported CSV or call sheet into a verified list of defects with no fixes applied: check the contract number first (deployed vs undeployed), read every line, reproduce each suspect by EXECUTING the real function on the exact string, classify by bug class, search docs/history for a recurrence, and report deployed / undeployed / not-a-defect separately in terms of what happened to the lead. Use whenever Vin pastes output and asks what went wrong or why a lead got that result."
+description: "L4 JOBS: Turn a pasted Render log, exported CSV or call sheet into a verified list of defects with no fixes applied: check the contract number first (deployed vs undeployed), read every line, reproduce each suspect by EXECUTING the real function on the exact string, classify by bug class, search docs/history for a recurrence, and report deployed / undeployed / not-a-defect separately in terms of what happened to the lead. Use whenever Vin pastes output and asks what went wrong or why a lead got that result."
 argument-hint: [log or csv file]
 ---
 # Diagnose from a pasted log, CSV or sheet

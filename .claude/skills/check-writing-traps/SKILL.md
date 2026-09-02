@@ -1,6 +1,6 @@
 ---
 name: check-writing-traps
-description: "RULE: How a boot check, selftest, fixture or falsification run passes while the defect it names is live, and how to write one that cannot: the self-matching needle (a literal needle finds itself in the check's own source), a check that does not assert its call site is half a check, NO VERDICT is not a pass, a falsification must reproduce the original defect, a fixture that measures nothing, a harness that reads glyphs instead of exit codes, a message naming the wrong cause. Use when adding or editing any boot check, test, fuzzer, gate, or falsification script."
+description: "L3 RULES: How a boot check, selftest, fixture or falsification run passes while the defect it names is live, and how to write one that cannot: the self-matching needle (a literal needle finds itself in the check's own source), a check that does not assert its call site is half a check, NO VERDICT is not a pass, a falsification must reproduce the original defect, a fixture that measures nothing, a harness that reads glyphs instead of exit codes, a message naming the wrong cause. Use when adding or editing any boot check, test, fuzzer, gate, or falsification script."
 user-invocable: false
 ---
 # Check-writing traps — how a check passes on a live bug

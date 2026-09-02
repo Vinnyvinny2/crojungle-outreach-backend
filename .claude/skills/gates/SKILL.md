@@ -1,6 +1,6 @@
 ---
 name: gates
-description: "DO: Run this repo's checks (bash ci-gates.sh, or one stage: static, checks, fuzz, auditfuzz, e2e, boot, http), read the BOOT VERDICT, and explain every red line in plain English with the bug class behind it and the file to open. Use when asked to run the tests, check the build, see if it is safe to push, or explain a failing gate, a red boot, or a 503 from /healthz."
+description: "L4 JOBS: Run this repo's checks (bash ci-gates.sh, or one stage: static, checks, fuzz, auditfuzz, e2e, boot, http), read the BOOT VERDICT, and explain every red line in plain English with the bug class behind it and the file to open. Use when asked to run the tests, check the build, see if it is safe to push, or explain a failing gate, a red boot, or a 503 from /healthz."
 argument-hint: [stage]
 allowed-tools: Bash(bash ci-gates.sh*) Bash(GATES=* bash ci-gates.sh*) Bash(npm ci*) Bash(node *) Read Grep
 ---

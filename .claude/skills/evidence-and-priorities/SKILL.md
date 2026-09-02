@@ -1,6 +1,6 @@
 ---
 name: evidence-and-priorities
-description: "KNOW: What is actually proven by real human replies (the 4.85 rating ceiling — the 4.2 floor was retired in §94; review pain wins but say the fault, never the source; a finding lands when it contradicts something the owner did on purpose) and the ordered list of what would move the reply rate. Use when deciding what to work on next, or whether a filter, rung, finding or email change has evidence behind it or is inference."
+description: "L1 STRATEGY: What is actually proven by real human replies (the 4.85 rating ceiling — the 4.2 floor was retired in §94; review pain wins but say the fault, never the source; a finding lands when it contradicts something the owner did on purpose) and the ordered list of what would move the reply rate. Use when deciding what to work on next, or whether a filter, rung, finding or email change has evidence behind it or is inference."
 ---
 # Evidence and priorities — what is proven, and what would move it
 

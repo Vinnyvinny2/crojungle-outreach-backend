@@ -1,6 +1,6 @@
 ---
 name: editing-server-js
-description: "RULE: The checklist for changing server.js or index.html without turning a boot check red or shipping half an edit: CRLF line endings, runtime-assembled needles, the declared tables a new rung must appear in, the CONTRACT_VERSION / CLIENT_CONTRACT bump, the 256MB heap cap, named Anthropic and Places calls, every returned field merged and persisted, no changelog prose in per-lead log lines, and the gates to run before pushing. Loads automatically when those files are being edited."
+description: "L3 RULES: The checklist for changing server.js or index.html without turning a boot check red or shipping half an edit: CRLF line endings, runtime-assembled needles, the declared tables a new rung must appear in, the CONTRACT_VERSION / CLIENT_CONTRACT bump, the 256MB heap cap, named Anthropic and Places calls, every returned field merged and persisted, no changelog prose in per-lead log lines, and the gates to run before pushing. Loads automatically when those files are being edited."
 user-invocable: false
 paths: ["server.js", "index.html", "*.js", "*.sh"]
 ---

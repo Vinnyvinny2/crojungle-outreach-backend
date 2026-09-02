@@ -1,6 +1,6 @@
 # CROJungle Outreach — start here
 
-This file is deliberately short (Claude Code reads it at the start of every session). It holds the identity of the system, the seven rules that are not negotiable, how to run the checks, and how to work with Vin. **Everything else is a skill** in `.claude/skills/` — one job each, a testable goal as its first line, loaded only when that job comes up — and **the 106 numbered round notes are in `docs/history/`**, moved word for word and indexed. The split happened on 2026-09-02; `docs/history/verify-split.sh` proves nothing was lost, and the full pre-split file is on branch `backup/claude-md-monolith`.
+This file is deliberately short (Claude Code reads it at the start of every session). It holds the identity of the system, the seven rules that are not negotiable, how to run the checks, and how to work with Vin. **Everything else is a skill** in `.claude/skills/` — one job each, a testable goal as its first line, loaded only when that job comes up, organised top-down from the decisions Vin makes (Level 1) to the jobs Claude runs (Level 4) — and **the 106 numbered round notes are in `docs/history/`**, moved word for word and indexed. The split happened on 2026-09-02; `docs/history/verify-split.sh` proves nothing was lost, and the full pre-split file is on branch `backup/claude-md-monolith`.
 
 ## What this is
 
@@ -100,30 +100,36 @@ lead, not in terms of which line changed.
 
 ## The skills
 
-**KNOW — what the system is**
+Organised like the business, top down: Vin decides at Level 1, everything below implements it. Each note opens with a testable goal.
 
+**Level 1 — STRATEGY: the decisions Vin makes (start at `owner-decisions`)**
+
+- `owner-decisions` — after reading it, Claude can state the current value of any strategic lever, who ruled it and when, and name the note and the place in the code that must change together when Vin changes his mind.
 - `business-and-icp` — after reading it, Claude can decide whether a lead or a finding fits what CROJungle sells, and at which price tier.
-- `cost-model` — after reading it, Claude can give a per-lead cost from a meter line, and refuse any cut on the DO-NOT-CUT list.
 - `evidence-and-priorities` — after reading it, Claude can tell a proven fact from an inference before anything is tuned, and pick the next move in the proven order.
+- `cost-model` — after reading it, Claude can give a per-lead cost from a meter line, and refuse any cut on the DO-NOT-CUT list.
+- `new-niche-playbook` — after reading it, Claude can add a new trade or market to the app in the right order, naming every declared table that must gain a row, the business facts the owner must supply for each, and the boot check that confirms it is done — and say what a full company swap would add.
+
+**Level 2 — OPERATIONS: how the machine carries them out**
+
+- `deploy-and-accounts` — after reading it, Claude can name the one-time Render, GitHub, Netlify, staging and Supabase actions that make a merge a deploy, tell whether each is done, and hand over the exact SQL the server expects.
 - `find-and-contact-list` — after reading it, Claude can explain what a Find press and a contact read do to a lead, read the log lines they print, and tell a confirmed owner, email or phone from a guess.
 - `knobs-and-env` — after reading it, Claude can trace any budget refusal or "not measured" line in a log to the setting that caused it.
 - `pipeline-how-it-works` — after reading it, Claude can name the stage, the function and the file for any behaviour someone describes.
 
-**RULE — what must never break**
+**Level 3 — RULES: what Claude obeys when it touches the code (Vin never needs to read these)**
 
 - `bug-classes` — after reading it, Claude can name the class of a bug before touching code, and open the round where that class was last seen.
 - `check-writing-traps` — after reading it, Claude can write a boot check or test that fails on the live defect it names, and spot one that cannot.
 - `editing-server-js` — after reading it, Claude can change server.js or index.html without turning a boot check red, breaking line endings, or shipping half an edit.
 - `what-not-to-do` — after reading it, Claude can recognise a change that would re-earn an old bug and refuse it, naming the rule and the round that earned it.
 
-**DO — jobs, invoked as /name or loaded when relevant**
+**Level 4 — JOBS: what Claude runs, as /name**
 
-- `deploy-and-accounts` — after reading it, Claude can name the one-time Render, GitHub, Netlify, staging and Supabase actions that make a merge a deploy, tell whether each is done, and hand over the exact SQL the server expects.
 - `diagnose-log` — after reading it, Claude can turn a pasted Render log, CSV or call sheet into a verified list of defects, each reproduced by running the real code, with nothing fixed until asked.
 - `falsify` — after reading it, Claude can prove a fix's guard actually guards by reverting that fix alone against a green baseline and getting a red on its own named assertion, and recognise a falsification that proves nothing.
 - `gates` — after reading it, Claude can run the checks (or one stage), read the verdict, and say in plain English what each red line means, which class of bug it is, and which file to open.
 - `history-lookup` — after reading it, Claude can find the round note that recorded a given bug, decision, check or log line, from a section number or a keyword, and quote it instead of re-deriving it.
-- `new-niche-playbook` — after reading it, Claude can add a new trade or market to the app in the right order, naming every declared table that must gain a row, the business facts Mike must supply for each, and the boot check that confirms it is done — and say what a full company swap would add.
 - `ship-round` — after reading it, Claude can close a round without shipping half of it: the round note in docs/history, its INDEX line, the contract bump when index.html changed, the commit and PR shape, and a handover that names what needs hands.
 
 ## Where everything moved (for the code comments that cite the old file)

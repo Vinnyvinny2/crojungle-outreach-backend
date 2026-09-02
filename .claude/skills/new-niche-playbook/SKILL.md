@@ -1,11 +1,11 @@
 ---
 name: new-niche-playbook
-description: "DO: Add a new trade, category or metro to the app in the right order, or plan a full company swap: every declared table in server.js that must gain a row (GP_CATEGORIES, CATEGORY_TIER, TRADE_CAPACITY_CLASS, TRADE_JOB_VALUE, urgency and referral sets, review floors, LSA eligibility, recurring and financing lists, NICHE_BRIEF_EXPECT and the brief library, GP_CITIES + GP_CITY_COORDS), the boot check that refuses each gap, the three gaps nothing refuses, the questionnaire for Mike, and the DECLARED / SOURCED wall for a niche brief. Use when asked to target a new niche, add a trade or city, write a niche brief, or reuse the machine for another company."
+description: "L1 STRATEGY: Add a new trade, category or metro to the app in the right order, or plan a full company swap: every declared table in server.js that must gain a row (GP_CATEGORIES, CATEGORY_TIER, TRADE_CAPACITY_CLASS, TRADE_JOB_VALUE, urgency and referral sets, review floors, LSA eligibility, recurring and financing lists, NICHE_BRIEF_EXPECT and the brief library, GP_CITIES + GP_CITY_COORDS), the boot check that refuses each gap, the three gaps nothing refuses, the questionnaire the owner answers, and the DECLARED / SOURCED wall for a niche brief. Use when asked to target a new niche, add a trade or city, write a niche brief, or reuse the machine for another company."
 argument-hint: [trade or metro]
 ---
 # New niche playbook — add a trade, a metro, or swap the company
 
-**Goal:** After reading this, Claude can add a new trade or market to the app in the right order, naming every declared table that must gain a row, the business facts Mike must supply for each, and the boot check that confirms it is done — and say what a full company swap would add.
+**Goal:** After reading this, Claude can add a new trade or market to the app in the right order, naming every declared table that must gain a row, the business facts the owner must supply for each, and the boot check that confirms it is done — and say what a full company swap would add.
 
 New text (2026-09-02), from a line-by-line survey of the declared tables in `server.js` at commit b01d952 (`tables.md` beside this note has every one with its line and its check). **Filling these tables is a `server.js` edit and every rule in `editing-server-js` applies** (CRLF, needles, the gates). The honest end state is one data file per niche so this playbook becomes a form; that extraction touches the server and is a later round. Today the tables are inside the file, and the boot is the form: it refuses to start until each declared table has its row, and says which.
 
@@ -29,11 +29,11 @@ Work in this order; after step 1 the boot goes RED and names steps 2-5 by table 
 
 `GP_CITIES` and `GP_CITY_COORDS` move TOGETHER (`COVERAGE RADIUS CHECK` reads `Object.keys(GP_CITY_COORDS)` as the searched set). A metro is chosen by population per search dollar, and cold-weather metros exist so basement, insulation and frozen-pipe trades have ground ([§94](../../../docs/history/round-094.md)). The Find picker reads the list from `/api/find-options`, never a copy ([§32](../../../docs/history/round-032.md)).
 
-## C. Write a niche brief (optional, and the part Mike owns)
+## C. Write a niche brief (optional; the owner supplies the DECLARED half)
 
 A brief in `NICHE_BRIEFS` is split by SHAPE and the boot enforces the wall ([§36](../../../docs/history/round-036.md)): **DECLARED** (unit of business, who buys, vocabulary, which software to ask about, where margin leaks, the questions worth asking — **no digit anywhere**) and **SOURCED** (figures, each with source and date, **no "you / your / they / their"**), so a segment fact can never become a claim about the company in front of us. Neither half reaches an email. A brief must not match a business MODEL it was not written for (store, supplier, franchise — the shared `BRIEF_MODEL_DISQUALIFIERS`, [§50](../../../docs/history/round-050.md)); a retailer with no brief is the designed answer. Budget 2-4 hours per brief; never estimate a number that could be sourced.
 
-## D. The questionnaire for Mike (one trade)
+## D. The questionnaire the owner answers (one trade) — Vin knows the niches; these are his calls, not Mike's
 
 1. What is one job worth, low to high, for a typical customer? (→ `TRADE_JOB_VALUE`)
 2. Can one person do this work alone, or does it take a crew? (→ capacity class)

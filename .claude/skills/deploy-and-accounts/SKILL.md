@@ -1,6 +1,6 @@
 ---
 name: deploy-and-accounts
-description: "DO: The one-time Render, GitHub, Netlify, staging and Supabase actions that make merge = deploy and stop half-live fixes: the /healthz health check, branch protection on the gates check, linking the repo so netlify.toml publishes index.html, a staging pair with RENDER_ENV, and every CREATE/ALTER statement the server expects (schema.sql). Use when asked why a red build still deployed, why Netlify still needs a drag-in, how to set up staging, or which SQL a SCHEMA PROBE line is asking for."
+description: "L2 OPERATIONS: The one-time Render, GitHub, Netlify, staging and Supabase actions that make merge = deploy and stop half-live fixes: the /healthz health check, branch protection on the gates check, linking the repo so netlify.toml publishes index.html, a staging pair with RENDER_ENV, and every CREATE/ALTER statement the server expects (schema.sql). Use when asked why a red build still deployed, why Netlify still needs a drag-in, how to set up staging, or which SQL a SCHEMA PROBE line is asking for."
 ---
 # Deploy and accounts — the one-time setup
 
