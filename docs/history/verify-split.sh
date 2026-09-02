@@ -17,7 +17,8 @@
 # ═══════════════════════════════════════════════════════════════════════════
 set -u
 cd "$(dirname "$0")/../.."
-BASE="${SPLIT_BASE:-b01d952e4f95d7b69686bc2c4063ca2aa0cb7546}"
+BASE="${SPLIT_BASE:-b01d952e4f95d7b69686bc2c4063ca2aa0cb7546}"   # the 105-round split
+FULL="${SPLIT_FULL:-fd76271}"                                          # the last complete CLAUDE.md (main after Round 106), for step 3
 FAIL=0
 ok()   { echo "✓ $*"; }
 bad()  { echo "✗ $*"; FAIL=1; }
@@ -35,7 +36,7 @@ if [ "$n" = 12295 ] && [ "$b" = 725701 ]; then ok "1. the saved original CLAUDE.
 
 # 2. byte-exact re-join, in the ORIGINAL order (by source line number, not by § number)
 count=$(ls docs/history/round-*.md 2>/dev/null | wc -l)
-[ "$count" = 105 ] && ok "2a. 105 round files present" || bad "2a. $count round files (expected 105)"
+[ "$count" -ge 105 ] && ok "2a. $count round files present (105 from the split, plus any archived since)" || bad "2a. $count round files (expected at least 105)"
 JOIN=$(mktemp)
 for f in $(for f in docs/history/round-*.md; do s=$(sed -n '2p' "$f" | sed -E 's/^Source: CLAUDE.md lines ([0-9]+)-.*/\1/'); echo "$s $f"; done | sort -n | awk '{print $2}'); do
   tail -n +4 "$f" >> "$JOIN"          # the first three lines of every file are the header added at the move
@@ -46,11 +47,25 @@ else
   bad "2b. re-joined text differs from the original — first differences:"; diff <(sed -n '206,10358p;10655,12295p' "$ORIG") "$JOIN" | head -20
 fi
 
+# 2c. EVERY round file (including ones added after the split) re-joins byte-for-byte to
+#     the commit its own header names — so a round archived later is proven the same way
+n2c=0; bad2c=0
+for f in docs/history/round-*.md; do
+  hdr=$(sed -n '2p' "$f")
+  a=$(echo "$hdr" | sed -E 's/^Source: CLAUDE.md lines ([0-9]+)-([0-9]+).*/\1/')
+  b=$(echo "$hdr" | sed -E 's/^Source: CLAUDE.md lines ([0-9]+)-([0-9]+).*/\2/')
+  c=$(echo "$hdr" | sed -E 's/.*from commit ([0-9a-f]+).*/\1/')
+  if ! git show "$c:CLAUDE.md" 2>/dev/null | sed -n "${a},${b}p" | diff -q - <(tail -n +4 "$f") > /dev/null; then echo "   ✗ $f does not match commit $c lines $a-$b"; bad2c=$((bad2c+1)); fi
+  n2c=$((n2c+1))
+done
+[ "$bad2c" = 0 ] && ok "2c. all $n2c round files match the commit and lines their own header names" || bad "2c. $bad2c round file(s) differ from their source (listed above)"
+
 # 3. after the slim: every unique line of the original still lives somewhere
 if [ "$(wc -l < CLAUDE.md)" -lt 1000 ]; then
   ALLOW=docs/history/dropped-lines.txt; touch "$ALLOW"
-  MISSING=$(sort -u "$ORIG" | comm -23 - <(cat CLAUDE.md docs/history/*.md .claude/skills/*/*.md .claude/skills/*/*.sql 2>/dev/null | sort -u) | grep -vxF -f "$ALLOW" | grep -v '^\s*$' | grep -vx -- '---')
-  if [ -z "$MISSING" ]; then ok "3. every unique line of the original exists in CLAUDE.md, docs/history or .claude/skills (allowlist: $(grep -c . "$ALLOW") lines, see $ALLOW)"; else bad "3. lines of the original that exist NOWHERE now:"; echo "$MISSING" | head -40; fi
+  FULLF=$(mktemp); git show "$FULL:CLAUDE.md" > "$FULLF" || { bad "3. cannot read CLAUDE.md at $FULL"; FULLF="$ORIG"; }
+  MISSING=$(sort -u "$FULLF" | comm -23 - <(cat CLAUDE.md docs/history/*.md .claude/skills/*/*.md .claude/skills/*/*.sql 2>/dev/null | sort -u) | grep -vxF -f "$ALLOW" | grep -v '^\s*$' | grep -vx -- '---')
+  if [ -z "$MISSING" ]; then ok "3. every unique line of the last complete CLAUDE.md ($FULL) exists in CLAUDE.md, docs/history or .claude/skills (allowlist: $(grep -c . "$ALLOW") lines, see $ALLOW)"; else bad "3. lines of the original that exist NOWHERE now:"; echo "$MISSING" | head -40; fi
 else
   ok "3. skipped — CLAUDE.md has not been slimmed yet ($(wc -l < CLAUDE.md) lines), so nothing has left it"
 fi

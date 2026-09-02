@@ -1,6 +1,6 @@
 # CLAUDE.md round history — index
 
-The 105 numbered round entries that used to be PART 4 of CLAUDE.md, moved here verbatim on 2026-09-02 (from commit b01d952e4f95d7b69686bc2c4063ca2aa0cb7546, kept whole on branch `backup/claude-md-monolith`). Each file is keyed on its **§ number**; some TITLES carry an older counter ("Round 100" is §77, "Round 102" is §79, "Round 107" is §85) — that is the title's own numbering, not the file key. Their original order in CLAUDE.md was 1–81, 90, 94–105, then 82–89 and 91–93 after PART 8. `verify-split.sh` in this folder proves the files re-join byte-for-byte to the original; run it any time. The **stage** column is a keyword first pass, not part of the moved text.
+The 105 numbered round entries that used to be PART 4 of CLAUDE.md, moved here verbatim on 2026-09-02 (from commit b01d952e4f95d7b69686bc2c4063ca2aa0cb7546, kept whole on branch `backup/claude-md-monolith`). Each file is keyed on its **§ number**; some TITLES carry an older counter ("Round 100" is §77, "Round 102" is §79, "Round 107" is §85) — that is the title's own numbering, not the file key. Their original order in CLAUDE.md was 1–81, 90, 94–105, then 82–89 and 91–93 after PART 8; §106 (merged 2026-09-02 from commit fd76271) sat after §105. `verify-split.sh` in this folder proves the files re-join byte-for-byte to the original; run it any time. The **stage** column is a keyword first pass, not part of the moved text.
 
 The PART 4 heading and intro these sat under, verbatim:
 
@@ -117,3 +117,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 103 | 2026-09-01 | Read the likeliest page first, and score for the business we can sell — 2026-09-01 | Gates / Cost | [round-103.md](round-103.md) |
 | 104 | 2026-09-01 | Seven leads, twelve reads, and four names that were not people — 2026-09-01 | Find / Client | [round-104.md](round-104.md) |
 | 105 | 2026-09-02 | Ten leads read in twelve seconds, and the score that called them a 53 — 2026-09-02 | Find / Gates | [round-105.md](round-105.md) |
+| 106 | 2026-09-02 | Twenty leads read live, four things on the sheet that were not true, and the export became grades — 2026-09-02 | Find / Gates | [round-106.md](round-106.md) |
