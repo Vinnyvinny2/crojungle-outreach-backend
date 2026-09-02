@@ -708,6 +708,17 @@ const runLead = async (b, over, capMs) => {
         `a national franchise was not refused by the contact route (got ${J1.code}: ${String((J1.json && J1.json.error) || '').slice(0, 140)})`);
       ok(state.requests.length === _beforeJ,
         `the franchise refusal still made ${state.requests.length - _beforeJ} network call(s) - "nothing was read and nothing was spent" is false`);
+      // 2026-09-02: a ministry bought a paid owner wave. Institutions are the
+      // same door as franchises: refused by name, nothing read, nothing spent.
+      const _beforeJm = state.requests.length;
+      const Jm = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+        company: { name: 'Synergy Ministry', website: 'https://example.com', placeId: 'p1m' },
+        keys: { anthropicKey: 'sk-test' },
+      });
+      ok(Jm.code === 422 && Jm.json && Jm.json.notIcp === true,
+        `a ministry was not refused by the contact route (got ${Jm.code}) - it reads, scores and buys a paid owner wave for an owner that does not exist`);
+      ok(state.requests.length === _beforeJm,
+        `the ministry refusal still made ${state.requests.length - _beforeJm} network call(s)`);
       // And the guard must not have been tightened until it eats the ICP. An
       // owner-operated name has to reach the read, which is section 14's
       // guard-too-tight failure and the expensive one.
@@ -831,6 +842,7 @@ const runLead = async (b, over, capMs) => {
     // scenario that needs to SPEND has to run above this line.
     console.log('── scenario E: Firecrawl 402 — the latch and the bounded hold');
     state.mode = 'fc402'; state.biz = biz('E');
+    const _logBeforeE = srv.log().length;
     const E = await runLead(state.biz, {}, 90000);
     // What the latch PROMISES: after the first 402 not one further Firecrawl
     // credit moves, and the response records that the site was never read —
@@ -841,6 +853,11 @@ const runLead = async (b, over, capMs) => {
       ok(E.result.corpusRead && E.result.corpusRead.homepageChars === 0, `corpusRead says ${JSON.stringify(E.result.corpusRead)} on a lead whose every page read was refused — the blind banner has nothing to fire on`);
     }
     ok(/FIRECRAWL OUT OF CREDITS/.test(srv.log()), 'the 402 never printed its own name in the log — the operator reads a blind audit with no cause attached');
+    // A search that comes back 402 is not a paid call. On 2026-09-02 the
+    // search door noted its spend at dispatch, so every doomed probe printed
+    // FC PAID, counted a credit and re-opened every other door.
+    ok(!/FC PAID \[search/.test(srv.log().slice(_logBeforeE)),
+      'a search refused with 402 was logged as FC PAID - the meter counts a credit that was never spent and the latch is cleared by a call that failed');
 
     srv.child.kill(); await sleep(400);
 

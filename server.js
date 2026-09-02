@@ -9154,10 +9154,6 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
 const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) => {
   if (!fcKey || !query) return [];
   if (fcCreditsBlocked()) return [];   // fail fast — no point firing doomed calls
-  // Flag whether the results are being SCRAPED, not just listed — search bills 2
-  // per 10 results, and each page read on top is a further credit. Without this the
-  // meter reported 2 for a call that actually cost 5.
-  fcNote(true, `search x${limit}${scrapeContent ? '+scrape' : ''}`, query);
   try {
     const r = await fcCall('https://api.firecrawl.dev/v1/search', {
       method: 'POST',
@@ -9174,6 +9170,15 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) =>
       console.log('🔴 FIRECRAWL OUT OF CREDITS (search)');
       return [];
     }
+    // Noted AFTER the answer, like map, scrape and batch. This door used to
+    // note at dispatch, and fcNote is also where the credit latch clears: on
+    // an empty account the one probe let through printed FC PAID, counted a
+    // credit, re-opened every door for the whole process, and then came back
+    // 402 - a dozen FC PAID / OUT OF CREDITS pairs per lead on 2026-09-02.
+    // Flag whether the results are being SCRAPED, not just listed — search bills 2
+    // per 10 results, and each page read on top is a further credit. Without this the
+    // meter reported 2 for a call that actually cost 5.
+    fcNote(true, `search x${limit}${scrapeContent ? '+scrape' : ''}`, query);
     const results = d.data || d.results || [];
     return results.map(x => ({
       url: x.url || '',
@@ -10479,6 +10484,9 @@ const isMailboxShape = (e) => {
 // cannot tell, because there is no list of every city in it.
 const MAILBOX_SUFFIX_RE = /[._-](?:us|usa|uk|ca|team|desk|dept|department|group|inbox|mail)$/;
 const MAILBOX_JUNK_RE = /^(?:noreply|donotreply|postmaster|hostmaster|maildaemon|mailerdaemon|bounce|bounces|abuse|webmaster|dmca|unsubscribe|privacy|legal|test|testing|example|user|username|name|email|youremail|your|sentry)$/;
+// The recruiting subset of the role list: graded and scored as a careers-page
+// address wherever it is found, and picked last among shared inboxes.
+const RECRUIT_LOCAL_RE = /^(?:jobs?|careers?|recruit|recruiting|recruitment|recruiter|hiring|talent|apply|applications?|employment|hr|humanresources)$/;
 const MAILBOX_ROLE_RE = /^(?:info|contact|hello|hi|hey|ask|team|office|admin|administration|sales|support|help|helpdesk|service|services|customer|customers|customerservice|customercare|care|enquiry|enquiries|inquiry|inquiries|mail|general|reception|frontdesk|frontoffice|mainoffice|account|accounts|accounting|billing|invoice|invoices|payment|payments|finance|hr|humanresources|jobs|job|careers|career|recruit|recruiting|recruitment|recruiter|hiring|talent|apply|application|applications|employment|press|media|marketing|compliance|order|orders|shop|store|studio|book|booking|bookings|schedule|scheduling|appointment|appointments|estimate|estimates|quote|quotes|dispatch|newpatient|newpatients|patient|patients|client|clients|connect|talk|reach|getstarted|contactus|emailus|callus|getintouch|letstalk|scheduler|estimator|requestaquote|getaquote|freequote|freeestimate)$/;
 // ══ THE COMPANY'S OWN MAILBOX IS NOT A PERSON'S ═══════════════════════════
 // Live, 2026-09-02: cpa@jtccpas.com, aardconcrete@aol.com (Aard Cement),
@@ -10554,7 +10562,10 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
   const domain = website.replace(/https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '').toLowerCase();
   if (!domain) return out;
 
-  const JUNK_DOMAIN = /@(sentry|wixpress|example|domain|email|yourcompany|squarespace|godaddy|shopify|wordpress|gravatar|schema|w3|cloudflare|placeholder)\./i;
+  // Live 2026-09-02: mymail@mailservice.com, a template's placeholder left in
+  // a footer, shipped as a grade-A published address. A placeholder domain is
+  // junk on any page, confirmed or not.
+  const JUNK_DOMAIN = /@(sentry|wixpress|example|domain|email|yourcompany|squarespace|godaddy|shopify|wordpress|gravatar|schema|w3|cloudflare|placeholder|mailservice|mailprovider|yourdomain|yourwebsite|yoursite|yourbusiness|mydomain|mysite|mywebsite|mycompany|sample|sampledomain|test|testing|website|emailaddress|address)\./i;
   // JUNK_LOCAL and ROLE_LOCAL_S were two of the six lists; both are mailboxKind now.
   const FREE_PROVIDER = /@(gmail|yahoo|outlook|hotmail|aol|icloud|proton|live|msn)\./i;
   const domainRoot = domain.split('.')[0];
@@ -10981,6 +10992,7 @@ const pickRosterOwner = (roster) => rankRosterOwners(roster)[0] || null;
 
 const DM_SOURCE_WEIGHT = {
   own_website_brain: 45,   // they published it themselves — strongest single source there is
+  own_website_regex: 30,   // one sentence on their own page matched by one regex: corroboration, never a settle
   web_search:        40,   // the whole web, read by an LLM. Catches BBB/Manta/local press.
   registry:          30,   // legal public record — but often lists a filing agent, not the owner
   license_or_chamber: 38,  // licence holder / chamber listing — a REAL named person, not an agent
@@ -10997,6 +11009,8 @@ const DM_SOURCE_WEIGHT = {
 const independentSourceCount = (sources) => {
   const s = new Set(sources);
   if (s.has('own_website_brain') && s.has('business_name')) s.delete('business_name');
+  // The regex backstop reads the SAME page as the brain and the name test.
+  if (s.has('own_website_regex') && (s.has('own_website_brain') || s.has('business_name'))) s.delete('own_website_regex');
   return s.size;
 };
 
@@ -11160,7 +11174,10 @@ const looksLikeRealName = (n) => {
   // list is deliberately narrow: "Law", "Bell" and "Steele" are real surnames
   // and are absent on purpose. What is here are nouns that end a FIRM's name
   // and end nobody's: a person is not called Jane Surgery.
-  const BUSINESS_TAIL = /^(?:surgery|surgeries|dentistry|orthodontics|construction|contracting|remodeling|remodelling|plumbing|roofing|landscaping|paving|insurance|realty|consulting|accounting|associates|trusts|solutions|systems|industries|enterprises|holdings|partners|specialists|clinic|clinics|center|centers|centre|hospital|practice|firm|agency|studio|salon|spa|supply|rentals|leasing)$/i;
+  // Live 2026-09-02, the 40-lead run: "Synergy Ministry" reached the sheet as
+  // the decision-maker. A ministry, a church, a foundation or an institute
+  // ends an organisation's name and ends nobody's.
+  const BUSINESS_TAIL = /^(?:surgery|surgeries|dentistry|orthodontics|construction|contracting|remodeling|remodelling|plumbing|roofing|landscaping|paving|insurance|realty|consulting|accounting|associates|trusts|solutions|systems|industries|enterprises|holdings|partners|specialists|clinic|clinics|center|centers|centre|hospital|practice|firm|agency|studio|salon|spa|supply|rentals|leasing|ministry|ministries|church|chapel|foundation|institute|association|academy|university|college|corporation)$/i;
   if (BUSINESS_TAIL.test(parts[parts.length - 1])) return false;
   return true;
 };
@@ -11629,6 +11646,25 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
 // rosterEligiblePage. It is a required argument rather than a defaulted one:
 // a default would mean a future caller silently gets the old whole-blob
 // behaviour, which is the defect this parameter exists to close.
+// == IS THE OWNER SENTENCE ABOUT OUR COMPANY? =============================
+// Shape A ("founder of ACME, David is...") captures the company between the
+// role and the person, and that capture is tested. Shape B ("Mike Taft,
+// founder") captured no company and was treated as ours UNCONDITIONALLY, so
+// a testimonial on their page ("John Smith, owner of Precision Supply, was
+// thrilled") named a supplier's owner as this lead's buyer. Shape B now reads
+// the words that follow the role: an "of / at / for X" that names somebody
+// else is not ours. No tail at all stays ours, as before - their own page,
+// their own sentence. Module scope so OWNER BACKSTOP CHECK executes it.
+const ownerSentenceIsOurs = (m, shapeA, corpus, coTok) => {
+  if (!m) return false;
+  const toks = Array.isArray(coTok) ? coTok : [];
+  if (shapeA) return toks.some(t => String(m[2] || '').toLowerCase().includes(t));
+  const _end = (m.index || 0) + String(m[0] || '').length;
+  const _tail = String(corpus || '').slice(_end, _end + 80).match(/^\s*(?:of|at|for)\s+([^.,;\n]{2,60})/);
+  const _co = _tail ? String(_tail[1] || '').toLowerCase() : '';
+  if (!_co) return true;
+  return toks.some(t => _co.includes(t));
+};
 const _ownerFromCorpus = async (corpus, companyName, website, apiKey, rosterCorpus) => {
   try {
     // ══ THE ROSTER IS READ BEFORE THE MODEL IS ASKED ═════════════════════════
@@ -11839,13 +11875,13 @@ ${corpus}` }]
       // An empty token list means the company name is entirely generic, so
       // there is nothing to tie the sentence to - refuse rather than guess.
       const _coTok = companyDistinctiveTokens(companyName);
-      const _ours = !_shapeA || _coTok.some(t => String((_m && _m[2]) || '').toLowerCase().includes(t));
+      const _ours = ownerSentenceIsOurs(_m, _shapeA, corpus, _coTok);
       if (_fallbackName && _ours && looksLikeRealName(_fallbackName) && String(corpus).includes(_fallbackName.split(/\s+/)[0])) {
         const _title = _fallbackRole
           ? _fallbackRole.charAt(0).toUpperCase() + _fallbackRole.slice(1).toLowerCase()
           : 'Owner';
         console.log(`DM/brain [${companyName}]: the model found nobody, but their own page names one \u2014 "${_m[0].trim().slice(0, 70)}". Read directly from the text we already scraped, so no extra credit and no false claim of absence. Offered as CORROBORATION rather than a settled answer: one sentence matched by one regex must not switch off the sources that could disagree with it.`);
-        return { name: _fallbackName, title: _title, confidence: 'medium', source: 'own_website_brain' };
+        return { name: _fallbackName, title: _title, confidence: 'medium', source: 'own_website_regex' };
       }
       if (_shapeA && !_ours) {
         console.log(`DM/brain [${companyName}]: an owner sentence is on the page but it is about a DIFFERENT company \u2014 "${_m[0].trim().slice(0, 70)}". Refused: a supplier's or a partner's owner quoted on their site is a stranger, not this lead's buyer.`);
@@ -12939,24 +12975,20 @@ const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey, locati
     if (loc) queries.unshift(`"${clean}" ${loc} owner OR founder OR "chief executive" OR president name`);
     if (!loc) console.log(`DM/websearch [${companyName}]: no city, so the undisambiguated name search is skipped — only the domain-scoped directory search runs.`);
 
-    // Run both searches in parallel — sequential cost us ~15s for no reason
-    const batches = await Promise.all(
-      queries.map(q => firecrawlSearch(fcKey, q, 2, false).catch(() => [])) // snippet-only: owner names live in BBB/Manta snippets
-    );
-    const hits = batches.flat().slice(0, 4);
-    if (hits.length === 0) return null;
-
-    const corpus = hits.map(h =>
-      `--- ${h.title}\nURL: ${h.url}\n${h.description}\n${h.content}`
-    ).join('\n\n').slice(0, 20000);
-
-    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 600,
-        messages: [{ role: 'user', content: `These are real web search results about the company "${companyName}"${domain ? ' (' + domain + ')' : ''}${loc ? ' located in ' + loc : ''}.
+    // One query at a time, and the second is bought only when the first did
+    // not name the owner. They ran in parallel ("sequential cost us ~15s"),
+    // which meant the directory query's two credits were spent on every lead
+    // the name query had already answered. Fifteen seconds is cheaper.
+    // The model read of one batch of results, factored out so the loop below
+    // can ask it after each query. Unchanged prompt.
+    const _askOwnerOfResults = async (corpus) => {
+      const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-haiku-4-5-20251001',
+          max_tokens: 600,
+          messages: [{ role: 'user', content: `These are real web search results about the company "${companyName}"${domain ? ' (' + domain + ')' : ''}${loc ? ' located in ' + loc : ''}.
 
 TASK: Identify the OWNER / FOUNDER / CEO / PRESIDENT of THIS SPECIFIC COMPANY — the person with authority to buy.
 
@@ -12971,16 +13003,33 @@ Return ONLY valid JSON, no markdown:
 
 SEARCH RESULTS:
 ${corpus}` }]
-      }),
-    }, 30000, 'owner-websearch');
-
-    const d = await r.json();
-    let text = anthropicText(d);
-    text = text.replace(/```json|```/g, '').trim();
-    const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
-    if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
-    const parsed = parseLLMJSON(text) || {};
-
+        }),
+      }, 30000, 'owner-websearch');
+      const d = await r.json();
+      let text = anthropicText(d);
+      text = text.replace(/```json|```/g, '').trim();
+      const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
+      if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
+      return parseLLMJSON(text) || {};
+    };
+    let hits = [];
+    let corpus = '';
+    let parsed = {};
+    for (let _qi = 0; _qi < queries.length; _qi++) {
+      const _batch = await firecrawlSearch(fcKey, queries[_qi], 2, false).catch(() => []); // snippet-only: owner names live in BBB/Manta snippets
+      const _new = Array.isArray(_batch) ? _batch : [];
+      if (!_new.length) continue;
+      hits = hits.concat(_new).slice(0, 4);
+      corpus = hits.map(h =>
+        `--- ${h.title}\nURL: ${h.url}\n${h.description}\n${h.content}`
+      ).join('\n\n').slice(0, 20000);
+      parsed = await _askOwnerOfResults(corpus) || {};
+      if (parsed.name && parsed.name !== 'null' && looksLikeRealName(parsed.name)) {
+        if (_qi + 1 < queries.length) console.log(`DM/websearch [${companyName}]: named on the first query \u2014 the directory query is not bought (2 Firecrawl credits saved)`);
+        break;
+      }
+    }
+    if (hits.length === 0) return null;
     if (!parsed.name || parsed.name === 'null' || !looksLikeRealName(parsed.name)) {
       rememberDmSearchFailed(domain);
       console.log(`DM/websearch [${companyName}]: no owner found in web results \u2014 remembering this for ${DM_NEGATIVE_TTL_DAYS} days so the same ~12 credits are not spent again on the same negative.`);
@@ -32985,11 +33034,45 @@ const foldFirstNameClusters = (clusters) => {
   }
   return clusters;
 };
-const rankOwnerCandidates = (found) => {
+// == THE NAME DOOR: EVERY OWNER SOURCE PASSES THROUGH ONE TEST ============
+// Live 2026-09-02, the 40-lead run: "Owner-Operator" and "Synergy Ministry"
+// both reached the sheet as the decision-maker's NAME. Five sources feed this
+// ranker (their site, the review signatures, the web search, the licence
+// boards, the registry) and each validated its own output by its own rule,
+// so a title that slipped one rule was ranked and won. The door below asks
+// the one question none of them asked together: is this string a person?
+// A title is not, the company's own name is not, and a multi-word string
+// that fails the real-name test is not. A bare first name ("Rick") passes,
+// because foldFirstNameClusters already handles it as corroboration.
+const OWNER_WORD_RE = /^(?:owner|owners|co-owner|founder|founders|co-founder|president|ceo|coo|cfo|principal|principals|proprietor|operator|operators|partner|partners|manager|managers|director|directors|team|staff|office|admin|administrator|management|leadership|company|business|the|our|and|of|&)$/i;
+const _ownerDoorSaid = new Set();
+const ownerNameDoor = (name, companyName = '') => {
+  const s = String(name || '').trim();
+  if (!s) return 'empty';
+  const toks = s.split(/[\s\/\-]+/).filter(Boolean);
+  if (toks.every(t => OWNER_WORD_RE.test(t) || ROLE_WORDS.has(t.toLowerCase()))) return 'title';
+  if (allRoleWords(s)) return 'title';
+  const _flat = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').replace(/^the /, '').trim();
+  const _co = _flat(companyName), _nm = _flat(s);
+  if (_co && _nm && _nm === _co) return 'company';
+  if (toks.length >= 2 && !looksLikeRealName(s)) return 'not-a-name';
+  return null;
+};
+const rankOwnerCandidates = (found, companyName = '') => {
   if (!found || !found.length) return null;
   const clusters = [];
   for (const f of found) {
     if (!f || !f.name) continue;
+    const _door = ownerNameDoor(f.name, companyName);
+    if (_door) {
+      const _k = f.source + '|' + f.name;
+      if (!_ownerDoorSaid.has(_k)) {
+        _ownerDoorSaid.add(_k);
+        if (_ownerDoorSaid.size > 5000) _ownerDoorSaid.clear();
+        console.log(`DM/door [${companyName || '?'}]: "${f.name}" from ${f.source} is ${_door === 'title' ? 'a job title, not a person' : _door === 'company' ? "the business's own name, not a person" : 'not a person\'s name'} \u2014 refused before ranking, so it cannot reach the sheet as the decision-maker.`);
+      }
+      continue;
+    }
     const hit = clusters.find(c => sameName(c.name, f.name));
     if (hit) {
       if (!hit.sources.includes(f.source)) {
@@ -33082,7 +33165,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // sources agree on. The grade downstream reads this.
   let _settledBy = '';
   const settled = () => {
-    const ranked = rankOwnerCandidates(found);
+    const ranked = rankOwnerCandidates(found, companyName);
     if (!ranked) { _settleWhy = 'no candidate survived ranking at all'; return null; }
     const independent = independentSourceCount(ranked.sources);
     const corroborated = independent >= 2 && ranked.authority >= 75;
@@ -33301,7 +33384,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     // The other three returns carry stagesRun; this one did not, so the route
     // read null and the OWNER WAVE line printed "the resolver did not run on
     // this lead" when stage 1 had run. Same shape as the no-name returns below.
-    { const _r = rankOwnerCandidates(found);
+    { const _r = rankOwnerCandidates(found, companyName);
       return _r ? { ..._r, stagesRun } : { name: null, title: null, score: 0, sources: [], corroborated: false, confidence: 'none', stagesRun }; }
   }
   if (settled()) {
@@ -33327,11 +33410,18 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     console.log(`DM [${companyName}]: stage 1 did not settle — ${_settleWhy}. Buying the paid lookups.`);
     // ── STAGE 2 — paid search. The heavy hitters for owner-operated SMBs. ────
     stagesRun = 2;
-    const [websearch, license] = await Promise.all([
-      findOwnerViaWebSearch(companyName, website, fcKey, apiKey, location).catch(() => null),
-      findOwnerViaLicense(companyName, industry, location, fcKey, apiKey).catch(() => null),
-    ]);
-    for (const f of [websearch, license]) if (f) found.push(f);
+    // One at a time, cheapest first, and the licence wave (two x4 searches)
+    // is bought only if the web search did not settle the lead. Fired
+    // together, a web-search win could not stop the ~8 licence credits
+    // already in flight - live on 2026-09-02, every lead paid for both.
+    const websearch = await findOwnerViaWebSearch(companyName, website, fcKey, apiKey, location).catch(() => null);
+    if (websearch) found.push(websearch);
+    if (settled()) {
+      console.log(`DM [${companyName}]: the web search settled it \u2014 the licence and chamber searches are not bought (~8 Firecrawl credits saved)`);
+    } else {
+      const license = await findOwnerViaLicense(companyName, industry, location, fcKey, apiKey).catch(() => null);
+      if (license) found.push(license);
+    }
 
     if (settled()) {
       console.log(`DM [${companyName}]: settled at stage 2 — skipped the state registry lookup (~3 Firecrawl credits saved)`);
@@ -33356,7 +33446,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
 
   // Cluster and rank — same function the stage gate used, so the decision to stop
   // buying lookups and the answer we return are computed identically.
-  const best = rankOwnerCandidates(found);
+  const best = rankOwnerCandidates(found, companyName);
   if (!best) {
     console.log(`DM [${companyName}]: NO usable decision-maker after ranking`);
     return { name: null, title: null, score: 0, sources: [], corroborated: false, confidence: 'none', stagesRun };
@@ -33588,7 +33678,7 @@ const EMAIL_GRADES = ['published_personal', 'smtp_confirmed', 'published_role', 
 const EMAIL_GRADE_SAY = {
   published_personal: 'Published on their own site, and it is a person, not a department.',
   smtp_confirmed:     'We checked the mailbox and it exists.',
-  published_role:     'Real and published, but a shared or recruiting inbox \u2014 somebody other than the owner reads it first.',
+  published_role:     'Real and published, but not the owner\u2019s own mailbox \u2014 a shared, recruiting or somebody else\u2019s inbox, so somebody other than the owner reads it first.',
   catch_all:          'Their domain accepts everything, so this cannot bounce \u2014 but we could not confirm it is his mailbox. Use his name in the first line.',
   pattern_guess:      'Built from a pattern, not confirmed. It may bounce.',
   verifier_down:      'Unconfirmed because our mailbox checker was unavailable on this run \u2014 that is our outage, not a fault of the address.',
@@ -33608,7 +33698,20 @@ const emailConfidenceGrade = (r, opts) => {
     // and cpa@jtccpas.com graded as "a person, not a department".
     const _k = e.mailboxKind || e.kind;
     const role = _k === 'role' || _k === 'junk' || _k === 'company' || e.fromCareersPage === true || e.offDomain === true;
-    return role ? 'published_role' : 'published_personal';
+    if (role) return 'published_role';
+    // == A PERSON'S MAILBOX IS ONLY GRADE A WHEN IT IS THE OWNER'S ==========
+    // Live 2026-09-02: a personal-looking box that matched nobody we named
+    // graded A, and the rep wrote to a stranger by the owner's first name.
+    // With an owner named, the local part has to be his (the one name rule,
+    // localMatchesName). With nobody named there is nothing to compare, and
+    // the address keeps the grade the page earned it.
+    const _owner = opts && opts.ownerName ? String(opts.ownerName) : '';
+    if (_owner) {
+      const _toks = _owner.toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(t => t.length >= 2);
+      const _local = String(e.email).split('@')[0].toLowerCase();
+      if (_toks.length && !localMatchesName(_local, _toks)) return 'published_role';
+    }
+    return 'published_personal';
   }
   if (e.catchAll === true) {
     // The verifier being down NEVER overrides a measurement. Tier 1 and 2 are
@@ -33635,7 +33738,7 @@ const findEmailFireproof = async (_args) => {
   // truthy, and every caller that asks `if (!em)` would silently change
   // behaviour. Adding a field must never change whether an answer exists.
   if (!_r) return _r;
-  const _g = emailConfidenceGrade(_r, { verifierDown: _verifierDown });
+  const _g = emailConfidenceGrade(_r, { verifierDown: _verifierDown, ownerName: (_args && _args.ceoName) || '' });
   return { ..._r, grade: _g, gradeSay: EMAIL_GRADE_SAY[_g] || '', verifierDown: _verifierDown };
 };
 
@@ -33867,9 +33970,14 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // Prefer an address matching our decision-maker, then any personal address,
     // then a generic one (at a 15-person company, info@ often IS the owner).
     const nameParts = name.toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 2);
-    const nameMatch = scraped.emails.find(e => nameParts.some(p => e.split('@')[0].includes(p)));
+    // The one name rule (localMatchesName), not an unbounded substring test:
+    // "ann" is inside hannah@ and "don" is inside donations@.
+    const nameMatch = scraped.emails.find(e => localMatchesName(e.split('@')[0], nameParts));
     const personal  = scraped.emails.find(e => mailboxKind(e, _mbCtx) === 'person');
-    let best = nameMatch || personal || scraped.emails[0];
+    // A recruiting box is the last resort among shared inboxes: a recruiter
+    // reads it, and an owner-level email there is filed with the resumes.
+    const _nonRecruit = scraped.emails.find(e => !RECRUIT_LOCAL_RE.test(e.split('@')[0].replace(/[^a-z0-9]/g, '')));
+    let best = nameMatch || personal || _nonRecruit || scraped.emails[0];
     let isGeneric = ['role', 'company'].includes(mailboxKind(best, _mbCtx));
 
     // ══ A SHARED INBOX IS NOT THE OWNER ══════════════════════════════════════
@@ -33921,7 +34029,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // reading the row now knows who the address reaches before he types a
     // first name into it.
     const _kind = mailboxKind(best, _mbCtx);
-    const _fromCareers = scraped.source === 'careers_page';
+    const _fromCareers = scraped.source === 'careers_page' || RECRUIT_LOCAL_RE.test(String(best).split('@')[0].replace(/[^a-z0-9]/g, ''));
     const _offDomain = scraped.offDomain === true || !String(best).endsWith('@' + domain);
     const _marks = [];
     if (_fromCareers) _marks.push('their careers page, so a recruiter reads it');
@@ -36981,7 +37089,7 @@ const cacheContact = async (domain, { owner, email, revenue, pain }) => {
 // institution list WITHOUT that escape, so a dermatology practice survived the
 // rule written to spare it and was then refused by a copy of it.
 const ICP_STAFFING = /\b(staffing|recruit\w*|talent|personnel|placement\w*|headhunt\w*|manpower|workforce|temp agenc\w*|search partners|search group|employment (?:agenc\w*|partners|service\w*))\b/i;
-const ICP_INSTITUTION = /\b(cruise line\w*|airlines?|airways|universit\w*|county of|city of|town of|township|state of|department of|social security|federal government|federal reserve|federal bureau|municipal authorit\w*|municipal district|municipal utilit\w*|housing authorit\w*|housing finance|public schools?|rehabilitation and nursing|logistics|freight system\w*|truck rental\w*|rent[- ]?a[- ]?car|dealer careers|home depot|rentals inc|enterprises inc|holdings inc|automotive group|dealer group|supermarket\w*|grocer\w*|distribution cent\w*|fulfillment cent\w*)\b/i;
+const ICP_INSTITUTION = /\b(cruise line\w*|airlines?|airways|universit\w*|school district|public schools?|ministry|ministries|church of|(?:baptist|lutheran|methodist|catholic|presbyterian|pentecostal|community|first|christian) church|memory care|nursing home|hospice|government agenc\w*|city government|county of|city of|town of|township|state of|department of|social security|federal government|federal reserve|federal bureau|municipal authorit\w*|municipal district|municipal utilit\w*|housing authorit\w*|housing finance|public schools?|rehabilitation and nursing|logistics|freight system\w*|truck rental\w*|rent[- ]?a[- ]?car|dealer careers|home depot|rentals inc|enterprises inc|holdings inc|automotive group|dealer group|supermarket\w*|grocer\w*|distribution cent\w*|fulfillment cent\w*)\b/i;
 // "Skin cancer center" is a dermatology practice by definition; a "cancer
 // center" without it is an oncology institution. That one word is the whole
 // difference between South Carolina Skin Cancer Center, which is exactly who we
@@ -37030,6 +37138,7 @@ const STEM_COMPLETE_WORDS = new Set([
   'finance', 'fitness', 'government', 'group', 'gym', 'health', 'healthcare',
   'heating', 'hvac', 'inc', 'irrigation', 'it', 'lawn', 'logistics', 'manpower',
   'massage', 'medical', 'medicine', 'msp', 'nursing', 'of', 'partners', 'payroll',
+  'church', 'home', 'hospice', 'ministries', 'ministry',
   'personnel', 'pest', 'pilates', 'pool', 'reserve', 'school', 'schools', 'security',
   'septic', 'staffing', 'talent', 'township', 'treatment', 'vet', 'workforce', 'yoga',
 ]);
@@ -37770,8 +37879,11 @@ const runDiscovery = async (body) => {
       // words directly below are the actual test, and they are the ones with
       // fixtures in both directions behind them.
       // Removed rather than raised: a bigger number is the same guess.
-      // Government / non-profit / institution
-      if (/\b(university|college|school|district|county|city of|state of|department of|ministry|federal|government|hospital|health system|medical center|clinic network)\b/i.test(name)) return false;
+      // Government / non-profit / institution: the ONE shared list, not a
+      // second hand-kept copy. The copy that used to sit here knew "ministry"
+      // and the contact route's copy did not, which is how a ministry bought
+      // a paid owner wave on 2026-09-02.
+      if (looksLikeEnterpriseByName(name)) return false;
       // Defense / aerospace
       if (/\b(defense contractor|aerospace|government contractor|department of defense|federal contractor)\b/i.test(name)) return false;
 
@@ -57579,6 +57691,23 @@ app.listen(PORT, () => {
       if (fcCreditsBlocked()) _fails.push('the doors stay shut after recovery');
       if (_fcProbeAt !== 0) _fails.push('the probe clock survives recovery, so the next outage waits out a stale timer before it can re-test');
 
+      // The search door notes its spend AFTER the response, like the other
+      // three. Noting at dispatch is what cleared the latch on a doomed probe.
+      {
+        const _s4 = selfSourceNoCommentsLF();
+        const _n4 = (a, b) => a + b;
+        const _f0 = _s4.indexOf(_n4('const firecrawlSearch = async (fcKey, query,', ' limit = 5, scrapeContent = true) => {'));
+        const _f1 = _f0 < 0 ? -1 : _s4.indexOf(_n4('const results = d.data ||', ' d.results || [];'), _f0);
+        if (_f0 < 0 || _f1 < 0) _fails.push('firecrawlSearch could not be found, so where it notes its spend is not being checked');
+        else {
+          const _body = _s4.slice(_f0, _f1);
+          const _note = _body.indexOf(_n4('fcNote(true, `search x', '${limit}'));
+          const _err = _body.indexOf(_n4('isCreditError(d,', ' r.status)'));
+          if (_note < 0) _fails.push('firecrawlSearch no longer notes its spend at all, so the meter under-reports every search');
+          else if (_err < 0) _fails.push('firecrawlSearch no longer checks for a credit error');
+          else if (_note < _err) _fails.push('firecrawlSearch notes its spend at DISPATCH again - on an empty account the one probe prints FC PAID, counts a credit and clears the latch for every door before the 402 comes back');
+        }
+      }
       // A re-trip after a failed probe restarts the clock rather than opening the gate.
       FIRECRAWL_OUT_OF_CREDITS = true; FIRECRAWL_CREDITS_EMPTY_AT = Date.now(); _fcProbeAt = Date.now();
       if (!fcCreditsBlocked()) _fails.push('a re-trip does not re-close the breaker');
@@ -58568,6 +58697,8 @@ app.listen(PORT, () => {
       'Window Nation',
       "America's Home Place - Sunbury, OH",      'Robert Half Technology',
       'Aspen Dental',
+      // 2026-09-02: a ministry and a memory-care home bought a paid owner wave.
+      'Synergy Ministry', 'Harbor Light Ministries', 'Grace Memory Care', 'Riverside Nursing Home',
     ];
     const _mustLive = [
       'Aqua Blue Pools', 'Hot Springs Pools & Spas', 'DFW Improved',
@@ -58577,6 +58708,10 @@ app.listen(PORT, () => {
       // and one that shares a word with a brand added this round.
       'Rainbow Roofing', 'One Hour Signs', 'Nolen Plumbing',
       'Kelly Roofing', 'Fox Plumbing', 'Block Electric Company',
+      // Searched categories and street names that share a word with the
+      // institution list. A name rule that deletes these deletes a category.
+      'Lakeside Addiction Treatment Center', 'Church Plumbing', 'College Park Plumbing',
+      'Government Street Dental',
     ];
     for (const n of _mustDie) {
       if (!nameIsOutOfIcp(n)) _fails.push(`"${n}" is not refused by name, and it is a national brand that has already cost a paid read`);
@@ -58629,6 +58764,26 @@ app.listen(PORT, () => {
           : `${what} is read as a CHAIN, and on the drop rule that deletes a real lead`);
       }
     }
+    // == AND A NONPROFIT, FROM ITS OWN PAGE ==============================
+    const _npCases = [
+      ['a page stating 501(c)(3)', { pages: [_pg('https://x.org/', 'Hope Recovery is a 501(c)(3) nonprofit organization.')], links: [] }, true],
+      ['a tax-deductible line', { pages: [_pg('https://x.org/', 'Your gift is tax-deductible to the extent allowed by law.')], links: [] }, true],
+      ['a donate page in their own nav', { pages: [_pg('https://x.org/', 'Serving families since 1990.')], links: ['https://x.org/donate'] }, true],
+      ['a donate link in the html', { pages: [{ url: 'https://x.org/', text: 'Welcome.', html: '<a href="/donate-now">Give</a>' }], links: [] }, true],
+      ['an ordinary treatment centre', { pages: [_pg('https://x.com/', 'Lakeside Addiction Treatment Center accepts most insurance. Call for a free consultation.')], links: ['https://x.com/admissions'] }, false],
+      ['a page DENYING it', { pages: [_pg('https://x.com/', 'We are not a nonprofit. Donate your old furniture through our partners.')], links: ['https://x.com/donate'] }, false],
+      ['a plumber who donates', { pages: [_pg('https://x.com/', 'We donate a portion of every job to the food bank.')], links: [] }, false],
+      ['nothing read at all', { pages: [], links: [] }, false],
+    ];
+    for (const [what, args, want] of _npCases) {
+      const got = readNonprofitEvidence(args);
+      if (got.isNonprofit !== want) {
+        _fails.push(want
+          ? `${what} is not read as a nonprofit, and it buys the paid owner wave for an owner that does not exist`
+          : `${what} is read as a NONPROFIT, and on the drop rule that deletes a real lead`);
+      }
+    }
+    if (readNonprofitEvidence({ pages: [], links: [] }).measured !== false) _fails.push('a nonprofit read over nothing claims to have measured something');
 
     // ── 3. ONE MAILBOX VOCABULARY ──────────────────────────────────────
     // The three addresses the live run shipped as tier-1 "Published on their
@@ -58677,6 +58832,12 @@ app.listen(PORT, () => {
       [_nd('out.chain = readChainEvidence({ pages,', ' rosterTitles: signals.teamTitles, links });'), 'the contact read no longer looks for chain evidence at all'],
       [_nd('if (apiKey && name &&', ' !out.notIcp) {'), 'a chain outlet still buys the paid owner wave'],
       [_nd('if (website &&', ' !out.notIcp) {'), 'a chain outlet still buys the address lookup'],
+      [_nd('out.nonprofit = readNonprofitEvidence({ pages,', ' links });'), 'the contact read no longer looks for nonprofit evidence at all'],
+      [_nd('if (!out.notIcp && out.nonprofit', '.isNonprofit) {'), 'a nonprofit is read and then bought anyway - the verdict does not reach notIcp'],
+      [_nd("const _dropAs = out.icpReason === 'nonprofit'", " ? 'as a nonprofit' : 'as a branch of a larger operation';"), 'the drop line calls every drop a chain again'],
+      [_nd('out.email.sendable ? out.email.address :', ' `${out.email.address} (BLOCKED:'), 'the FIND CONTACT line prints an address the sheet will never send to, with nothing saying so'],
+      [_nd('|business_name|hunter|', 'google_review_replies)$/'), 'the OWNER WAVE line forgot the review signatures again, so a free settle reads as a paid win'],
+      [_nd('_ownerWaveLectured', ' = true;'), 'the reading guide is back on every lead\'s OWNER WAVE line'],
       [_nd('freePages: pages.map(p => ({ url: p.url, text: p.text,', ' intent: p.intent })),'), 'the page intent is dropped again, so the extractor cannot tell a careers page from a contact page'],
       [_nd('priorLeads:', ' _bench,'), 'the chain detector lost the cross-run memory the bench already holds'],
       [_nd('licenseQualifier:', ' _isQualifier,'), 'the licence search stopped telling a QUALIFIER from an owner - that is the tradesman who holds the company licence, and it used to come back stamped "Owner"'],
@@ -59020,6 +59181,37 @@ app.listen(PORT, () => {
       }
       const _nSay = EMAIL_GRADES.filter(g => g !== 'none' && !EMAIL_GRADE_SAY[g]).length;
       if (_nSay) _fails.push(`${_nSay} email grade(s) have no sentence, so the row shows a code rather than an answer`);
+      // == GRADE A IS THE OWNER'S OWN MAILBOX ==============================
+      // Live 2026-09-02: a person-shaped box that matched nobody we named
+      // graded A. With an owner named, the local part must be his.
+      const _own = [
+        ['jane@b.com', 'Bob Smith', 'published_role', 'a stranger\'s personal mailbox grades A when we know the owner is somebody else'],
+        ['bob.smith@b.com', 'Bob Smith', 'published_personal', 'the owner\'s own first.last mailbox lost its A'],
+        ['bsmith@b.com', 'Bob Smith', 'published_personal', 'the owner\'s own initial-surname mailbox lost its A'],
+        ['bob@b.com', 'Bob Smith', 'published_personal', 'the owner\'s own first-name mailbox lost its A'],
+        ['mike@b.com', 'Michael Bacevich', 'published_personal', 'a nickname mailbox lost its A'],
+        ['jane@b.com', '', 'published_personal', 'with nobody named, a personal mailbox is graded as if we knew it was a stranger\'s'],
+      ];
+      for (const [_em, _who, _want, _msg] of _own) {
+        const _got = _eg({ email: _em, tier: 1, mailboxKind: 'person' }, { ownerName: _who });
+        if (_got !== _want) _fails.push(`${_msg} (${_em} for "${_who}" graded ${_got})`);
+      }
+      if (!RECRUIT_LOCAL_RE.test('jobs') || !RECRUIT_LOCAL_RE.test('careers') || RECRUIT_LOCAL_RE.test('info') || RECRUIT_LOCAL_RE.test('bob')) {
+        _fails.push('the recruiting mailbox list is wrong in one direction, so jobs@ is picked ahead of info@ or a person is read as a recruiter');
+      }
+      {
+        const _s3 = selfSourceNoCommentsLF();
+        const _n3 = (a, b) => a + b;
+        if (!_s3.includes(_n3('const nameMatch = scraped.emails.find(e => localMatchesName(', "e.split('@')[0], nameParts));"))) {
+          _fails.push('the published-address pick is back on an unbounded substring test, so "ann" picks hannah@ and "don" picks donations@ as the owner\'s mailbox');
+        }
+        if (!_s3.includes(_n3('let best = nameMatch || personal ||', ' _nonRecruit || scraped.emails[0];'))) {
+          _fails.push('a recruiting inbox is picked ahead of an ordinary shared inbox again');
+        }
+        if (!_s3.includes(_n3('|cloudflare|placeholder|', 'mailservice|mailprovider|'))) {
+          _fails.push('a template placeholder domain (mailservice.com) is accepted as a published address again');
+        }
+      }
     }
     // Graded at the ONE wrapper, never at a return site. Twenty-odd returns
     // regrading themselves is how the six answers become six opinions.
@@ -59030,7 +59222,7 @@ app.listen(PORT, () => {
       if (!_src.includes(_n('        catchAll:', ' true,'))) {
         _fails.push('the catch-all return no longer declares itself, so a domain that cannot bounce collapses into an ordinary pattern guess');
       }
-      const _egc = _src.split(_n('emailConfidenceGrade(_r, { verifierDown:', ' _verifierDown })')).length - 1;
+      const _egc = _src.split(_n('emailConfidenceGrade(_r, { verifierDown:', ' _verifierDown, ownerName:')).length - 1;
       if (_egc !== 1) _fails.push(`the email grade is decided at ${_egc} place(s); it must be decided once, at the wrapper every result passes through`);
       if (!_src.includes(_n('grade: em.grade ||', " '', gradeSay: em.gradeSay || '',"))) {
         _fails.push('the email grade stops before the row, so the client goes back to deriving confidence by regex over a human-readable label');
@@ -73152,8 +73344,32 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // The call sites, because everything above supplies its own arguments.
     const _src = selfSourceNoComments();
     const _n = (a, b) => a + b;
-    if (!_src.includes(_n('return { name: _fallbackName, title: _title, confidence:', " 'medium', source: 'own_website_brain' };"))) {
-      _fails.push('the code-read backstop claims high confidence again, which is exactly what ownSiteConfident reads to settle stage 1 - one regex hit would switch off every source that could disagree with it');
+    if (!_src.includes(_n('return { name: _fallbackName, title: _title, confidence:', " 'medium', source: 'own_website_regex' };"))) {
+      _fails.push('the code-read backstop claims high confidence again, or calls itself the brain - ownSiteConfident reads the brain label to settle stage 1, and one regex hit would switch off every source that could disagree with it');
+    }
+    if (!_src.includes(_n('const _ours = ownerSentenceIsOurs(', '_m, _shapeA, corpus, _coTok);'))) {
+      _fails.push('the backstop no longer asks the shared rule whether the sentence is about OUR company');
+    }
+    // Shape B executed through the real rule. A testimonial names a supplier's
+    // owner; the same sentence about us, or with no company after the role,
+    // is ours.
+    {
+      const _tok = companyDistinctiveTokens('Acme Roofing LLC');
+      const _shapeBre = (_a >= 0 && _b >= 0) ? new Function('return (function(){' + _fn.slice(_a, _b) + ' return _OWNER_SENTENCE; })()')() : null;
+      const _cases = [
+        ['a testimonial naming a supplier\'s owner', 'John Smith, owner of Precision Supply Company, praised the crew.', false],
+        ['the same shape about our company', 'John Smith, owner of Acme Roofing, started the company in 1998.', true],
+        ['a sentence with no company after the role', 'John Smith, Owner. Call us today.', true],
+        ['a sentence placing him at another firm', 'John Smith, president at Summit Materials, is a longtime customer.', false],
+      ];
+      for (const [_what, _s, _want] of _cases) {
+        const _mm = _shapeBre ? _s.match(_shapeBre) : null;
+        if (!_mm) { _fails.push(`the shape-B fixture "${_s.slice(0, 40)}" no longer matches the owner sentence at all`); continue; }
+        const _got = ownerSentenceIsOurs(_mm, !!_mm[3], _s, _tok);
+        if (_got !== _want) _fails.push(_want
+          ? `${_what} is refused as somebody else's, so their own owner sentence buys the paid search it exists to save`
+          : `${_what} is tied to OUR company, so a stranger is reported as this lead's buyer`);
+      }
     }
     if (!_src.includes(_n('if (_fallbackName && _ours && ', 'looksLikeRealName(_fallbackName)'))) {
       _fails.push('the backstop no longer requires the sentence to name OUR company, so an owner quoted in a testimonial is reported as this lead\'s buyer');
@@ -73232,6 +73448,48 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
     if (sameName('Michael Bacevich', 'Mike Bacevich') !== true) {
       _fails.push('sameName lost its nickname equivalence when the rule moved to module scope');
+    }
+
+    // 6. THE NAME DOOR. Live 2026-09-02: "Owner-Operator" (a review
+    //    signature's title in the name slot) and "Synergy Ministry" (the
+    //    business itself) both reached the sheet as the decision-maker.
+    //    Executed through the real ranker, both directions.
+    const _pete = rankOwnerCandidates([
+      _mk('Pete Barnes', 'own_website_brain', 'Owner'),
+      _mk('Owner-Operator', 'google_review_replies', 'Owner'),
+    ], 'Barnes Plumbing');
+    if (!_pete || _pete.name !== 'Pete Barnes') _fails.push(`"Owner-Operator" ${_pete ? 'beat the real owner' : 'took the real owner down with it'} - a job title in the name slot is ranked as a person`);
+    const _syn = rankOwnerCandidates([_mk('Synergy Ministry', 'own_website_brain', 'Founder')], 'Synergy Ministry');
+    if (_syn) _fails.push('the business\'s own name is ranked as its decision-maker - "Synergy Ministry" would be dialled as a person');
+    const _lone = rankOwnerCandidates([_mk('Owner-Operator', 'google_review_replies')], 'Barnes Plumbing');
+    if (_lone) _fails.push('a bare title with nobody beside it is ranked as a person');
+    const _doorCases = [
+      ['Bob Webb', 'Bob Webb Homes', null, 'an eponymous owner is refused as the company name'],
+      ['Rick', 'Miller\'s Fancy Bath', null, 'a bare first name is refused, so the review signature can never corroborate again'],
+      ['Client Connection Lead', 'Ten Key', 'title', 'a string made only of role words is accepted as a person'],
+      ['Roof Detective', 'The Roof Detective', 'company', 'the trading name minus its article is accepted as a person'],
+      ['Surek Plastic Surgery', 'Quinn Plastic Surgery', 'not-a-name', 'a firm name with a trade tail is accepted as a person'],
+      ['Ann Lead', 'X Co', null, 'a real owner whose surname is a role word is refused'],
+    ];
+    for (const [_nm, _co, _want, _msg] of _doorCases) {
+      if (ownerNameDoor(_nm, _co) !== _want) _fails.push(_msg);
+    }
+    // 7. THE WAVE IS BOUGHT ONE SEARCH AT A TIME. A Promise.all between the
+    //    stage-2 marker and the settle re-check means the licence credits are
+    //    in flight before the web search can win; same inside the web search
+    //    between its query list and its model call.
+    {
+      const _s2 = selfSourceNoCommentsLF();
+      const _n2 = (a, b) => a + b;
+      const _a = _s2.indexOf(_n2('stagesRun', ' = 2;'));
+      const _b = _a < 0 ? -1 : _s2.indexOf(_n2('findOwnerViaLicense(companyName, industry,', ' location, fcKey, apiKey)'), _a);
+      if (_a < 0 || _b < 0) _fails.push('the stage-2 block of findDecisionMaker could not be found, so its order is not being checked');
+      else if (/Promise\.all\(/.test(_s2.slice(_a, _b))) _fails.push('stage 2 fires the web search and the licence search together again, so a web-search win cannot stop the ~8 licence credits already in flight');
+      else if (!_s2.slice(_a, _b).includes(_n2('if (settled())', ' {'))) _fails.push('stage 2 no longer re-checks settled() between the web search and the licence search, so the licence credits are bought on a lead the web search already settled');
+      const _c = _s2.indexOf(_n2('const findOwnerViaWebSearch = async (companyName,', ' website, fcKey, apiKey, location = \'\') => {'));
+      const _d = _c < 0 ? -1 : _s2.indexOf(_n2("source: 'web_", "search',"), _c);
+      if (_c < 0 || _d < 0) _fails.push('the web search query block could not be found, so its order is not being checked');
+      else if (/Promise\.all\(/.test(_s2.slice(_c, _d))) _fails.push('the web search fires both of its queries together again, so the directory query is bought on every lead the name query already answered');
     }
 
     // ══ THE FOLD ADDS A SOURCE; IT DOES NOT PROMOTE ANYBODY ═══════════════
@@ -75694,6 +75952,32 @@ const chainLocationPath = (url) => {
 const CHAIN_STATE_ONLY_MIN = 3;
 // PURE, so the boot check runs the real rule over the real strings rather than
 // reading the source and hoping.
+// == A NONPROFIT IS NOT A BUYER, AND ITS OWN PAGE SAYS SO ===================
+// Live 2026-09-02: recovery centres, a ministry and a memory-care home were
+// read, scored and bought a paid owner wave. Their names are the vocabulary
+// of trades we DO search (addiction treatment is a searched category), so a
+// name rule would delete the category. What a nonprofit cannot hide is its
+// own page: a donate link, "501(c)(3)", "tax-deductible", a board of
+// directors. Same shape as readChainEvidence: pure, measured:false when we
+// read nothing, a denial guard, and the caller drops before it spends.
+const NONPROFIT_TEXT_RE = /\b(?:501\s*\(?\s*c\s*\)?\s*\(?\s*3\s*\)?|tax[- ]deductible|make a donation|donate (?:now|today|online)|your donation|our donors|non-?profit organi[sz]ation|charitable organi[sz]ation|registered charity|ein[:# ]+\d{2}-\d{7})\b/i;
+const NONPROFIT_LINK_RE = /\/(?:donate|donations|donate-now|give-now|make-a-gift|ways-to-give)(?:[\/?#]|$)/i;
+const NONPROFIT_DENIAL_RE = /\b(?:not a (?:non-?profit|charity)|for-profit (?:business|company|organi[sz]ation)|privately owned and operated)\b/i;
+const readNonprofitEvidence = ({ pages, links } = {}) => {
+  const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
+  const text = read.map(p => String(p.text || '')).join(' ');
+  const html = read.map(p => String(p.html || '')).join(' ');
+  const urls = read.map(p => String(p.url || '')).concat((Array.isArray(links) ? links : []).map(String));
+  const why = [];
+  const denied = NONPROFIT_DENIAL_RE.test(text);
+  if (!denied) {
+    const _t = text.match(NONPROFIT_TEXT_RE);
+    if (_t) why.push(`their own page says "${_t[0].trim().slice(0, 40)}"`);
+    const _l = urls.find(u => NONPROFIT_LINK_RE.test(u)) || (html.match(/href="([^"]*\/(?:donate|donations|donate-now|give-now|make-a-gift|ways-to-give)(?:[\/?#"]|$))/i) || [])[1] || '';
+    if (_l) why.push(`their own site carries a donation page (${String(_l).slice(0, 60)})`);
+  }
+  return { measured: read.length > 0, isNonprofit: why.length > 0, why: why.join('; '), denied };
+};
 const readChainEvidence = ({ pages, rosterTitles, links } = {}) => {
   const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
   const titles = (Array.isArray(rosterTitles) ? rosterTitles : []).map(t => String(t || ''));
@@ -76330,6 +76614,10 @@ const unstampResolvedWebsite = (out, state) => {
   return cleared;
 };
 
+// The one-sentence reading guide for the OWNER WAVE line prints once per
+// process, not once per lead: a per-lead line states what was measured about
+// THIS business, and forty copies of the same sentence is a log nobody reads.
+let _ownerWaveLectured = false;
 const runFindContactRead = async (company, keys, opts = {}) => {
   const t0 = Date.now();
   // ══ THE OWNER IS THE POINT OF THIS LIST ═════════════════════════════
@@ -76700,6 +76988,15 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     // blindness is the guard-too-tight failure. It says what is unknown.
     notes.push('we could not read enough of their site to tell an independent business from a branch of a bigger one \u2014 that is a gap in what we read, not a finding about them');
   }
+  // Same seat as the chain read, same reason: everything after this line
+  // costs credits, and a nonprofit has no owner to sell to.
+  out.nonprofit = readNonprofitEvidence({ pages, links });
+  if (!out.notIcp && out.nonprofit.isNonprofit) {
+    out.notIcp = true;
+    out.icpReason = 'nonprofit';
+    out.icpWhy = out.nonprofit.why;
+    notes.push(`this is a nonprofit \u2014 ${out.nonprofit.why}. There is no owner whose own money is on the line, so there is nothing here to sell.`);
+  }
 
 
   // ══ A LEAD WITH NO GOOGLE LISTING GETS THE SAME READ ══════════════════════
@@ -76977,7 +77274,8 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   };
   out.tookMs = Date.now() - t0;
   if (out.notIcp) {
-    console.log(`\u{1F517} FIND CONTACT [${name}]: DROPPED as a branch of a larger operation \u2014 ${out.icpWhy}. Stopped before the owner wave and the address lookup, so this cost ${out.spend.firecrawl} Firecrawl credit(s) rather than the ~8-16 a full read costs. The site read was already spent and cannot be refunded; everything after it can.`);
+    const _dropAs = out.icpReason === 'nonprofit' ? 'as a nonprofit' : 'as a branch of a larger operation';
+    console.log(`\u{1F517} FIND CONTACT [${name}]: DROPPED ${_dropAs} \u2014 ${out.icpWhy}. Stopped before the owner wave and the address lookup, so this cost ${out.spend.firecrawl} Firecrawl credit(s) rather than the ~8-16 a full read costs. The site read was already spent and cannot be refunded; everything after it can.`);
     return out;
   }
   // == WHAT THE PAID WAVE COST, AGAINST WHAT THE FREE READ HAD ============
@@ -77012,13 +77310,17 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     const _paid = out.paidOwnerLookup !== false && Number(out.ownerStagesRun) > 1;
     const _src = (out.owner && Array.isArray(out.owner.sources)) ? out.owner.sources : [];
     const _got = !!(out.owner && out.owner.name && out.owner.canBuy === true);
-    const _free = _src.length && _src.every(s => /own_website|business_name|hunter/.test(String(s)));
+    // Every free source by name. The old test forgot the review signatures, so
+    // a lead settled for nothing by "Rick, Owner" read as a paid win.
+    const _free = _src.length && _src.every(s => /^(?:own_website_brain|own_website_regex|business_name|hunter|google_review_replies)$/.test(String(s)));
     console.log(`\u{1F4B8} OWNER WAVE [${name}]: the paid wave was ${_paid ? 'BOUGHT' : 'NOT bought'}`
       + ` \u2014 outcome: ${_got ? 'a buyer we can name' : (out.owner && out.owner.name) ? 'a name BELOW the buying floor' : 'nobody at all'}`
       + `${_src.length ? `, from ${_src.join('+')}${_free ? ' (all free sources)' : ''}` : ''}`
-      + `${out.ownerStagesRun === null ? ' (the resolver did not run on this lead)' : ''}, ${out.spend.firecrawl} credit(s) on the lead. Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan.`);
+      + `${out.ownerStagesRun === null ? ' (the resolver did not run on this lead)' : ''}, ${out.spend.firecrawl} credit(s) on the lead.`
+      + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan.'));
+    _ownerWaveLectured = true;
   }
-  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) || 'none'} | phone ${out.phone || 'none'} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
+  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | phone ${out.phone || 'none'} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
   return out;
 };
 

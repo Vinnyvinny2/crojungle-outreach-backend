@@ -118,3 +118,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 104 | 2026-09-01 | Seven leads, twelve reads, and four names that were not people — 2026-09-01 | Find / Client | [round-104.md](round-104.md) |
 | 105 | 2026-09-02 | Ten leads read in twelve seconds, and the score that called them a 53 — 2026-09-02 | Find / Gates | [round-105.md](round-105.md) |
 | 106 | 2026-09-02 | Twenty leads read live, four things on the sheet that were not true, and the export became grades — 2026-09-02 | Find / Gates | [round-106.md](round-106.md) |
+| 107 | 2026-09-02 | Forty leads for the rep, seven defects at their roots — 2026-09-02 | Find / Cost | [round-107.md](round-107.md) |
