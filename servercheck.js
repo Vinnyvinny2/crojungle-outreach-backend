@@ -587,7 +587,7 @@ const runLead = async (b, over, capMs) => {
     ok(HS.hiringMarketing === true, `the dated Marketing Manager posting did not read as hiring for marketing (${JSON.stringify(HS.hiringTitles)})`);
     // THE SCORE, delivered and complete.
     ok(HJ.icp && typeof HJ.icp.score === 'number', `no ICP score arrived: ${JSON.stringify(HJ.icp)}`);
-    ok(HJ.icp && HJ.icp.measured === 7, `the score was measured on ${HJ.icp && HJ.icp.measured} of 7 signals on a lead carrying every one`);
+    ok(HJ.icp && HJ.icp.of >= 7 && HJ.icp.measured === HJ.icp.of, `the score was measured on ${HJ.icp && HJ.icp.measured} of ${HJ.icp && HJ.icp.of} signals on a lead carrying every one`);
     // THE TWO TERMS THAT ONLY EXIST AFTER THE LOOKUPS RUN. This is the whole of
     // section 98's score fix and no boot fixture can see it: findIcpScore used
     // to be called ~370 lines ABOVE the owner and address lookups, so a lead

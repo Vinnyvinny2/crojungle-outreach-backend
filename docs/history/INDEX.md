@@ -119,3 +119,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 105 | 2026-09-02 | Ten leads read in twelve seconds, and the score that called them a 53 — 2026-09-02 | Find / Gates | [round-105.md](round-105.md) |
 | 106 | 2026-09-02 | Twenty leads read live, four things on the sheet that were not true, and the export became grades — 2026-09-02 | Find / Gates | [round-106.md](round-106.md) |
 | 107 | 2026-09-02 | Forty leads for the rep, seven defects at their roots — 2026-09-02 | Find / Cost | [round-107.md](round-107.md) |
+| 108 | 2026-09-02 | The score learns the ICP's own questions — 2026-09-02 | Find | [round-108.md](round-108.md) |

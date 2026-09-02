@@ -5988,6 +5988,9 @@ const AFFORD_TERMS = [
   { id: 'teamReal', points: +6,  why: 'a published team too large to be one person and a helper' },
   { id: 'teamTiny', points: -8,  why: 'the team they publish is one or two people' },
   { id: 'staffed',  points: +3,  why: 'published opening hours one person could not cover alone' },
+  { id: 'financing', points: +4, why: 'they offer financing, so a single job is large enough to need it' },
+  { id: 'commercial', points: +3, why: 'they serve commercial clients as well as homeowners' },
+  { id: 'tenure',   points: +3,  why: 'fifteen or more years in business' },
 ];
 const AFFORD_PREMIUM_AT = 7;      // asserted at boot, with the leads either side of it
 const AFFORD_FLOOR_AT = -5;
@@ -6041,6 +6044,10 @@ const affordabilityBand = (m) => {
   // deliberately positive-only: plenty of real businesses keep short hours.
   const h = l.hours && typeof l.hours === 'object' ? l.hours : null;
   if (h && h.checked === true && (h.openDays === 7 || (Number.isFinite(Number(h.weeklyHours)) && Number(h.weeklyHours) > 60))) take('staffed');
+  if (l.financing === true) take('financing');
+  if (l.commercial === true) take('commercial');
+  const _yrs = Number(l.yearsInBusiness);
+  if (Number.isFinite(_yrs) && _yrs >= 15) take('tenure');
 
   const points = terms.reduce((n, t) => n + t.points, 0);
   if (!terms.length) {
@@ -36017,6 +36024,7 @@ const CONTACT_RANK_TERMS = [
   // somebody has been here, not proof they are getting a return - we are
   // reading markup, not their ads account - so it never sinks a lead alone.
   { id: 'dialledIn',  points: -12, why: 'their tracking and booking are already set up properly, so somebody competent is on this account' },
+  { id: 'aboveScale', points: -10, why: 'their own pages describe a business larger than the ones we sell to' },
 ];
 const CONTACT_RANK_MAX_MODIFIER = 18;   // the three positives; asserted at boot
 
@@ -36060,7 +36068,7 @@ const alreadyDialledIn = (s) => {
 const demotionPenalty = (lead) => {
   const l = lead || {};
   const terms = [];
-  const want = [['outOfBand', l.outsideBand === true], ['aboveSize', l.aboveSizeCeiling === true]];
+  const want = [['outOfBand', l.outsideBand === true], ['aboveSize', l.aboveSizeCeiling === true], ['aboveScale', l.scaleBand === 'over_15m']];
   for (const [id, on] of want) {
     if (!on) continue;
     const t = CONTACT_RANK_TERMS.find(x => x.id === id);
@@ -58784,6 +58792,24 @@ app.listen(PORT, () => {
       }
     }
     if (readNonprofitEvidence({ pages: [], links: [] }).measured !== false) _fails.push('a nonprofit read over nothing claims to have measured something');
+    // == AND WHO OWNS THEM, FROM THEIR OWN PAGE (Round 108) =================
+    const _tellCases = [
+      ['a division of a group', { pages: [_pg('https://x.com/', 'Acme Roofing is a division of Summit Home Services Group.')] }, 'owned'],
+      ['a private-equity portfolio company', { pages: [_pg('https://x.com/', 'We are proud to be a portfolio company focused on growth.')] }, 'owned'],
+      ['backed by a capital firm', { pages: [_pg('https://x.com/', 'Backed by Ridgeline Capital since 2021.')] }, 'owned'],
+      ['a franchisee disclosure', { pages: [_pg('https://x.com/', 'This franchise is independently owned and operated.')] }, 'franchise'],
+      ['serving nationwide', { pages: [_pg('https://x.com/', 'Serving customers nationwide from our Ohio headquarters.')] }, 'national'],
+      ['locally owned, no franchise word', { pages: [_pg('https://x.com/', 'We are independently owned and operated, right here in Austin.')] }, ''],
+      ['an ordinary contractor', { pages: [_pg('https://x.com/', 'Family-owned since 1998. We serve the whole metro area.')] }, ''],
+      ['nothing read at all', { pages: [] }, ''],
+    ];
+    for (const [what, args, want] of _tellCases) {
+      const got = readOwnershipTells(args);
+      if ((got.reason || '') !== want) _fails.push(want
+        ? `${what} is not read as ${want} (got "${got.reason || 'nothing'}"), and it buys the paid wave for a person who does not own the budget`
+        : `${what} is read as "${got.reason}", and on the drop rule that deletes a real lead`);
+    }
+    if (readOwnershipTells({ pages: [] }).measured !== false) _fails.push('an ownership read over nothing claims to have measured something');
 
     // ── 3. ONE MAILBOX VOCABULARY ──────────────────────────────────────
     // The three addresses the live run shipped as tier-1 "Published on their
@@ -58834,7 +58860,12 @@ app.listen(PORT, () => {
       [_nd('if (website &&', ' !out.notIcp) {'), 'a chain outlet still buys the address lookup'],
       [_nd('out.nonprofit = readNonprofitEvidence({ pages,', ' links });'), 'the contact read no longer looks for nonprofit evidence at all'],
       [_nd('if (!out.notIcp && out.nonprofit', '.isNonprofit) {'), 'a nonprofit is read and then bought anyway - the verdict does not reach notIcp'],
-      [_nd("const _dropAs = out.icpReason === 'nonprofit'", " ? 'as a nonprofit' : 'as a branch of a larger operation';"), 'the drop line calls every drop a chain again'],
+      [_nd('out.tells = readOwnershipTells({', ' pages });'), 'the contact read no longer looks for ownership tells at all'],
+      [_nd('if (!out.notIcp && out.tells', '.isOut) {'), 'an ownership tell is read and then bought anyway - the verdict does not reach notIcp'],
+      [_nd('signals.scaleBand = (estimateScaleBand(signals)', ' || {}).band || null;'), 'the size band is estimated by the term and never handed to the demotion, so an over-range business is not marked down'],
+      [_nd('signals.ownerAnswersReviews = (out.owner && Array.isArray(out.owner.sources)', " && out.owner.sources.includes('google_review_replies')) ? true : null;"), 'the founder term no longer sees who signs the review replies'],
+      [_nd('financing: signals.financing === true, commercial:', ' signals.commercial === true,'), 'affordability no longer receives the financing and commercial reads'],
+      [_nd("const _dropAs = ({ nonprofit: 'as a nonprofit',", " owned: 'as a business somebody else owns',"), 'the drop line calls every drop a chain again'],
       [_nd('out.email.sendable ? out.email.address :', ' `${out.email.address} (BLOCKED:'), 'the FIND CONTACT line prints an address the sheet will never send to, with nothing saying so'],
       [_nd('|business_name|hunter|', 'google_review_replies)$/'), 'the OWNER WAVE line forgot the review signatures again, so a free settle reads as a paid win'],
       [_nd('_ownerWaveLectured', ' = true;'), 'the reading guide is back on every lead\'s OWNER WAVE line'],
@@ -59061,9 +59092,54 @@ app.listen(PORT, () => {
     // term LEAVES THE DENOMINATOR; scoring it zero would tell a rep we checked
     // and this business is a bad fit.
     const _perfect = { teamCount: 12, adsCode: true, adPlatforms: ['Google'], hiringMarketing: true, hiringAny: true, hiringTitles: ['Marketing Manager'], hiringMarketingTitles: ['Marketing Manager'], reviewCount: 200, rating: 4.6,
-      affordBand: 'premium', affordWhy: 'a premium-fit trade at real volume', reachMeasured: true, ownerCanBuy: true, emailTier: 1 };
+      affordBand: 'premium', affordWhy: 'a premium-fit trade at real volume', reachMeasured: true, ownerCanBuy: true, emailTier: 1,
+      // Round 108: the founder, scale and invests terms at their maximum.
+      readable: true, execTitles: [], ownerNamedOnSite: true, founderPhrase: 'family-owned', ownerAnswersReviews: true,
+      staffProse: 14, staffProseSay: 'a team of 14 technicians',
+      liveChat: true, scheduler: false, callTracking: false, analytics: false, tagManager: false };
     const _full = findIcpScore(_perfect);
     if (_full.score !== 100) _fails.push(`a business scoring the maximum on every signal scored ${_full.score}, not 100`);
+    // == ROUND 108: THE THREE NEW TERMS, BOTH DIRECTIONS ====================
+    {
+      const _term = (id, s) => { const t = FIND_ICP_TERMS.find(x => x.id === id); return t ? t.score(s) : undefined; };
+      if (_term('founder', { readable: false, ownerNamedOnSite: null, founderPhrase: null, ownerAnswersReviews: null }) !== null) _fails.push('the founder term scores a lead whose pages could not be read and whose owner is unknown - an absence claimed off nothing');
+      const _org = _term('founder', { execTitles: ['Senior Vice President', 'Chief Operating Officer'], ownerNamedOnSite: true, founderPhrase: 'family-owned' });
+      if (!_org || _org.points !== 0) _fails.push('a leadership page with two corporate titles still scores as founder-led');
+      const _fo = _term('founder', { founderPhrase: 'family-owned', ownerNamedOnSite: true, ownerAnswersReviews: true });
+      if (!_fo || _fo.points !== 25) _fails.push(`the founder term at its maximum scores ${_fo && _fo.points}, not 25`);
+      const _none = _term('founder', { founderPhrase: false, ownerNamedOnSite: null, ownerAnswersReviews: null });
+      if (!_none || _none.points !== 3) _fails.push('a readable site that names nobody as running it is not scored low');
+      if (_term('scale', { staffProse: null, fleetProse: null, locationsProse: null }) !== null) _fails.push('the scale term scores a lead that published no size at all');
+      const _sc = estimateScaleBand({ staffProse: 14, staffProseSay: 'a team of 14 technicians' });
+      if (!_sc || _sc.band !== '3m_15m' || !/estimated/.test(_sc.say)) _fails.push('fourteen published technicians is not an estimated $3M-$15M band, or the sentence forgot to say "estimated"');
+      if ((estimateScaleBand({ verifiedEmployees: 150 }) || {}).band !== 'over_15m') _fails.push('150 verified employees is not read as larger than our range');
+      if ((estimateScaleBand({ fleetProse: 12 }) || {}).band !== '3m_15m') _fails.push('a twelve-truck fleet is not read as a mid-band business');
+      if ((estimateScaleBand({ yearsInBusiness: 20, reviewCount: 80 }) || {}).band !== '800k_3m') _fails.push('twenty years at eighty reviews is not read as an established small business');
+      if (estimateScaleBand({ yearsInBusiness: 20, reviewCount: 5 }) !== null) _fails.push('a long tenure with almost no reviews is given a size band - tenure alone is not size');
+      if (demotionPenalty({ scaleBand: 'over_15m' }).points !== -10) _fails.push('an over-range size band does not mark the lead down');
+      if (demotionPenalty({ scaleBand: '3m_15m' }).points !== 0) _fails.push('an in-range size band marks the lead down');
+      if (_term('invests', { liveChat: null, scheduler: null, callTracking: null, analytics: null, tagManager: null }) !== null) _fails.push('the invests term scores a site whose markup was not read');
+      if ((_term('invests', { liveChat: true, scheduler: false, callTracking: false, analytics: false, tagManager: false }) || {}).points !== 15) _fails.push('one marketing tool is not scored as the best prospect shape');
+      if ((_term('invests', { liveChat: false, scheduler: false, callTracking: false, analytics: false, tagManager: false }) || {}).points !== 5) _fails.push('no tools at all is not scored low');
+      if ((_term('invests', { liveChat: true, scheduler: true, callTracking: true, analytics: true, tagManager: true }) || {}).points !== 8) _fails.push('a fully tooled site is not scored as already looked after');
+      const _hr = _term('hiring', { hiringAny: true, hiringMarketing: false, hiringTitles: ['Technician', 'Installer'], hiringOpsTitles: ['Technician', 'Installer'], hiringRecent: true });
+      if (!_hr || _hr.points !== 17) _fails.push(`two recent field roles score ${_hr && _hr.points}, not 17`);
+      // The prose read, executed.
+      const _pr = readFindProse('Family-owned since 1998. Our team of 14 technicians and 12 trucks serve residential and commercial clients. Financing available. 2 technicians will arrive.', Date.parse('2026-09-02'));
+      if (_pr.founderPhrase !== 'family-owned') _fails.push(`the founder phrase read "${_pr.founderPhrase}"`);
+      if (_pr.yearsInBusiness !== 28) _fails.push(`"since 1998" read as ${_pr.yearsInBusiness} years in 2026`);
+      if (_pr.staffProse !== 14) _fails.push(`the staff count read ${_pr.staffProse}, not the largest figure (14)`);
+      if (_pr.fleetProse !== 12) _fails.push(`the fleet read ${_pr.fleetProse}`);
+      if (_pr.financing !== true || _pr.commercial !== true) _fails.push('financing or commercial clients were not read off the sentence that states them');
+      const _pr2 = readFindProse('Call us for a free estimate.');
+      if (_pr2.founderPhrase || _pr2.staffProse !== null || _pr2.yearsInBusiness !== null || _pr2.financing) _fails.push('the prose read invents a figure off a page that states none');
+      const _pr3 = readFindProse('A fleet of 600 trucks. 2000 employees.');
+      if (_pr3.staffProse !== null) _fails.push('a four-digit headcount is not refused as beyond a local business');
+      if (_pr3.fleetProse !== null) _fails.push('a 600-truck fleet is accepted as a local business - the bound on what a local business can be is gone');
+      const _ab = affordabilityBand({ tier: 'B', label: 'Plumbing', reviewCount: 200, financing: true, commercial: true, yearsInBusiness: 20 });
+      if (!_ab.terms.some(t => t.id === 'financing') || !_ab.terms.some(t => t.id === 'commercial') || !_ab.terms.some(t => t.id === 'tenure')) _fails.push('affordability does not read financing, commercial clients or tenure');
+      if (affordabilityBand({ tier: 'B', label: 'Plumbing', reviewCount: 200, yearsInBusiness: 3 }).terms.some(t => t.id === 'tenure')) _fails.push('three years in business counts as tenure');
+    }
     if (_full.measured !== FIND_ICP_TERMS.length) _fails.push('the perfect-fit fixture did not measure every term, so the maximum is not reachable');
 
     // == THE TWO TERMS THAT ANSWER "CAN WE SELL TO THEM" ==================
@@ -76062,6 +76138,21 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
   const analytics = _abs(AD_TAG_SIGNATURES.hasAnalytics.test(allHtml));
   const liveChat = _abs(CHAT_SIGNATURES.test(allHtml));
   const scheduler = _abs(SCHEDULER_SIGNATURES.test(allHtml));
+  // ══ WHAT THEIR OWN PROSE SAYS ABOUT SIZE, AGE AND WHO RUNS IT ══════════
+  // Round 108. The ICP is "founder-led, $800k-$15M, the owner reads his own
+  // email", and until this round the score never asked the first question and
+  // never estimated the second. Every read below is over text this function
+  // was already holding - zero extra requests - and every absence rides the
+  // same readable gate as ads and hiring: unreadable is null, never "no".
+  const allText = read.map(p => {
+    const t = String(p.text || '');
+    if (t.length >= 200) return t;
+    return String(p.html || '').replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  }).join(' ');
+  const _prose = readFindProse(allText, now);
+  const founderPhrase = _prose.founderPhrase ? _prose.founderPhrase : (readable ? false : null);
+  const financing = _abs(_prose.financing);
+  const commercial = _abs(_prose.commercial);
   let adsCode = null;
   const adPlatforms = [];
   if (googleAds) adPlatforms.push('Google');
@@ -76166,7 +76257,108 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
     hiringMarketingTitles: lanes.marketing,
     hiringSource,
     hiringNewestPostedAt: hiringNewest ? new Date(hiringNewest).toISOString() : null,
+    hiringOpsTitles: lanes.ops,
+    hiringRecent: hiringNewest ? (now - hiringNewest) <= 90 * 86400000 : null,
+    founderPhrase, financing, commercial,
+    yearsInBusiness: _prose.yearsInBusiness,
+    staffProse: _prose.staffProse, staffProseSay: _prose.staffProseSay,
+    fleetProse: _prose.fleetProse, locationsProse: _prose.locationsProse,
   };
+};
+
+// ══ THE PROSE READ, PURE ═══════════════════════════════════════════════════
+// Numbers a business writes about itself: "a team of 14", "12 trucks",
+// "3 locations", "since 1998". Each is the LARGEST such figure on the pages
+// (a services page saying "2 technicians will arrive" must not beat the about
+// page saying "our 30 technicians"), bounded to what a local business can
+// be, and reported with the phrase it came from so the sheet can quote it.
+// Nothing here is a headcount or a revenue; it is what they said.
+const FOUNDER_PHRASE_RE = /\b(family[- ]owned|family[- ]run|owner[- ]operated|founded by|started by|second[- ]generation|third[- ]generation|locally owned and operated|veteran[- ]owned|woman[- ]owned|women[- ]owned)\b/i;
+const FIND_FINANCING_RE = /\b(financing available|0% financing|financing options?|payment plans? available|flexible financing|apply for financing|easy financing)\b/i;
+const FIND_COMMERCIAL_RE = /\b(commercial (?:services|clients|customers|accounts|properties|projects|work|division)|residential (?:and|&) commercial|commercial (?:and|&) residential)\b/i;
+const STAFF_PROSE_RE = /\b(?:team of|staff of|crew of|over|more than|nearly)?\s*(\d{1,3})\+?\s*(?:employees|team members|staff members|technicians|techs|plumbers|electricians|roofers|installers|crew members|licensed (?:plumbers|electricians|technicians)|people on (?:our|the) team|dedicated professionals|skilled professionals)\b/gi;
+const FLEET_PROSE_RE = /\b(?:(\d{1,3})\+?\s*(?:trucks|vans|service vehicles|service trucks|fleet vehicles)|fleet of (\d{1,3}))\b/gi;
+const LOCATIONS_PROSE_RE = /\b(\d{1,2})\s*(?:locations|offices|showrooms|branches|convenient locations)\b/gi;
+const FIND_FOUNDED_RE = /\b(?:since|established|est\.?|founded|in business since|serving [a-z ,'-]{3,40} since|family[- ]owned since)\s*(?:in\s*)?((?:18|19|20)\d{2})\b/gi;
+const _maxCapture = (text, re, cap, min = 1) => {
+  let best = null, say = '';
+  re.lastIndex = 0;
+  let m;
+  while ((m = re.exec(text))) {
+    const n = Number(m[1] || m[2]);
+    if (!Number.isFinite(n) || n < min || n > cap) continue;
+    if (best === null || n > best) { best = n; say = String(m[0]).replace(/\s+/g, ' ').trim().slice(0, 50); }
+  }
+  return { n: best, say };
+};
+const readFindProse = (text, now = Date.now()) => {
+  const t = String(text || '');
+  const fp = t.match(FOUNDER_PHRASE_RE);
+  const staff = _maxCapture(t, STAFF_PROSE_RE, 999);
+  const fleet = _maxCapture(t, FLEET_PROSE_RE, 500);
+  const locs = _maxCapture(t, LOCATIONS_PROSE_RE, 99, 2);
+  let yearsInBusiness = null;
+  const _thisYear = new Date(now).getFullYear();
+  FIND_FOUNDED_RE.lastIndex = 0;
+  let m;
+  while ((m = FIND_FOUNDED_RE.exec(t))) {
+    const y = _thisYear - Number(m[1]);
+    if (y >= 0 && y <= 150 && (yearsInBusiness === null || y > yearsInBusiness)) yearsInBusiness = y;
+  }
+  return {
+    founderPhrase: fp ? String(fp[1]).toLowerCase() : '',
+    financing: FIND_FINANCING_RE.test(t),
+    commercial: FIND_COMMERCIAL_RE.test(t),
+    yearsInBusiness,
+    staffProse: staff.n, staffProseSay: staff.say,
+    fleetProse: fleet.n, locationsProse: locs.n,
+  };
+};
+
+// ══ AN ESTIMATED SIZE BAND, NEVER A FIGURE ═════════════════════════════════
+// The ICP is a revenue range and nothing this system reads is a revenue. What
+// it can read, best first: a verified headcount from the enrichment lane; a
+// headcount they wrote themselves; a fleet they wrote themselves; a location
+// count; a long tenure at real review volume. The answer is a BAND, worded as
+// an estimate wherever it is shown, and it never reaches permittedFigures -
+// it is an inference, and the email may not carry one.
+const SCALE_BAND_POINTS = { under_800k: 4, '800k_3m': 14, '3m_15m': 20, over_15m: 6 };
+const SCALE_BAND_SAY = { under_800k: 'under $800k', '800k_3m': '$800k-$3M', '3m_15m': '$3M-$15M', over_15m: 'over $15M' };
+const estimateScaleBand = (s) => {
+  const d = s || {};
+  const mk = (band, from) => ({ band, points: SCALE_BAND_POINTS[band], say: `estimated ${SCALE_BAND_SAY[band]} from ${from}` });
+  const ver = Number(d.verifiedEmployees);
+  if (Number.isFinite(ver) && ver > 0) return mk(ver < 3 ? 'under_800k' : ver < 10 ? '800k_3m' : ver <= 60 ? '3m_15m' : 'over_15m', `${ver} verified employees`);
+  const staff = Number(d.staffProse);
+  if (Number.isFinite(staff) && staff > 0) return mk(staff < 3 ? 'under_800k' : staff < 10 ? '800k_3m' : staff <= 60 ? '3m_15m' : 'over_15m', `"${d.staffProseSay || staff + ' staff'}" on their own pages`);
+  const fleet = Number(d.fleetProse);
+  if (Number.isFinite(fleet) && fleet > 0) return mk(fleet < 3 ? 'under_800k' : fleet < 10 ? '800k_3m' : fleet <= 40 ? '3m_15m' : 'over_15m', `${fleet} trucks on their own pages`);
+  const locs = Number(d.locationsProse);
+  if (Number.isFinite(locs) && locs >= 2) return mk(locs <= 5 ? '3m_15m' : 'over_15m', `${locs} locations on their own pages`);
+  const yrs = Number(d.yearsInBusiness), rv = Number(d.reviewCount);
+  if (Number.isFinite(yrs) && yrs >= 15 && Number.isFinite(rv) && rv >= 40) return mk('800k_3m', `${yrs} years in business at ${rv} reviews`);
+  return null;
+};
+
+// ══ WHAT THEIR OWN PAGE SAYS ABOUT WHO OWNS THEM ═══════════════════════════
+// Beside the chain and nonprofit reads: "a division of X", "portfolio
+// company", "backed by X Capital" is a business somebody else owns; "serving
+// customers nationwide" is not a local business; and "independently owned and
+// operated" next to the word "franchise" is a franchisee's required
+// disclosure. Pure, measured:false when nothing was read.
+const OWNED_TELL_RE = /\b(?:a (?:division|subsidiary|member|part) of (?:the )?[A-Z][\w&'.-]+(?: [A-Z][\w&'.-]+){0,3}|portfolio company|[Bb]acked by [A-Z][\w&'.-]+(?: [A-Z][\w&'.-]+){0,2} (?:Capital|Partners|Equity|Group|Ventures)|part of the [A-Z][\w&'.-]+ family of (?:brands|companies))\b/;
+const NATIONAL_TELL_RE = /\b(?:serving (?:customers |clients |homeowners |businesses )?nationwide|in all 50 states|coast to coast|nationwide network of)\b/i;
+const FRANCHISEE_TELL_RE = /\bindependently owned and operated\b/i;
+const readOwnershipTells = ({ pages } = {}) => {
+  const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
+  const text = read.map(p => String(p.text || '')).join(' ');
+  const why = [];
+  let reason = '';
+  const owned = text.match(OWNED_TELL_RE);
+  if (owned) { reason = 'owned'; why.push(`their own page says "${owned[0].trim().slice(0, 50)}"`); }
+  else if (FRANCHISEE_TELL_RE.test(text) && /\bfranchis/i.test(text)) { reason = 'franchise'; why.push('their own page carries the franchisee disclosure "independently owned and operated" beside the word franchise'); }
+  else { const nat = text.match(NATIONAL_TELL_RE); if (nat) { reason = 'national'; why.push(`their own page says "${nat[0].trim().slice(0, 50)}"`); } }
+  return { measured: read.length > 0, isOut: why.length > 0, reason, why: why.join('; ') };
 };
 
 // ── THE SCORE ───────────────────────────────────────────────────────────────
@@ -76251,10 +76443,50 @@ const FIND_ICP_TERMS = [
     },
   },
   {
+    id: 'founder', max: 25, label: 'whether the owner visibly runs the place',
+    score: (s) => {
+      const exec = Array.isArray(s.execTitles) ? s.execTitles : [];
+      if (exec.length >= 2) return { points: 0, say: `a leadership page with ${exec.length} corporate titles - run by an org chart, not by an owner` };
+      const known = [s.ownerNamedOnSite, s.founderPhrase, s.ownerAnswersReviews].some(v => v !== null && v !== undefined);
+      if (!known) return null;
+      const parts = []; let pts = 0;
+      if (s.ownerNamedOnSite === true) { pts += 10; parts.push('the owner is named on their own pages'); }
+      if (s.founderPhrase) { pts += 8; parts.push(`"${s.founderPhrase}" on their site`); }
+      if (s.ownerAnswersReviews === true) { pts += 7; parts.push('the owner answers their Google reviews'); }
+      if (!pts) return { points: 3, say: 'nothing on their pages says who runs the place' };
+      return { points: Math.min(25, pts), say: parts.join('; ') };
+    },
+  },
+  {
+    id: 'scale', max: 20, label: 'an estimated size band, from what they publish',
+    score: (s) => {
+      const b = estimateScaleBand(s);
+      if (!b) return null;
+      return { points: b.points, say: b.say + (b.band === 'over_15m' ? ' - larger than the businesses we sell to' : b.band === 'under_800k' ? ' - may be too small to carry a retainer' : '') };
+    },
+  },
+  {
+    id: 'invests', max: 15, label: 'whether they already pay for marketing tools',
+    score: (s) => {
+      const tools = [['a chat widget', s.liveChat], ['online booking', s.scheduler], ['call tracking', s.callTracking], ['analytics', s.analytics], ['a tag container', s.tagManager]];
+      const known = tools.filter(t => t[1] === true || t[1] === false);
+      if (!known.length) return null;
+      const on = tools.filter(t => t[1] === true).map(t => t[0]);
+      if (on.length === 0) return { points: 5, say: 'no marketing tools on their site at all - either untouched or too small to have bought any' };
+      if (on.length <= 2) return { points: 15, say: `runs ${on.join(' and ')} - a budget exists and there are gaps left to fill` };
+      if (on.length <= 4) return { points: 10, say: `runs ${on.join(', ')} - already spends on tooling` };
+      return { points: 8, say: `runs ${on.join(', ')} - fully tooled, somebody is already on this` };
+    },
+  },
+  {
     id: 'hiring', max: 20, label: 'whether they are hiring for marketing',
     score: (s) => {
       if (s.hiringMarketing === true) return { points: 20, say: `hiring for ${s.hiringMarketingTitles.slice(0, 2).join(', ') || 'a marketing role'} - a marketing budget being decided right now` };
-      if (s.hiringAny === true) return { points: 10, say: `hiring (${s.hiringTitles.slice(0, 2).join(', ')}), though not for marketing` };
+      if (s.hiringAny === true) {
+        const ops = Array.isArray(s.hiringOpsTitles) ? s.hiringOpsTitles.length : 0;
+        const pts = 10 + (ops >= 2 ? 4 : 0) + (s.hiringRecent === true ? 3 : 0);
+        return { points: Math.min(17, pts), say: `hiring (${s.hiringTitles.slice(0, 2).join(', ')}), though not for marketing${ops >= 2 ? ' - two or more field roles open, so the work is growing' : ''}${s.hiringRecent === true ? ', posted within 90 days' : ''}` };
+      }
       if (s.hiringAny === false) return { points: 4, say: 'no open roles found on their site' };
       return null;
     },
@@ -76997,6 +77229,13 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     out.icpWhy = out.nonprofit.why;
     notes.push(`this is a nonprofit \u2014 ${out.nonprofit.why}. There is no owner whose own money is on the line, so there is nothing here to sell.`);
   }
+  out.tells = readOwnershipTells({ pages });
+  if (!out.notIcp && out.tells.isOut) {
+    out.notIcp = true;
+    out.icpReason = out.tells.reason;
+    out.icpWhy = out.tells.why;
+    notes.push(`${out.tells.reason === 'national' ? 'this is not a local business' : 'somebody else owns this business'} \u2014 ${out.tells.why}. The person on the page does not own the marketing budget.`);
+  }
 
 
   // ══ A LEAD WITH NO GOOGLE LISTING GETS THE SAME READ ══════════════════════
@@ -77231,6 +77470,8 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     teamCount: typeof signals.teamCount === 'number' ? signals.teamCount : null,
     verifiedEmployees: signals.verifiedEmployees,
     hours: (company && company.publishedHours) || null,
+    financing: signals.financing === true, commercial: signals.commercial === true,
+    yearsInBusiness: signals.yearsInBusiness,
   });
   signals.affordBand = _aff.band;
   signals.affordWhy = _aff.why || '';
@@ -77265,6 +77506,16 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   signals.aboveSizeCeiling = (company && company.aboveSizeCeiling) === true;
   signals.ownerCanBuy = !!(out.owner && out.owner.canBuy === true);
   signals.emailTier = (out.email && typeof out.email.tier === 'number') ? out.email.tier : null;
+  // Round 108: is the owner we named visibly running the place? Named on
+  // their own pages (both name parts in text we read), or signing the review
+  // replies. Unknown with nobody named, never "no".
+  if (out.owner && out.owner.name && signals.readable === true) {
+    const _nm = String(out.owner.name).toLowerCase().split(/\s+/).filter(t => t.length >= 2);
+    const _txt = pages.map(p => String(p.text || '')).join(' ').toLowerCase();
+    signals.ownerNamedOnSite = _nm.length >= 2 ? _nm.every(t => _txt.includes(t)) : null;
+  } else signals.ownerNamedOnSite = null;
+  signals.ownerAnswersReviews = (out.owner && Array.isArray(out.owner.sources) && out.owner.sources.includes('google_review_replies')) ? true : null;
+  signals.scaleBand = (estimateScaleBand(signals) || {}).band || null;
   out.icp = findIcpScore(signals);
 
   const led = FC_LEDGER.getStore() || {};
@@ -77274,7 +77525,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   };
   out.tookMs = Date.now() - t0;
   if (out.notIcp) {
-    const _dropAs = out.icpReason === 'nonprofit' ? 'as a nonprofit' : 'as a branch of a larger operation';
+    const _dropAs = ({ nonprofit: 'as a nonprofit', owned: 'as a business somebody else owns', franchise: 'as a franchisee', national: 'as a national operator' })[out.icpReason] || 'as a branch of a larger operation';
     console.log(`\u{1F517} FIND CONTACT [${name}]: DROPPED ${_dropAs} \u2014 ${out.icpWhy}. Stopped before the owner wave and the address lookup, so this cost ${out.spend.firecrawl} Firecrawl credit(s) rather than the ~8-16 a full read costs. The site read was already spent and cannot be refunded; everything after it can.`);
     return out;
   }
