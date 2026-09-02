@@ -2356,7 +2356,9 @@ let contactTally = null;
                  'OWNER_GRADE_RATING', 'ownerGradeRating', 'EMAIL_GRADE_RATING', 'emailGradeRating', 'ownerGradeCell', 'bestTimeCell', 'exportedDateCell',
                  // A front-desk mailbox is kept on the sheet and marked, and the
                  // resolver's source ids are said the way a rep would say them.
-                 'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN'];
+                 'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN',
+                 // Round 110: size and target cells.
+                 'targetOf', 'sizeCell', 'targetCell'];
   const got2 = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED2.includes(n.id.name) && n.init) {
@@ -2373,7 +2375,7 @@ let contactTally = null;
         + '\nreturn { tabOf: contactTabOf, tabs: CONTACT_TABS, cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
         + ' mergeView: mergeFindView, latestRun: latestRunIdOf, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
-        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
+        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, targetCell, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
         + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
         + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT,'
         + ' generic: isGenericMailbox };')();
@@ -2491,7 +2493,7 @@ let contactTally = null;
           const _pr = [{ name: 'Acme Roofing', contactReadOk: true, contactOwner: 'Bob Acme', contactPhone: '5551234567',
                          contactWebsiteResolved: true, contactWebsite: 'https://acmeroofing.com', contactWebsiteConfirmed: true }];
           if (M.csv(_pr, false).indexOf('found by us') < 0) fails.push('the lean CSV carries an owner read off a domain we resolved with no word about where the domain came from');
-          if (!/found by us/.test(String(M.rows(_pr)[0].ownerGrade || ''))) fails.push('the owner grade cell does not carry the resolved-domain provenance, and it is the lean cell that has to');
+          if (!/found by us/.test(String(M.rows(_pr)[0].ownerHowSure || ''))) fails.push('the owner sentence does not carry the resolved-domain provenance');
           if (M.ownerGradeCell({ contactOwner: 'A B', contactOwnerGrade: 'unconfirmed', contactWebsiteResolved: true, contactWebsiteConfirmed: false }) !== 'D (site found by us, unconfirmed)') fails.push('the owner grade cell does not say the resolved domain was NOT confirmed');
           if (M.ownerGradeCell({ contactOwner: 'A B', contactOwnerGrade: 'confirmed' }) !== 'A') fails.push('a plain confirmed owner does not grade A');
           if (M.csv(_pr, true).indexOf('found by us from the name') < 0) fails.push('the full CSV website cell does not say the domain was resolved');
@@ -2608,13 +2610,26 @@ let contactTally = null;
         // Round 106: the lean file carries the GRADE and the sentence stays in
         // the full export. Both directions, because a lean set that quietly
         // grew the sentence back is the busy file this round exists to end.
-        if (M.lean.indexOf('ownerGrade') < 0 || M.lean.indexOf('ownerHowSure') >= 0) {
-          fails.push('the lean file does not carry the owner GRADE, or it carries the owner sentence again');
+        // Round 110, Vin: the grade letters leave the export. The lean file
+        // carries size, the target and the marketing decision-maker instead,
+        // and neither grade nor the sentence comes back.
+        for (const k of ['ownerGrade', 'emailGrade', 'emailSafeToSend', 'ownerHowSure', 'emailConfidence']) {
+          if (M.lean.indexOf(k) >= 0) fails.push(`the lean file carries "${k}" again - the grades and the sentences left the export on 2026-09-02`);
         }
-        if (M.lean.indexOf('emailGrade') < 0 || M.lean.indexOf('emailConfidence') >= 0) {
-          fails.push('the lean file does not carry the email GRADE, or it carries the email sentence again');
+        for (const k of ['size', 'target', 'marketingLead', 'marketingLeadEmail']) {
+          if (M.lean.indexOf(k) < 0) fails.push(`the lean file does not carry "${k}" - the rep asked for size and who to go to`);
         }
-        if (_rows[0].ownerGrade !== 'D') fails.push(`a held-back owner grades "${_rows[0].ownerGrade}", not D`);
+        if (M.cols.some(c => c[0] === 'ownerGrade' || c[0] === 'emailGrade' || c[0] === 'emailSafeToSend')) fails.push('a grade column is back in the declared table');
+        if (!/ask who is/.test(String(_rows[0].ownerHowSure || ''))) fails.push('the held-back owner lost the ask-rather-than-assert sentence in the full export');
+        // The two new cells, executed.
+        const _dar = M.rows([{ contactReadOk: true, name: 'Darrel Co', contactOwner: 'Darrel Jones', contactSize: 'high', contactSizeConfidence: 'sure', contactTarget: 'owner', contactLayers: 'owner' }])[0];
+        if (!_dar || _dar.size !== 'high' || _dar.sizeConfidence !== 'sure' || !/^Owner: Darrel Jones/.test(String(_dar.target))) fails.push(`Darrel at a high size does not export as the owner target (got ${JSON.stringify(_dar && [_dar.size, _dar.sizeConfidence, _dar.target])})`);
+        const _lay = M.rows([{ contactReadOk: true, name: 'Layer Co', contactOwner: 'Pat Roe', contactTarget: 'marketing', contactLayers: 'layered', contactMarketingLead: 'Jane Smith', contactMarketingLeadTitle: 'Director of Marketing', contactMarketingLeadEmail: 'jane@layer.co', contactMarketingLeadEmailSendable: true }])[0];
+        if (!_lay || !/Marketing decision-maker: Jane Smith \(Director of Marketing\); owner Pat Roe/.test(String(_lay.target)) || _lay.marketingLeadEmail !== 'jane@layer.co') fails.push(`a layered business does not export the marketing decision-maker as the target (got ${JSON.stringify(_lay && [_lay.target, _lay.marketingLeadEmail])})`);
+        if (M.rows([{ name: 'Never Read Co', contactPhone: '5550100' }]).length !== 0) fails.push('a lead that was never read is exported at all');
+        if (M.sizeCell({ name: 'Never Read Co' }) !== '' || M.targetCell({ name: 'Never Read Co', contactOwner: 'A B' }) !== '') fails.push('a lead that was never read gets a size or a target cell');
+        const _nm = M.rows([{ contactReadOk: true, name: 'Thin Co', contactOwner: 'Al Bo' }])[0];
+        if (!_nm || _nm.size !== 'not measured') fails.push('a read lead with no size evidence does not say "not measured"');
         if (M.ownerGrade({ contactOwner: 'A B', contactOwnerGrade: 'stated' }) !== 'B' || M.ownerGrade({ contactOwner: 'A B', contactOwnerGrade: 'inferred' }) !== 'C') fails.push('the owner grade letters drifted');
         if (M.ownerGrade({ contactOwnerGrade: 'confirmed' }) !== '') fails.push('a row with no owner still grades the owner');
         // The card. A fixture cannot see a renderer, so the call site is pinned
@@ -2640,11 +2655,11 @@ let contactTally = null;
         if (!_r || !/recruiting inbox/.test(String(_r.emailConfidence || ''))) {
           fails.push("the server's own answer about an address does not reach the exported row");
         }
-        if (!_r || _r.emailGrade !== 'B') fails.push(`a published shared inbox grades "${_r && _r.emailGrade}", not B`);
+        if (M.emailGrade({ contactEmail: 'a@b.com', contactEmailGrade: 'published_role' }) !== 'B') fails.push('a published shared inbox no longer grades B on the card');
         const _co = M.rows([{ ..._em('published_role', 'x'), contactEmailKind: 'company', contactReadOk: true, name: 'C Co' }])[0];
-        if (!_co || _co.emailGrade !== 'B' || !/company's own mailbox/.test(String(_co.emailGoesTo || ''))) fails.push("a company's own mailbox is not graded B and named as the company's");
+        if (!_co || !/company's own mailbox/.test(String(_co.emailGoesTo || ''))) fails.push("a company's own mailbox is not named as the company's");
         const _dn = M.rows([{ ..._em('verifier_down', 'x'), contactReadOk: true, name: 'D Co' }])[0];
-        if (!_dn || _dn.emailGrade !== 'D (checker down)') fails.push('an address resolved while the checker was down does not say so on its grade');
+        if (!_dn || M.emailGrade({ contactEmail: 'a@b.com', contactEmailGrade: 'verifier_down' }) !== 'D (checker down)') fails.push('an address resolved while the checker was down does not say so on the card grade');
         // A row read by an OLDER build has no grade and must still say
         // something rather than going blank.
         const _old = M.rows([{ contactReadOk: true, name: 'B Co', contactEmail: 'a@b.com', contactEmailTier: 2 }])[0];
@@ -2774,9 +2789,12 @@ let contactTally = null;
       if (new Set([s1.emailConfidence, s2.emailConfidence, s3.emailConfidence, s4.emailConfidence]).size !== 4) {
         fails.push('two different email tiers get the same confidence sentence in the contact CSV, which is the defect the audit captions already have');
       }
-      if (s4.emailSafeToSend.indexOf('NO') !== 0) fails.push('a tier-4 address does not report as unsafe to send, and the row reads like any other');
-      if ([s1.emailGrade, s2.emailGrade, s3.emailGrade, s4.emailGrade].join() !== 'A,A,C,D') fails.push(`a row read by an older build grades its tiers as ${[s1.emailGrade, s2.emailGrade, s3.emailGrade, s4.emailGrade].join()} rather than A,A,C,D`);
-      if (M.rows([{ contactReadOk: true, name: 'X', contactOwner: 'A B' }])[0].emailGrade !== '') fails.push('a lead with no address still carries an email grade');
+      // Round 110: Safe-to-send left the export; the address cell itself carries the warning.
+      if (!/do not send/.test(String(s4.email))) fails.push('a tier-4 address exports with no warning on it, and the row reads like any other');
+      if (/do not send/.test(String(s1.email))) fails.push('a published address is marked do-not-send');
+      const _eg = (t) => M.emailGrade({ contactEmail: 'a@b.com', contactEmailTier: t });
+      if ([_eg(1), _eg(2), _eg(3), _eg(4)].join() !== 'A,A,C,D') fails.push(`a row read by an older build grades its tiers as ${[_eg(1), _eg(2), _eg(3), _eg(4)].join()} rather than A,A,C,D on the card`);
+      if (M.emailGrade({ contactOwner: 'A B' }) !== '') fails.push('a lead with no address still carries an email grade');
       if (M.rows([{ contactReadOk: true, name: 'X', contactOwner: 'A B' }])[0].emailConfidence !== '') fails.push('a lead with no address still carries an email-confidence sentence');
 
       // FOUR — the three-state answers. "no" about a thing we never looked at

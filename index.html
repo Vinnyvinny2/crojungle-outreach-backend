@@ -1321,7 +1321,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20260926;
+const CLIENT_CONTRACT = 20260927;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5528,6 +5528,9 @@ const contactRequestBody = (company, settings) => {
       jobPostedAt: C.jobPostedAt || '',
       signalAgeDays: (typeof C.signalAgeDays === 'number') ? C.signalAgeDays : null,
       jobPostingUrl: C.jobPostingUrl || '',
+      // Round 110: the number of metros this business came back in - the
+      // strongest free size signal discovery measures, never sent before.
+      marketCount: (typeof C.marketCount === 'number') ? C.marketCount : null,
     },
     keys: {
       anthropicKey: S.apiKey, firecrawlKey: S.firecrawlKey, verifierKey: S.verifierKey,
@@ -5535,6 +5538,9 @@ const contactRequestBody = (company, settings) => {
       // path. The contact path never sent it, which is half of why the
       // review-reply owner source could never fire.
       apifyToken: S.apifyToken || '',
+      // Round 110: Hunter's marketing filter finds the director-level marketing
+      // head at a layered business. Only asked when their own pages named nobody.
+      hunterKey: S.hunterKey || '',
     },
     // ══ ONLY AN EXPLICIT OFF STANDS THE PAID OWNER LOOKUP DOWN ═════════════
     // The free stage of the owner ladder settles about half of leads; the paid
@@ -5639,6 +5645,21 @@ const emailGradeRating = (c) => {
 // The provenance of a domain WE resolved rides the owner grade, because that
 // cell is lean and `website` is not (Round 105's rule): a rep must never
 // download an owner without knowing the domain was ours to begin with.
+// Round 110: the two rep-facing cells. Pure, so the CSV, the Sheet and the
+// check read one rule.
+// A row read by an older build carries no target; an owner on it is the target.
+const targetOf = (c) => c.contactTarget || (c.contactOwner ? 'owner' : '');
+const sizeCell = (c) => !c.contactReadOk ? '' : (c.contactSize || 'not measured');
+const targetCell = (c) => !c.contactReadOk ? ''
+  : targetOf(c) === 'marketing'
+    ? ('Marketing decision-maker: ' + (c.contactMarketingLead || '')
+       + (c.contactMarketingLeadTitle ? ' (' + c.contactMarketingLeadTitle + ')' : '')
+       + (c.contactOwner ? '; owner ' + c.contactOwner + ' for the second call' : ''))
+  : targetOf(c) === 'owner' ? ('Owner: ' + (c.contactOwner || '')
+       + (c.contactLayers === 'layered' ? ' (layered business, no marketing head found - expect the owner not to answer)' : '')
+       // The lean file has to say when the owner was read off a domain WE found.
+       + websiteProvenanceCell(c))
+  : (c.contactTargetWhy || 'nobody reachable found');
 const ownerGradeCell = (c) => {
   const prov = (c && c.contactWebsiteResolved === true)
     ? (c.contactWebsiteConfirmed === true ? '(site found by us)' : '(site found by us, unconfirmed)') : '';
@@ -5748,6 +5769,18 @@ const contactFieldsFrom = (data) => {
     // The corporate titles on their own leadership page are what DECIDED the
     // size half of the score the row displays, and they stopped at the server.
     contactExecTitles: Array.isArray(sig.execTitles) ? sig.execTitles : [],
+    // ══ SIZE FOR THE REP, LAYERS FOR THE TARGET (Round 110) ═══════════════
+    contactSize: (d.size && d.size.band) || '',
+    contactSizeConfidence: (d.size && d.size.confidence) || '',
+    contactSizeWhy: (d.size && d.size.why) || '',
+    contactLayers: (d.layers && d.layers.verdict) || '',
+    contactTarget: d.target || '',
+    contactTargetWhy: d.targetWhy || '',
+    contactMarketingLead: (d.marketingLead && d.marketingLead.name) || '',
+    contactMarketingLeadTitle: (d.marketingLead && d.marketingLead.title) || '',
+    contactMarketingLeadEmail: (d.marketingLead && d.marketingLead.email) || '',
+    contactMarketingLeadEmailSendable: !!(d.marketingLead && d.marketingLead.sendable === true),
+    contactMarketingLeadCanBuy: !!(d.marketingLead && d.marketingLead.canBuy === true),
     contactReadVia: d.readVia || '',
     // The one stop this read can raise: their own pages never name the
     // business. Carried explicitly rather than left inside notes, because the
@@ -5873,16 +5906,20 @@ const FIND_CSV_COLUMNS = [
   ['icp', 'Fit /100 (not a Google position)'],
   ['icpWhy', 'What that score was measured on'],
   ['company', 'Company'],
+  // Round 110: what the rep asked for - how big, and who to go to.
+  ['size', 'Size (low / medium / high)'],
+  ['sizeConfidence', 'How sure we are of the size'],
+  ['target', 'Who to go to'],
   ['owner', 'Decision-maker'],
   ['ownerTitle', 'Their title'],
   ['ownerHowSure', 'How sure we are it is him, and what to ask'],
-  ['ownerGrade', 'Owner grade (A-D)'],
   ['ownerCanBuy', 'Can they authorise a purchase'],
   ['ownerFrom', 'Where we found them'],
+  ['marketingLead', 'Marketing decision-maker (layered businesses)'],
+  ['marketingLeadTitle', 'Their title'],
+  ['marketingLeadEmail', 'Their email'],
   ['email', 'Email'],
   ['emailConfidence', 'How confident we are in that address'],
-  ['emailGrade', 'Email grade (A-D)'],
-  ['emailSafeToSend', 'Safe to send'],
   ['emailWhyUnconfirmed', 'If it is unconfirmed, why'],
   ['emailGoesTo', 'Who opens it'],
   ['phone', 'Phone'],
@@ -5934,8 +5971,12 @@ const FIND_CSV_COLUMNS = [
 // and hiringPosted are sentences and left the lean file; each has a short
 // sibling here (ownerGrade, emailGrade, bestTime, and the posting age rides
 // hiringMarketing as "yes (11d ago)"). The sentences are one tick away.
-const FIND_CSV_ESSENTIAL = ['icp', 'company', 'owner', 'ownerTitle', 'ownerGrade',
-  'email', 'emailGrade', 'phone', 'bestTime', 'payingForAds', 'hiringMarketing',
+// Round 110, Vin: "we don't need email grading and decision-maker grading any
+// more" - the grade letters leave the export (the card and the send gate
+// still use them); the rep gets size, who to go to, and the marketing
+// decision-maker beside the owner.
+const FIND_CSV_ESSENTIAL = ['icp', 'company', 'size', 'target', 'owner', 'ownerTitle',
+  'marketingLead', 'marketingLeadTitle', 'email', 'marketingLeadEmail', 'phone', 'bestTime', 'payingForAds', 'hiringMarketing',
   // exported is lean because it answers the one question the file could not:
   // has this row already been handed out.
   'exported'];
@@ -6102,6 +6143,13 @@ const findContactRows = (companies) => {
     icp: (typeof c.contactIcp === 'number') ? c.contactIcp : null,
     icpWhy: c.contactIcpWhy || '',
     company: c.name || '',
+    size: sizeCell(c),
+    sizeConfidence: c.contactReadOk ? (c.contactSizeConfidence || 'unknown') : '',
+    target: targetCell(c),
+    marketingLead: c.contactMarketingLead || '',
+    marketingLeadTitle: c.contactMarketingLeadTitle || '',
+    marketingLeadEmail: !c.contactMarketingLeadEmail ? ''
+      : (c.contactMarketingLeadEmail + (c.contactMarketingLeadEmailSendable ? '' : ' (do not send - unconfirmed)')),
     owner: c.contactOwner || '',
     ownerTitle: c.contactOwnerTitle || (c.contactOwner ? 'no title found' : ''),
     ownerCanBuy: c.contactOwner ? (c.contactOwnerCanBuy ? 'yes' : 'not established') : '',
@@ -6110,14 +6158,15 @@ const findContactRows = (companies) => {
     // the two-hand-kept-copies failure. A row read by an older build carries
     // no grade and claims nothing rather than claiming confidence.
     ownerHowSure: (c.contactOwnerAskAs || '') + websiteProvenanceCell(c),
-    ownerGrade: ownerGradeCell(c),
     // Which sources named them. Computed on every read and rendered nowhere,
     // so a name read verbatim off a team page and a name a model proposed
     // looked identical to a rep about to say it out loud.
     ownerFrom: !c.contactOwner ? '' : (Array.isArray(c.contactOwnerSources) && c.contactOwnerSources.length
       ? c.contactOwnerSources.map(x => OWNER_SOURCE_PLAIN[x] || String(x).replace(/_/g, ' ')).join(', ')
       : 'source not recorded'),
-    email: c.contactEmail || '',
+    // Round 110: Safe-to-send left the export, so the address itself says when
+    // it must not be used - a rep reading one column cannot mail a guess.
+    email: !c.contactEmail ? '' : (c.contactEmail + (c.contactEmailSendable ? '' : ' (do not send - unconfirmed)')),
     // The tier IS the confidence. Deriving it by regex over a human-readable
     // label is how four materially different states collapse into one sentence.
     // The SERVER decides this now, at the one wrapper every result passes
@@ -6133,7 +6182,6 @@ const findContactRows = (companies) => {
       : c.contactEmailTier === 3 ? 'built from a pattern seen at this company, not confirmed'
       : c.contactEmailTier === 4 ? 'a guess from a common pattern, nothing confirmed it'
       : (c.contactEmailLabel || 'unknown'),
-    emailGrade: emailGradeRating(c),
     // ══ OUR OUTAGE, NOT A FAULT OF THE ADDRESS ═══════════════════════════
     // On the 2026-09-01 run the mailbox checker ran out of credits twice, and
     // every address resolved while it was down falls to tier 3 at best. Only
@@ -6144,7 +6192,6 @@ const findContactRows = (companies) => {
     emailWhyUnconfirmed: c.contactEmailVerifierDown === true
       ? 'our mailbox checker was unavailable on this run - that is our outage, not a fault of the address. Re-read this lead once it is back.'
       : (c.contactEmailBlockReason || ''),
-    emailSafeToSend: !c.contactEmail ? '' : (c.contactEmailSendable ? 'yes' : 'NO - do not send'),
     // Who actually opens it. A front-desk mailbox is kept - it is often the
     // only published address and a rep can still work it - but a caller has to
     // know before he opens with the owner's first name.
@@ -6366,6 +6413,15 @@ const leadFromCompany = (company) => {
       // team page from one a model guessed.
       contactOwnerSources: Array.isArray(company.contactOwnerSources) ? company.contactOwnerSources : [],
       contactOwnerCanBuy: company.contactOwnerCanBuy === true,
+      contactSize: company.contactSize || '',
+      contactSizeConfidence: company.contactSizeConfidence || '',
+      contactLayers: company.contactLayers || '',
+      contactTarget: company.contactTarget || '',
+      contactTargetWhy: company.contactTargetWhy || '',
+      contactMarketingLead: company.contactMarketingLead || '',
+      contactMarketingLeadTitle: company.contactMarketingLeadTitle || '',
+      contactMarketingLeadEmail: company.contactMarketingLeadEmail || '',
+      contactMarketingLeadEmailSendable: company.contactMarketingLeadEmailSendable === true,
       contactPhone: company.contactPhone || '',
       // Whether their own site prints the number we are about to dial.
       contactPhoneOnSite: (company.contactPhoneOnSite === true || company.contactPhoneOnSite === false)
