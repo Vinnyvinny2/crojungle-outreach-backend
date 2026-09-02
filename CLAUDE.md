@@ -54,6 +54,13 @@ his site.
 
 **The owner is the buyer.** Owner / CEO / President / Managing Partner can buy. VP
 and below is blocked. A perfect email to the wrong person is worse than no email.
+Since 2026-09-02 (Vin, with the rep): at a LAYERED business, where "there's
+receptionists, the owner's out of office, a million layers", the reachable buyer is
+one rung down, the marketing decision-maker: CMO, VP of Marketing, Director of
+Marketing. A Marketing Manager or Coordinator is never the buyer ("if they can't
+sign then what's the point"). Size never decides this: "a business doing $5M could
+be a guy named Darrel", and Darrel is the owner and the target. The rule is
+executed, not written, by `SIZE AND LAYERS CHECK`.
 
 **A check that cannot fail is not a check.** See PART 6.
 

@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260926;
+const CONTRACT_VERSION = 20260927;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -12743,6 +12743,10 @@ const parseTeamRoster = (html, companyName = '') => {
     // instrument and "An Ohio Attorney For" is a sentence fragment, and both
     // paired a junk name behind them on the 2026-09-01 run.
     if (practitionerIsHead(t) || CREDENTIAL_RE.test(t.trim().replace(/[,;]+$/, ''))) return 'practitioner';
+    // Round 110: "Marketing Director" and a bare "CMO" returned null here, so the
+    // row was dropped before anything could read it. They pair as staff; the
+    // marketing decision-maker is picked from the roster by its own rule.
+    if (JOB_MARKETING_OWNER.test(t)) return 'staff';
     if (NON_OWNER_TITLE_RE.test(t) || junior) return 'staff';
     return null;
   };
@@ -33193,7 +33197,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     const ranked = rankOwnerCandidates(found, companyName);
     if (!ranked) { _settleWhy = 'no candidate survived ranking at all'; return null; }
     const independent = independentSourceCount(ranked.sources);
-    const corroborated = independent >= 2 && ranked.authority >= 75;
+    const corroborated = independent >= 2 && ranked.authority >= DM_AUTHORITY_FLOOR;
     const ownSiteConfident = ranked.sources.includes('own_website_brain')
       && ranked.authority >= 90
       && (brainHit && brainHit.confidence === 'high');
@@ -35811,7 +35815,7 @@ const scoreReachability = (c) => {
   // someone who does not work there. Blocking these was discarding the single most
   // deliverable contacts in the pipeline.
   if (dmHeldBack && deliverable && emailMatchesOwner && !juniorTitle
-      && effectiveAuthority >= 75) {
+      && effectiveAuthority >= DM_AUTHORITY_FLOOR) {
     score = Math.max(score, 74);
     reasons.push(`${owner} came from one source only, but their own company mail server confirms a live mailbox in their name (${local}@\u2026) — that is independent confirmation this person is really there. Verify the title before pitching hard.`);
   }
@@ -36049,6 +36053,7 @@ const CONTACT_RANK_TERMS = [
   // reading markup, not their ads account - so it never sinks a lead alone.
   { id: 'dialledIn',  points: -12, why: 'their tracking and booking are already set up properly, so somebody competent is on this account' },
   { id: 'aboveScale', points: -10, why: 'their own pages describe a business larger than the ones we sell to' },
+  { id: 'sizeHigh',   points: -6,  why: 'a high-size business, which ranks below the mid-size ones the ICP is built on' },
 ];
 const CONTACT_RANK_MAX_MODIFIER = 18;   // the three positives; asserted at boot
 
@@ -36092,7 +36097,10 @@ const alreadyDialledIn = (s) => {
 const demotionPenalty = (lead) => {
   const l = lead || {};
   const terms = [];
-  const want = [['outOfBand', l.outsideBand === true], ['aboveSize', l.aboveSizeCeiling === true], ['aboveScale', l.scaleBand === 'over_15m']];
+  // Round 110: the "too big" marks are lifted when the reachable marketing
+  // decision-maker was actually found; a high size still ranks below medium.
+  const _reached = l.marketingLeadFound === true;
+  const want = [['outOfBand', l.outsideBand === true], ['aboveSize', l.aboveSizeCeiling === true && !_reached], ['aboveScale', l.scaleBand === 'over_15m' && !_reached], ['sizeHigh', l.sizeBand === 'high']];
   for (const [id, on] of want) {
     if (!on) continue;
     const t = CONTACT_RANK_TERMS.find(x => x.id === id);
@@ -43023,7 +43031,7 @@ const LISTING_OR_DIRECTORY_HOST = /(bizbuysell|bizquest|businessesforsale|busine
       // at all, so an absent verdict is re-derived from the title through the
       // same authorityScore the resolver uses.
       const _cachedOk = decisionMaker.canBuy === true
-        || (decisionMaker.canBuy === undefined && authorityScore(decisionMaker.title) >= 75);
+        || (decisionMaker.canBuy === undefined && authorityScore(decisionMaker.title) >= DM_AUTHORITY_FLOOR);
       if (!_cachedOk) {
         heldBackContact = {
           name: decisionMaker.name,
@@ -58949,6 +58957,93 @@ app.listen(PORT, () => {
     console.log(`⛔ FIND ICP GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ---- SIZE AND LAYERS (Round 110) --------------------------------------
+  // Two measurements, executed both directions on the shapes from the
+  // 2026-09-02 run, and the rule Vin ruled on: Darrel at $5M routes to
+  // Darrel; a layered business routes to a director-level marketing head; a
+  // Marketing Manager is never shown.
+  try {
+    const _fails = [];
+    const _sz = (s) => sizeBand(s);
+    const _cases = [
+      ['fourteen published technicians', { staffProse: 14, staffProseSay: 'a team of 14 technicians' }, 'medium', 'likely'],
+      ['eighty verified employees and eight locations', { verifiedEmployees: 80, locationsProse: 8 }, 'high', 'sure'],
+      ['seventy published staff and twelve trucks (disagree)', { fleetProse: 12, staffProse: 70 }, 'high', 'likely'],
+      ['three trucks alone', { fleetProse: 3 }, 'low', 'likely'],
+      ['three trucks and one location agree', { fleetProse: 3, locationsProse: 1 }, 'low', 'sure'],
+      ['only 900 reviews', { reviewCount: 900 }, 'high', 'guess'],
+      ['only 41 reviews', { reviewCount: 41 }, 'low', 'guess'],
+      ['only thirty years in business', { yearsInBusiness: 30 }, null, 'unknown'],
+      ['two department heads and a commercial division at a small shop', { staffProse: 4, execTitles: ['CFO', 'COO'], commercial: true }, 'medium', 'likely'],
+      ['nothing at all', {}, null, 'unknown'],
+    ];
+    for (const [what, s, band, conf] of _cases) {
+      const g = _sz(s);
+      if (g.band !== band || g.confidence !== conf) _fails.push(`${what} reads ${g.band}/${g.confidence}, not ${band}/${conf}`);
+    }
+    if (!/estimated|verified employees|on their own pages/.test(_sz({ verifiedEmployees: 80 }).why)) _fails.push('the size sentence does not say what it was read from');
+    // Layers, the Darrel test.
+    const _ly = (s, o) => readLayers(s, o || {}).verdict;
+    if (_ly({ readable: true, ownerNamedOnSite: true, execTitles: [], sizeBand: 'high', teamTitles: ['Owner', 'Estimator'] }, { ownerNamed: true }) !== 'owner') _fails.push('Darrel at $5M is not routed to Darrel - a high size with the owner named on his own pages must be owner-reachable');
+    if (_ly({ readable: true, ownerAnswersReviews: true, execTitles: [] }, { ownerNamed: true }) !== 'owner') _fails.push('an owner who answers his own reviews is not within reach');
+    if (_ly({ readable: true, ownerNamedOnSite: true, execTitles: ['Senior Vice President', 'CFO'] }, { ownerNamed: true }) !== 'layered') _fails.push('two corporate titles do not make a layered business when the owner is also named');
+    if (_ly({ readable: true, teamTitles: ['Marketing Manager', 'Estimator'], execTitles: [] }, { ownerNamed: false }) !== 'layered') _fails.push('a marketing function on the roster does not read as layered');
+    if (_ly({ readable: true, sizeBand: 'high', execTitles: [], teamTitles: [] }, { ownerNamed: false }) !== 'layered') _fails.push('a high-size business with nobody named as owner is not read as layered');
+    if (_ly({ readable: true, sizeBand: 'low', execTitles: [], teamTitles: [] }, { ownerNamed: false }) !== 'owner') _fails.push('a small shop with nothing corporate is not read as owner-reachable');
+    if (_ly({ readable: false }, { ownerNamed: false }) !== 'unmeasured') _fails.push('unreadable pages claim a layers verdict');
+    // Who counts as the buyer at a layered business.
+    const _ml = pickMarketingLead(['Jane Smith', 'Bob Lee', 'Ann Cole'], ['Director of Marketing', 'Marketing Coordinator', 'Marketing Manager']);
+    if (!_ml || _ml.name !== 'Jane Smith') _fails.push('the Director of Marketing is not picked from the roster');
+    if (pickMarketingLead(['Bob Lee', 'Ann Cole'], ['Marketing Coordinator', 'Marketing Manager']) !== null) _fails.push('a Marketing Manager or Coordinator is shown as the decision-maker - Vin: "if they can\'t sign then what\'s the point"');
+    if (pickMarketingLead(['Who We Are'], ['CMO']) !== null) _fails.push('a page heading with a CMO title is picked as a person');
+    for (const t of ['CMO', 'Chief Marketing Officer', 'VP of Marketing', 'VP Marketing', 'Vice President, Marketing', 'Head of Marketing', 'Director of Marketing', 'Marketing Director', 'Chief Growth Officer']) {
+      if (!MARKETING_BUYER_RE.test(t)) _fails.push(`"${t}" is not a marketing buyer title`);
+    }
+    for (const t of ['Marketing Manager', 'Marketing Coordinator', 'Digital Marketing Specialist', 'Owner', 'President']) {
+      if (MARKETING_BUYER_RE.test(t)) _fails.push(`"${t}" reads as a marketing buyer title`);
+    }
+    // The roster pairs them now instead of dropping them.
+    const _rows = parseTeamRoster('<h3>Jane Smith</h3><p>Marketing Director</p><h3>Bob Lee</h3><p>CMO</p><h3>Pete Barnes</h3><p>Owner</p>', 'Barnes Plumbing');
+    if (!_rows.some(r => r.name === 'Jane Smith') || !_rows.some(r => r.name === 'Bob Lee')) _fails.push('a Marketing Director or a CMO is still dropped by the roster parser before anything can read it');
+    if (!_rows.some(r => r.name === 'Pete Barnes' && r.isOwner)) _fails.push('pairing marketing titles cost the owner his row');
+    if (_rows.some(r => r.name === 'Jane Smith' && r.isOwner)) _fails.push('a Marketing Director is paired as the OWNER - PART 3 still says the owner is the buyer on an owner-run business');
+    // The target rule.
+    const _tg = (o, m, l) => targetFor({ owner: o, marketingLead: m, layers: l }).target;
+    if (_tg({ name: 'Darrel Jones' }, null, 'owner') !== 'owner') _fails.push('an owner within reach is not the target');
+    if (_tg({ name: 'Darrel Jones' }, { name: 'Jane Smith', title: 'Director of Marketing' }, 'owner') !== 'owner') _fails.push('an owner within reach loses the row to a marketing head');
+    if (_tg({ name: 'Darrel Jones' }, { name: 'Jane Smith', title: 'Director of Marketing' }, 'layered') !== 'marketing') _fails.push('a layered business with both found does not target the marketing head');
+    if (_tg({ name: 'Darrel Jones' }, null, 'layered') !== 'owner') _fails.push('a layered business with no marketing head loses the owner it did find');
+    if (_tg(null, null, 'layered') !== 'none') _fails.push('a layered business with nobody found claims a target');
+    // The demotions: lifted when the reachable decision-maker was found, and high ranks below medium.
+    if (demotionPenalty({ aboveSizeCeiling: true, scaleBand: 'over_15m', marketingLeadFound: true }).points !== 0) _fails.push('the "too big" marks stay on a lead whose reachable marketing head was found');
+    if (demotionPenalty({ aboveSizeCeiling: true, marketingLeadFound: false }).points !== -10) _fails.push('the review ceiling mark was lifted without a marketing head');
+    if (demotionPenalty({ sizeBand: 'high' }).points !== -6) _fails.push('a high size does not rank below medium');
+    if (demotionPenalty({ sizeBand: 'medium' }).points !== 0) _fails.push('a medium size is marked down');
+    // The call sites and the one floor.
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    const _sites = [
+      [_n('signals.sizeBand = _size.band;', ' signals.sizeConfidence = _size.confidence;'), 'the size band never reaches the signals, so the demotion and the client cannot see it'],
+      [_n('out.target = _target.target;', ' out.targetWhy = _target.why;'), 'the target is decided and never returned'],
+      [_n("if (JOB_MARKETING_OWNER.test(t))", " return 'staff';"), 'the roster drops marketing titles again'],
+      [_n('const corroborated = independent >= 2 && ranked.authority >=', ' DM_AUTHORITY_FLOOR;'), 'the settle rule is back on a literal 75 - a second copy of the buying floor'],
+      [_n('&& effectiveAuthority >=', ' DM_AUTHORITY_FLOOR) {'), 'the ranker is back on a literal 75'],
+      [_n('authorityScore(decisionMaker.title) >=', ' DM_AUTHORITY_FLOOR);'), 'the cache path is back on a literal 75'],
+      [_n('department=marketing&seniority=', 'executive,senior'), "Hunter is asked without its marketing filter, so it returns the same VPs and HR the owner ladder refuses"],
+      [_n("signals.marketingLeadFound = out.target ===", " 'marketing';"), 'the demotion cannot tell that the reachable decision-maker was found'],
+    ];
+    for (const [needle, msg] of _sites) if (!_src.includes(needle)) _fails.push(msg);
+    // Assembled at runtime: a literal regex here would find itself.
+    if (new RegExp(_n('uthority >= 7', '5\\b')).test(_src) || _src.includes(_n('decisionMaker.title) >= ', '75)'))) _fails.push('a literal 75 buying floor is back somewhere in the file');
+    if (_fails.length) {
+      console.log(`⛔ SIZE AND LAYERS CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
+    } else {
+      console.log(`✓ SIZE AND LAYERS CHECK: the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; and the buying floor has one copy.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SIZE AND LAYERS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ---- THE SHEET EXPORT TAKES ITS DESTINATION FROM THE REQUEST ----------
   // Which makes it the one endpoint here that would post a rep's contact list
   // to whatever address somebody names. On a public server an unbounded URL
@@ -70256,7 +70351,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (authorityScore('') >= 75) _fails.push('an ABSENT title clears the buying floor - "no title found" becomes the owner, which is the exact Michelle Musacchio sheet §41 exists to stop');
     if (authorityScore('Marketing Coordinator') >= 75) _fails.push('a below-the-line title clears the buying floor');
     if (_src.indexOf(_n('const _cachedOk = decisionMaker.can', 'Buy === true')) < 0
-      || _src.indexOf(_n('authorityScore(decisionMaker.title) >= ', '75)')) < 0) {
+      || _src.indexOf(_n('authorityScore(decisionMaker.title) >= ', 'DM_AUTHORITY_FLOOR)')) < 0) {
       _fails.push('the CACHED-contact arm no longer applies the buying-authority floor - a contact cached before that floor existed is promoted to owner again, with the title invented, on every re-research');
     }
     if (_src.indexOf(_n("verifiedCEOTitle = decisionMaker.title || ", "'Owner'")) >= 0) {
@@ -76076,7 +76171,7 @@ const chainLocationPath = (url) => {
   if (!m || !CHAIN_STATE_SLUGS.has(m[1])) return '';
   return m[2] ? `${m[1]}/${m[2]}` : m[1];
 };
-const CHAIN_STATE_ONLY_MIN = 3;
+const CHAIN_STATE_ONLY_MIN = 4;   // Round 110: an independent may trade in three states; four is a network
 // PURE, so the boot check runs the real rule over the real strings rather than
 // reading the source and hoping.
 // == A NONPROFIT IS NOT A BUYER, AND ITS OWN PAGE SAYS SO ===================
@@ -76104,6 +76199,123 @@ const readNonprofitEvidence = ({ pages, links } = {}) => {
     if (_l) why.push(`their own site carries a donation page (${String(_l).slice(0, 60)})`);
   }
   return { measured: read.length > 0, isNonprofit: why.length > 0, why: why.join('; '), denied };
+};
+// ══ SIZE FOR THE REP, LAYERS FOR THE TARGET (Round 110) ═══════════════════
+// Vin, 2026-09-02: "high established businesses' reachability is tough -
+// receptionists, the owner's out of office, a million layers ... we need to
+// drop down a level, but we need to grade them right. A well established
+// business doing $5M doesn't have to be corporate; it could be a guy named
+// Darrel. Those are fantastic leads." So two measurements, never one:
+//   SIZE  - what the rep sees: low / medium / high, from headcount, fleet,
+//           locations and markets (revenue per employee sits in one band
+//           across our trades, ~$150-300k; ~$250-400k per truck), with a
+//           confidence word. Age and review count never move it alone.
+//   LAYERS - who the rep goes to: the owner when he is within reach (named
+//           on his own pages, signing his reviews, a personal mailbox, and no
+//           org chart); the marketing decision-maker when the layers are
+//           there. Darrel at $5M routes to Darrel.
+// The buyer at a layered business is director level and up (CMO, VP or
+// Director of Marketing). A Marketing Manager or Coordinator is never shown:
+// "if they can't sign then what's the point." PART 3, dated 2026-09-02.
+const MARKETING_BUYER_RE = /\b(?:cmo|chief marketing officer|chief (?:growth|revenue) officer|vp(?:\.| of)? marketing|vice president(?:,| of)? marketing|head of marketing|director of marketing|marketing director)\b/i;
+const MARKETING_FUNCTION_RE = /\b(?:marketing|human resources|\bhr\b|recruit(?:er|ing)|talent acquisition|communications (?:manager|director|specialist))\b/i;
+const SIZE_TERMS = [
+  { id: 'verifiedEmployees', high: 60, medium: 10, say: (n) => `${n} verified employees` },
+  { id: 'staffProse',        high: 60, medium: 10, say: (n, s) => `"${s.staffProseSay || n + ' staff'}" on their own pages` },
+  { id: 'fleetProse',        high: 40, medium: 10, say: (n) => `${n} trucks on their own pages` },
+  { id: 'locationsProse',    high: 6,  medium: 2,  say: (n) => `${n} locations on their own pages` },
+  { id: 'marketCount',       high: 3,  medium: 2,  say: (n) => `seen in ${n} metros this run` },
+];
+const SIZE_ORDER = { low: 0, medium: 1, high: 2 };
+const sizeBand = (s) => {
+  const d = s || {};
+  const facts = [];
+  for (const t of SIZE_TERMS) {
+    const n = Number(d[t.id]);
+    if (!Number.isFinite(n) || n <= 0) continue;
+    if (t.id === 'marketCount' && n < 2) continue;
+    facts.push({ band: n >= t.high ? 'high' : n >= t.medium ? 'medium' : 'low', say: t.say(n, d) });
+  }
+  if (facts.length) {
+    // The strongest evidence decides; the rest either agree or do not.
+    let band = facts[0].band;
+    const agree = facts.filter(f => f.band === band).length;
+    let confidence = (facts.length >= 2 && agree >= 2) ? 'sure' : 'likely';
+    const why = [facts[0].say].concat(facts.slice(1).map(f => f.say + (f.band === band ? '' : ` (reads ${f.band})`)));
+    // Sophistication nudges one step up, never past "likely", never to high on its own.
+    const soft = [Array.isArray(d.execTitles) && d.execTitles.length >= 2, d.commercial === true, d.financing === true].filter(Boolean).length;
+    if (soft >= 2 && band === 'low') { band = 'medium'; confidence = 'likely'; why.push('department heads, commercial work or financing on their site'); }
+    return { band, confidence, why: why.join('; ') };
+  }
+  const rv = Number(d.reviewCount);
+  if (typeof d.reviewCount === 'number' && Number.isFinite(rv)) {
+    const band = rv >= 750 ? 'high' : rv >= 150 ? 'medium' : 'low';
+    return { band, confidence: 'guess', why: `only the review count (${rv}) - nothing published about staff, fleet or locations` };
+  }
+  return { band: null, confidence: 'unknown', why: 'nothing readable about their size' };
+};
+const readLayers = (s, opts) => {
+  const d = s || {}, o = opts || {};
+  const exec = Array.isArray(d.execTitles) ? d.execTitles.length : 0;
+  const titles = (Array.isArray(d.teamTitles) ? d.teamTitles : []).concat(Array.isArray(d.hiringTitles) ? d.hiringTitles : []);
+  const marketingFunction = titles.some(t => MARKETING_FUNCTION_RE.test(String(t || '')));
+  const ownerReach = d.ownerNamedOnSite === true || d.ownerAnswersReviews === true || !!d.founderPhrase || d.ownerMailboxPersonal === true;
+  const why = [];
+  if (ownerReach && exec < 2) {
+    if (d.ownerNamedOnSite === true) why.push('the owner is named on their own pages');
+    if (d.ownerAnswersReviews === true) why.push('the owner answers their Google reviews');
+    if (d.founderPhrase) why.push(`"${d.founderPhrase}" on their site`);
+    if (d.ownerMailboxPersonal === true) why.push("the owner's own mailbox is published");
+    return { verdict: 'owner', why: why.join('; ') };
+  }
+  if (exec >= 2) why.push(`${exec} corporate titles on their leadership page`);
+  if (marketingFunction) why.push('a marketing or HR function on their roster');
+  const sized = d.sizeBand === 'medium' || d.sizeBand === 'high';
+  if (!why.length && sized && !o.ownerNamed && d.readable === true) why.push('nobody is named as the owner anywhere we read, at a business this size');
+  if (why.length) return { verdict: 'layered', why: why.join('; ') };
+  if (d.readable === true) return { verdict: 'owner', why: 'nothing corporate on their pages' };
+  return { verdict: 'unmeasured', why: 'their pages could not be read' };
+};
+// Director level and up, from their own roster. A manager or coordinator is
+// never returned: they cannot sign, so they are not shown.
+const pickMarketingLead = (names, titles) => {
+  const ns = Array.isArray(names) ? names : [], ts = Array.isArray(titles) ? titles : [];
+  for (let i = 0; i < Math.min(ns.length, ts.length); i++) {
+    const t = String(ts[i] || ''), n = String(ns[i] || '').trim();
+    if (!MARKETING_BUYER_RE.test(t)) continue;
+    if (!looksLikeRealName(n) || ownerNameDoor(n)) continue;
+    return { name: n, title: t.trim(), source: 'own_website_roster' };
+  }
+  return null;
+};
+const targetFor = ({ owner, marketingLead, layers } = {}) => {
+  const hasOwner = !!(owner && owner.name);
+  if (layers === 'layered' && marketingLead && marketingLead.name) {
+    return { target: 'marketing', why: `layered business: ${marketingLead.name} (${marketingLead.title}) is the reachable decision-maker${hasOwner ? '; the owner, ' + owner.name + ', is the second call' : ''}` };
+  }
+  if (hasOwner) return { target: 'owner', why: layers === 'layered' ? 'layered business, but no marketing decision-maker was found - expect the owner not to answer' : 'the owner is within reach' };
+  if (layers === 'layered') return { target: 'none', why: 'layered business and no marketing decision-maker found' };
+  return { target: 'none', why: 'nobody reachable was found' };
+};
+// Hunter's own department and seniority filters - LinkedIn-biased toward VPs
+// and directors, which is exactly the weakness the owner ladder records and
+// exactly the strength here. One Hunter credit per address returned; zero
+// Firecrawl. Only asked on a layered business whose own pages named nobody.
+const findMarketingLeadViaHunter = async (website, hunterKey, companyName) => {
+  const domain = String(website || '').replace(/^https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '');
+  if (!domain || !hunterKey) return null;
+  const r = await hunterSerial(() => fetchT(`https://api.hunter.io/v2/domain-search?domain=${domain}&type=personal&department=marketing&seniority=executive,senior&limit=5&api_key=${hunterKey}`, {}, 10000));
+  const d = await safeJson(r);
+  const emails = (d && d.data && Array.isArray(d.data.emails)) ? d.data.emails : [];
+  const hit = emails.find(e => MARKETING_BUYER_RE.test(String(e.position || '')));
+  if (!hit) {
+    console.log(`HUNTER MARKETING [${companyName}]: ${emails.length} marketing address(es) at ${domain}, none at director level or above - not shown.`);
+    return null;
+  }
+  const name = `${hit.first_name || ''} ${hit.last_name || ''}`.trim();
+  if (!looksLikeRealName(name)) return null;
+  console.log(`HUNTER MARKETING [${companyName}]: \u2713 ${name} (${hit.position}) via Hunter's marketing filter, confidence ${hit.confidence || '?'}.`);
+  return { name, title: String(hit.position || '').trim(), email: hit.value || '', confidence: hit.confidence || null, source: 'hunter' };
 };
 const readChainEvidence = ({ pages, rosterTitles, links } = {}) => {
   const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
@@ -76944,6 +77156,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   //
   // Both values already existed on the lead. Neither was sent.
   const apifyToken = (keys && keys.apifyToken) || '';
+  const hunterKey = (keys && keys.hunterKey) || '';
   // let, not const: a lead that arrives without one can RECOVER it below.
   let placeId = String((company && company.placeId) || '').trim();
   const notes = [];
@@ -77571,6 +77784,45 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   } else signals.ownerNamedOnSite = null;
   signals.ownerAnswersReviews = (out.owner && Array.isArray(out.owner.sources) && out.owner.sources.includes('google_review_replies')) ? true : null;
   signals.scaleBand = (estimateScaleBand(signals) || {}).band || null;
+  // ══ SIZE FOR THE REP, LAYERS FOR THE TARGET (Round 110) ═══════════════
+  signals.marketCount = (company && Number.isFinite(Number(company.marketCount))) ? Number(company.marketCount) : null;
+  signals.ownerMailboxPersonal = !!(out.email && out.email.address && out.email.grade === 'published_personal');
+  const _size = sizeBand(signals);
+  signals.sizeBand = _size.band; signals.sizeConfidence = _size.confidence;
+  out.size = { band: _size.band, confidence: _size.confidence, why: _size.why };
+  const _layers = readLayers(signals, { ownerNamed: !!(out.owner && out.owner.name) });
+  out.layers = { verdict: _layers.verdict, why: _layers.why };
+  let _ml = pickMarketingLead(signals.teamNames, signals.teamTitles);
+  if (!_ml && _layers.verdict === 'layered' && hunterKey && website) {
+    try { _ml = await findMarketingLeadViaHunter(website, hunterKey, name); } catch (e) { notes.push(`the marketing decision-maker lookup failed (${e && e.message})`); }
+  }
+  out.marketingLead = _ml ? { name: _ml.name, title: _ml.title, canBuy: _layers.verdict === 'layered', sources: [_ml.source], email: _ml.email || '', emailTier: null, emailGrade: '', sendable: false } : null;
+  const _target = targetFor({ owner: out.owner, marketingLead: out.marketingLead, layers: _layers.verdict });
+  out.target = _target.target; out.targetWhy = _target.why;
+  if (out.target === 'marketing' && out.marketingLead) {
+    // Their address, through the same engine and the same verifier: one more
+    // check on a layered lead, none on an owner-run one. No Firecrawl.
+    try {
+      const _mem = await findEmailFireproof({
+        website, companyName: name,
+        ceoName: out.marketingLead.name, ceoTitle: out.marketingLead.title, ceoVouched: true,
+        fcKey: '', homepageContent: homeText, verifierKey, siteConfirmed: pages.length > 0, siteIsDown: pages.length === 0,
+        hunterEmail: out.marketingLead.email || '', hunterName: out.marketingLead.name, hunterTitle: out.marketingLead.title,
+        industry: (company && company.industry) || '',
+        freePages: pages.map(p => ({ url: p.url, text: p.text, intent: p.intent })),
+      });
+      if (_mem && _mem.email) {
+        out.marketingLead.email = _mem.email; out.marketingLead.emailTier = _mem.tier ?? null;
+        out.marketingLead.emailGrade = _mem.grade || ''; out.marketingLead.sendable = _mem.sendable === true;
+        out.marketingLead.emailBlockReason = _mem.blockReason || _mem.lookupBlocked || '';
+      }
+    } catch (e) { notes.push(`the marketing decision-maker's address lookup failed (${e && e.message})`); }
+    // The reach term reads the person the rep is sent to.
+    signals.ownerCanBuy = true;
+    signals.emailTier = (typeof out.marketingLead.emailTier === 'number') ? out.marketingLead.emailTier : null;
+  }
+  signals.marketingLeadFound = out.target === 'marketing';
+  console.log(`\u{1F3AF} TARGET [${name}]: size ${_size.band || 'not measured'} (${_size.confidence}: ${_size.why}) | layers ${_layers.verdict}${_layers.why ? ' (' + _layers.why + ')' : ''} | target ${out.target}${out.marketingLead ? ' ' + out.marketingLead.name + ', ' + out.marketingLead.title : ''} \u2014 ${_target.why}`);
   out.icp = findIcpScore(signals);
 
   const led = FC_LEDGER.getStore() || {};
@@ -77626,7 +77878,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan.'));
     _ownerWaveLectured = true;
   }
-  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | phone ${out.phone || 'none'} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
+  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
   return out;
 };
 

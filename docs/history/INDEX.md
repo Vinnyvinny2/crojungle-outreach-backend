@@ -121,3 +121,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 107 | 2026-09-02 | Forty leads for the rep, seven defects at their roots — 2026-09-02 | Find / Cost | [round-107.md](round-107.md) |
 | 108 | 2026-09-02 | The score learns the ICP's own questions — 2026-09-02 | Find | [round-108.md](round-108.md) |
 | 109 | 2026-09-02 | The second run's own misfires, and a rule Vin ruled on — 2026-09-02 | Find / Cost | [round-109.md](round-109.md) |
+| 110 | 2026-09-02 | Size for the rep, layers pick the target — 2026-09-02 | Find / Client | [round-110.md](round-110.md) |
