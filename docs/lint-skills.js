@@ -22,7 +22,7 @@ for (const name of fs.readdirSync(SK).sort()) {
   if (!/^\*\*Goal:\*\* /.test(body[2] || '')) bad(`${name}: Goal is not the first line under the title (got: ${body[2]})`);
   const lines = t.split('\n').length; if (lines > 500) bad(`${name}: ${lines} lines > 500`);
   // referenced supporting files in the same folder
-  for (const ref of (t.match(/`([a-z0-9-]+\.(md|sql|sh))`/g) || [])) { const f = ref.replace(/`/g, ''); if (f !== 'SKILL.md' && !/^(CLAUDE|INDEX|verify-split|ci-gates|server|index|clientcheck|map)\./.test(f) && !fs.existsSync(path.join(dir, f))) bad(`${name}: references ${f} which is not in its folder`); }
+  for (const ref of (t.match(/`([a-z0-9-]+\.(md|sql|sh))`/g) || [])) { const f = ref.replace(/`/g, ''); if (f !== 'SKILL.md' && !/^(CLAUDE|INDEX|verify-split|ci-gates|server|index|clientcheck|map|round-\d{3})\./.test(f) && !fs.existsSync(path.join(dir, f))) bad(`${name}: references ${f} which is not in its folder`); }
   if (/`map\.md`/.test(t) && !fs.existsSync(path.join(dir, 'map.md'))) bad(`${name}: map.md missing`);
   // verbatim copies: "lines A-B" claims in the intro must match the original byte for byte
   const claims = [...t.matchAll(/lines (\d+)-(\d+)/g)].map(x => [+x[1], +x[2]]);
