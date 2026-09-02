@@ -90,8 +90,6 @@ one now tested. And servercheck's scenario H asserted "7 of 7 signals" as a
 literal; it now reads the count off the response (`icp.of`), so the next
 term does not break it.
 
-Boot: 274 checks green.
-
 **274 boot checks green.** `bash ci-gates.sh` all stages. The contract is 20260926 on
 both sides — `index.html` did not change.
 
