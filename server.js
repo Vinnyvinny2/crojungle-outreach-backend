@@ -5065,7 +5065,14 @@ const signalsFromTitles = (titles) => {
 // Nothing here is a revenue: a band, worded as an estimate wherever shown.
 const ICP_MARKETING_SHARE = 0.10;
 const ICP_PREMIUM_RETAINER_MONTHLY = 10000;   // the '$10k' in OUR_PRICE_FIGURES; asserted at boot
-const ICP_REVENUE_BAND = { floor: 0.8e6, coreFrom: 1.2e6, upperFrom: 10e6, ceiling: 30e6 };
+// Round 114 (Vin, 2026-09-03): the ceiling is a REACHABILITY rule, never an
+// affordability one - "there is no top of the retainer; we would do a $50k a
+// day retainer if we got the deal". It marks where the phone stops reaching the
+// person who signs; a big company is an EMAIL lead, never dropped. $30M -> $35M
+// is headroom on a MEASURED number (a directory figure can be 30% off), and an
+// owner-run business over it stays on the call sheet up to the reach line.
+const ICP_REVENUE_BAND = { floor: 0.8e6, coreFrom: 1.2e6, upperFrom: 10e6, ceiling: 35e6 };
+const ICP_CALL_REACH_CEILING = 50e6;   // owner within reach and measured under this: still a call (Vin, 2026-09-03)
 const ICP_REVENUE_PER_EMPLOYEE = 200000;      // HVAC/plumbing/electrical $160-280k per head (MarginPlug, Tradesly, SubcontractorHub; Vertical IQ: 12 people ~= $2.9M), 2026-09-03
 const ICP_REVENUE_PER_TRUCK = 300000;         // $250-400k per truck, home services (Service Autopilot), 2026-09-03
 // Keyed by the CATEGORY_TIER label. A trade with no row uses the default; a
@@ -5160,7 +5167,8 @@ const sizeMeasured = (s) => {
 // A tier nobody could measure falls back on the affordability band the Find
 // press measured on every Places lead: "we did not look" never means "cannot
 // pay", so an unmeasured lead is taken as entry, never dropped.
-const LANE_TIERS = { call: ['entry', 'core', 'upper'], email: ['core', 'upper'] };
+// Round 114: the email lane has NO ceiling - a big company is an email lead.
+const LANE_TIERS = { call: ['entry', 'core', 'upper'], email: ['core', 'upper', 'over_ceiling'] };
 // Round 112: ONE fallback. When nothing measured the tier, the lane reads the
 // same guess the sheet prints (the review count: low / medium / high), so the
 // sheet word and the lane can never disagree (Hayward Tree Service read "low"
@@ -5169,7 +5177,7 @@ const LANE_TIERS = { call: ['entry', 'core', 'upper'], email: ['core', 'upper'] 
 // And the call lane means a NAMED owner within reach: a read lead with a
 // phone and nobody named is the "no name yet" bucket, off the rep's sheet.
 const SIZE_WORD_TIER = { low: 'entry', medium: 'core', high: 'upper' };
-const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, target, product } = {}) => {
+const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national } = {}) => {
   const why = [];
   let t = SCALE_TIERS.includes(tier) ? tier : null;
   let measured = !!t;
@@ -5181,26 +5189,48 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
     t = affordBand === 'premium' ? 'core' : affordBand === 'below_floor' ? 'below_floor' : 'entry';
     why.push(affordBand ? `size not measured and no review count; judged on the trade and the job count (${affordBand})` : 'size not measured and nothing else read, taken as entry');
   }
+  // Round 114 (Vin, 2026-09-03): headroom on the floor. A business is benched
+  // under it only when its size is likely or sure; a guess under the floor
+  // stays on the sheet as low, because the guess is the thing most likely wrong.
+  if (t === 'below_floor' && sizeConfidence !== 'likely' && sizeConfidence !== 'sure') {
+    t = 'entry';
+    why.push(`under the floor on a ${sizeConfidence || 'guess'} - kept as low`);
+  }
   // Round 113 (Vin, 2026-09-03): a product company is kept, as an email lead.
   const layered = layers === 'layered', ts = source === 'theirstack', prod = product === true;
+  // Round 114: a branch network, a PE-owned company and a national operator are
+  // LARGE companies - marked and kept, layered by construction.
+  const big = network === true ? 'a branch network' : peOwned === true ? 'PE-owned' : national === true ? 'a national operator' : '';
   const named = !!target && target !== 'none';
-  const inCall = LANE_TIERS.call.includes(t) && !layered && !ts && !prod;
+  // Round 114: an owner-run business over the call cap is still a call while its
+  // measured size sits under the reach line (DMI Paving at $24M: the founder is
+  // named with his own mailbox, and nothing about the cap changes that).
+  const reach = t === 'over_ceiling' && layers === 'owner' && !big && Number(usd) > 0 && Number(usd) <= ICP_CALL_REACH_CEILING;
+  // Round 114 (Vin: "it's better to never find out if we cut it"): a layered
+  // business under the cap STAYS on the call sheet, ranked last and marked, and
+  // the rep asks for the marketing head. Only a TheirStack lead (no phone) and
+  // a product company (a sales line) are never on it.
+  const inCall = (LANE_TIERS.call.includes(t) || reach) && !ts && !prod;
   const call = inCall && named;
   const noname = inCall && !named;
   const email = LANE_TIERS.email.includes(t) && named;
+  const last = call && (layered || !!big);
   if (t === 'below_floor') why.push('under the floor - benched');
-  if (t === 'over_ceiling') why.push('over the ceiling - the decision has left the building');
-  if (layered && LANE_TIERS.call.includes(t)) why.push('layered business - email only');
+  if (t === 'over_ceiling') why.push(reach ? `over the call cap but owner-run and measured under ${_usdShort(ICP_CALL_REACH_CEILING)} - still a call` : `over the call cap (${SCALE_BAND_SAY.over_ceiling}) - email, the marketing decision-maker`);
+  if (layered && inCall) why.push('layered business - on the call sheet last, ask for the marketing head');
+  if (big && inCall) why.push(`${big} - on the call sheet last; the local number reaches a branch, the decision is at head office`);
+  if (big && !inCall && LANE_TIERS.email.includes(t)) why.push(`${big} - email, the marketing decision-maker at head office`);
   if (ts && LANE_TIERS.call.includes(t)) why.push('a TheirStack lead - email only');
   if (prod && LANE_TIERS.call.includes(t)) why.push('a product company - email only');
   if (noname) why.push('nobody named yet - off the call sheet until a name is found');
   if (LANE_TIERS.email.includes(t) && !email && !noname) why.push('nobody named to write to');
-  if (call && email) why.push('owner within reach and can afford premium - call first, email if no connect');
-  return { call, email, noname, tier: t, measured, why: why.join('; ') };
+  if (call && email && !last) why.push('owner within reach and can afford premium - call first, email if no connect');
+  return { call, email, noname, last, tier: t, measured, why: why.join('; ') };
 };
 const laneWord = (l) => !l ? 'none' : (l.call && l.email) ? 'call + email' : l.call ? 'call' : l.email ? 'email' : l.noname ? 'no name yet' : 'none';
 
 const TS_LIMIT = 25; // credits per run = TS_LIMIT (1 credit/job). Raise on paid plan.
+const TS_MAX_EMPLOYEES = 5000; // Round 114 (Vin, 2026-09-03): the email lane has no ceiling - a big company is an email lead
 // Track last TheirStack run in memory (persists across requests, resets on deploy).
 // NOTE: this in-memory gate is the WEAKER of the two. The binding one is
 // TS_MIN_HOURS (default 84h) held in Supabase cron_state, which survives a
@@ -5227,9 +5257,10 @@ const searchTheirStack = async (theirstackKey) => {
       // job_location_pattern_or is documented; if the API ignored it the run
       // would be nationwide, i.e. the old behaviour - the log prints the count.
       job_location_pattern_or: GP_CITIES.map(c => c.replace(/\s+[A-Z]{2}$/, '')),
-      // Size filtered at source, from the ICP ladder: the core cut up to the ceiling.
+      // Size filtered at source, from the ICP ladder: the core cut up. No ceiling
+      // (Round 114): this is the email lane, and a big company is an email lead.
       min_employee_count: scaleCuts(ICP_REVENUE_PER_EMPLOYEE).core,
-      max_employee_count: ICP_EMPLOYEE_BLOCK,
+      max_employee_count: TS_MAX_EMPLOYEES,
       order_by: [{ field: 'date_posted', desc: true }],
       // ── MARKETING ONLY, AND WRITTEN OUT RATHER THAN PATTERN-MATCHED ───────
       // TheirStack also exposes `job_title_pattern_or` (regex), which would be
@@ -6258,6 +6289,13 @@ const affordabilityBand = (m) => {
 // 2,000 - a $10-30M operator has thousands of reviews and was never being read.
 // Still a demotion, never a deletion; the contact read sorts the lead's lane.
 const GP_MAX_REVIEWS = parseInt(process.env.GP_MAX_REVIEWS || '2000', 10);
+// Round 114 (Vin, 2026-09-03): big companies are email leads, and the demoted
+// pool is where Find puts them. Up to this share of a run is served from the
+// leads demoted for SIZE (never for the rating band) ahead of the rest of the
+// pool, so a batch carries some large companies for the email lane instead of
+// leaving them on the bench behind every in-band lead forever. 0 restores the
+// pure in-band-first order; capped at a half so the rep's sheet stays the run.
+const GP_LARGE_SHARE = Math.max(0, Math.min(0.5, Number(process.env.GP_LARGE_SHARE ?? '0.1') || 0));
 
 // ══ COORDINATES, SO A COVERAGE CLAIM CANNOT BE ABSURD ════════════════════════
 // The grid is twenty unrelated national metros. Without distance, "you do not
@@ -36345,11 +36383,14 @@ const CONTACT_RANK_TERMS = [
   // somebody has been here, not proof they are getting a return - we are
   // reading markup, not their ads account - so it never sinks a lead alone.
   { id: 'dialledIn',  points: -12, why: 'their tracking and booking are already set up properly, so somebody competent is on this account' },
-  { id: 'aboveScale', points: -10, why: 'their own pages describe a business over the ceiling of the ones we sell to' },
+  { id: 'aboveScale', points: -10, why: 'their own pages describe a business over the call cap - an email lead' },
   { id: 'sizeHigh',   points: -6,  why: 'a high-size business, which ranks below the mid-size ones the ICP is built on' },
   // Round 111: under the floor is benched and marked, never deleted - the
   // lower tier is the likely sale and the rep decides on the call.
   { id: 'scaleBelowFloor', points: -10, why: 'their own pages describe a business under the floor, so the lower tier is the likely sale' },
+  // Round 114 (Vin, 2026-09-03): layered, a branch network, PE-owned or a national
+  // operator stays on the call sheet - LAST. The rep asks for the marketing head.
+  { id: 'layeredLast', points: -8, why: 'layered or owned elsewhere - on the call sheet last, ask for the marketing head' },
 ];
 const CONTACT_RANK_MAX_MODIFIER = 18;   // the three positives; asserted at boot
 
@@ -36398,7 +36439,7 @@ const demotionPenalty = (lead) => {
   const _reached = l.marketingLeadFound === true;
   // Round 111: over the ceiling is corporate whoever was found, so that mark is
   // never lifted; the review-ceiling mark still is, because reviews are not size.
-  const want = [['outOfBand', l.outsideBand === true], ['aboveSize', l.aboveSizeCeiling === true && !_reached], ['aboveScale', l.scaleBand === 'over_ceiling'], ['scaleBelowFloor', l.scaleBand === 'below_floor'], ['sizeHigh', l.sizeBand === 'high']];
+  const want = [['outOfBand', l.outsideBand === true], ['aboveSize', l.aboveSizeCeiling === true && !_reached], ['aboveScale', l.scaleBand === 'over_ceiling'], ['scaleBelowFloor', l.scaleBand === 'below_floor'], ['sizeHigh', l.sizeBand === 'high'], ['layeredLast', l.laneLast === true]];
   for (const [id, on] of want) {
     if (!on) continue;
     const t = CONTACT_RANK_TERMS.find(x => x.id === id);
@@ -38552,9 +38593,15 @@ const WEIGHTS = {
       // ── SIGNAL 1: Verified headcount (highest confidence) ──────────────
       if (c.verifiedEmployees) {
         if (c.verifiedEmployees > ICP_EMPLOYEE_BLOCK) {
-          console.log(`BLOCKED [${c.name}]: ${c.verifiedEmployees} employees (verified) - past the ${ICP_EMPLOYEE_BLOCK}-employee ceiling of the ladder`);
-          blockedCount++; blockReasons.headcount = (blockReasons.headcount||0)+1;
-          return false;
+          // Round 114 (Vin, 2026-09-03): a big company is an EMAIL lead. Demoted
+          // behind every in-band lead and marked, never deleted - the same seat
+          // the review ceiling uses, so every gate that asks "is this demoted?"
+          // sees it and the contact read sorts it into the email lane.
+          c.aboveSizeCeiling = true;
+          c.sizeNote = `${c.verifiedEmployees} employees (verified) - past the ${ICP_EMPLOYEE_BLOCK}-employee call cap of the ladder; an email lead, served behind the in-band leads`;
+          console.log(`DEMOTED [${c.name}]: ${c.verifiedEmployees} employees (verified) - past the ${ICP_EMPLOYEE_BLOCK}-employee call cap of the ladder; kept as an email lead`);
+          blockReasons.headcountDemoted = (blockReasons.headcountDemoted||0)+1;
+          return true;
         }
         if (c.verifiedEmployees > ICP_EMPLOYEE_WARN) {
           c.sizeWarning = `${c.verifiedEmployees} employees — upper tier, verify reachability`;
@@ -38870,7 +38917,9 @@ const WEIGHTS = {
         let triage;
 
         if (emp > ICP_EMPLOYEE_BLOCK) {
-          // Verified past the ladder's ceiling — nobody reachable. Floored.
+          // Verified past the call cap - an email lead, served last (Round 114).
+          // Tiered so the FIND YIELD line counts it.
+          c.scaleTier = 'over_ceiling';
           triage = 8;
         } else if (isPlaces) {
           // Local owner-operated: reachable by construction. Rank by revenue proxy
@@ -39049,22 +39098,36 @@ const WEIGHTS = {
     // (srcTally counted the Adzuna lane against its cap. Both are gone.)
     const scored = [];
     let _skippedKnown = 0;
+    // Already in the client's pipeline — skip before it takes a queue slot.
+    // Done here rather than earlier so the dedupe count reflects leads that
+    // would genuinely have been returned, not ones filtered for other reasons.
+    // Name match catches the ones with no website stored, or a different URL.
+    const _isKnown = (c) => {
+      if (_knownHosts.size) { const h = _hostOf(c.website || ''); if (h && _knownHosts.has(h)) return true; }
+      if (_knownNames.size) { const k = _normName(c.name || c.company || ''); if (k && k.length > 4 && _knownNames.has(k)) return true; }
+      return false;
+    };
+    // Round 114: a slice of the run for the leads demoted for SIZE alone - the
+    // large companies the email lane wants. The pool is in-band first, so
+    // without this they sit behind every in-band lead and never come off the
+    // bench. The slice is taken in pool order (best large first) and appended
+    // behind the in-band leads; the client sorts by score anyway.
+    const _largeSlots = Math.floor(MAX_TOTAL * GP_LARGE_SHARE);
+    const _large = [];
     for (const c of allScored) {
-      // Already in the client's pipeline — skip before it takes a queue slot.
-      // Done here rather than earlier so the dedupe count reflects leads that
-      // would genuinely have been returned, not ones filtered for other reasons.
-      if (_knownHosts.size) {
-        const h = _hostOf(c.website || '');
-        if (h && _knownHosts.has(h)) { _skippedKnown++; continue; }
-      }
-      // Name match catches the ones with no website stored, or a different URL.
-      if (_knownNames.size) {
-        const k = _normName(c.name || c.company || '');
-        if (k && k.length > 4 && _knownNames.has(k)) { _skippedKnown++; continue; }
-      }
-      scored.push(c);
-      if (scored.length >= MAX_TOTAL) break;
+      if (_large.length >= _largeSlots) break;
+      if (!(c.aboveSizeCeiling === true && c.outsideBand !== true)) continue;
+      if (_isKnown(c)) continue;
+      _large.push(c);
     }
+    const _largeSet = new Set(_large);
+    for (const c of allScored) {
+      if (_largeSet.has(c)) continue;
+      if (_isKnown(c)) { _skippedKnown++; continue; }
+      scored.push(c);
+      if (scored.length >= MAX_TOTAL - _large.length) break;
+    }
+    scored.push(..._large);
     if (_skippedKnown) console.log(`DEDUPE: skipped ${_skippedKnown} companies already in your pipeline (~${_skippedKnown * 10} Firecrawl credits not re-spent)`);
 
     // Breakdown by source
@@ -39130,6 +39193,8 @@ const WEIGHTS = {
         // Round 111: the TheirStack lane's leads by tier - the one lane whose
         // size is known at Find time. A Places lead is tiered on its contact read.
         ...SCALE_TIERS.map(t => [`TheirStack ${t.replace('_', ' ')}`, scored.filter(c => c.source === 'theirstack' && c.scaleTier === t).length]).filter(r => r[1] > 0),
+        // Round 114: how many of the size-demoted large companies the slice served.
+        ...(_large.length ? [['large companies served for the email lane', _large.length]] : []),
       ].filter(r => Number.isFinite(Number(r[1])));
       const _worst = _rows.slice(2, -1).sort((a, b) => Number(b[1]) - Number(a[1]))[0];
       console.log(`\u{1F4C9} FIND YIELD: ${_rows.map(r => `${r[0]} ${r[1]}`).join(' \u2192 ')}.` +
@@ -59081,10 +59146,12 @@ app.listen(PORT, () => {
     // ── 2. THE MECHANISM: WHAT THE BUSINESS SAYS ABOUT ITSELF ──────────
     const _pg = (url, text) => ({ url, text, html: text });
     const _chainCases = [
-      ['a team page naming a Franchise Owner', { pages: [_pg('https://trulynolen.com/', 'Pest control since 1938.')], rosterTitles: ['Majority Franchise Owner', 'Operations Manager'], links: [] }, true],
-      ['a per-state locations URL we read', { pages: [_pg('https://www.windownation.com/locations/north-carolina/charlotte', 'Windows.')], rosterTitles: [], links: [] }, true],
-      ['a per-state locations URL in their own nav', { pages: [_pg('https://x.com/', 'Windows.')], rosterTitles: [], links: ['https://x.com/locations/texas/austin'] }, true],
-      ['a page selling franchises', { pages: [_pg('https://x.com/', 'Own a franchise in your area.')], rosterTitles: [], links: [] }, true],
+      // Round 114: a KIND per case - 'franchise' drops, 'network' is kept as an email lead, false is an independent.
+      ['a team page naming a Franchise Owner', { pages: [_pg('https://trulynolen.com/', 'Pest control since 1938.')], rosterTitles: ['Majority Franchise Owner', 'Operations Manager'], links: [] }, 'franchise'],
+      ['a per-state locations URL we read', { pages: [_pg('https://www.windownation.com/locations/north-carolina/charlotte', 'Windows.')], rosterTitles: [], links: [] }, 'network'],
+      ['a per-state locations URL in their own nav', { pages: [_pg('https://x.com/', 'Windows.')], rosterTitles: [], links: ['https://x.com/locations/texas/austin'] }, 'network'],
+      ['a page selling franchises', { pages: [_pg('https://x.com/', 'Own a franchise in your area.')], rosterTitles: [], links: [] }, 'franchise'],
+      ['a franchise title AND per-city location pages', { pages: [_pg('https://x.com/locations/texas/austin', 'Pest control.')], rosterTitles: ['Franchise Owner'], links: [] }, 'franchise'],
       ['an ordinary pool company', { pages: [_pg('https://aquabluepools.com/', 'Jerry Owner Kyle General Manager')], rosterTitles: ['Spa Sales Consultant'], links: [] }, false],
       // Two cases, because they exercise different rules. The first proves
       // CHAIN_SELF_RE is narrow enough that an ordinary denial never trips it.
@@ -59108,23 +59175,27 @@ app.listen(PORT, () => {
       // single-state independents publish /locations/texas - and a two-branch
       // operator inside one state cannot reach it however many pages it has.
       ['location pages for six different states', { pages: [_pg('https://dhiroofing.com/', 'Roofing.')], rosterTitles: [],
-        links: ['/locations/missouri', '/locations/kansas', '/locations/minnesota', '/locations/iowa', '/locations/nebraska', '/locations/wisconsin'] }, true],
+        links: ['/locations/missouri', '/locations/kansas', '/locations/minnesota', '/locations/iowa', '/locations/nebraska', '/locations/wisconsin'] }, 'network'],
       ['a single state page', { pages: [_pg('https://x.com/', 'Roofing.')], rosterTitles: [], links: ['https://x.com/locations/texas'] }, false],
       ['two state pages', { pages: [_pg('https://x.com/', 'Roofing.')], rosterTitles: [], links: ['https://x.com/locations/texas', 'https://x.com/locations/oklahoma'] }, false],
       ['three non-state segments under /locations', { pages: [_pg('https://x.com/', 'Roofing.')], rosterTitles: [], links: ['https://x.com/locations/downtown', 'https://x.com/locations/uptown', 'https://x.com/locations/midtown'] }, false],
       // Round 113: the two shapes that walked past the tells on 2026-09-03.
-      ['a per-city page under a state ABBREVIATION (ClearChoice)', { pages: [_pg('https://www.clearchoice.com/locations/oh/west-chester/9100-centre-pointe-dr', 'Dental implants.')], rosterTitles: [], links: [] }, true],
-      ['a "Brand - City" listing whose own page is one location\'s page (RiteRug)', { pages: [_pg('https://www.riterug.com/pages/locations/greenville-scin-home-shopping', 'Flooring.')], rosterTitles: [], links: [], name: 'RiteRug Flooring & Carpet - Greenville' }, true],
+      ['a per-city page under a state ABBREVIATION (ClearChoice)', { pages: [_pg('https://www.clearchoice.com/locations/oh/west-chester/9100-centre-pointe-dr', 'Dental implants.')], rosterTitles: [], links: [] }, 'network'],
+      ['a "Brand - City" listing whose own page is one location\'s page (RiteRug)', { pages: [_pg('https://www.riterug.com/pages/locations/greenville-scin-home-shopping', 'Flooring.')], rosterTitles: [], links: [], name: 'RiteRug Flooring & Carpet - Greenville' }, 'network'],
       ['a "Brand - City" listing whose own page is its homepage', { pages: [_pg('https://joesplumbing.com/', 'Plumbing.')], rosterTitles: [], links: ['https://joesplumbing.com/locations/raleigh'], name: "Joe's Plumbing - Raleigh" }, false],
       ['one city-only locations page and no suffix', { pages: [_pg('https://x.com/locations/greenville', 'Roofing.')], rosterTitles: [], links: [], name: 'X Roofing' }, false],
       ['a neighbourhood page under a two-letter English word', { pages: [_pg('https://x.com/locations/in/downtown', 'Roofing.')], rosterTitles: [], links: [] }, false],
     ];
     for (const [what, args, want] of _chainCases) {
       const got = readChainEvidence(args);
-      if (got.isChain !== want) {
-        _fails.push(want
-          ? `${what} is not read as a chain, and that is a franchise bought at full price`
+      const wantChain = want !== false;
+      if (got.isChain !== wantChain) {
+        _fails.push(wantChain
+          ? `${what} is not read as a chain, and that is a ${want} bought at full price`
           : `${what} is read as a CHAIN, and on the drop rule that deletes a real lead`);
+      } else if (wantChain && got.kind !== want) {
+        // Round 114 (Vin): a branch network is a LARGE company kept for email; only a franchise drops.
+        _fails.push(`${what} is read as ${got.kind || 'a chain of no kind'} and should be ${want} - ${want === 'network' ? 'a large company was dropped as a franchise' : 'a franchise was kept as an email lead'}`);
       }
     }
     // == AND A NONPROFIT, FROM ITS OWN PAGE ==============================
@@ -59155,6 +59226,8 @@ app.listen(PORT, () => {
       ['a private-equity portfolio company', { pages: [_pg('https://x.com/', 'We are proud to be a portfolio company focused on growth.')] }, 'owned'],
       ['backed by a capital firm', { pages: [_pg('https://x.com/', 'Backed by Ridgeline Capital since 2021.')] }, 'owned'],
       ['a franchisee disclosure', { pages: [_pg('https://x.com/', 'This franchise is independently owned and operated.')] }, 'franchise'],
+      // Round 114: a PE-backed franchisee is still a franchisee - the disclosure is tested first.
+      ['a PE-backed franchisee', { pages: [_pg('https://x.com/', 'A portfolio company of Ridgeline. This franchise is independently owned and operated.')] }, 'franchise'],
       // The four live 2026-09-02 drops: membership of a trade body is not ownership.
       ['a member of a chamber', { pages: [_pg('https://x.com/', 'We are proud to be a member of the Ohio Chamber of Commerce.')] }, ''],
       ['a member of an institute', { pages: [_pg('https://x.com/', 'Wilson Harris is a member of the American Institute of CPAs.')] }, ''],
@@ -59168,8 +59241,8 @@ app.listen(PORT, () => {
     for (const [what, args, want] of _tellCases) {
       const got = readOwnershipTells(args);
       if ((got.reason || '') !== want) _fails.push(want
-        ? `${what} is not read as ${want} (got "${got.reason || 'nothing'}"), and it buys the paid wave for a person who does not own the budget`
-        : `${what} is read as "${got.reason}", and on the drop rule that deletes a real lead`);
+        ? `${what} is not read as ${want} (got "${got.reason || 'nothing'}"), and ${want === 'franchise' ? 'it buys the paid wave for a person who does not own the budget' : 'the lane cannot route it to the marketing decision-maker'}`
+        : `${what} is read as "${got.reason}", and that misroutes a real lead`);
     }
     if (readOwnershipTells({ pages: [] }).measured !== false) _fails.push('an ownership read over nothing claims to have measured something');
 
@@ -59218,12 +59291,15 @@ app.listen(PORT, () => {
       [_nd('const _outOfIcp = nameIsOutOfIcp(', 'company.name);'), 'the contact route no longer refuses a lead by name before it spends'],
       [_nd('if (nameIsOutOfIcp(name))', ' return false;'), 'discovery no longer runs the one name gate, so a benched franchise walks back in'],
       [_nd('out.chain = readChainEvidence({ pages,', ' rosterTitles: signals.teamTitles, links, name });'), 'the contact read no longer looks for chain evidence at all, or reads it without the listing name (the "Brand - City" outlet tell is blind)'],
+      [_nd('if (out.chain.isChain && out.chain.kind', " === 'franchise') {"), 'a branch network is dropped as a franchise again, or a franchise is kept (Round 114: only franchise evidence drops)'],
+      [_nd('signals.branchNetwork', ' = true;'), 'a branch network is read and never marked, so the lane cannot route it to email'],
       [_nd('if (apiKey && name &&', ' !out.notIcp) {'), 'a chain outlet still buys the paid owner wave'],
       [_nd('if (website &&', ' !out.notIcp) {'), 'a chain outlet still buys the address lookup'],
       [_nd('out.nonprofit = readNonprofitEvidence({ pages,', ' links });'), 'the contact read no longer looks for nonprofit evidence at all'],
       [_nd('if (!out.notIcp && out.nonprofit', '.isNonprofit) {'), 'a nonprofit is read and then bought anyway - the verdict does not reach notIcp'],
       [_nd('out.tells = readOwnershipTells({', ' pages });'), 'the contact read no longer looks for ownership tells at all'],
-      [_nd('if (!out.notIcp && out.tells', '.isOut) {'), 'an ownership tell is read and then bought anyway - the verdict does not reach notIcp'],
+      [_nd('if (!out.notIcp && out.tells.isOut && out.tells.reason', " === 'franchise') {"), 'a franchisee is bought anyway, or a PE-owned / national company is dropped again (Round 114: marked, routed to email)'],
+      [_nd('signals.peOwned = out.tells.reason', " === 'owned';"), 'a PE-owned company is read and never marked, so the lane cannot route it to email'],
       [_nd('signals.scaleBand = (_scale && !_scale.guess) ?', ' _scale.band : null;'), 'the size band is estimated by the term and never handed to the demotion, so an over-range business is not marked down'],
       [_nd('signals.ownerAnswersReviews = (out.owner && Array.isArray(out.owner.sources)', " && out.owner.sources.includes('google_review_replies')) ? true : null;"), 'the founder term no longer sees who signs the review replies'],
       [_nd('financing: signals.financing === true, commercial:', ' signals.commercial === true,'), 'affordability no longer receives the financing and commercial reads'],
@@ -59253,7 +59329,7 @@ app.listen(PORT, () => {
     if (!_src.includes(_nd('const _mapped = _getMappedUrls(name,', ' website);'))) {
       _fails.push('the contact read no longer takes a second chain look at the sitemap it bought, so a multi-state operator reaches the sheet');
     }
-    if (!_src.includes(_nd('links: links.concat(', '_mapped) });'))) {
+    if (!_src.includes(_nd('links: links.concat(', '_mapped), name });'))) {
       _fails.push('the second chain look is not being handed the mapped URLs, so it re-reads the same homepage navigation and can only ever agree with the first');
     }
     // The memo is keyed by company AND website, and it expires. Two businesses
@@ -59364,8 +59440,8 @@ app.listen(PORT, () => {
       if (_hay.tier !== 'entry' || _hay.call !== true || _hay.email !== false || _hay.measured !== false) _fails.push('an unmeasured "low" lead is not entry / call only - the sheet word and the lane disagree again (Hayward)');
       const _nn = lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'none' });
       if (_nn.call !== false || _nn.noname !== true || _nn.email !== false || laneWord(_nn) !== 'no name yet') _fails.push('a read lead with nobody named is on the call sheet instead of the no-name bucket');
-      if (lanesFor({ tier: 'below_floor', layers: 'owner', source: 'google_places', target: 'none' }).noname !== false) _fails.push('a benched lead is in the no-name bucket');
-      if (lanesFor({ tier: 'core', layers: 'layered', source: 'google_places', target: 'none' }).noname !== false) _fails.push('a layered lead with nobody named is in the no-name bucket instead of nowhere');
+      if (lanesFor({ tier: 'below_floor', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'none' }).noname !== false) _fails.push('a benched lead is in the no-name bucket');
+      if (lanesFor({ tier: 'core', layers: 'layered', source: 'google_places', target: 'none' }).noname !== true) _fails.push('a layered lead with nobody named is not in the no-name bucket (Round 114: layered stays on the sheet)');
       if (cityState('Phoenix AZ') !== 'Phoenix AZ' || cityState('Phoenix, Arizona') !== 'Phoenix AZ' || cityState('Dripping Springs TX') !== 'Dripping Springs TX' || cityState('1234 W Main St, Phoenix, AZ 85001') !== 'Phoenix AZ' || cityState('') !== '') _fails.push('the city parser still loses "Phoenix AZ" or "Phoenix, Arizona", so the licence search is skipped');
     }
     // ══ ROUND 113: SURE AND LIKELY, NOT GUESS - AND A PRODUCT COMPANY IS AN EMAIL LEAD ══
@@ -59393,7 +59469,7 @@ app.listen(PORT, () => {
       if (_hvac.isProduct !== false) _fails.push('an HVAC company with a filter shop and a service area is read as a product company');
       if (readProductCompanyTells({ pages: [], links: [] }).measured !== false) _fails.push('a product read over nothing claims to have measured something');
     }
-    if (demotionPenalty({ scaleBand: 'over_ceiling', marketingLeadFound: true }).points !== -10) _fails.push('over the ladder\'s ceiling is lifted by a marketing head - a $30M+ buyer is corporate whoever was found');
+    if (demotionPenalty({ scaleBand: 'over_ceiling', marketingLeadFound: true }).points !== -10) _fails.push('over the call cap is lifted by a marketing head - an over-cap lead ranks below core whoever was found');
     if (demotionPenalty({ aboveSizeCeiling: true, marketingLeadFound: false }).points !== -10) _fails.push('the review ceiling mark was lifted without a marketing head');
     if (demotionPenalty({ sizeBand: 'high' }).points !== -6) _fails.push('a high size does not rank below medium');
     if (demotionPenalty({ sizeBand: 'medium' }).points !== 0) _fails.push('a medium size is marked down');
@@ -59402,13 +59478,17 @@ app.listen(PORT, () => {
       const _c = scaleCuts(ICP_REVENUE_PER_EMPLOYEE), _t = scaleCuts(ICP_REVENUE_PER_TRUCK);
       if (Math.abs(ICP_REVENUE_BAND.coreFrom - ICP_PREMIUM_RETAINER_MONTHLY * 12 / ICP_MARKETING_SHARE) > 1) _fails.push('the core floor is not the premium retainer at the 10% rule - the ladder and the price list drifted apart');
       if (!OUR_PRICE_FIGURES.includes('$' + Math.round(ICP_PREMIUM_RETAINER_MONTHLY / 1000) + 'k')) _fails.push('the retainer the ladder is derived from is not a licensed price figure');
-      if (_c.entry !== 4 || _c.core !== 6 || _c.upper !== 50 || _c.ceiling !== 150) _fails.push(`the default staff cuts read ${JSON.stringify(_c)} - not 4 / 6 / 50 / 150 from $800k / $1.2M / $10M / $30M at $200k a head`);
-      if (_t.entry !== 3 || _t.core !== 4 || _t.upper !== 33 || _t.ceiling !== 100) _fails.push(`the truck cuts read ${JSON.stringify(_t)}`);
+      if (_c.entry !== 4 || _c.core !== 6 || _c.upper !== 50 || _c.ceiling !== 175) _fails.push(`the default staff cuts read ${JSON.stringify(_c)} - not 4 / 6 / 50 / 175 from $800k / $1.2M / $10M / $35M at $200k a head`);
+      if (_t.entry !== 3 || _t.core !== 4 || _t.upper !== 33 || _t.ceiling !== 117) _fails.push(`the truck cuts read ${JSON.stringify(_t)}`);
+      // Round 114 (Vin, 2026-09-03): the call cap has headroom, the owner-run reach line sits above it, the email lane has no ceiling.
+      if (ICP_REVENUE_BAND.ceiling !== 35e6 || ICP_CALL_REACH_CEILING !== 50e6) _fails.push(`the call cap is $${ICP_REVENUE_BAND.ceiling / 1e6}M and the owner-run reach line $${ICP_CALL_REACH_CEILING / 1e6}M - Vin ruled $35M and $50M on 2026-09-03`);
+      if (!LANE_TIERS.email.includes('over_ceiling') || LANE_TIERS.call.includes('over_ceiling')) _fails.push('the email lane has a ceiling again, or the call lane lost its cap');
+      if (!(ICP_CALL_REACH_CEILING > ICP_REVENUE_BAND.ceiling)) _fails.push('the reach line is not above the call cap, so the owner-run override can never fire');
       if (tierFromCount(_c.core - 1, _c) !== 'entry' || tierFromCount(_c.core, _c) !== 'core' || tierFromCount(_c.upper, _c) !== 'core' || tierFromCount(_c.upper + 1, _c) !== 'upper' || tierFromCount(_c.ceiling, _c) !== 'upper' || tierFromCount(_c.ceiling + 1, _c) !== 'over_ceiling' || tierFromCount(_c.entry - 1, _c) !== 'below_floor') _fails.push('the tier boundaries do not sit on the cuts');
       if (ICP_EMPLOYEE_WARN !== _c.upper || ICP_EMPLOYEE_BLOCK !== _c.ceiling) _fails.push('the discovery employee gate is not derived from the ladder');
       const _st = SIZE_TERMS.find(t => t.id === 'staffProse').cut(_c, _t), _ft = SIZE_TERMS.find(t => t.id === 'fleetProse').cut(_c, _t);
       if (_st.medium !== _c.core || _st.high !== _c.upper + 1 || _ft.medium !== _t.core || _ft.high !== _t.upper + 1) _fails.push('the rep\'s size cuts are not the ladder\'s cuts, so the sheet word and the tier can disagree');
-      for (const n of [3, 4, 6, 50, 51, 150, 151]) {
+      for (const n of [3, 4, 6, 50, 51, 175, 176]) {
         const w = SIZE_WORD[(estimateScaleBand({ verifiedEmployees: n }) || {}).band], b = sizeBand({ verifiedEmployees: n }).band;
         if (w !== b) _fails.push(`${n} verified employees prints "${b}" on the sheet but sits in a tier whose word is "${w}"`);
       }
@@ -59424,16 +59504,44 @@ app.listen(PORT, () => {
       // The lanes, both ways.
       const _ln = (o) => laneWord(lanesFor(o));
       if (_ln({ tier: 'core', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call + email') _fails.push('Darrel at $5M is not in both lanes');
-      if (_ln({ tier: 'core', layers: 'layered', source: 'google_places', target: 'marketing' }) !== 'email') _fails.push('a layered core business is not email only');
-      if (_ln({ tier: 'upper', layers: 'layered', source: 'google_places', target: 'owner' }) !== 'email') _fails.push('a layered upper business whose only name is the owner is not email only');
+      // Round 114 (Vin: "it's better to never find out if we cut it"): layered stays on the sheet, LAST.
+      const _lc = lanesFor({ tier: 'core', layers: 'layered', source: 'google_places', target: 'marketing' });
+      if (laneWord(_lc) !== 'call + email' || _lc.last !== true || !/last/.test(_lc.why)) _fails.push(`a layered core business is not on the call sheet last and in the email lane (got ${laneWord(_lc)}, last ${_lc.last})`);
+      const _lu = lanesFor({ tier: 'upper', layers: 'layered', source: 'google_places', target: 'owner' });
+      if (laneWord(_lu) !== 'call + email' || _lu.last !== true) _fails.push('a layered upper business whose only name is the owner is off the call sheet');
+      if (lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'owner' }).last !== false) _fails.push('an owner-run core business is ranked last');
+      if (demotionPenalty({ laneLast: true }).points !== -8 || demotionPenalty({ laneLast: false }).points !== 0) _fails.push('the layered-last demotion does not rank a layered lead below the owner-run ones');
       if (_ln({ tier: 'core', layers: 'owner', source: 'theirstack', target: 'owner' }) !== 'email') _fails.push('a TheirStack lead reached the call sheet');
       if (_ln({ tier: 'entry', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('an entry owner-run business is not call only');
-      if (_ln({ tier: 'below_floor', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'none') _fails.push('a business under the floor is in a lane');
-      if (_ln({ tier: 'over_ceiling', layers: 'layered', source: 'google_places', target: 'marketing' }) !== 'none') _fails.push('a business over the ceiling is in a lane');
-      if (_ln({ tier: 'core', layers: 'layered', source: 'google_places', target: 'none' }) !== 'none') _fails.push('a layered business with nobody named is in the email lane with nobody to write to');
+      if (_ln({ tier: 'below_floor', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'none') _fails.push('a business measured under the floor for sure is in a lane');
+      if (_ln({ tier: 'below_floor', sizeConfidence: 'likely', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'none') _fails.push('a business likely under the floor is in a lane');
+      // Round 114: headroom on the floor - a GUESS under it stays on the sheet as low.
+      if (_ln({ tier: 'below_floor', sizeConfidence: 'guess', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('a business under the floor on a GUESS is benched (Vin, 2026-09-03: headroom on every measured number)');
+      // Round 114: over the call cap is EMAIL, not nothing; owner-run under the reach line is still a call.
+      if (_ln({ tier: 'over_ceiling', layers: 'layered', source: 'google_places', target: 'marketing' }) !== 'email') _fails.push('a layered business over the call cap is not an email lead');
+      if (_ln({ tier: 'over_ceiling', layers: 'layered', source: 'google_places', target: 'marketing', usd: 255e6, peOwned: true }) !== 'email') _fails.push('Rose Paving ($255M, PE-owned, layered) is not email only');
+      if (_ln({ tier: 'upper', layers: 'owner', source: 'google_places', target: 'owner', usd: 24e6 }) !== 'call + email') _fails.push('DMI Paving ($24M, owner-run) is not in both lanes');
+      if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'owner', usd: 40e6 }) !== 'call + email') _fails.push('an owner-run business at $40M is off the call sheet - the $50M reach line is not read');
+      if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'owner', usd: 60e6 }) !== 'email') _fails.push('an owner-run business at $60M is on the call sheet - the reach line has no top');
+      if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'owner', usd: null }) !== 'email') _fails.push('an over-cap business with no measured dollars is called on nothing');
+      if (_ln({ tier: 'over_ceiling', layers: 'layered', source: 'google_places', target: 'marketing', usd: 40e6 }) !== 'email') _fails.push('a LAYERED business at $40M is called - the reach line is for the owner-run only');
+      if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'owner', usd: 40e6, peOwned: true }) !== 'email') _fails.push('a PE-owned business at $40M is called - the reach line is for the owner-run only');
+      // Round 114: a branch network, PE-owned or national under the cap stays on the sheet, last; over the cap it is email.
+      for (const [k, what] of [['network', 'a branch network'], ['peOwned', 'a PE-owned company'], ['national', 'a national operator']]) {
+        const _b = lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'owner', [k]: true });
+        if (laneWord(_b) !== 'call + email' || _b.last !== true || !/last/.test(_b.why)) _fails.push(`${what} under the cap is not on the call sheet last and in the email lane (got ${laneWord(_b)})`);
+        if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'marketing', [k]: true }) !== 'email') _fails.push(`${what} over the cap is not an email lead`);
+      }
+      if (_ln({ tier: 'core', layers: 'layered', source: 'google_places', target: 'none' }) !== 'no name yet') _fails.push('a layered business with nobody named is not the no-name bucket');
+      // The measured dollars the reach line reads.
+      if ((estimateScaleBand({ verifiedEmployees: 120 }) || {}).usd !== 120 * ICP_REVENUE_PER_EMPLOYEE) _fails.push('a verified headcount does not carry its dollars');
+      if ((estimateScaleBand({ revenueStated: '$24M', revenueStatedSource: 'growjo' }) || {}).usd !== 24e6) _fails.push('a stated revenue does not carry its dollars');
+      if ((estimateScaleBand({ fleetProse: 10 }) || {}).usd !== 10 * ICP_REVENUE_PER_TRUCK) _fails.push('a fleet does not carry its dollars');
+      if ((estimateScaleBand({ locationsProse: 3 }) || {}).usd !== null) _fails.push('a location count invents dollars');
+      if ((estimateScaleBand({ verifiedEmployees: 6, tradeLabel: 'PI Law' }) || {}).usd !== 6 * 175000) _fails.push('the dollars behind a headcount ignore the trade');
       if (_ln({ tier: null, affordBand: 'premium', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call + email') _fails.push('an unmeasured lead the Find press judged premium is not taken as core');
       if (_ln({ tier: null, affordBand: null, layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('an unmeasured lead with nothing else is not taken as entry (call only) - "we did not look" read as "cannot pay"');
-      if (_ln({ tier: null, affordBand: 'below_floor', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'none') _fails.push('an unmeasured lead the Find press judged below the floor is in a lane');
+      if (_ln({ tier: null, affordBand: 'below_floor', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('an unmeasured lead the Find press judged below the floor is benched on a guess (Round 114: headroom on the floor)');
     }
     // The call sites and the one floor.
     const _src = selfSourceNoCommentsLF();
@@ -59453,9 +59561,14 @@ app.listen(PORT, () => {
       [_n('signals.directoryEmployeesRange = String(', "_dir.employeesFromRange || '');"), 'the lookup drops the range, so the confidence rule cannot tell a range across tiers from an exact count'],
       [_n('const _negKey = loc ? ', '`${domain}|${loc}` : domain;'), 'the web-search negative memo is keyed on the domain alone, so a city-less miss blocks the search for 14 days after the city is fixed'],
       [_n('out.product = readProductCompanyTells({', ' pages, links });'), 'the contact read no longer looks for a product company'],
-      [_n('product: signals.product', 'Company });'), 'the product verdict never reaches the lane'],
+      [_n('product: signals.product', 'Company, usd: signals.scaleUsd,'), 'the product verdict or the measured dollars never reach the lane'],
+      [_n('network: signals.branchNetwork === true, peOwned: signals.peOwned === true,', ' national: signals.nationalOperator === true });'), 'the branch-network, PE-owned and national marks never reach the lane'],
+      [_n('signals.scaleUsd = (_scale && !_scale.guess', ' && Number(_scale.usd) > 0) ? Number(_scale.usd) : null;'), 'the measured dollars never reach the signals, or a tenure guess supplies them'],
+      [_n('signals.laneLast = _lanes.last', ' === true;'), 'the lane says "last" and the score never hears it, so a layered lead is not ranked last'],
       [_n('c.verifiedEmployees > ', 'ICP_EMPLOYEE_BLOCK) {'), 'the discovery employee gate is back on a literal'],
-      [_n('max_employee_count: ', 'ICP_EMPLOYEE_BLOCK,'), 'TheirStack is asked for a literal size range instead of the ladder\'s'],
+      [_n('past the ${ICP_EMPLOYEE_BLOCK}-employee call cap of the ladder;', ' an email lead, served behind the in-band leads'), 'the discovery gate no longer marks a big company as an email lead'],
+      [_n('max_employee_count: ', 'TS_MAX_EMPLOYEES,'), 'TheirStack is asked with a ceiling again - the email lane has none (Round 114)'],
+      [_n('const _largeSlots = Math.floor(MAX_TOTAL * ', 'GP_LARGE_SHARE);'), 'the run no longer serves a slice of the size-demoted large companies, so they never leave the bench'],
       [_n('job_location_pattern_or: GP_CITIES', '.map('), 'TheirStack is asked nationwide instead of in our metros'],
       [_n('out.target = _target.target;', ' out.targetWhy = _target.why;'), 'the target is decided and never returned'],
       [_n("if (JOB_MARKETING_OWNER.test(t))", " return 'staff';"), 'the roster drops marketing titles again'],
@@ -59467,13 +59580,14 @@ app.listen(PORT, () => {
     ];
     for (const [needle, msg] of _sites) if (!_src.includes(needle)) _fails.push(msg);
     if (_src.includes(_n('/\\$\\s*\\d|employees/i.test(', 'String(r.description'))) _fails.push('the second size query trigger reads the snippet wording again');
+    if (_src.includes(_n('BLOCKED [${c.name}]: ${c.verifiedEmployees} employees (verified)', ' - past the'))) _fails.push('the discovery gate deletes a big company again instead of demoting it to the email lane');
     // Assembled at runtime: a literal regex here would find itself.
     if (new RegExp(_n('uthority >= 7', '5\\b')).test(_src) || _src.includes(_n('decisionMaker.title) >= ', '75)'))) _fails.push('a literal 75 buying floor is back somewhere in the file');
     if (new RegExp(_n('verifiedEmployees > 5', '00\\b')).test(_src) || new RegExp(_n('verifiedEmployees <= 2', '00\\b')).test(_src) || new RegExp(_n('emp <= 2', '00\\b')).test(_src)) _fails.push('a literal 200 or 500 employee gate is back somewhere in the file');
     if (_fails.length) {
       console.log(`⛔ SIZE AND LAYERS CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
     } else {
-      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the ladder and the layers (Darrel in both, layered and TheirStack email only, nobody named means no email lane, under the floor and over the ceiling in none); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; and the buying floor has one copy.`);
+      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the ladder and the layers (Darrel in both; TheirStack and product companies email only; layered, a branch network, PE-owned and national on the call sheet LAST under the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap and email over it; an owner-run business over the cap still called under $${ICP_CALL_REACH_CEILING / 1e6}M; nobody named means no email lane; under the floor benched only when likely or sure); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; and the buying floor has one copy.`);
     }
   } catch (e) {
     console.log(`⛔ SIZE AND LAYERS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -59673,8 +59787,8 @@ app.listen(PORT, () => {
       if (_term('scale', { staffProse: null, fleetProse: null, locationsProse: null }) !== null) _fails.push('the scale term scores a lead that published no size at all');
       const _sc = estimateScaleBand({ staffProse: 14, staffProseSay: 'a team of 14 technicians' });
       if (!_sc || _sc.band !== 'core' || !/estimated/.test(_sc.say)) _fails.push('fourteen published technicians is not an estimated core band, or the sentence forgot to say "estimated"');
-      if ((estimateScaleBand({ verifiedEmployees: 151 }) || {}).band !== 'over_ceiling') _fails.push('151 verified employees is not read as over the ceiling');
-      if ((estimateScaleBand({ verifiedEmployees: 150 }) || {}).band !== 'upper') _fails.push('150 verified employees is not read as the upper tier');
+      if ((estimateScaleBand({ verifiedEmployees: 176 }) || {}).band !== 'over_ceiling') _fails.push('176 verified employees is not read as over the call cap');
+      if ((estimateScaleBand({ verifiedEmployees: 175 }) || {}).band !== 'upper') _fails.push('175 verified employees is not read as the upper tier');
       if ((estimateScaleBand({ fleetProse: 12 }) || {}).band !== 'core') _fails.push('a twelve-truck fleet is not read as a core-band business');
       if ((estimateScaleBand({ yearsInBusiness: 20, reviewCount: 80 }) || {}).band !== 'entry') _fails.push('twenty years at eighty reviews is not read as an established small business (entry)');
       if ((estimateScaleBand({ revenueStated: '$5M', revenueStatedSource: 'zoominfo.com' }) || {}).band !== 'core' || !/directory/.test((estimateScaleBand({ revenueStated: '$5M' }) || {}).say)) _fails.push('a directory\'s stated $5M does not read as core, labelled as a directory\'s figure');
@@ -76610,9 +76724,10 @@ const CHAIN_STATE_SLUGS = new Set(Object.values(US_STATE_NAMES).map(s => s.toLow
 // The two shapes do not carry the same weight and are not scored the same way.
 // A per-CITY page under a state is a branch network by construction, so one is
 // enough. A single state page is ordinary: plenty of one-state independents
-// publish /locations/texas. THREE OR MORE distinct states is the bar for the
-// one-segment form, which a two-branch independent inside one state cannot
-// reach however many pages it publishes.
+// publish /locations/texas. FOUR OR MORE distinct states is the bar for the
+// one-segment form (CHAIN_STATE_ONLY_MIN: an independent may trade in three),
+// which a two-branch independent inside one state cannot reach however many
+// pages it publishes.
 // Round 113: a state ABBREVIATION under /locations/ counts too - ClearChoice
 // publishes /locations/oh/west-chester/... and read as independent on
 // 2026-09-03. The two-letter codes that are also English words (in, or, me,
@@ -76842,11 +76957,17 @@ const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
   // Nothing read is not evidence of anything. A lead whose site we could not
   // open is unmeasured, never independent and never a chain.
   const measured = read.length > 0 || titles.length > 0;
+  // Round 114 (Vin, 2026-09-03): a multi-location company is a LARGE company,
+  // not a franchise. Franchise evidence (a franchise title, a page selling
+  // franchises) drops the lead; a branch network (per-city location pages,
+  // pages for four states, a "Brand - City" outlet) marks it as an email lead.
+  const kind = (role || self) ? 'franchise' : why.length ? 'network' : '';
   return {
     measured,
     isChain: why.length > 0,
+    kind,
     why: why.join('; '),
-    role, place, deniedFranchise: denied,
+    role, place, self, outlet: _outlet ? String(_outlet.url || '') : '', deniedFranchise: denied,
   };
 };
 
@@ -77094,29 +77215,34 @@ const readFindProse = (text, now = Date.now()) => {
 // stated revenue reads first, then the strongest headcount, then the rest.
 const estimateScaleBand = (s) => {
   const d = s || {};
-  const cuts = scaleCuts(revenuePerEmployeeFor(d.tradeLabel));
+  const per = revenuePerEmployeeFor(d.tradeLabel);
+  const cuts = scaleCuts(per);
   const tcuts = scaleCuts(ICP_REVENUE_PER_TRUCK);
-  const mk = (band, from) => ({ band, points: SCALE_BAND_POINTS[band], say: `estimated ${SCALE_BAND_SAY[band]} from ${from}` });
+  // Round 114: `usd` is the measured dollars behind the band (a headcount times
+  // the trade's revenue per head, trucks times per truck, a stated revenue as
+  // read), for the call-reach line; null where the band came from a location
+  // count or tenure. Still never a figure for an email: an inference.
+  const mk = (band, from, usd) => ({ band, points: SCALE_BAND_POINTS[band], say: `estimated ${SCALE_BAND_SAY[band]} from ${from}`, usd: (Number.isFinite(Number(usd)) && Number(usd) > 0) ? Number(usd) : null });
   // A verified count first; a directory's figure next, flagged as a directory's
   // (and as a bound when it was "<$5M" or a range); then what they publish.
   const ver = Number(d.verifiedEmployees);
-  if (Number.isFinite(ver) && ver > 0) return mk(tierFromCount(ver, cuts), `${ver} verified employees`);
+  if (Number.isFinite(ver) && ver > 0) return mk(tierFromCount(ver, cuts), `${ver} verified employees`, ver * per);
   const rb = parseStatedRevenueBound(d.revenueStated);
-  if (rb) return Object.assign(mk(tierFromRevenue(rb.usd), `a directory's revenue figure (${d.revenueStatedSource || 'web'}${rb.bound === 'below' ? ', stated as under ' + _usdShort(rb.hi) : rb.bound === 'range' ? ', a range' : ''})`), { directory: true, bound: rb.bound });
+  if (rb) return Object.assign(mk(tierFromRevenue(rb.usd), `a directory's revenue figure (${d.revenueStatedSource || 'web'}${rb.bound === 'below' ? ', stated as under ' + _usdShort(rb.hi) : rb.bound === 'range' ? ', a range' : ''})`, rb.usd), { directory: true, bound: rb.bound });
   const dir = Number(d.directoryEmployees);
-  if (Number.isFinite(dir) && dir > 0) return Object.assign(mk(tierFromCount(dir, cuts), `${dir} employees per ${d.directoryEmployeesSource || 'a directory'}`), { directory: true });
+  if (Number.isFinite(dir) && dir > 0) return Object.assign(mk(tierFromCount(dir, cuts), `${dir} employees per ${d.directoryEmployeesSource || 'a directory'}`, dir * per), { directory: true });
   const staff = Number(d.staffProse);
   // A count they PUBLISH is a floor (a forty-person firm may publish four): from
   // three people up it reads as entry at least; only a verified count goes lower.
-  if (Number.isFinite(staff) && staff > 0) return mk(staff < cuts.entry && staff >= 3 ? 'entry' : tierFromCount(staff, cuts), `"${d.staffProseSay || staff + ' staff'}" on their own pages`);
+  if (Number.isFinite(staff) && staff > 0) return mk(staff < cuts.entry && staff >= 3 ? 'entry' : tierFromCount(staff, cuts), `"${d.staffProseSay || staff + ' staff'}" on their own pages`, staff * per);
   const fleet = Number(d.fleetProse);
-  if (Number.isFinite(fleet) && fleet > 0) return mk(tierFromCount(fleet, tcuts), `${fleet} trucks on their own pages`);
+  if (Number.isFinite(fleet) && fleet > 0) return mk(tierFromCount(fleet, tcuts), `${fleet} trucks on their own pages`, fleet * ICP_REVENUE_PER_TRUCK);
   const locs = Number(d.locationsProse);
   if (Number.isFinite(locs) && locs >= 2) return mk(locs <= 5 ? 'core' : locs <= 12 ? 'upper' : 'over_ceiling', `${locs} locations on their own pages`);
   // Their own team page is a FLOOR: at least this many people. It raises the
   // band, never lowers it, and only speaks when it reaches the core cut.
   const tc = Number(d.teamCount);
-  if (Number.isFinite(tc) && tc >= cuts.core) return Object.assign(mk(tierFromCount(tc, cuts), `at least ${tc} people on their own team page`), { floor: true });
+  if (Number.isFinite(tc) && tc >= cuts.core) return Object.assign(mk(tierFromCount(tc, cuts), `at least ${tc} people on their own team page`, tc * per), { floor: true });
   // Tenure is a GUESS, flagged so the lookup still fires (sizeMeasured ignores it).
   const yrs = Number(d.yearsInBusiness), rv = Number(d.reviewCount);
   if (Number.isFinite(yrs) && yrs >= 15 && Number.isFinite(rv) && rv >= 40) return Object.assign(mk('entry', `${yrs} years in business at ${rv} reviews - a guess`), { guess: true });
@@ -77170,9 +77296,12 @@ const readOwnershipTells = ({ pages } = {}) => {
   const text = read.map(p => String(p.text || '')).join(' ');
   const why = [];
   let reason = '';
-  const owned = text.match(OWNED_TELL_RE);
-  if (owned) { reason = 'owned'; why.push(`their own page says "${owned[0].trim().slice(0, 50)}"`); }
-  else if (FRANCHISEE_TELL_RE.test(text) && /\bfranchis/i.test(text)) { reason = 'franchise'; why.push('their own page carries the franchisee disclosure "independently owned and operated" beside the word franchise'); }
+  // Round 114: the franchisee disclosure is tested FIRST - a PE-backed
+  // franchisee is still a franchisee, and only a franchise drops the lead.
+  const franchisee = FRANCHISEE_TELL_RE.test(text) && /\bfranchis/i.test(text);
+  const owned = franchisee ? null : text.match(OWNED_TELL_RE);
+  if (franchisee) { reason = 'franchise'; why.push('their own page carries the franchisee disclosure "independently owned and operated" beside the word franchise'); }
+  else if (owned) { reason = 'owned'; why.push(`their own page says "${owned[0].trim().slice(0, 50)}"`); }
   else { const nat = text.match(NATIONAL_TELL_RE); if (nat) { reason = 'national'; why.push(`their own page says "${nat[0].trim().slice(0, 50)}"`); } }
   return { measured: read.length > 0, isOut: why.length > 0, reason, why: why.join('; ') };
 };
@@ -77211,7 +77340,7 @@ const FIND_ICP_TERMS = [
       if (Number.isFinite(_ver) && _ver >= 1) {
         // Round 111: the cuts are the ladder's, per trade.
         const _vt = tierFromCount(_ver, scaleCuts(revenuePerEmployeeFor(s.tradeLabel)));
-        if (_vt === 'over_ceiling') return { points: 5,  say: `${_ver} employees, verified - over the ceiling of the businesses we sell to` };
+        if (_vt === 'over_ceiling') return { points: 5,  say: `${_ver} employees, verified - over the call cap, an email lead` };
         if (_vt === 'upper')        return { points: 25, say: `${_ver} employees, verified - upper tier` };
         if (_vt === 'core')         return { points: 35, say: `${_ver} employees, verified - squarely the size we sell to` };
         if (_vt === 'entry')        return { points: 30, say: `${_ver} employees, verified - a real crew, entry tier` };
@@ -77232,7 +77361,7 @@ const FIND_ICP_TERMS = [
       // people up; only a VERIFIED count can put a business under the floor.
       const _cuts = scaleCuts(revenuePerEmployeeFor(s.tradeLabel));
       const _nt = n < _cuts.entry && n >= 3 ? 'entry' : tierFromCount(n, _cuts);
-      if (_nt === 'over_ceiling') return { points: 5,  say: `${n}+ people on their team page - over the ceiling of the businesses we sell to` };
+      if (_nt === 'over_ceiling') return { points: 5,  say: `${n}+ people on their team page - over the call cap, an email lead` };
       if (_nt === 'upper')        return { points: 25, say: `${n}+ people on their team page - upper tier` };
       if (_nt === 'core')         return { points: 35, say: `${n}+ people on their team page - squarely the size we sell to` };
       if (_nt === 'entry')        return { points: 30, say: `${n}+ people on their team page - a real crew, entry tier` };
@@ -77286,7 +77415,7 @@ const FIND_ICP_TERMS = [
       // Round 112: the team-page floor already scores in the size term; one fact
       // must not sit in two terms of the same denominator, so here it is unmeasured.
       if (!b || b.floor) return null;
-      return { points: b.points, say: b.say + (b.band === 'over_ceiling' ? ' - over the ceiling of the businesses we sell to' : b.band === 'below_floor' ? ' - under the floor, the lower tier is the likely sale' : '') };
+      return { points: b.points, say: b.say + (b.band === 'over_ceiling' ? ' - over the call cap, an email lead' : b.band === 'below_floor' ? ' - under the floor, the lower tier is the likely sale' : '') };
     },
   },
   {
@@ -78035,11 +78164,17 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // team page named it a franchise on the FIRST page we read, and we then
   // went on and bought the rest of the lead anyway.
   out.chain = readChainEvidence({ pages, rosterTitles: signals.teamTitles, links, name });
-  if (out.chain.isChain) {
+  if (out.chain.isChain && out.chain.kind === 'franchise') {
     out.notIcp = true;
     out.icpReason = 'chain';
     out.icpWhy = out.chain.why;
-    notes.push(`this is a branch of a larger operation \u2014 ${out.chain.why}. The branch manager does not own the marketing, so there is nothing here to sell him.`);
+    notes.push(`this is a franchise outlet \u2014 ${out.chain.why}. The franchisor sets the marketing fund and approves the vendors, so there is nothing here to sell.`);
+  } else if (out.chain.isChain) {
+    // Round 114 (Vin, 2026-09-03): a branch network is a LARGE company - kept,
+    // marked, an email lead. The local number reaches a branch; the decision
+    // is at head office, with the marketing decision-maker.
+    signals.branchNetwork = true;
+    notes.push(`a branch network \u2014 ${out.chain.why}. Kept as an email lead: the local number reaches a branch, and the marketing decision-maker at head office is the target.`);
   } else if (out.chain.measured !== true) {
     // == AN ABSENCE CLAIM NEEDS A LOOK =====================================
     // readChainEvidence has computed `measured` since it was written and
@@ -78062,11 +78197,18 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     notes.push(`this is a nonprofit \u2014 ${out.nonprofit.why}. There is no owner whose own money is on the line, so there is nothing here to sell.`);
   }
   out.tells = readOwnershipTells({ pages });
-  if (!out.notIcp && out.tells.isOut) {
+  if (!out.notIcp && out.tells.isOut && out.tells.reason === 'franchise') {
     out.notIcp = true;
     out.icpReason = out.tells.reason;
     out.icpWhy = out.tells.why;
-    notes.push(`${out.tells.reason === 'national' ? 'this is not a local business' : 'somebody else owns this business'} \u2014 ${out.tells.why}. The person on the page does not own the marketing budget.`);
+    notes.push(`this is a franchisee \u2014 ${out.tells.why}. The franchisor owns the marketing budget.`);
+  } else if (!out.notIcp && out.tells.isOut) {
+    // Round 114 (Vin, 2026-09-03): a PE-owned company and a national operator
+    // are LARGE companies - marked, routed to email, never dropped. The person
+    // on the page does not own the budget; the marketing decision-maker does.
+    signals.peOwned = out.tells.reason === 'owned';
+    signals.nationalOperator = out.tells.reason === 'national';
+    notes.push(`${signals.peOwned ? 'owned by somebody else' : 'a national operator'} \u2014 ${out.tells.why}. Kept as an email lead: the decision is at head office, and the marketing decision-maker is the target.`);
   }
   // Round 113 (Vin): a product company or a manufacturer is kept, as an EMAIL
   // lead. The verdict reaches the lane below; nothing is dropped here.
@@ -78216,13 +78358,18 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   if (!out.notIcp) {
     const _mapped = _getMappedUrls(name, website);
     if (_mapped.length) {
-      const _late = readChainEvidence({ pages, rosterTitles: signals.teamTitles, links: links.concat(_mapped) });
-      if (_late.isChain) {
+      const _late = readChainEvidence({ pages, rosterTitles: signals.teamTitles, links: links.concat(_mapped), name });
+      if (_late.isChain && _late.kind === 'franchise') {
         out.chain = _late;
         out.notIcp = true;
         out.icpReason = 'chain';
         out.icpWhy = _late.why;
-        notes.push(`this is a branch of a larger operation \u2014 ${_late.why}. Their homepage links none of it; their own sitemap does.`);
+        notes.push(`this is a franchise outlet \u2014 ${_late.why}. Their homepage links none of it; their own sitemap does.`);
+      } else if (_late.isChain && signals.branchNetwork !== true) {
+        // Round 114: the sitemap shows a branch network - marked, kept, email.
+        out.chain = _late;
+        signals.branchNetwork = true;
+        notes.push(`a branch network \u2014 ${_late.why}. Their homepage links none of it; their own sitemap does. Kept as an email lead.`);
       }
     }
   }
@@ -78389,6 +78536,8 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   const _scale = estimateScaleBand(signals);
   // A tenure guess is printed but never decides the tier the lanes read.
   signals.scaleBand = (_scale && !_scale.guess) ? _scale.band : null;
+  // Round 114: the measured dollars, for the $50M reach line; null when nothing measured.
+  signals.scaleUsd = (_scale && !_scale.guess && Number(_scale.usd) > 0) ? Number(_scale.usd) : null;
   const _size = sizeBand(signals);
   signals.sizeBand = _size.band; signals.sizeConfidence = _size.confidence;
   out.size = { band: _size.band, confidence: _size.confidence, why: _size.why, tier: signals.scaleBand, say: _scale ? _scale.say : '' };
@@ -78425,9 +78574,11 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   }
   signals.marketingLeadFound = out.target === 'marketing';
   // ══ WHICH LANE (Round 111) ═══════════════════════════════════════════
-  const _lanes = lanesFor({ tier: signals.scaleBand, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany });
+  const _lanes = lanesFor({ tier: signals.scaleBand, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true });
   out.lanes = _lanes;
-  console.log(`\u{1F3AF} TARGET [${name}]: size ${_size.band || 'not measured'} (${_size.confidence}: ${_size.why}) | tier ${_lanes.tier}${_lanes.measured && _scale ? ' (' + _scale.say + ')' : ' (taken as ' + _lanes.tier + ' - not measured)'} | layers ${_layers.verdict}${_layers.why ? ' (' + _layers.why + ')' : ''}${signals.productCompany ? ' | product company (' + out.product.why + ')' : ''} | target ${out.target}${out.marketingLead ? ' ' + out.marketingLead.name + ', ' + out.marketingLead.title : ''} \u2014 ${_target.why} | lane ${laneWord(_lanes)}${_lanes.why ? ' (' + _lanes.why + ')' : ''}`);
+  // Round 114: a layered or owned-elsewhere lead on the call sheet ranks LAST.
+  signals.laneLast = _lanes.last === true;
+  console.log(`\u{1F3AF} TARGET [${name}]: size ${_size.band || 'not measured'} (${_size.confidence}: ${_size.why}) | tier ${_lanes.tier}${_lanes.measured && _scale ? ' (' + _scale.say + ')' : ' (taken as ' + _lanes.tier + ' - not measured)'} | layers ${_layers.verdict}${_layers.why ? ' (' + _layers.why + ')' : ''}${signals.productCompany ? ' | product company (' + out.product.why + ')' : ''}${signals.branchNetwork ? ' | branch network (' + out.chain.why + ')' : ''}${signals.peOwned ? ' | PE-owned (' + out.tells.why + ')' : ''}${signals.nationalOperator ? ' | national (' + out.tells.why + ')' : ''} | target ${out.target}${out.marketingLead ? ' ' + out.marketingLead.name + ', ' + out.marketingLead.title : ''} \u2014 ${_target.why} | lane ${laneWord(_lanes)}${_lanes.why ? ' (' + _lanes.why + ')' : ''}`);
   out.icp = findIcpScore(signals);
 
   const led = FC_LEDGER.getStore() || {};
