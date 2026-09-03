@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260928;
+const CONTRACT_VERSION = 20260929;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -5111,12 +5111,43 @@ const SCALE_BAND_POINTS = { below_floor: 3, entry: 12, core: 20, upper: 16, over
 const SIZE_WORD = { below_floor: 'low', entry: 'low', core: 'medium', upper: 'high', over_ceiling: 'high' };
 // A revenue a directory STATES ("$5M", "$25,300,000") - an estimate somebody
 // else made, read into a band and never into permittedFigures.
-const parseStatedRevenue = (s) => {
-  const m = String(s || '').replace(/,/g, '').match(/\$?\s*(\d+(?:\.\d+)?)\s*(m|million|k|thousand|b|billion)?\b/i);
-  if (!m) return null;
-  const n = parseFloat(m[1]), u = (m[2] || '').toLowerCase();
-  const v = u.startsWith('b') ? n * 1e9 : u.startsWith('m') ? n * 1e6 : (u.startsWith('k') || u.startsWith('t')) ? n * 1e3 : n;
-  return (Number.isFinite(v) && v >= 1e5 && v <= 1e10) ? v : null;
+// Round 112: "<$5M" is a bucket, not a measurement of $5M (Landon Plastic
+// Surgery read as medium off it); "$500K-$1M" is a range. A bound reads as
+// the midpoint of what it could be and is flagged, so a lower bound never
+// decides a band on its own.
+const parseStatedRevenueBound = (s) => {
+  const str = String(s || '').replace(/,/g, '');
+  const one = (t) => {
+    const m = String(t || '').match(/\$?\s*(\d+(?:\.\d+)?)\s*(m|million|k|thousand|b|billion)?\b/i);
+    if (!m) return null;
+    const n = parseFloat(m[1]), u = (m[2] || '').toLowerCase();
+    const v = u.startsWith('b') ? n * 1e9 : u.startsWith('m') ? n * 1e6 : (u.startsWith('k') || u.startsWith('t')) ? n * 1e3 : n;
+    return (Number.isFinite(v) && v >= 1e5 && v <= 1e10) ? v : null;
+  };
+  const range = str.match(/(\$?\s*\d+(?:\.\d+)?\s*(?:m|million|k|thousand|b|billion)?)\s*(?:-|–|to)\s*(\$?\s*\d+(?:\.\d+)?\s*(?:m|million|k|thousand|b|billion)?)/i);
+  if (range) {
+    const lo = one(range[1]), hi = one(range[2]);
+    if (lo && hi && hi >= lo) return { usd: (lo + hi) / 2, bound: 'range', lo, hi };
+  }
+  const v = one(str);
+  if (!v) return null;
+  if (/^\s*(<|under|less than|up to|below)/i.test(str)) return { usd: v / 2, bound: 'below', lo: 0, hi: v };
+  if (/^\s*(>|over|more than|above)|\+\s*$/i.test(str)) return { usd: v, bound: 'above', lo: v, hi: null };
+  return { usd: v, bound: 'exact', lo: v, hi: v };
+};
+const parseStatedRevenue = (s) => { const b = parseStatedRevenueBound(s); return b ? b.usd : null; };
+// What counts as a MEASURED size: a headcount, a fleet, a location count, a
+// stated revenue, or a team page at least as long as the core cut. Tenure
+// and reviews never count - a guess must not block the lookup (Round 112:
+// five leads at 19-105 years never had their size bought).
+const sizeMeasured = (s) => {
+  const d = s || {};
+  const pos = (k) => Number.isFinite(Number(d[k])) && Number(d[k]) > 0;
+  if (pos('verifiedEmployees') || pos('directoryEmployees') || pos('staffProse') || pos('fleetProse')) return true;
+  if (Number(d.locationsProse) >= 2) return true;
+  if (parseStatedRevenue(d.revenueStated)) return true;
+  if (Number(d.teamCount) >= scaleCuts(revenuePerEmployeeFor(d.tradeLabel)).core) return true;
+  return false;
 };
 // ══ WHICH LANE A LEAD BELONGS TO (Round 111) ════════════════════════════════
 // Vin, 2026-09-03: "keep what our ICP has been for cold calling and up it for
@@ -5130,25 +5161,42 @@ const parseStatedRevenue = (s) => {
 // press measured on every Places lead: "we did not look" never means "cannot
 // pay", so an unmeasured lead is taken as entry, never dropped.
 const LANE_TIERS = { call: ['entry', 'core', 'upper'], email: ['core', 'upper'] };
-const lanesFor = ({ tier, affordBand, layers, source, target } = {}) => {
+// Round 112: ONE fallback. When nothing measured the tier, the lane reads the
+// same guess the sheet prints (the review count: low / medium / high), so the
+// sheet word and the lane can never disagree (Hayward Tree Service read "low"
+// on the sheet and "core, call + email" in the lane). The Find-time
+// affordability band is used only when there is no review count at all.
+// And the call lane means a NAMED owner within reach: a read lead with a
+// phone and nobody named is the "no name yet" bucket, off the rep's sheet.
+const SIZE_WORD_TIER = { low: 'entry', medium: 'core', high: 'upper' };
+const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, target } = {}) => {
   const why = [];
   let t = SCALE_TIERS.includes(tier) ? tier : null;
+  let measured = !!t;
+  if (!t && SIZE_WORD_TIER[sizeWord]) {
+    t = SIZE_WORD_TIER[sizeWord];
+    why.push(`size not measured - taken as ${t} from the review count (${sizeConfidence || 'guess'})`);
+  }
   if (!t) {
     t = affordBand === 'premium' ? 'core' : affordBand === 'below_floor' ? 'below_floor' : 'entry';
-    why.push(affordBand ? `size not published; judged on the trade and the job count (${affordBand})` : 'size not published and nothing else measured, taken as entry');
+    why.push(affordBand ? `size not measured and no review count; judged on the trade and the job count (${affordBand})` : 'size not measured and nothing else read, taken as entry');
   }
   const layered = layers === 'layered', ts = source === 'theirstack';
-  const call = LANE_TIERS.call.includes(t) && !layered && !ts;
-  const email = LANE_TIERS.email.includes(t) && !!target && target !== 'none';
+  const named = !!target && target !== 'none';
+  const inCall = LANE_TIERS.call.includes(t) && !layered && !ts;
+  const call = inCall && named;
+  const noname = inCall && !named;
+  const email = LANE_TIERS.email.includes(t) && named;
   if (t === 'below_floor') why.push('under the floor - benched');
   if (t === 'over_ceiling') why.push('over the ceiling - the decision has left the building');
   if (layered && LANE_TIERS.call.includes(t)) why.push('layered business - email only');
   if (ts && LANE_TIERS.call.includes(t)) why.push('a TheirStack lead - email only');
-  if (LANE_TIERS.email.includes(t) && !email) why.push('nobody named to write to');
+  if (noname) why.push('nobody named yet - off the call sheet until a name is found');
+  if (LANE_TIERS.email.includes(t) && !email && !noname) why.push('nobody named to write to');
   if (call && email) why.push('owner within reach and can afford premium - call first, email if no connect');
-  return { call, email, tier: t, why: why.join('; ') };
+  return { call, email, noname, tier: t, measured, why: why.join('; ') };
 };
-const laneWord = (l) => !l ? 'none' : (l.call && l.email) ? 'call + email' : l.call ? 'call' : l.email ? 'email' : 'none';
+const laneWord = (l) => !l ? 'none' : (l.call && l.email) ? 'call + email' : l.call ? 'call' : l.email ? 'email' : l.noname ? 'no name yet' : 'none';
 
 const TS_LIMIT = 25; // credits per run = TS_LIMIT (1 credit/job). Raise on paid plan.
 // Track last TheirStack run in memory (persists across requests, resets on deploy).
@@ -6279,7 +6327,7 @@ const GP_CITIES = [
 // cost money and misses the next one. readFindChainSignals is the mechanism,
 // because it reads the business's own pages instead of our memory.
 
-const GP_FRANCHISE = /\b(roto-?rooter|mr\.? rooter|benjamin franklin|one hour (heating|air|hvac|plumbing|electric|smile)|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow (international|restoration)|chemdry|chem-?dry|brookdale|atria senior|sunrise senior|five star senior|holiday retirement|erickson living|watermark retirement|discovery senior|enlivant|pacifica senior|belmont village|silverado senior|oakmont senior|morningstar senior|merrill gardens|aegis living|bickford|legend senior|allegro (senior|living)|life care services|davey tree|bartlett tree|sav-?a-?tree|monster tree|brightview|yellowstone landscape|landcare|ruppert landscape|us lawns|weed ?man|scotts lawn|naturalawn|spring-?green|truly nolen|ram jack|window nation|america.?s home place)\b/i;
+const GP_FRANCHISE = /\b(overhead door company of|roto-?rooter|mr\.? rooter|benjamin franklin|one hour (heating|air|hvac|plumbing|electric|smile)|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow (international|restoration)|chemdry|chem-?dry|brookdale|atria senior|sunrise senior|five star senior|holiday retirement|erickson living|watermark retirement|discovery senior|enlivant|pacifica senior|belmont village|silverado senior|oakmont senior|morningstar senior|merrill gardens|aegis living|bickford|legend senior|allegro (senior|living)|life care services|davey tree|bartlett tree|sav-?a-?tree|monster tree|brightview|yellowstone landscape|landcare|ruppert landscape|us lawns|weed ?man|scotts lawn|naturalawn|spring-?green|truly nolen|ram jack|window nation|america.?s home place)\b/i;
 // ══ THE FRANCHISE LIST IS A LIST OF BRANDS SOMEBODY REMEMBERED ══════════════
 // Vin: "ive ran an audit on ram jack like 6 times it always pops up in the find
 // section". Ram Jack is a national foundation-repair franchise with dozens of
@@ -8440,10 +8488,20 @@ const parseLLMJSON = (raw) => {
 // Also fixes a second fault in the three copies of the "correct" version: they all
 // required a STATE+ZIP part to exist, so a plain "Greenville, SC" produced an EMPTY
 // location and dropped the qualifier entirely.
+// Round 112: two leads lost their city ("no city could be parsed") and the
+// licence search was skipped. "Phoenix AZ" without a comma (the shape the
+// Find grid uses) and "Phoenix, Arizona" (a full state name) now parse.
+const US_STATE_ABBR = { alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA', colorado: 'CO', connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS', kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI', minnesota: 'MN', mississippi: 'MS', missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT', virginia: 'VA', washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY', 'district of columbia': 'DC' };
 const cityState = (location) => {
   const parts = String(location || '').split(',').map(s => s.trim()).filter(Boolean)
-    .filter(p => !/^(usa|u\.s\.a\.|united states|us)$/i.test(p));
+    .filter(p => !/^(usa|u\.s\.a\.|united states|us)$/i.test(p))
+    .map(p => US_STATE_ABBR[p.toLowerCase()] || p);
   if (!parts.length) return '';
+  // "Phoenix AZ" / "Dripping Springs TX" in one piece: the last token is the state.
+  if (parts.length === 1) {
+    const m = parts[0].match(/^(.+?)\s+([A-Z]{2})$/);
+    if (m && m[1] && !/\d/.test(m[1])) return `${m[1].trim()} ${m[2]}`;
+  }
   let idx = parts.findIndex(p => /\b[A-Z]{2}\b\s*\d{5}/.test(p));
   let st = '';
   if (idx >= 0) st = (parts[idx].match(/\b([A-Z]{2})\b/) || [])[1] || '';
@@ -11125,6 +11183,7 @@ const DM_SOURCE_WEIGHT = {
   own_website_regex: 30,   // one sentence on their own page matched by one regex: corroboration, never a settle
   web_search:        40,   // the whole web, read by an LLM. Catches BBB/Manta/local press.
   registry:          30,   // legal public record — but often lists a filing agent, not the owner
+  opencorporates:    36,   // an OFFICER on the filed company record, agents refused by position (Round 112)
   license_or_chamber: 38,  // licence holder / chamber listing — a REAL named person, not an agent
   google_review_replies: 35, // whoever answers the reviews at an owner-run shop is the owner
   news:              30,   // press quotes them as owner — strong independent corroboration
@@ -11430,6 +11489,22 @@ const _getMappedUrls = (companyName, website) => {
 // refusal); the domain half is a bare substring — domains have no word
 // boundaries — so it keeps the 4-letter floor ("ray" inside
 // raymondplumbing.com is the false positive that floor exists for).
+// Round 112: whether an eponym can sign. Pure, so the boot can execute it.
+// Lifts to 80 when the surname is in the business name AND the person is on
+// the business's own sources, UNLESS the page gives them a plainly junior
+// title (office manager, coordinator, assistant, receptionist, technician,
+// apprentice, intern) - a family member at the front desk is not the owner.
+const EPONYM_JUNIOR_RE = /\b(?:office manager|coordinator|assistant|receptionist|technician|apprentice|intern|dispatcher|scheduler|bookkeeper|clerk)\b/i;
+const eponymousAuthority = (best, companyName, currentAuthority) => {
+  const b = best || {};
+  const cur = Number.isFinite(Number(currentAuthority)) ? Number(currentAuthority) : 30;
+  if (!b.name || cur >= DM_AUTHORITY_FLOOR) return { lift: false, authority: cur, why: '' };
+  const onOwnSite = (b.sources || []).some(sc => /own_website|business_name|google_review_replies/.test(String(sc)));
+  if (!onOwnSite) return { lift: false, authority: cur, why: 'not on their own sources' };
+  if (!surnameInCompanyName(b.name, companyName)) return { lift: false, authority: cur, why: 'surname not in the business name' };
+  if (EPONYM_JUNIOR_RE.test(String(b.title || ''))) return { lift: false, authority: cur, why: `"${b.title}" is a junior title` };
+  return { lift: true, authority: 80, why: 'the business is named after them and their own site confirms it' };
+};
 const isEponymousOwnerRule = (personName, coName, siteUrl) => {
   const parts = String(personName || '').trim().split(/\s+/)
     .filter(w => w.length > 2 && !/^(dr|mr|mrs|ms|dds|md|do|dvm|esq|jr|sr|iii|ii)\.?$/i.test(w));
@@ -13107,6 +13182,10 @@ const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey, locati
       `"${clean}" ${domain ? domain + ' ' : ''}${loc ? loc + ' ' : ''}(bbb.org OR manta.com OR buzzfile.com OR dnb.com) owner principal`,
     ];
     if (loc) queries.unshift(`"${clean}" ${loc} owner OR founder OR "chief executive" OR president name`);
+    // Round 112: the last query, bought only when the two above named nobody.
+    // LinkedIn result titles read "Name - Owner - Company", and the same
+    // name-must-appear-in-the-results rule applies.
+    queries.push(`"${clean}" ${loc ? loc + ' ' : ''}owner OR founder OR president site:linkedin.com/in`);
     if (!loc) console.log(`DM/websearch [${companyName}]: no city, so the undisambiguated name search is skipped — only the domain-scoped directory search runs.`);
 
     // One query at a time, and the second is bought only when the first did
@@ -13415,7 +13494,17 @@ const findSizeViaSearch = async (companyName, website, fcKey, apiKey, location =
     // (e.g. "Johns Roofing has revenue of $25,300,000"). So snippet-only = 1 credit,
     // no page scrape needed. Location-locked so we don't grab a same-named company.
     const q = `"${companyName}" ${loc ? loc + ' ' : ''}revenue (prospeo.io OR rocketreach.co OR growjo.com OR zoominfo.com OR dnb.com)`;
-    const results = await firecrawlSearch(fcKey, q, 4, false); // snippet-only
+    let results = await firecrawlSearch(fcKey, q, 4, false); // snippet-only
+    // Round 112: on a miss, one more snippet-only search over the two sources
+    // that publish a headcount for owner-operated trades - LinkedIn company
+    // pages ("11-50 employees") and BBB profiles ("Number of Employees: 12").
+    // 2 credits, only when the revenue directories said nothing.
+    let secondQuery = false;
+    if (results.length === 0 || !results.some(r => /\$\s*\d|employees/i.test(String(r.description || '')))) {
+      const q2 = `"${companyName}" ${loc ? loc + ' ' : ''}employees (site:linkedin.com/company OR site:bbb.org)`;
+      const r2s = await firecrawlSearch(fcKey, q2, 4, false);
+      if (r2s.length) { results = results.concat(r2s); secondQuery = true; }
+    }
     if (results.length === 0) return null;
 
     const corpus = results.map(r => `--- ${r.title}\nURL: ${r.url}\n${r.description}`).join('\n\n').slice(0, 12000);
@@ -13433,11 +13522,13 @@ Extract this company's EMPLOYEE COUNT and ANNUAL REVENUE if stated.
 RULES:
 - Only report figures the sources ACTUALLY state. Never estimate, never guess.
 - Make sure the figure is about THIS company${loc ? ' in ' + loc : ''}, not a similarly-named one in a different city. If a result is clearly a different-location business, ignore it.
-- Directory sites (Prospeo, RocketReach, Growjo, ZoomInfo, D&B) publish these for private companies — those are valid sources.
+- Directory sites (Prospeo, RocketReach, Growjo, ZoomInfo, D&B), LinkedIn company pages and BBB profiles publish these for private companies — those are valid sources.
+- A LinkedIn range like "11-50 employees" is a RANGE: report it in "employeesRange" exactly as written and leave "employees" null unless an exact count is stated.
+- Copy revenue EXACTLY as written, including "<", "under" or a range like "$500K-$1M" — never round a bucket into a number.
 - If a figure is not stated anywhere, return null for it. Null is correct.
 
 Return ONLY valid JSON:
-{"employees": number or null, "revenue": "e.g. $5M" or null, "source": "which site said it", "confidence": "high|medium|low"}
+{"employees": number or null, "employeesRange": "e.g. 11-50" or null, "revenue": "e.g. $5M or <$5M or $1M-$5M, exactly as written" or null, "source": "which site said it", "confidence": "high|medium|low"}
 
 RESULTS:
 ${corpus}` }]
@@ -13449,8 +13540,12 @@ ${corpus}` }]
     const fb = text.indexOf('{'), lb = text.lastIndexOf('}');
     if (fb >= 0 && lb > fb) text = text.slice(fb, lb + 1);
     const parsed = parseLLMJSON(text) || {};
-    if (!parsed.employees && !parsed.revenue) return null;
-    console.log(`SIZE [${companyName}]: emp=${parsed.employees || '?'} rev=${parsed.revenue || '?'} (${parsed.source || '?'})`);
+    // A stated range reads as its midpoint, and the row says it was a range.
+    const _rg = String(parsed.employeesRange || '').match(/(\d+)\s*(?:-|–|to)\s*(\d+)/);
+    if (!(Number(parsed.employees) > 0) && _rg) { parsed.employees = Math.round((Number(_rg[1]) + Number(_rg[2])) / 2); parsed.employeesFromRange = parsed.employeesRange; }
+    if (!(Number(parsed.employees) > 0) && !parsed.revenue) return null;
+    parsed.secondQuery = secondQuery;
+    console.log(`SIZE [${companyName}]: emp=${parsed.employees || '?'}${parsed.employeesFromRange ? ' (from the range ' + parsed.employeesFromRange + ')' : ''} rev=${parsed.revenue || '?'} (${parsed.source || '?'}${secondQuery ? '; LinkedIn/BBB query bought' : ''})`);
     return parsed;
   } catch(e) {
     console.log('findSizeViaSearch failed:', e.message);
@@ -32830,6 +32925,48 @@ ${replies.join('\n---\n').slice(0, 9000)}` }]
   } catch(e) { console.log('findOwnerViaReviewReplies failed:', e.message); return null; }
 };
 
+// ══ OPENCORPORATES OFFICERS (Round 112) ═══════════════════════════════════
+// The state-registry web search is off because it returned filing agents. The
+// OpenCorporates API returns the OFFICERS a company filed - president, member,
+// manager, director - with their positions, so the agent can be refused by
+// its position. Behind OPENCORPORATES_KEY (free tier, 500 calls a month);
+// without the key the stage says so once per lead and costs nothing.
+const OPENCORPORATES_KEY = String(process.env.OPENCORPORATES_KEY || '').trim();
+const OC_AGENT_RE = /\b(?:registered agent|agent|incorporator|organizer|organiser)\b/i;
+const OC_OWNER_POS_RE = /\b(?:president|ceo|chief executive|owner|member|managing member|manager|managing|director|principal|partner|chairman|founder)\b/i;
+const pickOpenCorporatesOfficer = (officers, companyName) => {
+  const list = Array.isArray(officers) ? officers : [];
+  for (const o of list) {
+    const off = (o && o.officer) || o || {};
+    const name = String(off.name || '').trim(), pos = String(off.position || '').trim();
+    if (!name || OC_AGENT_RE.test(pos) || !OC_OWNER_POS_RE.test(pos)) continue;
+    if (off.inactive === true) continue;
+    // Filing agents also file as "president" of themselves: refuse organisations.
+    if (ownerNameDoor(name, companyName) || !looksLikeRealName(name)) continue;
+    return { name, title: pos.replace(/\b\w/g, c => c.toUpperCase()) };
+  }
+  return null;
+};
+const findOwnerViaOpenCorporates = async (companyName, location) => {
+  if (!OPENCORPORATES_KEY) return null;
+  try {
+    const st = (cityState(location).match(/\b([A-Z]{2})$/) || [])[1] || '';
+    const q = `https://api.opencorporates.com/v0.4/companies/search?q=${encodeURIComponent(companyName)}${st ? '&jurisdiction_code=us_' + st.toLowerCase() : ''}&api_token=${encodeURIComponent(OPENCORPORATES_KEY)}`;
+    const r = await fetchT(q, { headers: { 'Accept': 'application/json' } }, 8000);
+    const d = await safeJson(r);
+    const cos = (((d || {}).results || {}).companies || []).map(x => x.company).filter(Boolean);
+    const want = String(companyName).toLowerCase().replace(/[^a-z0-9]/g, '');
+    const co = cos.find(c => String(c.name || '').toLowerCase().replace(/[^a-z0-9]/g, '').startsWith(want.slice(0, Math.min(12, want.length)))) || null;
+    if (!co || !co.company_number || !co.jurisdiction_code) { console.log(`DM/opencorporates [${companyName}]: no matching filing${st ? ' in ' + st : ''}.`); return null; }
+    const r2 = await fetchT(`https://api.opencorporates.com/v0.4/companies/${co.jurisdiction_code}/${encodeURIComponent(co.company_number)}?api_token=${encodeURIComponent(OPENCORPORATES_KEY)}`, { headers: { 'Accept': 'application/json' } }, 8000);
+    const d2 = await safeJson(r2);
+    const officers = (((d2 || {}).results || {}).company || {}).officers || [];
+    const pick = pickOpenCorporatesOfficer(officers, companyName);
+    if (!pick) { console.log(`DM/opencorporates [${companyName}]: ${officers.length} officer(s) filed, none with an owner-level position that is a person.`); return null; }
+    console.log(`DM/opencorporates [${companyName}]: \u2713 ${pick.name} (${pick.title}) from the ${co.jurisdiction_code.toUpperCase()} filing ${co.company_number}`);
+    return { name: pick.name, title: pick.title, source: 'opencorporates', confidence: 'medium', evidence: `filed as ${pick.title} on the ${co.jurisdiction_code.toUpperCase()} company record` };
+  } catch (e) { console.log(`DM/opencorporates [${companyName}]: failed - ${e.message}`); return null; }
+};
 const findOwnerViaRegistry = async (companyName, fcKey) => {
   if (!companyName || !fcKey) return null;
   try {
@@ -33196,11 +33333,17 @@ const _ownerDoorSaid = new Set();
 // the title "Our Founder" and shipped as the decision-maker. A pronoun or a
 // navigation word is never part of a person's name.
 const NAV_WORD_RE = /^(?:who|we|are|what|why|how|meet|about|our|your|the|team|story|us|contact|home|welcome|services|careers)$/i;
+// Round 112: a leadership page listed its CLIENTS beside their titles and the
+// roster read "Atlanta Journal-Constitution (Facilities Manager)" and
+// "Colliers International (General Manager)" as people. A token no person
+// carries as a name is an organisation.
+const ORG_TOKEN_RE = /^(?:journal|constitution|international|corporation|corp|company|co|group|holdings|partners|associates|llc|inc|bank|university|hospital|magazine|times|news|tribune|gazette|herald|chronicle|post|county|city|state|department|district|authority|commission|council|chamber)$/i;
 const ownerNameDoor = (name, companyName = '') => {
   const s = String(name || '').trim();
   if (!s) return 'empty';
   const toks = s.split(/[\s\/\-]+/).filter(Boolean);
   if (toks.some(t => NAV_WORD_RE.test(t))) return 'not-a-name';
+  if (toks.some(t => ORG_TOKEN_RE.test(t.replace(/[.,]$/, '')))) return 'not-a-name';
   if (toks.every(t => OWNER_WORD_RE.test(t) || ROLE_WORDS.has(t.toLowerCase()))) return 'title';
   if (allRoleWords(s)) return 'title';
   const _flat = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').replace(/^the /, '').trim();
@@ -33575,6 +33718,15 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
       if (license) found.push(license);
     }
 
+    // Round 112: the filed officers, free with a key, before any registry search.
+    if (!settled()) {
+      if (OPENCORPORATES_KEY) {
+        const oc = await findOwnerViaOpenCorporates(companyName, location).catch(() => null);
+        if (oc) found.push(oc);
+      } else {
+        console.log(`DM [${companyName}]: the OpenCorporates officer lookup is not configured (OPENCORPORATES_KEY unset) - a free stage that names the filed president or member.`);
+      }
+    }
     if (settled()) {
       console.log(`DM [${companyName}]: settled at stage 2 — skipped the state registry lookup (~3 Firecrawl credits saved)`);
     } else if (found.length === 0) {
@@ -33654,13 +33806,17 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   };
   let _authority = _NO_TITLE(best.title) ? 30 : best.authority;
   let _eponymousOwner = false;
-  if (_NO_TITLE(best.title) && best.name) {
-    const _onOwnSite = (best.sources || []).some(sc => /own_website|business_name|google_review_replies/.test(String(sc)));
-    if (surnameInCompanyName(best.name, companyName) && _onOwnSite) {
-      _eponymousOwner = true;
-      _authority = 80;
-      console.log(`DM [${companyName}]: EPONYMOUS AUTHORITY \u2014 no title was scraped for ${best.name}, but their surname is in the business name and they are confirmed on the business's own sources. An unknown title at a business named after the person is owner-level, not junior. Authority ${best.authority} \u2192 80.`);
-    }
+  // Round 112: the lift used to fire only when the title was ABSENT, so Dr.
+  // Bruce Landon of Landon Plastic Surgery - "Medical Director", authority 35,
+  // named after himself on his own site - was HELD BACK and his address
+  // blocked. At an eponymous business the eponym IS the owner, whatever the
+  // title under the photo says; a junior title still cannot lift a mere
+  // surname match (eponymousAuthority refuses "Office Manager" named Parke).
+  const _epo = eponymousAuthority(best, companyName, _authority);
+  if (_epo.lift) {
+    _eponymousOwner = true;
+    _authority = _epo.authority;
+    console.log(`DM [${companyName}]: EPONYMOUS AUTHORITY \u2014 ${best.name} is "${best.title || 'no title found'}" on the page, but the business is named after them and their own sources confirm it, so they can sign (${_epo.why}).`);
   }
   const hasAuthority = _authority >= AUTHORITY_FLOOR;
 
@@ -55306,6 +55462,19 @@ app.listen(PORT, () => {
     if (licenseHitTiesToCompany('Sam Smith', 'The Service Company LLC', _hoppeHits) !== null) _fails.push('a company with no distinctive token must produce NO judgement, never a guess in either direction');
     const _src = selfSourceNoCommentsLF();
     if (!_src.includes(_n('const _isEponymousOwner = ', 'isEponymousOwnerRule;'))) _fails.push('the resolver no longer uses the module rule — two hand-kept copies of one decision again');
+    // Round 112: the eponym can sign whatever the title under the photo says.
+    const _lan = eponymousAuthority({ name: 'Bruce Landon', title: 'Medical Director', sources: ['own_website_brain'] }, 'Landon Plastic Surgery', 35);
+    if (!_lan.lift || _lan.authority < DM_AUTHORITY_FLOOR) _fails.push('Dr. Landon of Landon Plastic Surgery is still held below the buying floor by his "Medical Director" title (live, 2026-09-03)');
+    if (eponymousAuthority({ name: 'Mat Parke', title: 'Office Manager', sources: ['own_website_brain'] }, 'Parke Roofing', 20).lift) _fails.push('a family member at the front desk is lifted to owner by the surname alone');
+    if (eponymousAuthority({ name: 'Bruce Landon', title: 'Medical Director', sources: ['hunter'] }, 'Landon Plastic Surgery', 35).lift) _fails.push('an eponym is lifted on Hunter alone, with nothing of their own confirming it');
+    if (eponymousAuthority({ name: 'Bruce Landon', title: 'Medical Director', sources: ['own_website_brain'] }, 'Quinn Plastic Surgery', 35).lift) _fails.push('a surname that is not in the business name is lifted');
+    if (!_src.includes(_n('const _epo = eponymousAuthority(best, companyName,', ' _authority);'))) _fails.push('the settle rule does not read the eponymous authority rule, so Landon is held back again');
+    // The OpenCorporates officer pick refuses agents by position and organisations by name.
+    const _oc = pickOpenCorporatesOfficer([{ officer: { name: 'CT CORPORATION SYSTEM', position: 'registered agent' } }, { officer: { name: 'Legalinc Corporate Services Inc', position: 'president' } }, { officer: { name: 'Jane Doe', position: 'president' } }], 'Doe Roofing LLC');
+    if (!_oc || _oc.name !== 'Jane Doe') _fails.push(`the OpenCorporates pick returned ${JSON.stringify(_oc)} - a filing agent or a service company is the owner`);
+    if (pickOpenCorporatesOfficer([{ officer: { name: 'John Smith', position: 'incorporator' } }], 'Smith Co')) _fails.push('an incorporator is taken as the owner');
+    if (!_src.includes(_n('findOwnerViaOpenCorporates(companyName,', ' location).catch'))) _fails.push('the OpenCorporates stage is never called from the ladder');
+    if (!/site:linkedin\.com\/in/.test(_src)) _fails.push('the LinkedIn owner query is gone from the web search');
     if (_src.includes(_n('const eponymousConfident = independent', ' >= 2'))) _fails.push('the unreachable independent-source floor is back on the eponymous settle — the paid wave is bought on every eponymous lead again');
     if (!_src.includes(_n('licenseHitTiesToCompany(parsed.name, clean, ', 'hits) === false'))) _fails.push('the licence extraction lost its mechanical company tie — the August Hoppe class ships on the next similarly-named business');
     if (_fails.length) {
@@ -56770,7 +56939,7 @@ app.listen(PORT, () => {
       ['the audit fields do not pass through the post-contact stripper', _dn('stripPostContactClaimsDeep(parsed[k], ', '_pcx, 1)')],
       ['the audit fields do not pass through the ownership stripper', _dn('stripUnverifiedOwnershipDeep(parsed[k], ', '_ownx, 1, _ownAllow)')],
       ['the synthesis does not pass through the ownership stripper', _dn('stripUnverifiedOwnershipDeep(_srx, ', '_srOwn, 1, {')],
-      ['the resolver and the brain-add no longer share the ONE surname rule', _dn('surnameInCompanyName(best.name, ', 'companyName) && _onOwnSite')],
+      ['the resolver and the brain-add no longer share the ONE surname rule', _dn('if (!surnameInCompanyName(b.name, ', 'companyName)) return')],
       ['the brain-read name never earns its code-checked evidence line', _dn('ownerNameEvidence = `Read off their own pages', ' \\u2014 no title is published')],
       // Re-scoped by the owner, round 101: the floor is three mentions OR two
       // for the response-to-money buckets (no_response/quote_delay).
@@ -59035,7 +59204,7 @@ app.listen(PORT, () => {
       [_nd('if (!out.notIcp && out.nonprofit', '.isNonprofit) {'), 'a nonprofit is read and then bought anyway - the verdict does not reach notIcp'],
       [_nd('out.tells = readOwnershipTells({', ' pages });'), 'the contact read no longer looks for ownership tells at all'],
       [_nd('if (!out.notIcp && out.tells', '.isOut) {'), 'an ownership tell is read and then bought anyway - the verdict does not reach notIcp'],
-      [_nd('signals.scaleBand = _scale ?', ' _scale.band : null;'), 'the size band is estimated by the term and never handed to the demotion, so an over-range business is not marked down'],
+      [_nd('signals.scaleBand = (_scale && !_scale.guess) ?', ' _scale.band : null;'), 'the size band is estimated by the term and never handed to the demotion, so an over-range business is not marked down'],
       [_nd('signals.ownerAnswersReviews = (out.owner && Array.isArray(out.owner.sources)', " && out.owner.sources.includes('google_review_replies')) ? true : null;"), 'the founder term no longer sees who signs the review replies'],
       [_nd('financing: signals.financing === true, commercial:', ' signals.commercial === true,'), 'affordability no longer receives the financing and commercial reads'],
       [_nd("const _dropAs = ({ nonprofit: 'as a nonprofit',", " owned: 'as a business somebody else owns',"), 'the drop line calls every drop a chain again'],
@@ -59150,6 +59319,35 @@ app.listen(PORT, () => {
     if (_tg(null, null, 'layered') !== 'none') _fails.push('a layered business with nobody found claims a target');
     // The demotions: lifted when the reachable decision-maker was found, and high ranks below medium.
     if (demotionPenalty({ aboveSizeCeiling: true, marketingLeadFound: true }).points !== 0) _fails.push('the review-ceiling mark stays on a lead whose reachable marketing head was found');
+    // ══ ROUND 112: MEASURE, DO NOT GUESS - AND ONE RULER FOR THE SHEET AND THE LANE ══
+    {
+      if (sizeMeasured({ yearsInBusiness: 41, reviewCount: 58 })) _fails.push('tenure counts as a measured size, so an old business never has its size bought (Allied, Zaring, NATiVE, PSI, Overhead Door on 2026-09-03)');
+      if (sizeMeasured({ reviewCount: 130 })) _fails.push('a review count counts as a measured size');
+      if (!sizeMeasured({ teamCount: 8 }) || sizeMeasured({ teamCount: 3 })) _fails.push('a team page at the core cut is not a measured floor, or a three-person page is');
+      if (!sizeMeasured({ revenueStated: '$14m' }) || !sizeMeasured({ directoryEmployees: 5 })) _fails.push('a directory figure does not count as measured');
+      const _ten = estimateScaleBand({ yearsInBusiness: 41, reviewCount: 58 });
+      if (!_ten || _ten.guess !== true || _ten.band !== 'entry') _fails.push('the tenure band is not flagged as a guess');
+      const _b1 = parseStatedRevenueBound('<$5M'), _b2 = parseStatedRevenueBound('$500K-$1M'), _b3 = parseStatedRevenueBound('$14m');
+      if (!_b1 || _b1.bound !== 'below' || _b1.usd !== 2.5e6) _fails.push('"<$5M" is read as a measurement of $5M');
+      if (!_b2 || _b2.bound !== 'range' || _b2.usd !== 750000) _fails.push('"$500K-$1M" is not read as a range at its midpoint');
+      if (!_b3 || _b3.bound !== 'exact' || _b3.usd !== 14e6) _fails.push('"$14m" is misread');
+      if ((estimateScaleBand({ revenueStated: '<$5M' }) || {}).band !== 'core' || !/under \$5M/.test((estimateScaleBand({ revenueStated: '<$5M' }) || {}).say)) _fails.push('a "<$5M" bucket does not say it was a bucket');
+      if ((estimateScaleBand({ teamCount: 8 }) || {}).band !== 'core' || !(estimateScaleBand({ teamCount: 8 }) || {}).floor) _fails.push('eight people on their own team page is not read as at least core');
+      if (estimateScaleBand({ teamCount: 3 })) _fails.push('three people on a team page decides a band');
+      const _alm = sizeBand({ revenueStated: '$14m', revenueStatedSource: 'RocketReach', reviewCount: 62 });
+      if (_alm.band !== 'high' || _alm.confidence !== 'guess') _fails.push(`one directory\'s $14M with 62 reviews reads "${_alm.band} (${_alm.confidence})" - a wrong "high" can come from one snippet`);
+      const _alm2 = sizeBand({ revenueStated: '$14m', revenueStatedSource: 'RocketReach', reviewCount: 62, teamCount: 60 });
+      if (_alm2.confidence !== 'likely') _fails.push('a directory figure with one agreeing fact is not "likely"');
+      const _car = sizeBand({ revenueStated: '$500K-$1M', revenueStatedSource: 'ZoomInfo', directoryEmployees: 5, reviewCount: 30 });
+      if (_car.band !== 'low' || _car.confidence !== 'sure') _fails.push(`a directory range, a directory headcount and the review band agreeing is not "low (sure)" (got ${_car.band} ${_car.confidence})`);
+      const _hay = lanesFor({ tier: null, sizeWord: 'low', sizeConfidence: 'guess', affordBand: 'premium', layers: 'owner', source: 'google_places', target: 'owner' });
+      if (_hay.tier !== 'entry' || _hay.call !== true || _hay.email !== false || _hay.measured !== false) _fails.push('an unmeasured "low" lead is not entry / call only - the sheet word and the lane disagree again (Hayward)');
+      const _nn = lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'none' });
+      if (_nn.call !== false || _nn.noname !== true || _nn.email !== false || laneWord(_nn) !== 'no name yet') _fails.push('a read lead with nobody named is on the call sheet instead of the no-name bucket');
+      if (lanesFor({ tier: 'below_floor', layers: 'owner', source: 'google_places', target: 'none' }).noname !== false) _fails.push('a benched lead is in the no-name bucket');
+      if (lanesFor({ tier: 'core', layers: 'layered', source: 'google_places', target: 'none' }).noname !== false) _fails.push('a layered lead with nobody named is in the no-name bucket instead of nowhere');
+      if (cityState('Phoenix AZ') !== 'Phoenix AZ' || cityState('Phoenix, Arizona') !== 'Phoenix AZ' || cityState('Dripping Springs TX') !== 'Dripping Springs TX' || cityState('1234 W Main St, Phoenix, AZ 85001') !== 'Phoenix AZ' || cityState('') !== '') _fails.push('the city parser still loses "Phoenix AZ" or "Phoenix, Arizona", so the licence search is skipped');
+    }
     if (demotionPenalty({ scaleBand: 'over_ceiling', marketingLeadFound: true }).points !== -10) _fails.push('over the ladder\'s ceiling is lifted by a marketing head - a $30M+ buyer is corporate whoever was found');
     if (demotionPenalty({ aboveSizeCeiling: true, marketingLeadFound: false }).points !== -10) _fails.push('the review ceiling mark was lifted without a marketing head');
     if (demotionPenalty({ sizeBand: 'high' }).points !== -6) _fails.push('a high size does not rank below medium');
@@ -59200,7 +59398,10 @@ app.listen(PORT, () => {
       [_n('out.lanes = ', '_lanes;'), 'the lane is decided and never returned'],
       [_n('signals.tradeLabel = String((company && company.industry)', " || '');"), 'the trade never reaches the size read, so every niche is sized as an HVAC shop'],
       [_n('findSizeViaSearch(name, website, fcKey,', ' apiKey,'), 'the size lookup is never bought, so an unpublished size stays a guess off the review count'],
-      [_n('if (!estimateScaleBand(', 'signals) && website) {'), 'the size lookup is bought on a lead that published its size, or on one with no website'],
+      [_n('if (!sizeMeasured(', 'signals) && website) {'), 'the size lookup is bought on a lead that measured its size, or skipped on one that only guessed it'],
+      [_n('sizeWord: _size.band, sizeConfidence: _size.confidence,', ' affordBand: signals.affordBand ||'), 'the lane does not read the sheet\'s own guess, so the two can disagree'],
+      [_n("signals.scaleBand = (_scale && !_scale.guess) ?", ' _scale.band : null;'), 'a tenure guess decides the tier the lanes read'],
+      [_n('site:linkedin.com/company OR ', 'site:bbb.org'), 'the size lookup has no second query, so a miss on the revenue directories stays a miss'],
       [_n('c.verifiedEmployees > ', 'ICP_EMPLOYEE_BLOCK) {'), 'the discovery employee gate is back on a literal'],
       [_n('max_employee_count: ', 'ICP_EMPLOYEE_BLOCK,'), 'TheirStack is asked for a literal size range instead of the ladder\'s'],
       [_n('job_location_pattern_or: GP_CITIES', '.map('), 'TheirStack is asked nationwide instead of in our metros'],
@@ -65719,13 +65920,13 @@ app.listen(PORT, () => {
     // them squarely in the ICP. Each is now qualified by the words that
     // actually name the franchise, and the real franchises still die.
     {
-      const _fLive = ['Rainbow Roofing & Siding', 'Rainbow Painting LLC',
+      const _fLive = ['Overhead Door Repair Pros', 'Rainbow Roofing & Siding', 'Rainbow Painting LLC',
         'One Hour Signs', 'Midway Plumbing', 'Rooter Solutions of Tampa',
         'Precision Concrete Cutting', 'Brothers Landscaping'];
       for (const n of _fLive) {
         if (GP_FRANCHISE.test(n)) _fails.push(`"${n}" is DELETED at discovery as a franchise - an ordinary word in the franchise list is deleting the owner-operated businesses this pipeline exists to find, and this delete has no bench and no second chance`);
       }
-      const _fDie = ['Roto-Rooter Plumbing', 'Mr. Rooter of Dallas',
+      const _fDie = ['Overhead Door Company of Jacksonville', 'Roto-Rooter Plumbing', 'Mr. Rooter of Dallas',
         'One Hour Heating & Air Conditioning', 'Rainbow International Restoration',
         'ServPro of North Austin', 'Molly Maid of Cincinnati', 'Aspen Dental'];
       for (const n of _fDie) {
@@ -73877,6 +74078,10 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       ['Roof Detective', 'The Roof Detective', 'company', 'the trading name minus its article is accepted as a person'],
       ['Surek Plastic Surgery', 'Quinn Plastic Surgery', 'not-a-name', 'a firm name with a trade tail is accepted as a person'],
       ['Ann Lead', 'X Co', null, 'a real owner whose surname is a role word is refused'],
+      // Round 112: a leadership page listing CLIENTS beside their titles (Whitco Roofing, 2026-09-03).
+      ['Atlanta Journal-Constitution', 'Whitco Roofing, Inc.', 'not-a-name', 'a client newspaper on a leadership page is accepted as a person'],
+      ['Colliers International', 'Whitco Roofing, Inc.', 'not-a-name', 'a client firm on a leadership page is accepted as a person'],
+      ['Grant B. Whitney', 'Whitco Roofing, Inc.', null, 'the real CEO beside those clients is refused'],
     ];
     for (const [_nm, _co, _want, _msg] of _doorCases) {
       if (ownerNameDoor(_nm, _co) !== _want) _fails.push(_msg);
@@ -76414,6 +76619,8 @@ const SIZE_TERMS = [
   { id: 'fleetProse',         cut: (c, t) => ({ high: t.upper + 1, medium: t.core }), say: (n) => `${n} trucks on their own pages` },
   { id: 'locationsProse',     cut: () => ({ high: 6, medium: 2 }), say: (n) => `${n} locations on their own pages` },
   { id: 'marketCount',        cut: () => ({ high: 3, medium: 2 }), say: (n) => `seen in ${n} metros this run` },
+  // Round 112: their own team page, a floor - it only ever raises the band.
+  { id: 'teamCount',          cut: (c) => ({ high: c.upper + 1, medium: c.core }), floor: true, say: (n) => `at least ${n} people on their own team page` },
 ];
 const SIZE_ORDER = { low: 0, medium: 1, high: 2 };
 const sizeBand = (s) => {
@@ -76425,17 +76632,26 @@ const sizeBand = (s) => {
     if (!Number.isFinite(n) || n <= 0) continue;
     if (t.id === 'marketCount' && n < 2) continue;
     const k = t.cut(_cuts, _tcuts);
-    facts.push({ band: n >= k.high ? 'high' : n >= k.medium ? 'medium' : 'low', say: t.say(n, d) });
+    if (t.floor && n < k.medium) continue;   // a floor under the core cut says nothing
+    facts.push({ band: n >= k.high ? 'high' : n >= k.medium ? 'medium' : 'low', say: t.say(n, d), directory: t.id === 'directoryEmployees' });
   }
-  // A revenue a directory states reads straight onto the ladder - after a
-  // verified headcount, ahead of what their own pages say.
-  const _rev = parseStatedRevenue(d.revenueStated);
-  if (_rev) facts.splice(Number.isFinite(Number(d.verifiedEmployees)) && Number(d.verifiedEmployees) > 0 ? 1 : 0, 0, { band: SIZE_WORD[tierFromRevenue(_rev)], say: `a directory's revenue figure (${d.revenueStatedSource || 'web'})` });
+  // A revenue a directory states reads onto the ladder after a verified
+  // headcount, ahead of what their own pages say - but it is a DIRECTORY's
+  // figure (Round 112: RocketReach put a gmail roofer at $14M): alone it is a
+  // guess, likely when one other fact agrees, sure when two do.
+  const _rb = parseStatedRevenueBound(d.revenueStated);
+  if (_rb) facts.splice(Number.isFinite(Number(d.verifiedEmployees)) && Number(d.verifiedEmployees) > 0 ? 1 : 0, 0, { band: SIZE_WORD[tierFromRevenue(_rb.usd)], say: `a directory's revenue figure (${d.revenueStatedSource || 'web'}${_rb.bound === 'below' ? ', stated as under ' + _usdShort(_rb.hi) : _rb.bound === 'range' ? ', a range' : ''})`, directory: true });
   if (facts.length) {
     // The strongest evidence decides; the rest either agree or do not.
     let band = facts[0].band;
+    const _rvGuess = (typeof d.reviewCount === 'number' && Number.isFinite(Number(d.reviewCount))) ? (Number(d.reviewCount) >= 750 ? 'high' : Number(d.reviewCount) >= 150 ? 'medium' : 'low') : null;
     const agree = facts.filter(f => f.band === band).length;
     let confidence = (facts.length >= 2 && agree >= 2) ? 'sure' : 'likely';
+    if (facts[0].directory) {
+      // Agreement from the other facts, with the review band as one weak vote.
+      const others = facts.slice(1).filter(f => f.band === band).length + (_rvGuess === band ? 1 : 0);
+      confidence = others >= 2 ? 'sure' : others >= 1 ? 'likely' : 'guess';
+    }
     const why = [facts[0].say].concat(facts.slice(1).map(f => f.say + (f.band === band ? '' : ` (reads ${f.band})`)));
     // Sophistication nudges one step up, never past "likely", never to high on its own.
     const soft = [Array.isArray(d.execTitles) && d.execTitles.length >= 2, d.commercial === true, d.financing === true].filter(Boolean).length;
@@ -76788,12 +77004,14 @@ const estimateScaleBand = (s) => {
   const cuts = scaleCuts(revenuePerEmployeeFor(d.tradeLabel));
   const tcuts = scaleCuts(ICP_REVENUE_PER_TRUCK);
   const mk = (band, from) => ({ band, points: SCALE_BAND_POINTS[band], say: `estimated ${SCALE_BAND_SAY[band]} from ${from}` });
-  const rev = parseStatedRevenue(d.revenueStated);
-  if (rev) return mk(tierFromRevenue(rev), `a directory's revenue figure (${d.revenueStatedSource || 'web'})`);
+  // A verified count first; a directory's figure next, flagged as a directory's
+  // (and as a bound when it was "<$5M" or a range); then what they publish.
   const ver = Number(d.verifiedEmployees);
   if (Number.isFinite(ver) && ver > 0) return mk(tierFromCount(ver, cuts), `${ver} verified employees`);
+  const rb = parseStatedRevenueBound(d.revenueStated);
+  if (rb) return Object.assign(mk(tierFromRevenue(rb.usd), `a directory's revenue figure (${d.revenueStatedSource || 'web'}${rb.bound === 'below' ? ', stated as under ' + _usdShort(rb.hi) : rb.bound === 'range' ? ', a range' : ''})`), { directory: true, bound: rb.bound });
   const dir = Number(d.directoryEmployees);
-  if (Number.isFinite(dir) && dir > 0) return mk(tierFromCount(dir, cuts), `${dir} employees per ${d.directoryEmployeesSource || 'a directory'}`);
+  if (Number.isFinite(dir) && dir > 0) return Object.assign(mk(tierFromCount(dir, cuts), `${dir} employees per ${d.directoryEmployeesSource || 'a directory'}`), { directory: true });
   const staff = Number(d.staffProse);
   // A count they PUBLISH is a floor (a forty-person firm may publish four): from
   // three people up it reads as entry at least; only a verified count goes lower.
@@ -76802,8 +77020,13 @@ const estimateScaleBand = (s) => {
   if (Number.isFinite(fleet) && fleet > 0) return mk(tierFromCount(fleet, tcuts), `${fleet} trucks on their own pages`);
   const locs = Number(d.locationsProse);
   if (Number.isFinite(locs) && locs >= 2) return mk(locs <= 5 ? 'core' : locs <= 12 ? 'upper' : 'over_ceiling', `${locs} locations on their own pages`);
+  // Their own team page is a FLOOR: at least this many people. It raises the
+  // band, never lowers it, and only speaks when it reaches the core cut.
+  const tc = Number(d.teamCount);
+  if (Number.isFinite(tc) && tc >= cuts.core) return Object.assign(mk(tierFromCount(tc, cuts), `at least ${tc} people on their own team page`), { floor: true });
+  // Tenure is a GUESS, flagged so the lookup still fires (sizeMeasured ignores it).
   const yrs = Number(d.yearsInBusiness), rv = Number(d.reviewCount);
-  if (Number.isFinite(yrs) && yrs >= 15 && Number.isFinite(rv) && rv >= 40) return mk('entry', `${yrs} years in business at ${rv} reviews`);
+  if (Number.isFinite(yrs) && yrs >= 15 && Number.isFinite(rv) && rv >= 40) return Object.assign(mk('entry', `${yrs} years in business at ${rv} reviews - a guess`), { guess: true });
   return null;
 };
 
@@ -76938,7 +77161,9 @@ const FIND_ICP_TERMS = [
     id: 'scale', max: 20, label: 'an estimated size band, from what they publish',
     score: (s) => {
       const b = estimateScaleBand(s);
-      if (!b) return null;
+      // Round 112: the team-page floor already scores in the size term; one fact
+      // must not sit in two terms of the same denominator, so here it is unmeasured.
+      if (!b || b.floor) return null;
       return { points: b.points, say: b.say + (b.band === 'over_ceiling' ? ' - over the ceiling of the businesses we sell to' : b.band === 'below_floor' ? ' - under the floor, the lower tier is the likely sale' : '') };
     },
   },
@@ -78012,15 +78237,15 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   out.sizeLookup = { bought: false, source: '', why: 'a size was published, nothing bought' };
   // Never on a lead with no website: that lead spends nothing, by the rule the
   // free read already keeps (a name alone matches the wrong company anyway).
-  if (!estimateScaleBand(signals) && website) {
-    out.sizeLookup = { bought: true, source: '', why: 'nothing published about their size' };
+  if (!sizeMeasured(signals) && website) {
+    out.sizeLookup = { bought: true, source: '', why: 'nothing measured about their size' };
     try {
       const _capi = (companiesApiKey && website) ? await enrichViaCompaniesAPI(website, companiesApiKey) : null;
       if (_capi && Number(_capi.employees) > 0) {
         signals.directoryEmployees = Math.round(Number(_capi.employees)); signals.directoryEmployeesSource = 'the Companies API';
         out.sizeLookup.source = 'the Companies API';
       } else if (fcKey && apiKey) {
-        const _dir = await findSizeViaSearch(name, website, fcKey, apiKey, String((company && company.location) || ''));
+        const _dir = await findSizeViaSearch(name, website, fcKey, apiKey, String((company && (company.location || company.market)) || ''));
         if (_dir && Number(_dir.employees) > 0) { signals.directoryEmployees = Math.round(Number(_dir.employees)); signals.directoryEmployeesSource = String(_dir.source || 'a directory'); }
         if (_dir && _dir.revenue) { signals.revenueStated = String(_dir.revenue); signals.revenueStatedSource = String(_dir.source || 'a directory'); }
         if (_dir && (Number(_dir.employees) > 0 || _dir.revenue)) out.sizeLookup.source = `a directory snippet (${_dir.source || 'web'})`;
@@ -78029,7 +78254,8 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     console.log(`\u{1F4CF} SIZE LOOKUP [${name}]: ${out.sizeLookup.source ? `bought - ${signals.directoryEmployees ? signals.directoryEmployees + ' employees' : ''}${signals.directoryEmployees && signals.revenueStated ? ', ' : ''}${signals.revenueStated ? 'revenue ' + signals.revenueStated : ''} from ${out.sizeLookup.source}` : 'bought and found nothing - the band stays a guess'}`);
   }
   const _scale = estimateScaleBand(signals);
-  signals.scaleBand = _scale ? _scale.band : null;
+  // A tenure guess is printed but never decides the tier the lanes read.
+  signals.scaleBand = (_scale && !_scale.guess) ? _scale.band : null;
   const _size = sizeBand(signals);
   signals.sizeBand = _size.band; signals.sizeConfidence = _size.confidence;
   out.size = { band: _size.band, confidence: _size.confidence, why: _size.why, tier: signals.scaleBand, say: _scale ? _scale.say : '' };
@@ -78066,9 +78292,9 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   }
   signals.marketingLeadFound = out.target === 'marketing';
   // ══ WHICH LANE (Round 111) ═══════════════════════════════════════════
-  const _lanes = lanesFor({ tier: signals.scaleBand, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target });
+  const _lanes = lanesFor({ tier: signals.scaleBand, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target });
   out.lanes = _lanes;
-  console.log(`\u{1F3AF} TARGET [${name}]: size ${_size.band || 'not measured'} (${_size.confidence}: ${_size.why}) | tier ${_lanes.tier}${_scale ? ' (' + _scale.say + ')' : ' (not measured)'} | layers ${_layers.verdict}${_layers.why ? ' (' + _layers.why + ')' : ''} | target ${out.target}${out.marketingLead ? ' ' + out.marketingLead.name + ', ' + out.marketingLead.title : ''} \u2014 ${_target.why} | lane ${laneWord(_lanes)}${_lanes.why ? ' (' + _lanes.why + ')' : ''}`);
+  console.log(`\u{1F3AF} TARGET [${name}]: size ${_size.band || 'not measured'} (${_size.confidence}: ${_size.why}) | tier ${_lanes.tier}${_lanes.measured && _scale ? ' (' + _scale.say + ')' : ' (taken as ' + _lanes.tier + ' - not measured)'} | layers ${_layers.verdict}${_layers.why ? ' (' + _layers.why + ')' : ''} | target ${out.target}${out.marketingLead ? ' ' + out.marketingLead.name + ', ' + out.marketingLead.title : ''} \u2014 ${_target.why} | lane ${laneWord(_lanes)}${_lanes.why ? ' (' + _lanes.why + ')' : ''}`);
   out.icp = findIcpScore(signals);
 
   const led = FC_LEDGER.getStore() || {};

@@ -1321,7 +1321,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20260928;
+const CLIENT_CONTRACT = 20260929;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5534,6 +5534,9 @@ const contactRequestBody = (company, settings) => {
       // Round 111: the affordability band the Find press measured - the lane
       // rule's second ruler when nothing published a size.
       affordBand: C.affordBand || '',
+      // Round 112: the metro the Find press found them in - the city the
+      // licence and size searches fall back on when the address has none.
+      market: Array.isArray(C.marketsSeen) && C.marketsSeen.length ? String(C.marketsSeen[0] || '') : '',
     },
     keys: {
       anthropicKey: S.apiKey, firecrawlKey: S.firecrawlKey, verifierKey: S.verifierKey,
@@ -5661,11 +5664,23 @@ const targetOf = (c) => c.contactTarget || (c.contactOwner ? 'owner' : '');
 // which is what those rows meant before the lanes existed.
 const laneOf = (c) => {
   const l = c && c.contactLanes;
-  if (l && typeof l === 'object') return { call: l.call === true, email: l.email === true };
+  // Round 112: the call lane means a NAMED owner. A row the server laned
+  // before the no-name bucket existed (Round 111: lanes without `noname`)
+  // is read the same way: call only with a name, else no name yet. A row
+  // with no lanes at all predates the lanes and keeps its old meaning.
+  if (l && typeof l === 'object') {
+    if (typeof l.noname === 'boolean') return { call: l.call === true, email: l.email === true, noname: l.noname === true };
+    const named = !!(c && c.contactOwner);
+    return { call: l.call === true && named, email: l.email === true, noname: l.call === true && !named };
+  }
   const layered = !!c && c.contactLayers === 'layered';
-  return { call: !!c && c.contactReadOk === true && !layered && c.source !== 'theirstack', email: layered };
+  return { call: !!c && c.contactReadOk === true && !layered && c.source !== 'theirstack', email: layered, noname: false };
 };
-const laneChip = (c) => { const l = laneOf(c); return l.call && l.email ? 'CALL + EMAIL' : l.call ? 'CALL' : l.email ? 'EMAIL' : (c && c.contactSizeTier === 'over_ceiling') ? 'OVER THE CEILING' : 'TOO SMALL'; };
+const laneChip = (c) => { const l = laneOf(c); return l.call && l.email ? 'CALL + EMAIL' : l.call ? 'CALL' : l.email ? 'EMAIL' : l.noname ? 'NO NAME YET' : (c && c.contactSizeTier === 'over_ceiling') ? 'OVER THE CEILING' : 'TOO SMALL'; };
+// The four buckets of the Read tab (Round 112). A lead in both lanes is in both lists.
+const LANE_TABS = [['call', 'Call list'], ['email', 'Email lane'], ['noname', 'No name yet'], ['bench', 'Too small']];
+const laneHas = (c, k) => { const l = laneOf(c); return k === 'call' ? l.call === true : k === 'email' ? l.email === true : k === 'noname' ? l.noname === true : (!l.call && !l.email && !l.noname); };
+const laneKey = (c) => { const l = laneOf(c); return l.call ? 'call' : l.email ? 'email' : l.noname ? 'noname' : 'bench'; };
 // The rep's sheet is the CALL lane and nothing else - the CSV, the Google
 // Sheet and the count on the button all read this one rule.
 const exportableContact = (c) => contactTabOf(c) === 'read' && hasContactData(c) && laneOf(c).call === true;
@@ -5800,7 +5815,7 @@ const contactFieldsFrom = (data) => {
     // lead belongs to (call = the rep's sheet; email = the Research lane).
     contactSizeTier: (d.size && d.size.tier) || '',
     contactSizeSay: (d.size && d.size.say) || '',
-    contactLanes: (d.lanes && typeof d.lanes === 'object') ? { call: d.lanes.call === true, email: d.lanes.email === true } : null,
+    contactLanes: (d.lanes && typeof d.lanes === 'object') ? { call: d.lanes.call === true, email: d.lanes.email === true, noname: d.lanes.noname === true } : null,
     contactLanesWhy: (d.lanes && d.lanes.why) || '',
     contactMarketingLead: (d.marketingLead && d.marketingLead.name) || '',
     contactMarketingLeadTitle: (d.marketingLead && d.marketingLead.title) || '',
@@ -6001,7 +6016,7 @@ const FIND_CSV_COLUMNS = [
 // more" - the grade letters leave the export (the card and the send gate
 // still use them); the rep gets size, who to go to, and the marketing
 // decision-maker beside the owner.
-const FIND_CSV_ESSENTIAL = ['icp', 'company', 'size', 'target', 'owner', 'ownerTitle',
+const FIND_CSV_ESSENTIAL = ['icp', 'company', 'size', 'sizeConfidence', 'target', 'owner', 'ownerTitle',
   'marketingLead', 'marketingLeadTitle', 'email', 'marketingLeadEmail', 'phone', 'bestTime', 'payingForAds', 'hiringMarketing',
   // exported is lean because it answers the one question the file could not:
   // has this row already been handed out.
@@ -6565,6 +6580,8 @@ function FindView({
   // costs quality it no longer buys.
   const [contactPlacesOnly, setContactPlacesOnly] = React.useState(_fv.contactPlacesOnly === true);
   const [contactTab, setContactTab] = React.useState(_fv.contactTab);
+  // Round 112: which bucket of the Read tab is shown. The rep's sheet is always the call list.
+  const [contactLane, setContactLane] = React.useState('call');
   // 'run' shows only the leads the last press read; 'queue' shows everything
   // that has ever been read. Both are real questions and the panel could only
   // ever answer the second one.
@@ -8055,7 +8072,7 @@ function FindView({
       // THE LIST IS THE TAB. Counting alone would leave "a read lead leaves the
       // pool" true of the numbers and false of the screen, which is the whole
       // complaint.
-      const _tabbed = _cShown.filter(c => contactTabOf(c) === contactTab);
+      const _tabbed = _cShown.filter(c => contactTabOf(c) === contactTab).filter(c => contactTab !== 'read' || laneHas(c, contactLane));
       const _shown = contactSort
         ? _tabbed.slice().sort((a, b) => {
             const A = (typeof a.contactIcp === 'number') ? a.contactIcp : -1;
@@ -8560,6 +8577,13 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       // tab and it is in no file.
       const _cExportable = _scoped.filter(c => exportableContact(c));
       const _cReadNoContact = _cRead.length - _cExportable.length;
+      // Round 112: WHY a read row is not in the file, by reason - the old
+      // sentence blamed "no owner, no address and no number" for rows the lane
+      // rule kept off the sheet on purpose.
+      const _cLane = Object.fromEntries(LANE_TABS.map(([k]) => [k, _cRead.filter(c => laneHas(c, k))]));
+      const _cEmailOnly = _cRead.filter(c => laneHas(c, 'email') && !laneHas(c, 'call'));
+      const _cCallNoContact = _cLane.call.filter(c => !hasContactData(c));
+      const _cEmailMovable = _cLane.email.filter(c => c && c.name && !alreadyAdded(c.name));
       const _running = !!(contactRun && !contactRun.finishedAt && contactRun.done < contactRun.total);
       const _pct = contactRun && contactRun.total ? Math.round((contactRun.done / contactRun.total) * 100) : 0;
       const _elapsed = contactRun ? Math.max(0, Math.round((Date.now() - contactRun.startedAt) / 1000)) : 0;
@@ -8775,7 +8799,26 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
                 saveDiscovered(back); setDiscovered(back);
               },
             }, 'Put ' + _cNoRead.length + ' back in Not read')) : null,
-          (contactTab === 'read' && (_cExportable.length || _cRead.length)) ? _band('Export',
+          (contactTab === 'read' && _cRead.length) ? _band('Lane',
+            React.createElement('div', { style:{ display:'flex', gap:6, flexWrap:'wrap' } },
+              ...LANE_TABS.map(([k, lab]) => React.createElement('button', { key:k,
+                className:'btn', onClick: () => setContactLane(k),
+                title: k === 'call' ? 'Owner within reach and named: what the CSV and the Google Sheet carry'
+                     : k === 'email' ? 'Layered businesses, TheirStack leads and anyone in both lanes: the Research lane'
+                     : k === 'noname' ? 'Read, with a phone, and nobody named yet - off the sheet until a name is found'
+                     : 'Measured under the floor or over the ceiling - kept and marked, never deleted',
+                style:{ background: contactLane === k ? 'var(--a)' : 'transparent',
+                        color: contactLane === k ? '#0b0d10' : 'var(--m2)',
+                        border:'1px solid ' + (contactLane === k ? 'var(--a)' : 'var(--b)') } },
+                lab + ' (' + _cLane[k].length + ')'))),
+            contactLane === 'email' ? _cap('Email is the lane for these: the rep does not call them. Move them to Research when you are ready to audit and write.') : null,
+            contactLane === 'email' && _cEmailMovable.length ? React.createElement('button', {
+              className:'btn', style:{ background:'var(--a)', color:'#0b0d10' },
+              onClick: () => { const n = addManyToPipeline(_cEmailMovable); setContactErr(n ? '' : 'Nothing moved - every lead in the email lane is already in the pipeline.'); },
+            }, 'Move the ' + _cEmailMovable.length + ' in the email lane to Research') : null,
+            contactLane === 'noname' ? _cap('Read, with a number to dial, and nobody named yet. They stay here until a name source finds someone; they are never on the rep\'s sheet.') : null,
+            contactLane === 'bench' ? _cap('Measured under the $800k floor or over the $30M ceiling. Kept and marked, never deleted.') : null) : null,
+          (contactTab === 'read' && contactLane === 'call' && (_cExportable.length || _cRead.length)) ? _band('Export',
             // The button did not vanish - it had nothing to export, and said nothing.
             (_cRead.length && !_cExportable.length) ? _cap('Nothing to export: ' + _cRead.length + ' read lead(s) produced no owner, no address and no number.') : null,
             _cExportable.length ? React.createElement('button', {
@@ -8869,7 +8912,12 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
                   onClick: () => setContactScope(k) }, lab))) : null,
             _cap((_scopeWord === 'in this run' ? 'This run: ' : 'This queue so far: ')
               + findTallyLine(findRunTally(_scoped)), 'var(--t)'),
-            _cReadNoContact > 0 ? _cap(_cReadNoContact + ' of the ' + _cRead.length + ' read had no owner, no address and no number on their site, so they are not in the file.') : null) : null,
+            _cReadNoContact > 0 ? _cap('Not in the file: ' + [
+                _cEmailOnly.length ? _cEmailOnly.length + ' in the email lane (Research, not the rep)' : '',
+                _cLane.noname.length ? _cLane.noname.length + ' with no name yet' : '',
+                _cLane.bench.length ? _cLane.bench.length + ' under the floor or over the ceiling' : '',
+                _cCallNoContact.length ? _cCallNoContact.length + ' with nothing to dial or write to' : '',
+              ].filter(Boolean).join(', ') + ' - of the ' + _cRead.length + ' read.') : null) : null,
 
           // ══ A DECISION IS NOT A FAILURE ══════════════════════════════════
           // A lead the server ruled out was rendered in the same red box as a

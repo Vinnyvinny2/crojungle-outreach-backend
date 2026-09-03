@@ -238,6 +238,9 @@ const fake = http.createServer(async (req, res) => {
   const path = '/' + seg.slice(1).join('/');
   state.requests.push({ host, path: path.split('?')[0] });
   const body = await readBody(req);
+  // Round 112: the search query rides the record, so a scenario can tell the
+  // size lookup's searches from a page bought instead of read for free.
+  try { const _j = JSON.parse(String(body || '')); state.requests[state.requests.length - 1].query = String((_j && _j.query) || ''); } catch (e) { state.requests[state.requests.length - 1].query = ''; }
   const b = state.biz || biz('A');
 
   if (host === 'api.anthropic.com') return send(res, 200, anthropicAnswer(body, b));
@@ -554,6 +557,7 @@ const runLead = async (b, over, capMs) => {
     state.mode = 'findrich'; state.biz = biz('H');
     const hBiz = state.biz;
     const h0 = fcCalls();
+    const hReq0 = state.requests.length;   // Round 112: an INDEX into the request log, not a count
     // Scoped to THIS lead's window. state.requests accumulates across every
     // scenario and the golden lead legitimately buys a review pull, so an
     // absolute count here measures somebody else's spend - a harness that
@@ -566,6 +570,14 @@ const runLead = async (b, over, capMs) => {
       keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test', verifierKey: '' },
     });
     const hFc = fcCalls() - h0;
+    // Round 112: the size lookup is a DECLARED spend (Vin: measure the size instead
+    // of guessing it), bought only when nothing measured the size. The free-read
+    // invariant is about PAGES: no map, no scrape, no owner search on a site that
+    // answers a plain fetch. The size searches are counted apart and must be the
+    // only Firecrawl calls on this lead.
+    const _isSizeQ = (q) => /revenue \(prospeo\.io|employees \(site:linkedin/.test(String(q || ''));
+    const hFcFree = state.requests.slice(hReq0).filter(q => q.host === 'api.firecrawl.dev' && !_isSizeQ(q.query)).length;
+    const hFcSize = state.requests.slice(hReq0).filter(q => q.host === 'api.firecrawl.dev' && _isSizeQ(q.query)).length;
     const hApify = apifyCalls() - hAp0;
     const HJ = H1.json || {};
     ok(H1.code === 200, `the contact read answered ${H1.code}: ${String(HJ.error || '').slice(0, 160)}`);
@@ -573,8 +585,10 @@ const runLead = async (b, over, capMs) => {
     // answers a plain HTTP GET must cost NOTHING. If this ever goes above zero
     // the read has quietly gone back to buying pages it could have had free,
     // and the "under $100 a month" arithmetic goes with it.
-    ok(hFc === 0, `the contact read made ${hFc} Firecrawl call(s) on a site that answers a plain fetch — the free read is not the door any more`);
-    ok((HJ.spend || {}).firecrawl === 0, `the contact read reports ${(HJ.spend || {}).firecrawl} Firecrawl credit(s) on a plainly readable site`);
+    ok(hFcFree === 0, `the contact read made ${hFcFree} Firecrawl call(s) beyond the size lookup on a site that answers a plain fetch — the free read is not the door any more`);
+    ok(hFcSize >= 1 && hFcSize <= 2, `the size lookup bought ${hFcSize} search(es) on a lead that published no size - it should buy one, and a second only on a miss`);
+    ok(HJ.sizeLookup && HJ.sizeLookup.bought === true, 'the size lookup was not bought on a lead whose pages published no size, so the sheet guesses off the review count');
+    ok((HJ.spend || {}).firecrawl === hFcSize * 2, `the contact read reports ${(HJ.spend || {}).firecrawl} Firecrawl credit(s) on a plainly readable site where the size lookup bought ${hFcSize} search(es) at 2 each - a page was bought, or the ledger missed the lookup`);
     ok(/plain fetch/.test(String(HJ.readVia || '')), `readVia says "${HJ.readVia}" rather than naming the free read`);
     // Their own navigation, not a paid sitemap: the team, contact and careers
     // pages must all have been found from the homepage's own links.
