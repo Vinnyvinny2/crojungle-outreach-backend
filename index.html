@@ -6328,6 +6328,7 @@ const findContactRows = (companies) => {
          + (c.contactWebsiteConfirmed === true ? '; their pages name the business)' : '; NOT confirmed)'))
       : (c.website || ''),
     exported: exportedDateCell(c),
+    _last: laneOf(c).last === true,   // Round 115: the hedge's rows sort last; not a column
     exportedTo: (c.exportedTo || []).join(' and '),
     location: c.location || '',
     reviews: (typeof c.reviewCount === 'number') ? String(c.reviewCount) : '',
@@ -6338,6 +6339,9 @@ const findContactRows = (companies) => {
   // Highest score first, and an UNSCORED lead sorts LAST rather than as a zero:
   // it was never scored, and a confident 0 reads as "we checked and it is bad".
   return rows.sort((a, b) => {
+    // Round 115: a row the hedge kept on the sheet sorts LAST whatever its fit.
+    const La = a._last ? 1 : 0, Lb = b._last ? 1 : 0;
+    if (La !== Lb) return La - Lb;
     const A = (typeof a.icp === 'number') ? a.icp : -1;
     const B = (typeof b.icp === 'number') ? b.icp : -1;
     return B - A || String(a.company).localeCompare(String(b.company));

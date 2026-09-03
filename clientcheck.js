@@ -2358,7 +2358,7 @@ let contactTally = null;
                  // resolver's source ids are said the way a rep would say them.
                  'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN',
                  // Round 110: size and target cells.
-                 'targetOf', 'sizeCell', 'targetCell',
+                 'targetOf', 'sizeCell', 'targetCell', 'lastRowsLast',
                  // Round 111: the lane helpers the rep's sheet is filtered through.
                  'laneOf', 'laneChip', 'exportableContact', 'LANE_TABS', 'laneHas', 'laneKey'];
   const got2 = {};
