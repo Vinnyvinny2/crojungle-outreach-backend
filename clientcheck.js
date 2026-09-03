@@ -2358,7 +2358,9 @@ let contactTally = null;
                  // resolver's source ids are said the way a rep would say them.
                  'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN',
                  // Round 110: size and target cells.
-                 'targetOf', 'sizeCell', 'targetCell'];
+                 'targetOf', 'sizeCell', 'targetCell',
+                 // Round 111: the lane helpers the rep's sheet is filtered through.
+                 'laneOf', 'laneChip', 'exportableContact'];
   const got2 = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED2.includes(n.id.name) && n.init) {
@@ -2375,7 +2377,7 @@ let contactTally = null;
         + '\nreturn { tabOf: contactTabOf, tabs: CONTACT_TABS, cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
         + ' mergeView: mergeFindView, latestRun: latestRunIdOf, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
-        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, targetCell, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
+        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, targetCell, laneOf, laneChip, exportableContact, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
         + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
         + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT,'
         + ' generic: isGenericMailbox };')();
@@ -2482,6 +2484,29 @@ let contactTally = null;
           const _xr = M.rows([{ contactReadOk: true, name: 'X', contactEmail: 'a@b.com', exportedAt: '2026-09-02T10:00:00Z', exportedTo: ['csv'] }])[0];
           if (!_xr || _xr.exported !== '2026-09-02' || _xr.exportedTo !== 'csv') fails.push('the lean exported cell is not the date alone, or the destination column is gone');
           if (M.lean.indexOf('exported') < 0) fails.push('"exported" is not in the lean CSV, so the file a rep downloads cannot answer whether a row was already handed out');
+          // ══ ROUND 111: THE SHEET IS THE CALL LANE ═══════════════════════
+          // Vin: "I don't think these should make the call sheet at all, email
+          // only." The server decides the lanes; the rows, the CSV, the Sheet
+          // and the button count all read ONE rule.
+          {
+            const _darrel = { name: 'Darrel Roofing', contactReadOk: true, contactOwner: 'Darrel Jones', contactPhone: '5551234567', contactLanes: { call: true, email: true }, contactSize: 'medium', contactSizeTier: 'core' };
+            const _layered = { name: 'Summit HVAC', contactReadOk: true, contactOwner: 'Pat Summit', contactMarketingLead: 'Jane Smith', contactMarketingLeadTitle: 'Director of Marketing', contactPhone: '5559876543', contactLanes: { call: false, email: true }, contactLayers: 'layered', contactTarget: 'marketing' };
+            const _small = { name: 'One Truck Plumbing', contactReadOk: true, contactOwner: 'Al One', contactPhone: '5550001111', contactLanes: { call: false, email: false }, contactSize: 'low', contactSizeTier: 'below_floor' };
+            const _ts = { name: 'Jobs Co', contactReadOk: true, contactOwner: 'Kim Jobs', contactPhone: '5552223333', source: 'theirstack', contactLanes: { call: false, email: true } };
+            const _old = { name: 'Older Read Co', contactReadOk: true, contactOwner: 'Old Owner', contactPhone: '5554445555' };
+            const _oldLayered = { name: 'Older Layered Co', contactReadOk: true, contactOwner: 'Old Exec', contactPhone: '5556667777', contactLayers: 'layered' };
+            const _names = M.rows([_darrel, _layered, _small, _ts, _old, _oldLayered]).map(r => r.company);
+            if (_names.indexOf('Darrel Roofing') < 0) fails.push('an owner-run core lead is not on the rep sheet');
+            if (_names.indexOf('Summit HVAC') >= 0) fails.push('a layered business reached the rep sheet - it is email only');
+            if (_names.indexOf('One Truck Plumbing') >= 0) fails.push('a business under the floor reached the rep sheet');
+            if (_names.indexOf('Jobs Co') >= 0) fails.push('a TheirStack lead reached the rep sheet');
+            if (_names.indexOf('Older Read Co') < 0) fails.push('a row read on an older build (no lanes) fell off the rep sheet');
+            if (_names.indexOf('Older Layered Co') >= 0) fails.push('an older layered row is on the rep sheet');
+            if (M.sheet([_darrel, _layered], false).rows.length !== 1) fails.push('the Google Sheet payload does not read the same lane rule as the CSV');
+            if (M.exportableContact(_darrel) !== true || M.exportableContact(_layered) !== false) fails.push('exportableContact disagrees with the rows');
+            if (M.laneChip(_darrel) !== 'CALL + EMAIL' || M.laneChip(_layered) !== 'EMAIL' || M.laneChip(_small) !== 'TOO SMALL' || M.laneChip({ contactReadOk: true, contactLanes: { call: true, email: false } }) !== 'CALL') fails.push('the lane chip does not say the lane');
+            if (M.laneOf(_old).call !== true || M.laneOf(_oldLayered).call !== false) fails.push('the older-row fallback does not read the layers');
+          }
           // The run survives a refresh: the newest run id in the data is the run.
           if (M.latestRun([{ contactRunId: 'run_1a' }, { contactRunId: 'run_zz' }, { contactRunId: 'bogus' }, {}]) !== 'run_zz') fails.push('the newest run id is not recovered from the data, so "the 10 you just read" dies on refresh');
           if (M.latestRun([]) !== '') fails.push('an empty queue yields a run id');
@@ -2624,7 +2649,10 @@ let contactTally = null;
         // The two new cells, executed.
         const _dar = M.rows([{ contactReadOk: true, name: 'Darrel Co', contactOwner: 'Darrel Jones', contactSize: 'high', contactSizeConfidence: 'sure', contactTarget: 'owner', contactLayers: 'owner' }])[0];
         if (!_dar || _dar.size !== 'high' || _dar.sizeConfidence !== 'sure' || !/^Owner: Darrel Jones/.test(String(_dar.target))) fails.push(`Darrel at a high size does not export as the owner target (got ${JSON.stringify(_dar && [_dar.size, _dar.sizeConfidence, _dar.target])})`);
-        const _lay = M.rows([{ contactReadOk: true, name: 'Layer Co', contactOwner: 'Pat Roe', contactTarget: 'marketing', contactLayers: 'layered', contactMarketingLead: 'Jane Smith', contactMarketingLeadTitle: 'Director of Marketing', contactMarketingLeadEmail: 'jane@layer.co', contactMarketingLeadEmailSendable: true }])[0];
+        const _layLead = { contactReadOk: true, name: 'Layer Co', contactOwner: 'Pat Roe', contactTarget: 'marketing', contactLayers: 'layered', contactMarketingLead: 'Jane Smith', contactMarketingLeadTitle: 'Director of Marketing', contactMarketingLeadEmail: 'jane@layer.co', contactMarketingLeadEmailSendable: true };
+        // Round 111: a layered business is email only, so it is NOT a row on the rep sheet; the cells are read directly.
+        if (M.rows([_layLead]).length) fails.push('a layered business reached the rep sheet - it is email only');
+        const _lay = { target: M.targetCell(_layLead), marketingLeadEmail: _layLead.contactMarketingLeadEmail };
         if (!_lay || !/Marketing decision-maker: Jane Smith \(Director of Marketing\); owner Pat Roe/.test(String(_lay.target)) || _lay.marketingLeadEmail !== 'jane@layer.co') fails.push(`a layered business does not export the marketing decision-maker as the target (got ${JSON.stringify(_lay && [_lay.target, _lay.marketingLeadEmail])})`);
         if (M.rows([{ name: 'Never Read Co', contactPhone: '5550100' }]).length !== 0) fails.push('a lead that was never read is exported at all');
         if (M.sizeCell({ name: 'Never Read Co' }) !== '' || M.targetCell({ name: 'Never Read Co', contactOwner: 'A B' }) !== '') fails.push('a lead that was never read gets a size or a target cell');
@@ -3159,7 +3187,7 @@ let contactTally = null;
   ]) {
     if (html.indexOf(_nn(a, b)) < 0) fails.push(why);
   }
-  if (html.indexOf(_nn("const _cExportable = _scoped.filter(c => contactTabOf(c) === 'read'", ' && hasContactData(c));')) < 0
+  if (html.indexOf(_nn("const _cExportable = _scoped.filter(c => ", "exportableContact(c));")) < 0
       || html.indexOf(_nn("const _cRead = _scoped.filter(c => contactTabOf(c)", " === 'read');")) < 0) {
     fails.push('the CSV count is taken from a different population than the read count beside it, so the two numbers on the panel contradict each other');
   }
@@ -3399,7 +3427,7 @@ let findStat = null;
     if (!/extraLanes:\s*false,/.test(src)) {
       fails.push('extraLanes is no longer declared false in pullFilters, so the trigger lanes are back on by default and every run buys four lanes nobody chose');
     }
-    if (!/onChange:\s*e => setPullFilters\(p => \(\{ \.\.\.p, extraLanes: e\.target\.checked \}\)\)/.test(src)) {
+    if (!/onChange:\s*e => setPullFilters\(p => \(\{ \.\.\.p, extraLanes: e\.target\.checked, extraLanesSet: true \}\)\)/.test(src)) {
       fails.push('there is no control that sets extraLanes, so the lanes can only be turned on by editing the file - a switch nobody can reach is a switch that rots');
     }
     // And Reset must not silently take the choice with it. It used to REPLACE

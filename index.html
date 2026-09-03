@@ -1321,7 +1321,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20260927;
+const CLIENT_CONTRACT = 20260928;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5531,6 +5531,9 @@ const contactRequestBody = (company, settings) => {
       // Round 110: the number of metros this business came back in - the
       // strongest free size signal discovery measures, never sent before.
       marketCount: (typeof C.marketCount === 'number') ? C.marketCount : null,
+      // Round 111: the affordability band the Find press measured - the lane
+      // rule's second ruler when nothing published a size.
+      affordBand: C.affordBand || '',
     },
     keys: {
       anthropicKey: S.apiKey, firecrawlKey: S.firecrawlKey, verifierKey: S.verifierKey,
@@ -5541,6 +5544,9 @@ const contactRequestBody = (company, settings) => {
       // Round 110: Hunter's marketing filter finds the director-level marketing
       // head at a layered business. Only asked when their own pages named nobody.
       hunterKey: S.hunterKey || '',
+      // Round 111: the free Companies API lookup, bought only when nothing
+      // published a size, so the rep's rating is measured rather than guessed.
+      companiesApiKey: S.companiesApiKey || '',
     },
     // ══ ONLY AN EXPLICIT OFF STANDS THE PAID OWNER LOOKUP DOWN ═════════════
     // The free stage of the owner ladder settles about half of leads; the paid
@@ -5649,6 +5655,20 @@ const emailGradeRating = (c) => {
 // check read one rule.
 // A row read by an older build carries no target; an owner on it is the target.
 const targetOf = (c) => c.contactTarget || (c.contactOwner ? 'owner' : '');
+// ══ WHICH LANE (Round 111) ══════════════════════════════════════════════
+// The server decides (out.lanes) from the ladder and the layers. A row read
+// on an older build has no lanes: it is the call lane unless it was layered,
+// which is what those rows meant before the lanes existed.
+const laneOf = (c) => {
+  const l = c && c.contactLanes;
+  if (l && typeof l === 'object') return { call: l.call === true, email: l.email === true };
+  const layered = !!c && c.contactLayers === 'layered';
+  return { call: !!c && c.contactReadOk === true && !layered && c.source !== 'theirstack', email: layered };
+};
+const laneChip = (c) => { const l = laneOf(c); return l.call && l.email ? 'CALL + EMAIL' : l.call ? 'CALL' : l.email ? 'EMAIL' : (c && c.contactSizeTier === 'over_ceiling') ? 'OVER THE CEILING' : 'TOO SMALL'; };
+// The rep's sheet is the CALL lane and nothing else - the CSV, the Google
+// Sheet and the count on the button all read this one rule.
+const exportableContact = (c) => contactTabOf(c) === 'read' && hasContactData(c) && laneOf(c).call === true;
 const sizeCell = (c) => !c.contactReadOk ? '' : (c.contactSize || 'not measured');
 const targetCell = (c) => !c.contactReadOk ? ''
   : targetOf(c) === 'marketing'
@@ -5776,6 +5796,12 @@ const contactFieldsFrom = (data) => {
     contactLayers: (d.layers && d.layers.verdict) || '',
     contactTarget: d.target || '',
     contactTargetWhy: d.targetWhy || '',
+    // Round 111: the ladder tier behind the rep's word, and which lane the
+    // lead belongs to (call = the rep's sheet; email = the Research lane).
+    contactSizeTier: (d.size && d.size.tier) || '',
+    contactSizeSay: (d.size && d.size.say) || '',
+    contactLanes: (d.lanes && typeof d.lanes === 'object') ? { call: d.lanes.call === true, email: d.lanes.email === true } : null,
+    contactLanesWhy: (d.lanes && d.lanes.why) || '',
     contactMarketingLead: (d.marketingLead && d.marketingLead.name) || '',
     contactMarketingLeadTitle: (d.marketingLead && d.marketingLead.title) || '',
     contactMarketingLeadEmail: (d.marketingLead && d.marketingLead.email) || '',
@@ -6137,8 +6163,11 @@ const findContactRows = (companies) => {
   // both come through this function, and a filter applied at one of them is the
   // two-hand-kept-copies disease with the copy that rots being whichever
   // destination is added next.
+  // Round 111: and only the CALL lane - a layered business, a TheirStack lead
+  // or one under the floor is never on the rep's sheet (Vin: "I don't think
+  // these should make the call sheet at all, email only").
   const list = (Array.isArray(companies) ? companies : [])
-    .filter(c => contactTabOf(c) === 'read' && hasContactData(c));
+    .filter(c => exportableContact(c));
   const rows = list.map(c => ({
     icp: (typeof c.contactIcp === 'number') ? c.contactIcp : null,
     icpWhy: c.contactIcpWhy || '',
@@ -6418,6 +6447,10 @@ const leadFromCompany = (company) => {
       contactLayers: company.contactLayers || '',
       contactTarget: company.contactTarget || '',
       contactTargetWhy: company.contactTargetWhy || '',
+      contactSizeTier: company.contactSizeTier || '',
+      contactSizeSay: company.contactSizeSay || '',
+      contactLanes: (company.contactLanes && typeof company.contactLanes === 'object') ? company.contactLanes : null,
+      contactLanesWhy: company.contactLanesWhy || '',
       contactMarketingLead: company.contactMarketingLead || '',
       contactMarketingLeadTitle: company.contactMarketingLeadTitle || '',
       contactMarketingLeadEmail: company.contactMarketingLeadEmail || '',
@@ -6493,7 +6526,11 @@ function FindView({
     // review floor, the capacity class and the affordability band all have
     // nothing to read and the lead is scored as though they had.
     extraLanes: false,
-  }, (_fv.pullFilters && typeof _fv.pullFilters === 'object') ? _fv.pullFilters : {}));
+  }, (_fv.pullFilters && typeof _fv.pullFilters === 'object') ? _fv.pullFilters : {},
+  // Round 111: ON by default when a TheirStack key is set (Vin: "we are
+  // bringing TheirStack back"); a choice the operator MADE on the box
+  // (extraLanesSet) still wins, so turning it off sticks.
+  (_fv.pullFilters && _fv.pullFilters.extraLanesSet === true) ? {} : { extraLanes: !!(settings && settings.theirstackKey) }));
   const [showFilters, setShowFilters] = React.useState(false);
   // == THE CONTACT RUN ======================================================
   // Its own state, in the Find tab, sharing nothing with the Research batch.
@@ -6646,7 +6683,7 @@ function FindView({
     },
       React.createElement('input', {
         type: 'checkbox', checked: pullFilters.extraLanes === true,
-        onChange: e => setPullFilters(p => ({ ...p, extraLanes: e.target.checked })),
+        onChange: e => setPullFilters(p => ({ ...p, extraLanes: e.target.checked, extraLanesSet: true })),
         style: { marginTop: 2, cursor: 'pointer' },
       }),
       React.createElement('span', { style: { fontSize: 12, color: 'var(--m2)', lineHeight: 1.5 } },
@@ -8175,6 +8212,16 @@ function FindView({
                 co.contactIcpMeasured + ' of ' + co.contactIcpOf)
             : null),
         React.createElement('div', { style:{ flex:1, minWidth:0 } },
+          // Round 111: size, target and lane on the card - they were in the
+          // CSV only, which is why nobody could see which rows the rep gets.
+          React.createElement('div', { style:{ fontSize:11.5, color:'var(--m2)', marginBottom:3, display:'flex', gap:8, alignItems:'center', flexWrap:'wrap' } },
+            React.createElement('span', { style:{ fontSize:10, fontWeight:700, letterSpacing:'.05em', padding:'2px 7px', borderRadius:99,
+              border:'1px solid ' + (laneOf(co).call ? 'var(--a)' : 'var(--b)'), color: laneOf(co).call ? 'var(--a)' : 'var(--m2)' },
+              title: co.contactLanesWhy || '' }, laneChip(co)),
+            React.createElement('span', { title: co.contactSizeSay || co.contactSizeWhy || '' },
+              'Size: ' + sizeCell(co) + (co.contactSizeConfidence ? ' (' + co.contactSizeConfidence + ')' : '') + (co.contactSizeSay ? ' \u00b7 ' + co.contactSizeSay.replace(/^estimated /, '') : '')),
+            React.createElement('span', { title: co.contactTargetWhy || '' }, 'Target: ' + (targetCell(co) || 'nobody')),
+          ),
           React.createElement('div', { style:_line },
             co.contactOwner
               ? React.createElement('span', { style:{ fontWeight:600 } }, co.contactOwner)
@@ -8249,8 +8296,9 @@ function FindView({
         : '⚠ size unverified';
       // Revenue band from Companies API — maps employee bands to rough revenue ranges
       const BAND_REVENUE = {
-        '1-10': '<$1M', '10-50': '$500k–$3M', '50-200': '$1M–$10M',
-        '200-500': '$5M–$25M', '500-1k': '$15M–$50M', '1k-5k': '$50M+',
+        // Round 111: at ~$200k a head (the ICP ladder's benchmark).
+        '1-10': 'under $2M', '10-50': '$2M–$10M', '50-200': '$10M–$40M',
+        '200-500': '$40M–$100M', '500-1k': '$100M+', '1k-5k': '$200M+',
       };
       const revBand = co.verifiedRevenueBand ? BAND_REVENUE[co.verifiedRevenueBand] : null;
       // ══ THE REVENUE BAND WE INVENTED FROM A REVIEW COUNT IS GONE ═══════
@@ -8510,7 +8558,7 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       // by contactTabOf and left the export reading the whole pool. So the two
       // now share the one membership rule - a chain drop is in the Ruled out
       // tab and it is in no file.
-      const _cExportable = _scoped.filter(c => contactTabOf(c) === 'read' && hasContactData(c));
+      const _cExportable = _scoped.filter(c => exportableContact(c));
       const _cReadNoContact = _cRead.length - _cExportable.length;
       const _running = !!(contactRun && !contactRun.finishedAt && contactRun.done < contactRun.total);
       const _pct = contactRun && contactRun.total ? Math.round((contactRun.done / contactRun.total) * 100) : 0;
