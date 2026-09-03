@@ -1321,7 +1321,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20260929;
+const CLIENT_CONTRACT = 20260930;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5668,17 +5668,24 @@ const laneOf = (c) => {
   // before the no-name bucket existed (Round 111: lanes without `noname`)
   // is read the same way: call only with a name, else no name yet. A row
   // with no lanes at all predates the lanes and keeps its old meaning.
+  // Round 115: `last` - a layered, branch-network, PE-owned or national row the
+  // server kept on the call sheet (Round 114's hedge) sorts to the bottom.
   if (l && typeof l === 'object') {
-    if (typeof l.noname === 'boolean') return { call: l.call === true, email: l.email === true, noname: l.noname === true };
+    if (typeof l.noname === 'boolean') return { call: l.call === true, email: l.email === true, noname: l.noname === true, last: l.last === true };
     const named = !!(c && c.contactOwner);
-    return { call: l.call === true && named, email: l.email === true, noname: l.call === true && !named };
+    return { call: l.call === true && named, email: l.email === true, noname: l.call === true && !named, last: false };
   }
   const layered = !!c && c.contactLayers === 'layered';
-  return { call: !!c && c.contactReadOk === true && !layered && c.source !== 'theirstack', email: layered, noname: false };
+  return { call: !!c && c.contactReadOk === true && !layered && c.source !== 'theirstack', email: layered, noname: false, last: false };
 };
-const laneChip = (c) => { const l = laneOf(c); return l.call && l.email ? 'CALL + EMAIL' : l.call ? 'CALL' : l.email ? 'EMAIL' : l.noname ? 'NO NAME YET' : (c && c.contactSizeTier === 'over_ceiling') ? 'OVER THE CEILING' : 'TOO SMALL'; };
+// Round 115: the rows the hedge kept on the sheet go LAST - on the screen, in
+// the CSV and in the Google Sheet, by one rule. A stable sort keeps the fit
+// order inside each half.
+const lastRowsLast = (list) => (Array.isArray(list) ? list : []).slice().sort((a, b) => (laneOf(a).last ? 1 : 0) - (laneOf(b).last ? 1 : 0));
+const laneChip = (c) => { const l = laneOf(c); return l.call && l.email ? 'CALL + EMAIL' : l.call ? 'CALL' : l.email ? 'EMAIL' : l.noname ? 'NO NAME YET' : (c && c.contactSizeTier === 'over_ceiling') ? 'OVER THE CEILING' : (c && c.contactSizeTier === 'below_floor') ? 'TOO SMALL' : 'NO LANE'; };
 // The four buckets of the Read tab (Round 112). A lead in both lanes is in both lists.
-const LANE_TABS = [['call', 'Call list'], ['email', 'Email lane'], ['noname', 'No name yet'], ['bench', 'Too small']];
+// Round 115: the fourth bucket is "No lane" - under the floor is one reason, not the only one.
+const LANE_TABS = [['call', 'Call list'], ['email', 'Email lane'], ['noname', 'No name yet'], ['bench', 'No lane']];
 const laneHas = (c, k) => { const l = laneOf(c); return k === 'call' ? l.call === true : k === 'email' ? l.email === true : k === 'noname' ? l.noname === true : (!l.call && !l.email && !l.noname); };
 const laneKey = (c) => { const l = laneOf(c); return l.call ? 'call' : l.email ? 'email' : l.noname ? 'noname' : 'bench'; };
 // The rep's sheet is the CALL lane and nothing else - the CSV, the Google
@@ -5690,8 +5697,13 @@ const targetCell = (c) => !c.contactReadOk ? ''
     ? ('Marketing decision-maker: ' + (c.contactMarketingLead || '')
        + (c.contactMarketingLeadTitle ? ' (' + c.contactMarketingLeadTitle + ')' : '')
        + (c.contactOwner ? '; owner ' + c.contactOwner + ' for the second call' : ''))
-  : targetOf(c) === 'owner' ? ('Owner: ' + (c.contactOwner || '')
+  // Round 115: a name the server HELD BACK (below the buying floor) is not
+  // "Owner:" on the rep's sheet - the grade letters left the file in Round
+  // 109, so the cell has to say it (ClearChoice's prosthodontist, 2026-09-03).
+  : targetOf(c) === 'owner' ? ((c.contactOwnerGrade === 'unconfirmed' ? 'Held back: ' : 'Owner: ') + (c.contactOwner || '')
+       + (c.contactOwnerGrade === 'unconfirmed' ? ' (cannot sign - ask who owns the marketing)' : '')
        + (c.contactLayers === 'layered' ? ' (layered business, no marketing head found - expect the owner not to answer)' : '')
+       + (laneOf(c).last ? ' - ranked last, ask for the marketing head' : '')
        // The lean file has to say when the owner was read off a domain WE found.
        + websiteProvenanceCell(c))
   : (c.contactTargetWhy || 'nobody reachable found');
@@ -5815,7 +5827,7 @@ const contactFieldsFrom = (data) => {
     // lead belongs to (call = the rep's sheet; email = the Research lane).
     contactSizeTier: (d.size && d.size.tier) || '',
     contactSizeSay: (d.size && d.size.say) || '',
-    contactLanes: (d.lanes && typeof d.lanes === 'object') ? { call: d.lanes.call === true, email: d.lanes.email === true, noname: d.lanes.noname === true } : null,
+    contactLanes: (d.lanes && typeof d.lanes === 'object') ? { call: d.lanes.call === true, email: d.lanes.email === true, noname: d.lanes.noname === true, last: d.lanes.last === true } : null,
     contactLanesWhy: (d.lanes && d.lanes.why) || '',
     contactMarketingLead: (d.marketingLead && d.marketingLead.name) || '',
     contactMarketingLeadTitle: (d.marketingLead && d.marketingLead.title) || '',
@@ -6016,7 +6028,7 @@ const FIND_CSV_COLUMNS = [
 // more" - the grade letters leave the export (the card and the send gate
 // still use them); the rep gets size, who to go to, and the marketing
 // decision-maker beside the owner.
-const FIND_CSV_ESSENTIAL = ['icp', 'company', 'size', 'sizeConfidence', 'target', 'owner', 'ownerTitle',
+const FIND_CSV_ESSENTIAL = ['icp', 'company', 'website', 'size', 'sizeConfidence', 'target', 'owner', 'ownerTitle',
   'marketingLead', 'marketingLeadTitle', 'email', 'marketingLeadEmail', 'phone', 'bestTime', 'payingForAds', 'hiringMarketing',
   // exported is lean because it answers the one question the file could not:
   // has this row already been handed out.
@@ -6181,8 +6193,8 @@ const findContactRows = (companies) => {
   // Round 111: and only the CALL lane - a layered business, a TheirStack lead
   // or one under the floor is never on the rep's sheet (Vin: "I don't think
   // these should make the call sheet at all, email only").
-  const list = (Array.isArray(companies) ? companies : [])
-    .filter(c => exportableContact(c));
+  const list = lastRowsLast((Array.isArray(companies) ? companies : [])
+    .filter(c => exportableContact(c)));
   const rows = list.map(c => ({
     icp: (typeof c.contactIcp === 'number') ? c.contactIcp : null,
     icpWhy: c.contactIcpWhy || '',
@@ -8075,6 +8087,9 @@ function FindView({
       const _tabbed = _cShown.filter(c => contactTabOf(c) === contactTab).filter(c => contactTab !== 'read' || laneHas(c, contactLane));
       const _shown = contactSort
         ? _tabbed.slice().sort((a, b) => {
+            // Round 115: the hedge's rows sit at the bottom whatever their fit.
+            const La = laneOf(a).last ? 1 : 0, Lb = laneOf(b).last ? 1 : 0;
+            if (La !== Lb) return La - Lb;
             const A = (typeof a.contactIcp === 'number') ? a.contactIcp : -1;
             const B = (typeof b.contactIcp === 'number') ? b.contactIcp : -1;
             if (B !== A) return B - A;
@@ -8806,7 +8821,7 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
                 title: k === 'call' ? 'Owner within reach and named: what the CSV and the Google Sheet carry'
                      : k === 'email' ? 'Layered businesses, TheirStack leads and anyone in both lanes: the Research lane'
                      : k === 'noname' ? 'Read, with a phone, and nobody named yet - off the sheet until a name is found'
-                     : 'Measured under the floor or over the ceiling - kept and marked, never deleted',
+                     : 'No lane: measured under the $800k floor (likely or sure), or nobody to call or write to - kept and marked, never deleted',
                 style:{ background: contactLane === k ? 'var(--a)' : 'transparent',
                         color: contactLane === k ? '#0b0d10' : 'var(--m2)',
                         border:'1px solid ' + (contactLane === k ? 'var(--a)' : 'var(--b)') } },
@@ -8817,7 +8832,7 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
               onClick: () => { const n = addManyToPipeline(_cEmailMovable); setContactErr(n ? '' : 'Nothing moved - every lead in the email lane is already in the pipeline.'); },
             }, 'Move the ' + _cEmailMovable.length + ' in the email lane to Research') : null,
             contactLane === 'noname' ? _cap('Read, with a number to dial, and nobody named yet. They stay here until a name source finds someone; they are never on the rep\'s sheet.') : null,
-            contactLane === 'bench' ? _cap('Measured under the $800k floor or over the $30M ceiling. Kept and marked, never deleted.') : null) : null,
+            contactLane === 'bench' ? _cap('No lane: measured under the $800k floor (likely or sure), or nobody to call or write to. Over the $35M call cap is the Email lane. Kept and marked, never deleted.') : null) : null,
           (contactTab === 'read' && contactLane === 'call' && (_cExportable.length || _cRead.length)) ? _band('Export',
             // The button did not vanish - it had nothing to export, and said nothing.
             (_cRead.length && !_cExportable.length) ? _cap('Nothing to export: ' + _cRead.length + ' read lead(s) produced no owner, no address and no number.') : null,
@@ -8915,7 +8930,7 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
             _cReadNoContact > 0 ? _cap('Not in the file: ' + [
                 _cEmailOnly.length ? _cEmailOnly.length + ' in the email lane (Research, not the rep)' : '',
                 _cLane.noname.length ? _cLane.noname.length + ' with no name yet' : '',
-                _cLane.bench.length ? _cLane.bench.length + ' under the floor or over the ceiling' : '',
+                _cLane.bench.length ? _cLane.bench.length + ' in no lane (under the floor, or nobody to reach)' : '',
                 _cCallNoContact.length ? _cCallNoContact.length + ' with nothing to dial or write to' : '',
               ].filter(Boolean).join(', ') + ' - of the ' + _cRead.length + ' read.') : null) : null,
 

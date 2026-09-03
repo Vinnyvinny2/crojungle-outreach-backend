@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260929;
+const CONTRACT_VERSION = 20260930;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -5213,7 +5213,10 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
   const inCall = (LANE_TIERS.call.includes(t) || reach) && !ts && !prod;
   const call = inCall && named;
   const noname = inCall && !named;
-  const email = LANE_TIERS.email.includes(t) && named;
+  // Round 115: a product company is an email lead whatever the tier GUESS - a
+  // manufacturer's reviews do not measure it (Mission Solar, 37 reviews, was
+  // "entry" and got no lane at all). A measured below-floor still benches.
+  const email = named && (LANE_TIERS.email.includes(t) || (prod && t !== 'below_floor'));
   const last = call && (layered || !!big);
   if (t === 'below_floor') why.push('under the floor - benched');
   if (t === 'over_ceiling') why.push(reach ? `over the call cap but owner-run and measured under ${_usdShort(ICP_CALL_REACH_CEILING)} - still a call` : `over the call cap (${SCALE_BAND_SAY.over_ceiling}) - email, the marketing decision-maker`);
@@ -5221,7 +5224,7 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
   if (big && inCall) why.push(`${big} - on the call sheet last; the local number reaches a branch, the decision is at head office`);
   if (big && !inCall && LANE_TIERS.email.includes(t)) why.push(`${big} - email, the marketing decision-maker at head office`);
   if (ts && LANE_TIERS.call.includes(t)) why.push('a TheirStack lead - email only');
-  if (prod && LANE_TIERS.call.includes(t)) why.push('a product company - email only');
+  if (prod && LANE_TIERS.call.includes(t)) why.push(LANE_TIERS.email.includes(t) ? 'a product company - email only' : 'a product company - email whatever the size guess, its reviews do not measure a manufacturer');
   if (noname) why.push('nobody named yet - off the call sheet until a name is found');
   if (LANE_TIERS.email.includes(t) && !email && !noname) why.push('nobody named to write to');
   if (call && email && !last) why.push('owner within reach and can afford premium - call first, email if no connect');
@@ -6367,7 +6370,7 @@ const GP_CITIES = [
 // cost money and misses the next one. readFindChainSignals is the mechanism,
 // because it reads the business's own pages instead of our memory.
 
-const GP_FRANCHISE = /\b(overhead door company of|roto-?rooter|mr\.? rooter|benjamin franklin|one hour (heating|air|hvac|plumbing|electric|smile)|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow (international|restoration)|chemdry|chem-?dry|brookdale|atria senior|sunrise senior|five star senior|holiday retirement|erickson living|watermark retirement|discovery senior|enlivant|pacifica senior|belmont village|silverado senior|oakmont senior|morningstar senior|merrill gardens|aegis living|bickford|legend senior|allegro (senior|living)|life care services|davey tree|bartlett tree|sav-?a-?tree|monster tree|brightview|yellowstone landscape|landcare|ruppert landscape|us lawns|weed ?man|scotts lawn|naturalawn|spring-?green|truly nolen|ram jack|window nation|america.?s home place)\b/i;
+const GP_FRANCHISE = /\b(archadeck|overhead door company of|roto-?rooter|mr\.? rooter|benjamin franklin|one hour (heating|air|hvac|plumbing|electric|smile)|aire ?serv|mister sparky|mr\.? electric|mr\.? handyman|molly maid|merry maids|servpro|servicemaster|the grounds guys|lawn doctor|trugreen|terminix|orkin|aptive|precision (garage|door)|gerber collision|christian brothers|meineke|midas|jiffy lube|valvoline|aspen dental|western dental|heartland dental|pacific dental|great clips|ace hardware|true value|budget blinds|two men and a truck|1-?800-?got-?junk|junk king|college hunks|anytime fitness|planet fitness|jan-?pro|stanley steemer|coit|paul davis|belfor|rainbow (international|restoration)|chemdry|chem-?dry|brookdale|atria senior|sunrise senior|five star senior|holiday retirement|erickson living|watermark retirement|discovery senior|enlivant|pacifica senior|belmont village|silverado senior|oakmont senior|morningstar senior|merrill gardens|aegis living|bickford|legend senior|allegro (senior|living)|life care services|davey tree|bartlett tree|sav-?a-?tree|monster tree|brightview|yellowstone landscape|landcare|ruppert landscape|us lawns|weed ?man|scotts lawn|naturalawn|spring-?green|truly nolen|ram jack|window nation|america.?s home place)\b/i;
 // ══ THE FRANCHISE LIST IS A LIST OF BRANDS SOMEBODY REMEMBERED ══════════════
 // Vin: "ive ran an audit on ram jack like 6 times it always pops up in the find
 // section". Ram Jack is a national foundation-repair franchise with dozens of
@@ -13528,8 +13531,16 @@ const findWebsiteViaSearch = async (companyName, fcKey, location) => {
 // The Companies API returns emp=? on a big share of private SMBs. But ZoomInfo's
 // PUBLIC pages, D&B, Buzzfile and Manta all publish revenue estimates and
 // headcount for private companies, free to read. Search reaches them.
-const findSizeViaSearch = async (companyName, website, fcKey, apiKey, location = '') => {
+// Round 115: the LinkedIn / BBB query found nothing on 21 of 21 misses on the
+// 2026-09-03 evening run (~42 credits, and every lead queued behind it at two
+// Firecrawl calls in flight). A one-truck shop has no LinkedIn company page;
+// from the medium review band up it often does. Bought below that only when
+// the review count is unknown.
+const SIZE_SECOND_QUERY_MIN_REVIEWS = 150;
+const findSizeViaSearch = async (companyName, website, fcKey, apiKey, location = '', opts = {}) => {
   if (!companyName || !fcKey || !apiKey) return null;
+  const _rv = Number((opts || {}).reviewCount);
+  const secondWorth = !Number.isFinite(_rv) || _rv <= 0 || _rv >= SIZE_SECOND_QUERY_MIN_REVIEWS;
   try {
     const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
     const loc = cityState(location);
@@ -13590,7 +13601,7 @@ ${corpus}` }]
     // Affordable Foundation Repair (2026-09-03) bought one query, parsed
     // nothing, and stayed a guess. 2 credits and one more cheap model call,
     // only when the first parse found nothing.
-    if (!parsed && !secondQuery) {
+    if (!parsed && !secondQuery && secondWorth) {
       const q2 = `"${companyName}" ${loc ? loc + ' ' : ''}employees (site:linkedin.com/company OR site:bbb.org)`;
       const r2s = await firecrawlSearch(fcKey, q2, 4, false);
       if (r2s.length) { results = results.concat(r2s); secondQuery = true; parsed = await _extractSize(results); }
@@ -59152,6 +59163,11 @@ app.listen(PORT, () => {
       ['a per-state locations URL in their own nav', { pages: [_pg('https://x.com/', 'Windows.')], rosterTitles: [], links: ['https://x.com/locations/texas/austin'] }, 'network'],
       ['a page selling franchises', { pages: [_pg('https://x.com/', 'Own a franchise in your area.')], rosterTitles: [], links: [] }, 'franchise'],
       ['a franchise title AND per-city location pages', { pages: [_pg('https://x.com/locations/texas/austin', 'Pest control.')], rosterTitles: ['Franchise Owner'], links: [] }, 'franchise'],
+      // Round 115: the "Brand of City" territory on the brand's own domain (Archadeck of Columbus, 2026-09-03).
+      ['a "Brand of City" listing whose page is /city on the brand\'s domain (Archadeck)', { pages: [_pg('https://archadeck.com/columbus', 'Decks and porches. Locally owned and operated.')], rosterTitles: ['Owner'], links: [], name: 'Archadeck of Columbus' }, 'franchise'],
+      ['a "Brand of City" listing on the brand domain, deeper path', { pages: [_pg('https://www.overheaddoor.com/jacksonville/about', 'Doors.')], rosterTitles: [], links: [], name: 'Overhead Door Company of Jacksonville' }, 'franchise'],
+      ['a trade name "X of City" on its own site', { pages: [_pg('https://roofersoftampa.com/', 'Roofing.')], rosterTitles: [], links: [], name: 'Roofers of Tampa' }, false],
+      ['a "Brand of City" name whose page is the brand homepage, no city path', { pages: [_pg('https://archadeck.com/', 'Decks.')], rosterTitles: [], links: [], name: 'Archadeck of Columbus' }, false],
       ['an ordinary pool company', { pages: [_pg('https://aquabluepools.com/', 'Jerry Owner Kyle General Manager')], rosterTitles: ['Spa Sales Consultant'], links: [] }, false],
       // Two cases, because they exercise different rules. The first proves
       // CHAIN_SELF_RE is narrow enough that an ordinary denial never trips it.
@@ -59186,6 +59202,9 @@ app.listen(PORT, () => {
       ['one city-only locations page and no suffix', { pages: [_pg('https://x.com/locations/greenville', 'Roofing.')], rosterTitles: [], links: [], name: 'X Roofing' }, false],
       ['a neighbourhood page under a two-letter English word', { pages: [_pg('https://x.com/locations/in/downtown', 'Roofing.')], rosterTitles: [], links: [] }, false],
     ];
+    // Round 115: the brand behind an outlet, for the size lookup.
+    if (readChainEvidence({ pages: [_pg('https://www.riterug.com/pages/locations/greenville-scin-home-shopping', 'Flooring.')], name: 'RiteRug Flooring & Carpet - Greenville' }).brand !== 'RiteRug Flooring & Carpet') _fails.push('a "Brand - City" outlet does not carry its brand, so the size lookup measures one branch');
+    if (readChainEvidence({ pages: [_pg('https://archadeck.com/columbus', 'Decks.')], name: 'Archadeck of Columbus' }).brand !== 'Archadeck') _fails.push('a "Brand of City" territory does not carry its brand');
     for (const [what, args, want] of _chainCases) {
       const got = readChainEvidence(args);
       const wantChain = want !== false;
@@ -59460,6 +59479,11 @@ app.listen(PORT, () => {
       if (_rv.confidence !== 'likely') _fails.push('the review count still votes on a directory figure');
       const _prodLane = lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'owner', product: true });
       if (_prodLane.call !== false || _prodLane.email !== true || _prodLane.noname !== false || laneWord(_prodLane) !== 'email') _fails.push('a product company is on the call sheet (GoSun, 2026-09-03 - Vin: email leads)');
+      // Round 115: a product company on a tier GUESS is still an email lead; measured under the floor it is not.
+      if (laneWord(lanesFor({ tier: null, sizeWord: 'low', sizeConfidence: 'guess', layers: 'owner', source: 'google_places', target: 'owner', product: true })) !== 'email') _fails.push('a product company guessed as entry gets no lane at all (Mission Solar, 2026-09-03)');
+      if (laneWord(lanesFor({ tier: 'below_floor', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', product: true })) !== 'none') _fails.push('a product company measured under the floor is an email lead');
+      // Round 115: the page picker never fetches an asset.
+      if (pickFindPages(['https://x.com/wp-content/plugins/contact-form-7/includes/css/styles.css', 'https://x.com/contact', 'https://x.com/about.pdf', 'https://x.com/about'], 'https://x.com/', FIND_MAX_FREE_PAGES).some(p => /\.(css|pdf)$/i.test(p.url))) _fails.push('the page picker fetches a stylesheet or a PDF as a page (Cap City Decks, 2026-09-03)');
       const _pgp = (url, text) => ({ url, text, html: text });
       const _gosun = readProductCompanyTells({ pages: [_pgp('https://gosun.co/', 'JD John D. Owner Solar Ovens BEST SELLER Fusion Hybrid Solar + Electric. Cook Day or Night. $499 $599 Shop Fusion')], links: ['https://gosun.co/collections/all', 'https://gosun.co/cart', 'https://gosun.co/products/fusion'] });
       if (_gosun.isProduct !== true) _fails.push('an online product company reads as a service business (GoSun)');
@@ -59550,14 +59574,16 @@ app.listen(PORT, () => {
       [_n('signals.sizeBand = _size.band;', ' signals.sizeConfidence = _size.confidence;'), 'the size band never reaches the signals, so the demotion and the client cannot see it'],
       [_n('out.lanes = ', '_lanes;'), 'the lane is decided and never returned'],
       [_n('signals.tradeLabel = String((company && company.industry)', " || '');"), 'the trade never reaches the size read, so every niche is sized as an HVAC shop'],
-      [_n('findSizeViaSearch(name, website, fcKey,', ' apiKey,'), 'the size lookup is never bought, so an unpublished size stays a guess off the review count'],
+      [_n('findSizeViaSearch(sizeName, website, fcKey,', ' apiKey, leadLocation, { reviewCount: signals.reviewCount });'), 'the size lookup is never bought, is bought on the outlet name instead of the brand, or cannot see the review count that decides the second query'],
+      [_n("const sizeName = (out.chain && out.chain.kind === 'network'", ' && out.chain.brand) ? out.chain.brand : name;'), 'a branch network is measured as one outlet again (ClearChoice, 2026-09-03)'],
+      [_n('if ((signals.branchNetwork === true || signals.peOwned === true || signals.nationalOperator === true)', " && _layers.verdict === 'owner') {"), 'a branch network, PE-owned or national lead reads as owner-run off its own page again, so a held-back name reaches the sheet as the owner'],
       [_n('if (!sizeMeasured(', 'signals) && website) {'), 'the size lookup is bought on a lead that measured its size, or skipped on one that only guessed it'],
       [_n('sizeWord: _size.band, sizeConfidence: _size.confidence,', ' affordBand: signals.affordBand ||'), 'the lane does not read the sheet\'s own guess, so the two can disagree'],
       [_n("signals.scaleBand = (_scale && !_scale.guess) ?", ' _scale.band : null;'), 'a tenure guess decides the tier the lanes read'],
       [_n('site:linkedin.com/company OR ', 'site:bbb.org'), 'the size lookup has no second query, so a miss on the revenue directories stays a miss'],
-      [_n('if (!parsed && ', '!secondQuery) {'), 'the second size query is bought on the wording of a snippet instead of on a null parse (Emrick, Affordable Foundation, 2026-09-03)'],
+      [_n('if (!parsed && !secondQuery', ' && secondWorth) {'), 'the second size query is bought on the wording of a snippet, or on every miss regardless of the review band (21 of 21 misses on 2026-09-03)'],
       [_n('location: lead', 'Location,'), 'the owner ladder does not read the market the Find press found the lead in, so a Places lead with no parsable city skips its licence search (Affordable Foundation, 2026-09-03)'],
-      [_n('fcKey, apiKey, lead', 'Location);'), 'the size lookup and the owner ladder read two different locations'],
+      [_n('fcKey, apiKey, lead', 'Location, { reviewCount'), 'the size lookup and the owner ladder read two different locations'],
       [_n('signals.directoryEmployeesRange = String(', "_dir.employeesFromRange || '');"), 'the lookup drops the range, so the confidence rule cannot tell a range across tiers from an exact count'],
       [_n('const _negKey = loc ? ', '`${domain}|${loc}` : domain;'), 'the web-search negative memo is keyed on the domain alone, so a city-less miss blocks the search for 14 days after the city is fixed'],
       [_n('out.product = readProductCompanyTells({', ' pages, links });'), 'the contact read no longer looks for a product company'],
@@ -66093,7 +66119,7 @@ app.listen(PORT, () => {
       for (const n of _fLive) {
         if (GP_FRANCHISE.test(n)) _fails.push(`"${n}" is DELETED at discovery as a franchise - an ordinary word in the franchise list is deleting the owner-operated businesses this pipeline exists to find, and this delete has no bench and no second chance`);
       }
-      const _fDie = ['Overhead Door Company of Jacksonville', 'Roto-Rooter Plumbing', 'Mr. Rooter of Dallas',
+      const _fDie = ['Archadeck of Columbus', 'Overhead Door Company of Jacksonville', 'Roto-Rooter Plumbing', 'Mr. Rooter of Dallas',
         'One Hour Heating & Air Conditioning', 'Rainbow International Restoration',
         'ServPro of North Austin', 'Molly Maid of Cincinnati', 'Aspen Dental'];
       for (const n of _fDie) {
@@ -76613,11 +76639,15 @@ const FIND_MAX_FREE_PAGES = parseInt(process.env.FIND_MAX_FREE_PAGES || '20', 10
 // number that made the sequential version impossible.
 const FIND_FREE_POOL = parseInt(process.env.FIND_FREE_POOL || '5', 10);
 const FIND_FREE_READ_MS = parseInt(process.env.FIND_FREE_READ_MS || '120000', 10);
+const FIND_ASSET_RE = /\.(?:css|js|mjs|json|xml|txt|png|jpe?g|gif|svg|webp|ico|pdf|woff2?|ttf|eot|mp4|mp3|zip)(?:[?#]|$)/i;
 const pickFindPages = (links, homepageUrl, budget) => {
   const cap = Number.isFinite(Number(budget)) && Number(budget) > 0 ? Number(budget) : FIND_MAX_PAGES;
   const free = cap > FIND_MAX_PAGES;
   const home = String(homepageUrl || '').replace(/\/$/, '').toLowerCase();
-  const pool = (Array.isArray(links) ? links : []).filter(u => String(u).toLowerCase() !== home);
+  // Round 115: an asset is never a page - "contact" inside
+  // /wp-content/plugins/contact-form-7/.../styles.css was fetched as the
+  // contact page on 2026-09-03 and its text went into the owner read.
+  const pool = (Array.isArray(links) ? links : []).filter(u => String(u).toLowerCase() !== home && !FIND_ASSET_RE.test(String(u)));
   const out = [];
   const taken = new Set();
   for (const intent of FIND_PAGE_INTENTS) {
@@ -76951,6 +76981,25 @@ const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
   const _suffix = String(name || '').match(/\s[-\u2013\u2014]\s*([A-Z][A-Za-z.'\s]{2,30})$/);
   const _outlet = _suffix ? read.find(p => /\/locations?\//i.test(String(p.url || '').replace(/^https?:\/\/[^\/]+/, ''))) : null;
   if (_outlet) why.push(`their Google listing is "${_suffix[0].trim()}" and the page it points at is one location's page (${String(_outlet.url).replace(/^https?:\/\/[^\/]+/, '')})`);
+  // Round 115: "Archadeck of Columbus" at archadeck.com/columbus walked onto the
+  // call sheet on 2026-09-03. A listing named "<Brand> of <City>" whose own
+  // page is /<city> on the BRAND's domain is a territory of a franchise
+  // system - the naming Overhead Door, Archadeck, ServPro and Molly Maid all
+  // use. The name alone is not enough ("Roofers of Tampa" is a trade name);
+  // the brand domain plus the city path is.
+  const _ofCity = String(name || '').match(/^(.{3,60}?) of ([A-Z][A-Za-z.'\s]{2,30})$/);
+  const _brandSlug = _ofCity ? _ofCity[1].toLowerCase().replace(/[^a-z0-9]+/g, '') : '';
+  const _citySlug = _ofCity ? _ofCity[2].trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') : '';
+  const _ofPage = (_ofCity && _brandSlug.length >= 4) ? read.find(p => {
+    const u = String(p.url || '');
+    const host = ((u.match(/^https?:\/\/([^\/]+)/) || ['', ''])[1]).toLowerCase().replace(/^www\./, '').replace(/\..*$/, '').replace(/[^a-z0-9]/g, '');
+    const path = u.replace(/^https?:\/\/[^\/]+/, '').toLowerCase().replace(/[?#].*$/, '').replace(/\/+$/, '');
+    // Either direction: 'overheaddoor' is inside 'overheaddoorcompany' and 'archadeck' is 'archadeck'.
+    const core = _brandSlug.replace(/(company|corporation|corp|inc|llc|co)$/, '');
+    const hostMatch = host.length >= 4 && core.length >= 4 && (host.includes(core) || core.includes(host));
+    return hostMatch && (path === '/' + _citySlug || path.startsWith('/' + _citySlug + '/'));
+  }) : null;
+  if (_ofPage) why.push(`their Google listing is "${_ofCity[0]}" and its own page is /${_citySlug} on ${_ofCity[1]}'s site - a territory of a franchise system`);
   const denied = CHAIN_DENIAL_RE.test(text);
   const self = (!denied && CHAIN_SELF_RE.test(text)) ? (text.match(CHAIN_SELF_RE) || [''])[0] : '';
   if (self) why.push(`their own pages sell franchises ("${self.trim().slice(0, 40)}")`);
@@ -76961,11 +77010,15 @@ const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
   // not a franchise. Franchise evidence (a franchise title, a page selling
   // franchises) drops the lead; a branch network (per-city location pages,
   // pages for four states, a "Brand - City" outlet) marks it as an email lead.
-  const kind = (role || self) ? 'franchise' : why.length ? 'network' : '';
+  const kind = (role || self || _ofPage) ? 'franchise' : why.length ? 'network' : '';
+  // Round 115: the BRAND behind a "Brand - City" outlet, so the size lookup
+  // can measure the network instead of one branch (ClearChoice's lookup
+  // searched "... - Cincinnati" and found nothing on 2026-09-03).
+  const brand = _suffix ? String(name).slice(0, _suffix.index).trim() : (_ofCity ? _ofCity[1].trim() : '');
   return {
     measured,
     isChain: why.length > 0,
-    kind,
+    kind, brand,
     why: why.join('; '),
     role, place, self, outlet: _outlet ? String(_outlet.url || '') : '', deniedFranchise: denied,
   };
@@ -78525,7 +78578,10 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         signals.directoryEmployees = Math.round(Number(_capi.employees)); signals.directoryEmployeesSource = 'the Companies API';
         out.sizeLookup.source = 'the Companies API';
       } else if (fcKey && apiKey) {
-        const _dir = await findSizeViaSearch(name, website, fcKey, apiKey, leadLocation);
+        // Round 115: a branch network is measured as the BRAND, not one outlet.
+        const sizeName = (out.chain && out.chain.kind === 'network' && out.chain.brand) ? out.chain.brand : name;
+        if (sizeName !== name) out.sizeLookup.why += `; searched as "${sizeName}"`;
+        const _dir = await findSizeViaSearch(sizeName, website, fcKey, apiKey, leadLocation, { reviewCount: signals.reviewCount });
         if (_dir && Number(_dir.employees) > 0) { signals.directoryEmployees = Math.round(Number(_dir.employees)); signals.directoryEmployeesSource = String(_dir.source || 'a directory'); signals.directoryEmployeesRange = String(_dir.employeesFromRange || ''); }
         if (_dir && _dir.revenue) { signals.revenueStated = String(_dir.revenue); signals.revenueStatedSource = String(_dir.source || 'a directory'); }
         if (_dir && (Number(_dir.employees) > 0 || _dir.revenue)) out.sizeLookup.source = `a directory snippet (${_dir.source || 'web'})`;
@@ -78541,7 +78597,14 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   const _size = sizeBand(signals);
   signals.sizeBand = _size.band; signals.sizeConfidence = _size.confidence;
   out.size = { band: _size.band, confidence: _size.confidence, why: _size.why, tier: signals.scaleBand, say: _scale ? _scale.say : '' };
-  const _layers = readLayers(signals, { ownerNamed: !!(out.owner && out.owner.name) });
+  let _layers = readLayers(signals, { ownerNamed: !!(out.owner && out.owner.name) });
+  // Round 115: a branch network, a PE-owned company or a national operator is
+  // layered by construction - "locally owned and operated" on ClearChoice's
+  // Cincinnati page read as owner-run on 2026-09-03 and a held-back
+  // prosthodontist reached the sheet as the owner. The decision is at head office.
+  if ((signals.branchNetwork === true || signals.peOwned === true || signals.nationalOperator === true) && _layers.verdict === 'owner') {
+    _layers = { verdict: 'layered', why: `${signals.branchNetwork ? 'a branch network' : signals.peOwned ? 'PE-owned' : 'a national operator'} - the decision is at head office${_layers.why ? ' (their page: ' + _layers.why + ')' : ''}` };
+  }
   out.layers = { verdict: _layers.verdict, why: _layers.why };
   let _ml = pickMarketingLead(signals.teamNames, signals.teamTitles);
   if (!_ml && _layers.verdict === 'layered' && hunterKey && website) {

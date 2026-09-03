@@ -126,3 +126,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 112 | 2026-09-03 | The first Round 111 run: measure the size, name the owner, show the lanes — 2026-09-03 | Find / Client | [round-112.md](round-112.md) |
 | 113 | 2026-09-03 | The 35-lead run: the redeploy that cut it in half, the guesses that were the rule, and a product company is an email lead — 2026-09-03 | Find | [round-113.md](round-113.md) |
 | 114 | 2026-09-03 | Rose Paving: the ceiling is a reachability rule, big companies go to email, and the call sheet is hedged — 2026-09-03 | Find | [round-114.md](round-114.md) |
+| 115 | 2026-09-03 | The first Round 114 run: the lanes reconciled, a franchise and a chain on the sheet, and the website column back — 2026-09-03 | Find / Client | [round-115.md](round-115.md) |
