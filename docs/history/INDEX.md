@@ -124,3 +124,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 110 | 2026-09-02 | Size for the rep, layers pick the target — 2026-09-02 | Find / Client | [round-110.md](round-110.md) |
 | 111 | 2026-09-03 | One ladder, two lanes: the ICP band re-derived, the size measured, the sheet made the call list — 2026-09-03 | Find / Client | [round-111.md](round-111.md) |
 | 112 | 2026-09-03 | The first Round 111 run: measure the size, name the owner, show the lanes — 2026-09-03 | Find / Client | [round-112.md](round-112.md) |
+| 113 | 2026-09-03 | The 35-lead run: the redeploy that cut it in half, the guesses that were the rule, and a product company is an email lead — 2026-09-03 | Find | [round-113.md](round-113.md) |

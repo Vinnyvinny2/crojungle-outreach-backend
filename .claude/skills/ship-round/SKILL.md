@@ -33,6 +33,7 @@ The ruling since [§104](../../../docs/history/round-104.md): **a round that cha
 ## 4. Commit and PR
 
 - Commit subject: `Round N: <one lowercase clause>, and <second clause>` (the house form; recent examples in `git log --oneline`). Body: what changed, what was falsified, whether index.html changed. Never a model name in a commit or PR.
+- **Ask Vin before every merge, and never merge while he is running a batch** ([§113](../../../docs/history/round-113.md)): every merge to `main` restarts Render, docs-only merges included, and a restart kills the reads in flight and stops the run.
 - One PR per round, squash-merged to `main` — a push to the branch is NOT a deploy; the sweep that found two pushes never merged started by diffing `origin/main` against the tested tree ([§37](../../../docs/history/round-037.md)). CI (`gates.yml`) runs the whole gate list on the PR; branch protection makes it a blocker once PART 8 step 1b is done.
 
 ## 5. The handover (use `handover-checklist.md`)
