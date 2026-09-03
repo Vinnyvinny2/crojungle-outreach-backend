@@ -2360,7 +2360,7 @@ let contactTally = null;
                  // Round 110: size and target cells.
                  'targetOf', 'sizeCell', 'targetCell',
                  // Round 111: the lane helpers the rep's sheet is filtered through.
-                 'laneOf', 'laneChip', 'exportableContact'];
+                 'laneOf', 'laneChip', 'exportableContact', 'LANE_TABS', 'laneHas', 'laneKey'];
   const got2 = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED2.includes(n.id.name) && n.init) {
@@ -2377,7 +2377,7 @@ let contactTally = null;
         + '\nreturn { tabOf: contactTabOf, tabs: CONTACT_TABS, cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
         + ' mergeView: mergeFindView, latestRun: latestRunIdOf, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
-        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, targetCell, laneOf, laneChip, exportableContact, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
+        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, targetCell, laneOf, laneChip, exportableContact, laneHas, laneKey, laneTabs: LANE_TABS, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
         + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
         + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT,'
         + ' generic: isGenericMailbox };')();
@@ -2504,8 +2504,18 @@ let contactTally = null;
             if (_names.indexOf('Older Layered Co') >= 0) fails.push('an older layered row is on the rep sheet');
             if (M.sheet([_darrel, _layered], false).rows.length !== 1) fails.push('the Google Sheet payload does not read the same lane rule as the CSV');
             if (M.exportableContact(_darrel) !== true || M.exportableContact(_layered) !== false) fails.push('exportableContact disagrees with the rows');
-            if (M.laneChip(_darrel) !== 'CALL + EMAIL' || M.laneChip(_layered) !== 'EMAIL' || M.laneChip(_small) !== 'TOO SMALL' || M.laneChip({ contactReadOk: true, contactLanes: { call: true, email: false } }) !== 'CALL') fails.push('the lane chip does not say the lane');
+            if (M.laneChip(_darrel) !== 'CALL + EMAIL' || M.laneChip(_layered) !== 'EMAIL' || M.laneChip(_small) !== 'TOO SMALL' || M.laneChip({ contactReadOk: true, contactOwner: 'A B', contactLanes: { call: true, email: false } }) !== 'CALL') fails.push('the lane chip does not say the lane');
             if (M.laneOf(_old).call !== true || M.laneOf(_oldLayered).call !== false) fails.push('the older-row fallback does not read the layers');
+            // Round 112: nobody named is "no name yet", off the sheet; a lead in both lanes is in both lists.
+            const _noname = { name: 'ECO LLC', contactReadOk: true, contactPhone: '5556667788', contactLanes: { call: false, email: false, noname: true } };
+            const _oldNoname = { name: 'Round 111 No Name Co', contactReadOk: true, contactPhone: '5551112222', contactLanes: { call: true, email: false } };
+            if (M.rows([_noname, _oldNoname]).length !== 0) fails.push('a read lead with nobody named is on the rep sheet');
+            if (M.laneChip(_noname) !== 'NO NAME YET' || M.laneOf(_oldNoname).noname !== true) fails.push('the no-name bucket is not read from the lanes or the older-row fallback');
+            if (!M.laneHas(_darrel, 'call') || !M.laneHas(_darrel, 'email') || M.laneHas(_darrel, 'noname')) fails.push('a lead in both lanes is not in both lists');
+            if (!M.laneHas(_small, 'bench') || M.laneHas(_small, 'call') || M.laneKey(_small) !== 'bench') fails.push('a benched lead is not in the Too small bucket');
+            if (M.laneKey(_layered) !== 'email' || M.laneKey(_noname) !== 'noname') fails.push('laneKey does not name the bucket');
+            if (!M.laneTabs.some(t => t[0] === 'noname') || M.laneTabs.length !== 4) fails.push('the Read tab does not have the four buckets');
+            if (M.lean.indexOf('sizeConfidence') < 0) fails.push('the rep\'s sheet does not carry the size confidence word beside the size');
           }
           // The run survives a refresh: the newest run id in the data is the run.
           if (M.latestRun([{ contactRunId: 'run_1a' }, { contactRunId: 'run_zz' }, { contactRunId: 'bogus' }, {}]) !== 'run_zz') fails.push('the newest run id is not recovered from the data, so "the 10 you just read" dies on refresh');
