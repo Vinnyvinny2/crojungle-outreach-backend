@@ -80,7 +80,7 @@ improve signals."*
   nobody, under the same name-must-appear-in-the-results rule;
   `findOwnerViaOpenCorporates` reads the OFFICERS a company filed, refusing
   agents and incorporators by position and organisations by the name door,
-  behind `OPENCORPORATES_KEY` (free tier; without the key the stage says so
+  behind `OPENCORPORATES_KEY` (a paid key - OpenCorporates no longer has a free tier, Vin 2026-09-03; without the key the stage says so
   once per lead and costs nothing); `DM_SOURCE_WEIGHT.opencorporates` 36.
 - **The eponym can sign.** `eponymousAuthority(best, companyName, authority)`
   lifts to 80 when the surname is in the business name AND the person is on
@@ -154,8 +154,9 @@ spend on that lead, and its credits must match the ledger.
 contract is 20260929 on both sides.**
 
 **`index.html` changed, so this NEEDS the Netlify drag-in.** Render env:
-`OPENCORPORATES_KEY` turns the officer stage on (free tier at
-opencorporates.com; without it the stage is skipped and says so). The
+`OPENCORPORATES_KEY` turns the officer stage on (a paid plan at
+opencorporates.com - there is no free tier any more, so it waits on the
+No-name-yet numbers; without it the stage is skipped and says so). The
 verifier top-up is still owed. The next batch's `📏 SIZE LOOKUP` lines
 should show a lookup on every unmeasured lead and most `🎯 TARGET` lines a
 sure or likely; the No name yet bucket should hold well under 10% of reads.
