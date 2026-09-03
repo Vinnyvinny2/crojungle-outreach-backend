@@ -32929,8 +32929,8 @@ ${replies.join('\n---\n').slice(0, 9000)}` }]
 // The state-registry web search is off because it returned filing agents. The
 // OpenCorporates API returns the OFFICERS a company filed - president, member,
 // manager, director - with their positions, so the agent can be refused by
-// its position. Behind OPENCORPORATES_KEY (free tier, 500 calls a month);
-// without the key the stage says so once per lead and costs nothing.
+// its position. Behind OPENCORPORATES_KEY (a paid plan - no free tier since
+// 2026-09-03); without the key the stage says so once per lead and costs nothing.
 const OPENCORPORATES_KEY = String(process.env.OPENCORPORATES_KEY || '').trim();
 const OC_AGENT_RE = /\b(?:registered agent|agent|incorporator|organizer|organiser)\b/i;
 const OC_OWNER_POS_RE = /\b(?:president|ceo|chief executive|owner|member|managing member|manager|managing|director|principal|partner|chairman|founder)\b/i;
@@ -33724,7 +33724,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
         const oc = await findOwnerViaOpenCorporates(companyName, location).catch(() => null);
         if (oc) found.push(oc);
       } else {
-        console.log(`DM [${companyName}]: the OpenCorporates officer lookup is not configured (OPENCORPORATES_KEY unset) - a free stage that names the filed president or member.`);
+        console.log(`DM [${companyName}]: the OpenCorporates officer lookup is not configured (OPENCORPORATES_KEY unset) - a paid stage that names the filed president or member; it waits on the No-name-yet numbers.`);
       }
     }
     if (settled()) {
