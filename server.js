@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261003;
+const CONTRACT_VERSION = 20261004;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -59506,7 +59506,22 @@ app.listen(PORT, () => {
       ['Pella Windows and Doors Showroom of Raleigh, NC', 'https://www.pella.com/locations/nc/durham', 'Durham, NC'],
       ['Sono Bello Kansas City', 'https://www.sonobello.com/locations/kansas-city', 'Overland Park, KS'],
       ['UrgentVet - Carytown', 'https://urgentvet.com/location/carytown-richmond-va/', 'Richmond, VA'],
-    ]) if (!_ot(n, u, c).isOutlet) _fails.push(`"${n}" is not read as a branch on a brand's own site - that shape cost ten credits each and named nobody, three times out of three, on 2026-09-04`);
+      // Round 119. The most expensive lead of the 2026-09-04 run: 13 Firecrawl
+      // credits, six paid searches, nobody named. Its listing points at
+      // locations.freeway.com/tampa-fl-33603, which is a branch by BOTH of
+      // this function's own tests - and it was caught by neither, because the
+      // segment match was exact ("tampa" never matched "tampa-fl-33603") and
+      // the host was read as its first label, so the "named after its own
+      // town" guard was comparing the town against the word "locations".
+      ['Freeway Insurance', 'https://locations.freeway.com/tampa-fl-33603', 'Tampa, FL'],
+      ['Some Brand', 'https://stores.somebrand.com/dallas-tx-75201', 'Dallas, TX'],
+      ['Some Brand', 'https://locations.somebrand.com/', 'Dallas, TX'],
+      // On a PLAIN host, so only the hyphen-boundary match can catch it. Found
+      // by falsification: with only the Freeway shapes above, reverting the
+      // boundary match left this check GREEN, and a fixture that cannot fail
+      // proves nothing about the rule it names.
+      ['Pella Windows Tampa', 'https://www.pella.com/tampa-fl-33603', 'Tampa, FL'],
+    ]) if (!_ot(n, u, c).isOutlet) _fails.push(`"${n}" at ${u} is not read as a branch on a brand's own site - that shape cost ten credits each and named nobody, three times out of three, on 2026-09-04, and thirteen more on Freeway Insurance the day after`);
     for (const [n, u, c] of [
       ['Arlington Concrete', 'https://arlingtonconcreteco.com/', 'Columbus, OH'],
       ['Arlington Concrete', 'https://arlingtonconcreteco.com/arlington', 'Arlington, OH'],
@@ -59514,6 +59529,15 @@ app.listen(PORT, () => {
       ['Joe Plumbing - Raleigh', 'https://joeplumbing.com/', 'Raleigh, NC'],
       ['Some Roofer', 'https://someroofer.com/home', 'Dallas, TX'],
       ['Independent Dental', 'https://independentdental.com/locations', 'Tulsa, OK'],
+      // Round 119, both ways: the hyphen boundary must not turn a town into a
+      // substring, and the brand label must still be the brand.
+      ['Tampax Supply Co', 'https://tampaxsupply.com/tampax-depot', 'Tampa, FL'],
+      ['Arlington Concrete', 'https://www.arlingtonconcreteco.com/arlington-oh-43001', 'Arlington, OH'],
+      // The brand label, reachable only on a host with a subdomain that is NOT
+      // one of the locations words: read the first label and "sales" does not
+      // contain "tampa", so a dental practice named after its own bay gets
+      // called somebody else's branch. Also found by falsification.
+      ['Tampa Bay Dental', 'https://sales.tampabaydental.com/tampa-fl-33607', 'Tampa, FL'],
     ]) if (_ot(n, u, c).isOutlet) _fails.push(`"${n}" at ${u} is read as somebody else's branch - either a listing pointing at its own home page or a business named after its own town`);
     if (_ot('Nothing Read Co', '', 'Tulsa, OK').measured !== false) _fails.push('a lead whose site we never opened claims to have been measured for the branch tell');
     if (_ot('Sono Bello Kansas City', 'https://www.sonobello.com/locations/kansas-city', 'Overland Park, KS').brand !== 'Sono Bello') _fails.push('the brand behind a branch is not the listing name minus the city, so the size lookup searches one outlet');
@@ -59981,7 +60005,24 @@ app.listen(PORT, () => {
     const _g = _sb([_good, _goodContact], { robots: 'User-agent: *\nAllow: /' });
     if (_g.measured !== true || _g.gap !== 0 || _g.faults.length) _fails.push(`a modern site with schema, a form and a tappable phone reads as gap ${_g.gap} (${_g.faults.map(f => f.id).join(',')})`);
     if (_g.word !== 'strong') _fails.push(`a clean site is called "${_g.word}"`);
-    if ((FIND_ICP_TERMS.find(t => t.id === 'sitegap').score({ siteMeasured: true, siteGap: 0 }) || {}).points !== 0) _fails.push('a good website does not score zero on the gap term');
+    // Round 119, and it is the whole ruling: a good website must cost a lead
+    // NOTHING. Asserted on the number a rep sorts by, not on a term - because
+    // it was a term for one round, and 74 became 65 for a clean site.
+    if (siteLift({ siteMeasured: true, siteGap: 0 }).points !== 0) _fails.push('a good website lifts a lead, which is not what a good website means');
+    if (FIND_ICP_TERMS.some(t => t.id === 'sitegap')) _fails.push('the website gap is back in the scoring table, where a good site costs a lead the ratio - the §118 defect, arithmetic and invisible');
+    {
+      const _lead = { teamCount: 19, execTitles: [], adsCode: false, ownerNamedOnSite: true, founderPhrase: 'family-owned',
+        liveChat: true, reviewCount: 180, rating: 4.7, affordBand: 'premium', reachMeasured: true, ownerCanBuy: true, emailTier: 2 };
+      const _blind = findIcpScore(Object.assign({}, _lead, { siteMeasured: false }));
+      const _clean = findIcpScore(Object.assign({}, _lead, { siteMeasured: true, siteGap: 0 }));
+      const _bad = findIcpScore(Object.assign({}, _lead, { siteMeasured: true, siteGap: SITE_GAP_MAX }));
+      if (_clean.score !== _blind.score) _fails.push(`a clean website moves the score from ${_blind.score} to ${_clean.score} - Vin ruled it scores nothing AND is never penalised`);
+      if (!(_bad.score > _blind.score)) _fails.push(`a wrecked website scores ${_bad.score} against ${_blind.score} for the same business with no site read - a bad site must LIFT a lead`);
+      const _quiet = siteLift({ siteMeasured: true, siteGap: SITE_GAP_MAX, reviewCount: 10 }).points;
+      const _bleeding = siteLift({ siteMeasured: true, siteGap: SITE_GAP_MAX, reviewCount: 900, adsCode: true }).points;
+      if (!(_bleeding > _quiet)) _fails.push('the same wrecked website is worth no more at a business paying for ads with 900 reviews than at a quiet one - the bleed is the whole of Vin 2026-09-04');
+      if (_bleeding > SITE_LIFT_MAX) _fails.push(`the website lift reaches ${_bleeding}, past its own cap of ${SITE_LIFT_MAX}`);
+    }
 
     // 2. A 2016 template: every group fires, and the sentence names the work.
     const _o = _sb([_old, _oldContact], { robots: 'User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nAllow: /' });
@@ -60001,7 +60042,8 @@ app.listen(PORT, () => {
     if (_t.measured !== false) _fails.push('a 258-character page is judged on its website - the Floor Gurus failure, aimed this time at the number a rep sorts by');
     if (_t.faults.length) _fails.push(`an unreadable page reports ${_t.faults.length} website fault(s)`);
     if (/nothing wrong/.test(_t.why)) _fails.push('an unreadable site is described as having nothing wrong with it, which is a claim we cannot make');
-    if (FIND_ICP_TERMS.find(t => t.id === 'sitegap').score({ siteMeasured: false, siteGap: 0 }) !== null) _fails.push('the website term scores a lead whose site we could not read, so our blindness is charged to them');
+    if (siteLift({ siteMeasured: false, siteGap: SITE_GAP_MAX }).points !== 0) _fails.push('a site we could not read lifts a lead anyway, so our blindness is scored as their gap');
+    if (siteLift({ siteMeasured: true, siteGap: true }).points !== 0) _fails.push('a boolean in siteGap buys a lift - Number(true) is 1, the null-laundering class §60 records');
     if (_sb([]).measured !== false) _fails.push('a lead with no pages at all is judged on its website');
 
     // 4. A POSITIVE is a positive on any page; an ABSENCE needs readable text.
@@ -60049,11 +60091,13 @@ app.listen(PORT, () => {
       [_n118('signals.siteGap = (out.site && typeof out.site.gap === ', "'number') ? out.site.gap : null;"), 'the website gap never reaches the signals, so the score cannot see it'],
       [_n118('signals.siteMeasured = !!(out.site &&', ' out.site.measured === true);'), 'the score cannot tell a site we judged from one we could not read'],
       [_n118('fetchSiteFile(website, ', "'/robots.txt')"), 'robots.txt is no longer read, so nothing knows whether the AI crawlers are shut out'],
-      [_n118("if (typeof s.siteGap !== 'number' ||", ' !Number.isFinite(s.siteGap)'), 'the website term is back on Number(), so a stray boolean scores a point off nothing'],
+      [_n118("if (typeof d.siteGap !== 'number' ||", ' !Number.isFinite(d.siteGap)'), 'the website lift is back on Number(), so a stray boolean buys a lift off nothing'],
+      [_n118('const _lift = siteLift', '(s);'), 'the website lift is computed and never added to the score - computed-but-not-passed, the class this file produces most'],
+      [_n118('grade: judged ? SITE_GAP_GRADE(', 'Math.min(SITE_GAP_MAX, gap)) : null,'), 'the website grade out of 10 no longer reaches the row Vin asked for it in'],
     ]) if (!_s118.includes(_needle)) _fails.push(_msg);
 
     if (_fails.length) console.log(`\u26d4 WEBSITE BUILD CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
-    else console.log(`✓ WEBSITE BUILD CHECK: the first signal in this system that asks whether the thing we SELL is broken, rather than whether they can pay for it. Read free from markup the owner hunt already downloaded - no Firecrawl credit and no model call - over four groups: does the site ask for the job (a form, a tappable phone), is the build current (${SITE_GAP_TERMS.filter(t => t.group === 'build').length} markers plus the DIY-builder fingerprint), can AI search read it (business schema classified so Wix boilerplate does not count, a JavaScript-only shell, robots.txt per crawler) and is it set up for search at all (noindex, the title, alt text). A modern site scores 0 of ${SITE_GAP_MAX} and is never marked down for it; the worst site reaches ${SITE_GAP_MAX}; and a page we could not read claims NOTHING in either direction - a positive is a positive on any page, an absence needs readable text, and the difference is why a JavaScript shell reports the one fault that describes it instead of being charged with having no contact form.`);
+    else console.log(`✓ WEBSITE BUILD CHECK: the first signal in this system that asks whether the thing we SELL is broken, rather than whether they can pay for it. Read free from markup the owner hunt already downloaded - no Firecrawl credit and no model call - over four groups: does the site ask for the job (a form, a tappable phone), is the build current (${SITE_GAP_TERMS.filter(t => t.group === 'build').length} markers plus the DIY-builder fingerprint), can AI search read it (business schema classified so Wix boilerplate does not count, a JavaScript-only shell, robots.txt per crawler) and is it set up for search at all (noindex, the title, alt text). A modern site scores 0 of ${SITE_GAP_MAX} and costs a lead nothing at all - the gap is a LIFT on top of the score (up to ${SITE_LIFT_MAX}, and worth more where they are paying for the traffic landing on it) rather than a term inside the ratio, which is the only shape in which a good website is free; the worst site reaches ${SITE_GAP_MAX} and grades ${SITE_GAP_GRADE(SITE_GAP_MAX)} of 10; and a page we could not read claims NOTHING in either direction - a positive is a positive on any page, an absence needs readable text, and the difference is why a JavaScript shell reports the one fault that describes it instead of being charged with having no contact form.`);
   } catch (e) {
     console.log(`\u26d4 WEBSITE BUILD CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
@@ -60254,6 +60298,24 @@ app.listen(PORT, () => {
       const _none = _term('founder', { founderPhrase: false, ownerNamedOnSite: null, ownerAnswersReviews: null });
       if (!_none || _none.points !== 3) _fails.push('a readable site that names nobody as running it is not scored low');
       if (_term('scale', { staffProse: null, fleetProse: null, locationsProse: null }) !== null) _fails.push('the scale term scores a lead that published no size at all');
+      // ══ ROUND 119: THE QUIET ONES ═══════════════════════════════════════
+      // Vin, 2026-09-04. Nearly every owner-run local business has no jobs
+      // page and no chat widget, and those two absences were costing 26 of 220
+      // while the ads term paid 18 of 25 for the very same silence.
+      {
+        const _hq = _term('hiring', { hiringAny: false });
+        if (!_hq || _hq.points !== null) _fails.push('a business with no jobs page is still charged points for it - the quiet owner-run shop this system exists to sell to, marked down for being quiet');
+        if (!_hq || !/not evidence either way/.test(String(_hq.say))) _fails.push('the row says nothing about WHY the hiring signal was left out, or prints "not measured" about a careers page we read');
+        const _iq = _term('invests', { liveChat: false, scheduler: false, callTracking: false, analytics: false, tagManager: false });
+        if (!_iq || _iq.points !== null) _fails.push('a business with no marketing tools is still charged points for it, which the ads term already pays 18 of 25 FOR');
+        // And the direction is untouched: hiring for marketing is still the
+        // loudest thing on the term, exactly as Vin defined a good prospect.
+        const _hm = _term('hiring', { hiringMarketing: true, hiringMarketingTitles: ['Marketing Manager'] });
+        if (!_hm || _hm.points !== 20) _fails.push('hiring for a marketing role no longer scores the maximum - the signal Vin named first');
+        const _hn = findIcpScore({ teamCount: 12, rating: 4.5, reviewCount: 200, hiringAny: false, liveChat: false, scheduler: false, callTracking: false, analytics: false, tagManager: false });
+        if (_hn.terms.filter(t => t.id === 'hiring' || t.id === 'invests').some(t => t.measured)) _fails.push('the quiet terms are back in the denominator, where leaving them out is the only thing that stops them costing points');
+        if (_hn.terms.filter(t => t.id === 'hiring' || t.id === 'invests').some(t => t.say === 'not measured')) _fails.push('a careers page we READ is reported as "not measured", which is a false sentence about our own work');
+      }
       const _sc = estimateScaleBand({ staffProse: 14, staffProseSay: 'a team of 14 technicians' });
       if (!_sc || _sc.band !== 'core' || !/estimated/.test(_sc.say)) _fails.push('fourteen published technicians is not an estimated core band, or the sentence forgot to say "estimated"');
       if ((estimateScaleBand({ verifiedEmployees: 176 }) || {}).band !== 'over_ceiling') _fails.push('176 verified employees is not read as over the call cap');
@@ -60268,7 +60330,11 @@ app.listen(PORT, () => {
       if (demotionPenalty({ scaleBand: 'core' }).points !== 0 || demotionPenalty({ scaleBand: 'entry' }).points !== 0) _fails.push('an in-range size band marks the lead down');
       if (_term('invests', { liveChat: null, scheduler: null, callTracking: null, analytics: null, tagManager: null }) !== null) _fails.push('the invests term scores a site whose markup was not read');
       if ((_term('invests', { liveChat: true, scheduler: false, callTracking: false, analytics: false, tagManager: false }) || {}).points !== 15) _fails.push('one marketing tool is not scored as the best prospect shape');
-      if ((_term('invests', { liveChat: false, scheduler: false, callTracking: false, analytics: false, tagManager: false }) || {}).points !== 5) _fails.push('no tools at all is not scored low');
+      // Round 108 pinned "no tools at all scores 5 of 15". Round 119 retired
+      // that: Vin ruled the quiet ones stop being punished, and the ads term
+      // already pays 18 of 25 for the same silence. The rule now is that no
+      // tools leaves the score - asserted in the FIVE block above, both ways.
+      if ((_term('invests', { liveChat: false, scheduler: false, callTracking: false, analytics: false, tagManager: false }) || {}).points !== null) _fails.push('no tools at all is charged points again - the double count Round 119 removed');
       if ((_term('invests', { liveChat: true, scheduler: true, callTracking: true, analytics: true, tagManager: true }) || {}).points !== 8) _fails.push('a fully tooled site is not scored as already looked after');
       const _hr = _term('hiring', { hiringAny: true, hiringMarketing: false, hiringTitles: ['Technician', 'Installer'], hiringOpsTitles: ['Technician', 'Installer'], hiringRecent: true });
       if (!_hr || _hr.points !== 17) _fails.push(`two recent field roles score ${_hr && _hr.points}, not 17`);
@@ -60599,10 +60665,11 @@ app.listen(PORT, () => {
     // Number.isFinite(0) is true, so every one of these must refuse to score.
     for (const bad of [null, undefined, '', [], {}, true, NaN, '4.6']) {
       const r = findIcpScore({ teamCount: bad, rating: bad, reviewCount: bad, siteGap: bad, siteMeasured: bad });
-      if (r.terms.some(t => (t.id === 'size' || t.id === 'rating' || t.id === 'demand' || t.id === 'sitegap') && t.measured)) {
+      if (r.terms.some(t => (t.id === 'size' || t.id === 'rating' || t.id === 'demand') && t.measured)) {
         _fails.push(`findIcpScore treats ${JSON.stringify(bad)} as a measurement`);
         break;
       }
+      if (r.lift) { _fails.push(`the website lift treats ${JSON.stringify(bad)} as a measured gap`); break; }
     }
 
     // == AND THE SCORE IS COMPUTED AFTER THE LOOKUPS, NOT BEFORE ==========
@@ -77498,8 +77565,21 @@ const placeSlug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-
 const readOutletTell = ({ name, homeUrl, city } = {}) => {
   const u = String(homeUrl || '');
   if (!u) return { measured: false, isOutlet: false, why: '', brand: '', path: '' };
-  const host = ((u.match(/^https?:\/\/([^\/]+)/) || ['', ''])[1]).toLowerCase().replace(/^www\./, '').replace(/\..*$/, '').replace(/[^a-z0-9]/g, '');
+  // Round 119. locations.freeway.com read as host "locations" - the FIRST
+  // label, not the business's - so the "named after its own town" guard was
+  // comparing the town against the word "locations" on every branch host a
+  // brand publishes. Take the label before the public suffix instead, and
+  // treat a "locations"/"stores"/"offices" subdomain as the tell it plainly
+  // is: nobody puts their only website on locations.<brand>.com.
+  const _hostFull = ((u.match(/^https?:\/\/([^\/]+)/) || ['', ''])[1]).toLowerCase().replace(/^www\./, '');
+  const _labels = _hostFull.split('.').filter(Boolean);
+  const host = (_labels.length >= 2 ? _labels[_labels.length - 2] : (_labels[0] || '')).replace(/[^a-z0-9]/g, '');
+  const outletHost = _labels.length >= 3 && /^(?:locations?|stores?|showrooms?|branch(?:es)?|offices?|dealers?|centers?|centres?)$/i.test(_labels[0] || '');
   const path = u.replace(/^https?:\/\/[^\/]+/, '').replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
+  if (outletHost) {
+    return { measured: true, isOutlet: true, brand: '', path: path || '/',
+      why: `their Google listing points at ${_hostFull}${path} - a branch address on a brand's own locations host` };
+  }
   if (!path || path === '/') return { measured: true, isOutlet: false, why: '', brand: '', path: '/' };
   const segs = path.split('/').filter(Boolean).map(placeSlug);
   // Every trailing run of the listing name that could be a place: "Raleigh",
@@ -77517,7 +77597,13 @@ const readOutletTell = ({ name, homeUrl, city } = {}) => {
   // A business named after its own town publishes /arlington on its OWN site,
   // so the town has to be absent from the domain for the path to prove anything.
   const ours = (slug) => host.length >= 4 && slug && host.includes(slug.replace(/-/g, ''));
-  const match = tails.concat([_cityTail]).find(t => t.slug && t.slug.length >= 4 && segs.includes(t.slug) && !ours(t.slug));
+  // A segment does not have to BE the town. Freeway Insurance's listing points
+  // at /tampa-fl-33603 - the town, its state and its zip in one slug - and an
+  // exact segment match never saw it, which is why that lead was the most
+  // expensive of the 2026-09-04 run at 13 credits for nobody named. Matched on
+  // a hyphen boundary, so "tampa" catches "tampa-fl-33603" and never "tampax".
+  const _carries = (seg, slug) => seg === slug || seg.startsWith(slug + '-') || seg.endsWith('-' + slug) || seg.includes('-' + slug + '-');
+  const match = tails.concat([_cityTail]).find(t => t.slug && t.slug.length >= 4 && segs.some(seg => _carries(seg, t.slug)) && !ours(t.slug));
   if (OUTLET_PATH_RE.test(path) && segs.length >= 2) {
     return { measured: true, isOutlet: true, why: `their Google listing points at one location's page inside a bigger site (${path})`, brand: (match && match.brand) || '', path };
   }
@@ -77605,6 +77691,14 @@ const SITE_GAP_TERMS = [
 ];
 const SITE_GAP_MAX = 25;
 const SITE_GAP_WORD = (n) => n >= 16 ? 'poor' : n >= 10 ? 'weak' : n >= 4 ? 'fair' : 'strong';
+// Round 119 (Vin: "can we just get a grade on the website 1-10, lower being
+// worse, in a column to the right of the website name"). Computed HERE and
+// nowhere else, so the log line, the CSV, the Google Sheet and the card can
+// never disagree about one number. 10 is a build with nothing we sell missing
+// from it; 1 is the worst this function can measure. There is deliberately no
+// grade for a site we could not read - a 1 on an unread site is an absence
+// claim, and this whole function exists to refuse those.
+const SITE_GAP_GRADE = (n) => Math.max(1, Math.min(10, 10 - Math.round((Math.min(SITE_GAP_MAX, Math.max(0, n)) * 9) / SITE_GAP_MAX)));
 const readSiteBuild = ({ pages, links, website, companyName, city, trade, robots, llms } = {}) => {
   const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
   const home = read.find(p => p && p.intent === 'home') || read[0] || null;
@@ -77681,6 +77775,7 @@ const readSiteBuild = ({ pages, links, website, companyName, city, trade, robots
     gap: Math.min(SITE_GAP_MAX, gap),
     rawGap: gap,
     word: judged ? SITE_GAP_WORD(Math.min(SITE_GAP_MAX, gap)) : '',
+    grade: judged ? SITE_GAP_GRADE(Math.min(SITE_GAP_MAX, gap)) : null,
     faults, clean,
     // The rep's cell, decided HERE. Faults are pushed in table order and the
     // table is ordered by weight, so the first two are the two worst.
@@ -78286,7 +78381,9 @@ const FIND_ICP_TERMS = [
       const known = tools.filter(t => t[1] === true || t[1] === false);
       if (!known.length) return null;
       const on = tools.filter(t => t[1] === true).map(t => t[0]);
-      if (on.length === 0) return { points: 5, say: 'no marketing tools on their site at all - either untouched or too small to have bought any' };
+      // Round 119, the same ruling and the same double count: "untouched" is
+      // worth 18 of 25 on the ads term, and it used to cost 10 of 15 here.
+      if (on.length === 0) return { points: null, say: 'no marketing tools on their site at all - untouched, which the ads term already scores, so it is left out here rather than counted twice' };
       if (on.length <= 2) return { points: 15, say: `runs ${on.join(' and ')} - a budget exists and there are gaps left to fill` };
       if (on.length <= 4) return { points: 10, say: `runs ${on.join(', ')} - already spends on tooling` };
       return { points: 8, say: `runs ${on.join(', ')} - fully tooled, somebody is already on this` };
@@ -78301,7 +78398,20 @@ const FIND_ICP_TERMS = [
         const pts = 10 + (ops >= 2 ? 4 : 0) + (s.hiringRecent === true ? 3 : 0);
         return { points: Math.min(17, pts), say: `hiring (${s.hiringTitles.slice(0, 2).join(', ')}), though not for marketing${ops >= 2 ? ' - two or more field roles open, so the work is growing' : ''}${s.hiringRecent === true ? ', posted within 90 days' : ''}` };
       }
-      if (s.hiringAny === false) return { points: 4, say: 'no open roles found on their site' };
+      // ══ ROUND 119: STOP PUNISHING THE QUIET ONES ═══════════════════════
+      // Vin, 2026-09-04, choosing it in as many words. Hiring is POSITIVE
+      // evidence - the preamble above this table says so of the terms added
+      // beside Vin's three - and almost no owner-run local business publishes
+      // a jobs page at all. Charging 4 of 20 for that silence put a 16-point
+      // hole in the exact business we exist to sell to, and the `ads` term
+      // pays 18 of 25 for the SAME silence three terms above ("nothing
+      // marketing-related at all - the whole budget is still to play for").
+      // One fact cannot be worth +18 and -16 in one denominator.
+      //
+      // points: null LEAVES the score - a ratio is the only place a penalty
+      // can hide - but the sentence is kept, because "not measured" would be
+      // a false thing to print about a careers page we read.
+      if (s.hiringAny === false) return { points: null, say: 'no open roles on their site - not evidence either way, so it is left out rather than counted against them' };
       return null;
     },
   },
@@ -78359,39 +78469,9 @@ const FIND_ICP_TERMS = [
       return null;
     },
   },
-  // ══ IS THE THING WE SELL BROKEN? ═══════════════════════════════════════
-  // Round 118 (Vin, 2026-09-04). Every term above asks whether they CAN pay.
-  // This is the first one that asks whether they NEED us, and it is the only
-  // signal in the table aimed at the product itself: a business with money and
-  // a good website is a wasted call; a business with money and a 2016 template
-  // that AI search cannot read is the whole premium line.
-  //
-  // Points rise with the SIZE OF THE GAP. A good site scores 0 and is never
-  // demoted - Vin's ruling, 2026-09-04: it still buys a retainer or the AI
-  // brain, and the research behind §111 is that most businesses are already
-  // paying for marketing they know is not working. Falling behind the leads
-  // with real gaps is the whole effect, and it needs no penalty to happen.
-  //
-  // Built from facts NO other term consumes: schema, the build's vintage, the
-  // title, alt text, the form, the tel: link. `invests` and `ads` already own
-  // chat, booking, call tracking, analytics and the tag container, and the
-  // table's own rule is that one fact must not sit in two terms of one
-  // denominator - which is why `scale` sits out when the team floor scores.
-  {
-    id: 'sitegap', max: 25, label: 'how much of the website work we sell is missing',
-    score: (s) => {
-      // Unmeasured means we could not read enough of their site to see an
-      // absence. Scoring that 0 would mark a lead down for our own blindness.
-      if (s.siteMeasured !== true) return null;
-      // strictNum, never Number: Number(true) is 1 and 1 is finite, so a stray
-      // boolean scored a point off nothing. The same rule demand and rating
-      // carry, and the same null-laundering class §60 records.
-      if (typeof s.siteGap !== 'number' || !Number.isFinite(s.siteGap) || s.siteGap < 0) return null;
-      const n = s.siteGap;
-      if (n <= 0) return { points: 0, say: 'their website is in good shape - nothing we sell is obviously missing from it' };
-      return { points: Math.min(25, n), say: s.siteWhy || `${n} points of website work missing` };
-    },
-  },
+  // IS THE THING WE SELL BROKEN? That question is NOT a term - it is siteLift,
+  // a post-ratio offset below this table, for the arithmetic reason written
+  // there. Round 118 made it the eleventh term and the ratio defeated it.
   {
     id: 'reach', max: 15, label: 'whether the read actually produced somebody to contact',
     // The score used to be computed BEFORE the owner and address lookups ran,
@@ -78428,6 +78508,54 @@ const FIND_ICP_TERMS = [
 // score says we checked and it is a bad fit, which is the opposite of what
 // happened.
 const FIND_ICP_MIN_TERMS = 3;
+// ══ A BROKEN WEBSITE IS A LIFT, NOT A TERM ════════════════════════════════
+// Round 119. Vin, 2026-09-04, asked for something no option offered him:
+// *"bad website should def lift a lead - it should especially lift it more if
+// they're doing good for other signals, like they're spending ads, have high
+// revenue, because it becomes more of a bleeding thing if they're successful."*
+//
+// Round 118 made the gap the ELEVENTH TERM and the arithmetic quietly defeated
+// it. In a ratio over the terms measured, a term can only lift a lead above
+// its own average by scoring ABOVE that average - so on a lead averaging 74%,
+// a term with a maximum of 25 could move the score about three points either
+// way, and it needed a gap of 20 just to break even. The worst site in the
+// 2026-09-04 run was 13. Measured on one real lead from that run: 74 with no
+// site read, 65 with a CLEAN one, 68 fair, 72 weak. The term lowered all 25
+// leads and lifted none, which is the exact penalty Vin had ruled against.
+//
+// So it is an offset applied AFTER the ratio, beside demotionPenalty and
+// alreadyDialledIn, and for the reason already written there: an offset does
+// not touch the denominator, so a good website now costs a lead nothing at
+// all instead of costing it the ratio.
+//
+// The multiplier is Vin's sentence and not a new idea: the same hole leaks
+// more when more is flowing through it. Ad code means they are PAYING to send
+// traffic to a site that cannot convert it or be read by AI search; a heavy
+// review count means real volume is landing on it. Neither fact is scored
+// twice as goodness - they PRICE the gap, they do not score it, which is a
+// different job from the one `ads` and `demand` do in the table above.
+const SITE_LIFT_BAND = { strong: 0, fair: 2, weak: 5, poor: 8 };
+const SITE_LIFT_MAX = 14;
+const SITE_LIFT_VOLUME = 150;
+const siteLift = (signals) => {
+  const d = signals || {};
+  const none = { points: 0, terms: [] };
+  // A site we could not read lifts nothing. Our blindness is not their gap.
+  if (d.siteMeasured !== true) return none;
+  // strictNum, never Number: Number(true) is 1, and a stray boolean must not
+  // buy a lift off a measurement that never happened (§118 caught exactly that).
+  if (typeof d.siteGap !== 'number' || !Number.isFinite(d.siteGap) || d.siteGap < 0) return none;
+  const word = SITE_GAP_WORD(Math.min(SITE_GAP_MAX, d.siteGap));
+  const base = SITE_LIFT_BAND[word] || 0;
+  if (!base) return none;
+  const bleed = [];
+  if (d.adsCode === true) bleed.push('they are paying for the traffic landing on it');
+  const _rev = d.reviewCount;
+  if (typeof _rev === 'number' && Number.isFinite(_rev) && _rev >= SITE_LIFT_VOLUME) bleed.push(`${_rev} reviews of real volume landing on it`);
+  const points = Math.min(SITE_LIFT_MAX, Math.round(base * (1 + 0.4 * bleed.length)));
+  return { points, terms: [{ id: 'siteGap', points, word,
+    why: `a ${word} website${bleed.length ? ' and ' + bleed.join(' and ') : ''}` }] };
+};
 const findIcpScore = (signals) => {
   const s = signals || {};
   const terms = [];
@@ -78436,7 +78564,13 @@ const findIcpScore = (signals) => {
     let r = null;
     try { r = t.score(s); } catch { r = null; }
     if (!r || typeof r.points !== 'number' || !Number.isFinite(r.points)) {
-      terms.push({ id: t.id, label: t.label, measured: false, points: null, max: t.max, say: 'not measured' });
+      // Round 119: a term may answer { points: null, say } - "we looked, and
+      // what we found is not evidence either way". It leaves the denominator
+      // exactly like an unmeasured term, because the ratio is the only place a
+      // penalty can hide; but the row must not print "not measured" about a
+      // careers page we actually read.
+      terms.push({ id: t.id, label: t.label, measured: false, points: null, max: t.max,
+        say: (r && typeof r.say === 'string' && r.say) ? r.say : 'not measured' });
       continue;
     }
     points += r.points;
@@ -78476,13 +78610,18 @@ const findIcpScore = (signals) => {
   const _run = alreadyDialledIn(s);
   const _marks = _dem.terms.concat(_run.terms);
   const _off = _dem.points + _run.points;
+  // Round 119: the website gap, up here with the demotions and never in the
+  // table, so a good site cannot cost a lead the ratio. See siteLift.
+  const _lift = siteLift(s);
   return {
-    score: Math.max(0, Math.min(100, _base + _off)),
+    score: Math.max(0, Math.min(100, _base + _off + _lift.points)),
     measured, of: FIND_ICP_TERMS.length, terms,
     demotions: _marks,
+    lift: _lift.points, liftWhy: _lift.points ? _lift.terms[0].why : '',
     why: `scored on the ${measured} of ${FIND_ICP_TERMS.length} signals we could measure`
        + (measured < FIND_ICP_TERMS.length ? '; the rest are left out rather than counted as zero' : '')
-       + (_marks.length ? `, then marked down ${Math.abs(_off)} for ${_marks.map(t => t.why).join(' and ')}` : ''),
+       + (_marks.length ? `, then marked down ${Math.abs(_off)} for ${_marks.map(t => t.why).join(' and ')}` : '')
+       + (_lift.points ? `, then lifted ${_lift.points} for ${_lift.terms[0].why}` : ''),
   };
 };
 

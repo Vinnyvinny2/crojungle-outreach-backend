@@ -2358,7 +2358,7 @@ let contactTally = null;
                  // resolver's source ids are said the way a rep would say them.
                  'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN',
                  // Round 110: size and target cells.
-                 'targetOf', 'SHORT_CELL_MAX', 'shortCell', 'nameWithFlag', 'sizeCell', 'siteCell', 'targetCell', 'targetWhyCell', 'websiteCell', 'lastRowsLast',
+                 'targetOf', 'SHORT_CELL_MAX', 'shortCell', 'nameWithFlag', 'sizeCell', 'siteCell', 'siteGradeCell', 'targetCell', 'targetWhyCell', 'websiteCell', 'lastRowsLast',
                  // Round 111: the lane helpers the rep's sheet is filtered through.
                  'laneOf', 'laneChip', 'exportableContact', 'LANE_TABS', 'laneHas', 'laneKey'];
   const got2 = {};
@@ -2579,7 +2579,13 @@ let contactTally = null;
       {
         const _need = [
           ['the panel no longer renders a tab per contact state', "CONTACT_TABS.map(([k, lab]) =>"],
-          ['the rendered list is not filtered by the tab, so a read lead never leaves the pool on screen', "_cShown.filter(c => contactTabOf(c) === contactTab)"],
+          // Round 119: the list reads _scoped, not _cShown - the SAME population
+          // the lane counts, the export and the move button read. The two
+          // disagreeing is how "only 18 in the email lane" happened on a queue
+          // carrying hundreds.
+          ['the rendered list is not filtered by the tab AND by the scope, so the lane count and the cards under it describe different populations - "only 18 in the email lane" on a queue carrying hundreds', "_scoped.filter(c => contactTabOf(c) === contactTab)"],
+          ['the lane counts and the rendered list read different populations again - the count says one press and the list shows the whole queue', "const _cLane = Object.fromEntries(LANE_TABS.map(([k]) => [k, _cRead.filter(c => laneHas(c, k))]));"],
+          ['the scope switch is not on the Lane row, where the numbers it decides are', "onClick: () => setContactScope(k) }, lab))) : null,\n            (_cRunSet.length && contactScope === 'run')"],
           ['the tab counts are not computed from the same pool the list is', "for (const c of _cShown) { const t = contactTabOf(c);"],
           ['the spending band is no longer confined to the not-read tab', "contactTab !== 'unread' ? null : _cUnread.length === 0 ? _band('Read',"],
         ];
@@ -2682,8 +2688,8 @@ let contactTally = null;
         // Round 118: the website read is on the sheet, and it says nothing at
         // all on a lead whose site we could not read.
         const _siteRows = M.rows([
-          { name: 'Poor Co', contactReadOk: true, contactOwner: 'P Q', contactPhone: '5551110000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: true, contactSiteWord: 'poor', contactSiteShort: 'poor (DIY build, no schema)', contactSiteGap: 22, contactSiteWhy: 'it is a DIY website-builder template; no business schema in their code' },
-          { name: 'Good Co', contactReadOk: true, contactOwner: 'G H', contactPhone: '5552220000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: true, contactSiteWord: 'strong', contactSiteShort: 'strong', contactSiteGap: 0, contactSiteWhy: 'nothing wrong with their site that we can see from its code' },
+          { name: 'Poor Co', contactReadOk: true, contactOwner: 'P Q', contactPhone: '5551110000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: true, contactSiteWord: 'poor', contactSiteShort: 'poor (DIY build, no schema)', contactSiteGap: 22, contactSiteGrade: 2, contactSiteWhy: 'it is a DIY website-builder template; no business schema in their code' },
+          { name: 'Good Co', contactReadOk: true, contactOwner: 'G H', contactPhone: '5552220000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: true, contactSiteWord: 'strong', contactSiteShort: 'strong', contactSiteGap: 0, contactSiteGrade: 10, contactSiteWhy: 'nothing wrong with their site that we can see from its code' },
           { name: 'Unread Co', contactReadOk: true, contactOwner: 'U V', contactPhone: '5553330000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: false, contactSiteWhy: 'we could not read enough of their site to judge the build' },
         ]);
         const _byName = (n) => _siteRows.find(r => r.company === n) || {};
@@ -2692,6 +2698,17 @@ let contactTally = null;
         if (_byName('Unread Co').site !== 'not read') fails.push('a lead whose website we could not read is given a verdict on it anyway - the absence claim this system exists to refuse');
         if (!/DIY website-builder/.test(String(_byName('Poor Co').siteWhy))) fails.push('the full file lost the sentence saying what is missing from the website');
         if (/converts badly|conversion rate/i.test(String(_byName('Poor Co').site) + String(_byName('Poor Co').siteWhy))) fails.push('the website cell claims something about how their site CONVERTS, which is their analytics and not our markup read');
+        // Round 119, Vin: "a grade on the website 1-10, lower being worse, in a
+        // column to the right of the website name." All three parts asserted:
+        // the number, its emptiness on a site nobody could read, and its seat.
+        if (_byName('Poor Co').siteGrade !== '2') fails.push(`the website grade is not on the sheet (got ${JSON.stringify(_byName('Poor Co').siteGrade)})`);
+        if (_byName('Good Co').siteGrade !== '10') fails.push('a business with a good website does not grade 10');
+        if (_byName('Unread Co').siteGrade !== '') fails.push('a lead whose website we could not read is graded anyway - a 1 on an unread site is the absence claim this system exists to refuse');
+        {
+          const _keys = M.cols.map(c => c[0]);
+          if (_keys[_keys.indexOf('website') + 1] !== 'siteGrade') fails.push('the website grade is not the column immediately right of the website, which is where Vin asked for it');
+          if (M.lean.indexOf('siteGrade') !== M.lean.indexOf('website') + 1) fails.push('the website grade is not beside the website in the lean file the rep actually opens');
+        }
         if (M.siteCell({ name: 'Never Read Co', contactSiteMeasured: true, contactSiteShort: 'poor' }) !== '') fails.push('a lead that was never read gets a website verdict');
         if (M.lean.indexOf('siteWhy') >= 0) fails.push('the long website sentence is back in the lean file');
         for (const k of ['size', 'site', 'target', 'marketingLead', 'marketingLeadEmail']) {
