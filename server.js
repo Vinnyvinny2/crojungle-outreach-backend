@@ -10704,6 +10704,9 @@ const normaliseRecipient = (e) => {
   const local = localRaw.split('+')[0].replace(/\./g, '');
   return `${local}@${domain}`;
 };
+// UNKNOWN is a fact about the probe's moment, not about the domain, so it is
+// remembered only long enough to stop a batch re-paying for it lead after lead.
+const CATCHALL_UNKNOWN_TTL_MS = 10 * 60 * 1000;
 const isCatchAllDomain = async (domain, verifierKey) => {
   if (!verifierKey || !domain) return null;
   if (catchAllCache.has(domain)) return catchAllCache.get(domain);
@@ -10740,7 +10743,15 @@ const isCatchAllDomain = async (domain, verifierKey) => {
     // res2 errors. Deciding and caching from res alone fired the single-sample
     // path exactly where two samples matter most.
     if (res2.error) {
-      console.log(`Catch-all probe [${domain}]: second probe errored (${res2.error}) — one sample may not decide, recording UNKNOWN and not caching.`);
+      // Round 121: cached, briefly. It used to return WITHOUT caching, so every
+      // later lead on the same domain re-paid two probes and up to sixty
+      // seconds of wall clock to learn the same nothing. UNKNOWN is a real
+      // answer about the moment, not about the domain, so it expires on its own
+      // rather than sticking for the life of the process the way a measured
+      // verdict does.
+      catchAllCache.set(domain, null);
+      setTimeout(() => { if (catchAllCache.get(domain) === null) catchAllCache.delete(domain); }, CATCHALL_UNKNOWN_TTL_MS).unref?.();
+      console.log(`Catch-all probe [${domain}]: second probe errored (${res2.error}) — one sample may not decide, recording UNKNOWN for ${Math.round(CATCHALL_UNKNOWN_TTL_MS / 60000)} minutes rather than re-probing it on every lead. The address routes that do not read an SMTP verdict still run.`);
       return null;
     }
     if (!res2.error) {
@@ -34879,39 +34890,6 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // Our own pattern guesses failed SMTP, but Hunter may have the address indexed
     // from a public source, or know a house pattern we never guessed (e.g. a
     // nickname mailbox like sam@ instead of slotze@).
-    // CREDIT GUARD: email-finder costs a Hunter credit and the free plan is 50/month.
-    // Only spend it when it is genuinely the deciding factor — we have a confirmed
-    // decision-maker, no address yet, and every free route has already failed. Never
-    // for a generic/role name, and never when the domain is catch-all (that path is
-    // already sendable without paying).
-    const worthACredit = hunterKey && name && looksLikeRealName(name) && catchAll !== true;
-    if (worthACredit) {
-      const hf = await hunterFindPersonEmail(domain, name, hunterKey);
-      // Record that the last paid route was CLOSED rather than empty, so nothing
-      // downstream reports "no defensible address found" for a lookup we never got
-      // to make. The distinction is the whole point: one is a fact about them, the
-      // other is a fact about our account.
-      if (hf && hf.unavailable) {
-        _lookupBlocked = hf.reason;
-        console.log(`EMAIL [${domain}]: could NOT check ${name} \u2014 ${_lookupBlocked === 'hunter_rate_limited' ? 'Hunter is rate-limited right now, which is a speed limit and not an empty balance \u2014 re-running this lead in a minute will ask again' : 'Hunter out of credits'}. This is not evidence that no address exists.`);
-      }
-      if (hf && hf.email) {
-        // Only trust it if Hunter actually SOURCED it, or SMTP confirms it. A bare
-        // pattern guess at ~60 confidence is how people get blacklisted.
-        if (hf.sourced && hf.score >= 80) {
-          console.log(`\u2713 EMAIL [${domain}] recovered by Hunter Finder (sourced, ${hf.score}): ${hf.email}`);
-          return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null, score: Math.min(95, hf.score) };
-        }
-        if (verifierKey) {
-          const v = await verifyEmailSMTP(hf.email, verifierKey);
-          if (v.valid === true) {
-            console.log(`\u2713 EMAIL [${domain}] Hunter Finder + SMTP confirmed: ${hf.email}`);
-            return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null };
-          }
-        }
-        console.log(`EMAIL [${domain}]: Hunter Finder returned ${hf.email} at confidence ${hf.score} but it is unsourced/unverified \u2014 not sendable`);
-      }
-    }
 
     // EPONYMOUS BUSINESS = the address is the owner's, and we can say so.
     // When the company is named after this person — "Claude Reynolds Insurance" with
@@ -35049,6 +35027,62 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
         }
         if (v.error) break;   // verifier died mid-loop — stop, do not draw conclusions
         await new Promise(r => setTimeout(r, 200));
+      }
+    }
+
+    // ══ AN UNKNOWN CATCH-ALL CLOSED A ROUTE THAT DOES NOT NEED SMTP ══════
+    // Round 121. Premier Home Pros, 2026-09-04: a real owner, a real domain,
+    // and the address shipped as a blocked guess. isCatchAllDomain fires two
+    // probes that must agree; the second hit the 30-second cap, so it returned
+    // null - UNKNOWN - which is correct and deliberate. But the consumer above
+    // reads `catchAll === false`, and that ONE gate wrapped the pattern probes,
+    // the nickname pass, the house pattern, the company-mailbox probe AND this
+    // block - whose own guard is already `catchAll !== true` and would have
+    // admitted null perfectly well. A guard written to handle UNKNOWN, sitting
+    // inside a block UNKNOWN can never enter.
+    //
+    // Worse, the SMTP timeout line tells the operator in as many words that
+    // "it does NOT block the send: the address falls back to Hunter
+    // verification and to the learned-pattern route" - a sentence about our own
+    // system that was not true on this path.
+    //
+    // So the Hunter finder moved DOWN here, out of the SMTP-gated block. On a
+    // known-good domain nothing changes: the free and SMTP routes above still
+    // run first and return before this, so no extra credit is ever spent. On an
+    // UNKNOWN domain this is now reachable, which is what the log always said.
+    // The routes that genuinely need a definite non-catch-all answer - anything
+    // that reads an SMTP verdict - stay above, where they were.
+    // CREDIT GUARD: email-finder costs a Hunter credit and the free plan is 50/month.
+    // Only spend it when it is genuinely the deciding factor — we have a confirmed
+    // decision-maker, no address yet, and every free route has already failed. Never
+    // for a generic/role name, and never when the domain is catch-all (that path is
+    // already sendable without paying).
+    const worthACredit = hunterKey && name && looksLikeRealName(name) && catchAll !== true;
+    if (worthACredit) {
+      const hf = await hunterFindPersonEmail(domain, name, hunterKey);
+      // Record that the last paid route was CLOSED rather than empty, so nothing
+      // downstream reports "no defensible address found" for a lookup we never got
+      // to make. The distinction is the whole point: one is a fact about them, the
+      // other is a fact about our account.
+      if (hf && hf.unavailable) {
+        _lookupBlocked = hf.reason;
+        console.log(`EMAIL [${domain}]: could NOT check ${name} \u2014 ${_lookupBlocked === 'hunter_rate_limited' ? 'Hunter is rate-limited right now, which is a speed limit and not an empty balance \u2014 re-running this lead in a minute will ask again' : 'Hunter out of credits'}. This is not evidence that no address exists.`);
+      }
+      if (hf && hf.email) {
+        // Only trust it if Hunter actually SOURCED it, or SMTP confirms it. A bare
+        // pattern guess at ~60 confidence is how people get blacklisted.
+        if (hf.sourced && hf.score >= 80) {
+          console.log(`\u2713 EMAIL [${domain}] recovered by Hunter Finder (sourced, ${hf.score}): ${hf.email}`);
+          return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null, score: Math.min(95, hf.score) };
+        }
+        if (verifierKey) {
+          const v = await verifyEmailSMTP(hf.email, verifierKey);
+          if (v.valid === true) {
+            console.log(`\u2713 EMAIL [${domain}] Hunter Finder + SMTP confirmed: ${hf.email}`);
+            return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null };
+          }
+        }
+        console.log(`EMAIL [${domain}]: Hunter Finder returned ${hf.email} at confidence ${hf.score} but it is unsourced/unverified \u2014 not sendable`);
       }
     }
 
@@ -55955,6 +55989,56 @@ app.listen(PORT, () => {
       console.log(`⛔ SEARCH SLOT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
     } finally { bootRelease(); }
   })();
+
+  // ══ ADDRESS ROUTE CHECK — round 121 ═════════════════════════════════════
+  // Premier Home Pros, 2026-09-04: a real owner, a real domain, and the address
+  // shipped as a BLOCKED guess. The catch-all probe's second sample timed out,
+  // so it returned null (UNKNOWN) - correct - and one gate reading
+  // `catchAll === false` then closed the pattern probes, the nickname pass, the
+  // house pattern, the company mailbox AND the Hunter finder, whose own guard is
+  // `catchAll !== true` and would have admitted null.
+  //
+  // Asserted BY POSITION on the real source, because no fixture can see it: the
+  // defect is which side of a brace a block sits on.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    const _gate = _src.indexOf(_n('if (catchAll === false', ' && verifierKey) {'));
+    const _hunter = _src.indexOf(_n('const worthACredit = hunterKey && name', ' && looksLikeRealName(name) && catchAll !== true;'));
+    // A CODE anchor, not a comment one. The first draft of this used the
+    // "Genuinely nothing left" comment - and selfSourceNoCommentsLF STRIPS
+    // comments, so the index was -1, lastIndexOf searched from position 0, and
+    // the whole positional assertion passed on a build with the block moved
+    // back inside. Falsification caught it: the revert stayed GREEN. A check
+    // that cannot fail is not a check.
+    const _nothingLeft = _src.indexOf(_n('const _smtpActuallyRan = (catchAll === false', ' && !!verifierKey && !verifierBlocked());'));
+    if (_gate < 0) _fails.push('the SMTP-gated block could not be found, so nothing here is being checked');
+    else if (_hunter < 0) _fails.push('the Hunter email-finder is not guarded on \'catchAll !== true\' - either it was renamed, or its guard was tightened to === false, which is the 2026-09-04 defect: an UNKNOWN catch-all closing the one paid route that does not read an SMTP verdict');
+    else if (_hunter < _gate) _fails.push('the Hunter finder runs BEFORE the free and SMTP routes, so every lead pays a Hunter credit for an address the probes would have found for nothing');
+    else if (_nothingLeft < 0) _fails.push('the give-up branch could not be located, so the position of the Hunter finder is not being checked at all');
+    else if (_hunter > _nothingLeft) _fails.push('the Hunter finder sits after the give-up branch, so it can never run at all');
+    // The structural fact: it must not be INSIDE the catchAll === false block.
+    // Two sharper-looking tests were written and thrown away first, and both
+    // are worth recording because both PASSED on a build with the block moved
+    // back inside. Matching the block's closing brace by position kept finding
+    // the Hunter block's own four-space brace; counting nesting depth from the
+    // gate counts every brace in every string and template literal between
+    // them. What "inside" actually looks like in this file is INDENTATION: the
+    // gated block's contents sit at six spaces, everything at function level
+    // sits at four. That is the whole test, and falsification agrees with it.
+    else if (!_src.includes(_n('\n    const worthACredit', ' = hunterKey'))) {
+      _fails.push('the Hunter finder is indented as a nested block, which in this function means it is back inside the catchAll === false gate - so an UNKNOWN catch-all closes a route whose own guard already admits UNKNOWN, and the SMTP timeout line promises the operator that exact fallback');
+    }
+    // And the UNKNOWN is remembered, briefly, rather than re-probed per lead.
+    if (!_src.includes(_n('catchAllCache.set(domain,', ' null);'))) _fails.push('an UNKNOWN catch-all is not cached at all, so every later lead on that domain re-pays two probes and up to sixty seconds to learn the same nothing');
+    if (!_src.includes(_n('catchAllCache.delete(domain); }, CATCHALL_UNKNOWN', '_TTL_MS)'))) _fails.push('the UNKNOWN catch-all is cached forever - it is a fact about the probe\'s moment, not about the domain, and a permanent one would disable the SMTP path for the life of the process');
+    if (!(CATCHALL_UNKNOWN_TTL_MS > 0 && CATCHALL_UNKNOWN_TTL_MS <= 60 * 60 * 1000)) _fails.push(`the UNKNOWN cache lives ${CATCHALL_UNKNOWN_TTL_MS}ms - long enough to outlast the condition that caused it`);
+    if (_fails.length) console.log(`⛔ ADDRESS ROUTE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ ADDRESS ROUTE CHECK: an UNKNOWN catch-all no longer closes the routes that never needed an SMTP verdict. The Hunter email-finder sits below the SMTP-gated block, so a known-good domain still tries every free and probed route first and spends no extra credit, while a domain whose second probe timed out can finally reach the fallback the timeout line has always promised the operator. UNKNOWN is remembered for ${Math.round(CATCHALL_UNKNOWN_TTL_MS / 60000)} minutes - a fact about the probe's moment, not about the domain - instead of being re-bought on every lead in the batch.`);
+  } catch (e) {
+    console.log(`⛔ ADDRESS ROUTE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
 
   // ══ TRANSPORT TRUTH CHECK — round 121 ═══════════════════════════════════
   // "We could not ask" and "we asked and there is nothing" are different facts
