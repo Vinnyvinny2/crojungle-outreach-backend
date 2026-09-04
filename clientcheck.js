@@ -2506,12 +2506,20 @@ let contactTally = null;
             if (M.exportableContact(_darrel) !== true || M.exportableContact(_layered) !== false) fails.push('exportableContact disagrees with the rows');
             if (M.laneChip(_darrel) !== 'CALL + EMAIL' || M.laneChip(_layered) !== 'EMAIL' || M.laneChip(_small) !== 'TOO SMALL' || M.laneChip({ contactReadOk: true, contactOwner: 'A B', contactLanes: { call: true, email: false } }) !== 'CALL') fails.push('the lane chip does not say the lane');
             if (M.laneOf(_old).call !== true || M.laneOf(_oldLayered).call !== false) fails.push('the older-row fallback does not read the layers');
-            // Round 112: nobody named is "no name yet", off the sheet; a lead in both lanes is in both lists.
+            // Round 112: nobody named is "no name yet", off the sheet.
             const _noname = { name: 'ECO LLC', contactReadOk: true, contactPhone: '5556667788', contactLanes: { call: false, email: false, noname: true } };
             const _oldNoname = { name: 'Round 111 No Name Co', contactReadOk: true, contactPhone: '5551112222', contactLanes: { call: true, email: false } };
             if (M.rows([_noname, _oldNoname]).length !== 0) fails.push('a read lead with nobody named is on the rep sheet');
             if (M.laneChip(_noname) !== 'NO NAME YET' || M.laneOf(_oldNoname).noname !== true) fails.push('the no-name bucket is not read from the lanes or the older-row fallback');
-            if (!M.laneHas(_darrel, 'call') || !M.laneHas(_darrel, 'email') || M.laneHas(_darrel, 'noname')) fails.push('a lead in both lanes is not in both lists');
+            // ══ ROUND 120: THE EMAIL LANE IS THE ONES THE REP DOES NOT CALL ══
+            // Round 112 put a both-lane lead in BOTH lists, and on the
+            // 2026-09-04 press that made the two buttons identical - "Call list
+            // (4)" and "Email lane (4)", the same four businesses. Vin: "make
+            // sure theyre accurately email only ones."
+            if (!M.laneHas(_darrel, 'call') || M.laneHas(_darrel, 'noname')) fails.push('a lead the rep calls is not on the call list');
+            if (M.laneHas(_darrel, 'email')) fails.push('a lead the rep is calling is ALSO in the email lane, so the two buttons count the same businesses twice and the email lane answers nothing');
+            if (!M.laneHas(_layered, 'email') || M.laneHas(_layered, 'call')) fails.push('a layered lead the rep never dials is not in the email lane, which is the whole population that lane exists for');
+            if (M.laneChip(_darrel) !== 'CALL + EMAIL') fails.push('a both-lane lead stopped saying it is emailed when the call does not connect - it leaves the email BUCKET, it does not leave the email lane');
             if (!M.laneHas(_small, 'bench') || M.laneHas(_small, 'call') || M.laneKey(_small) !== 'bench') fails.push('a benched lead is not in the No lane bucket');
             // Round 115: the website is back in the lean file; the hedge's rows sort last; a held-back name is not "Owner:".
             if (M.lean.indexOf('website') < 0) fails.push('the website column is not in the lean CSV (Vin, 2026-09-03: "we need those back")');
@@ -2586,6 +2594,10 @@ let contactTally = null;
           ['the rendered list is not filtered by the tab AND by the scope, so the lane count and the cards under it describe different populations - "only 18 in the email lane" on a queue carrying hundreds', "_scoped.filter(c => contactTabOf(c) === contactTab)"],
           ['the lane counts and the rendered list read different populations again - the count says one press and the list shows the whole queue', "const _cLane = Object.fromEntries(LANE_TABS.map(([k]) => [k, _cRead.filter(c => laneHas(c, k))]));"],
           ['the scope switch is not on the Lane row, where the numbers it decides are', "onClick: () => setContactScope(k) }, lab))) : null,\n            (_cRunSet.length && contactScope === 'run')"],
+          // Round 120, Vin: "need it to shwo total amount of email ones we have
+          // too, it just shows per run." Both numbers on the one button.
+          ['the lane button shows only this press, so the queue total Vin asked for is nowhere on the panel', "+ ((contactScope === 'run' && _cRunSet.length && _cLaneAll[k].length !== _cLane[k].length)"],
+          ['the all-time lane counts are computed off the scoped pool, so the "of N" repeats the number beside it', "const _cReadAll = _cShown.filter(c => contactTabOf(c) === 'read');"],
           ['the tab counts are not computed from the same pool the list is', "for (const c of _cShown) { const t = contactTabOf(c);"],
           ['the spending band is no longer confined to the not-read tab', "contactTab !== 'unread' ? null : _cUnread.length === 0 ? _band('Read',"],
         ];
@@ -2693,10 +2705,14 @@ let contactTally = null;
           { name: 'Unread Co', contactReadOk: true, contactOwner: 'U V', contactPhone: '5553330000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: false, contactSiteWhy: 'we could not read enough of their site to judge the build' },
         ]);
         const _byName = (n) => _siteRows.find(r => r.company === n) || {};
-        if (_byName('Poor Co').site !== 'poor (DIY build, no schema)') fails.push(`the website verdict is not on the sheet (got ${JSON.stringify(_byName('Poor Co').site)})`);
+        // Round 120, Vin: "dont need a descritpion on why theyre good or bad,
+        // just good fair bad." The verdict is a token; the sentence lives one
+        // tick box away in siteWhy, and the grade beside it carries the detail.
+        if (_byName('Poor Co').site !== 'poor') fails.push(`the website verdict is not a plain token on the sheet (got ${JSON.stringify(_byName('Poor Co').site)})`);
+        if (/\(/.test(String(_byName('Poor Co').site))) fails.push('the website cell is carrying its own explanation again - a sentence pretending to be a token, in a column a rep scans');
         if (_byName('Good Co').site !== 'strong') fails.push('a business with a good website does not say so');
         if (_byName('Unread Co').site !== 'not read') fails.push('a lead whose website we could not read is given a verdict on it anyway - the absence claim this system exists to refuse');
-        if (!/DIY website-builder/.test(String(_byName('Poor Co').siteWhy))) fails.push('the full file lost the sentence saying what is missing from the website');
+        if (!/DIY website-builder/.test(String(_byName('Poor Co').siteWhy))) fails.push('the full file lost the sentence saying what is missing from the website - the lean cell dropped the why on the understanding that this column keeps it');
         if (/converts badly|conversion rate/i.test(String(_byName('Poor Co').site) + String(_byName('Poor Co').siteWhy))) fails.push('the website cell claims something about how their site CONVERTS, which is their analytics and not our markup read');
         // Round 119, Vin: "a grade on the website 1-10, lower being worse, in a
         // column to the right of the website name." All three parts asserted:

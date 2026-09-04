@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261004;
+const CONTRACT_VERSION = 20261005;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -58660,13 +58660,21 @@ app.listen(PORT, () => {
     // FIVE - a leadership page is not a headcount. Alliance scored 75/100, the
     // HIGHEST in that run, because fourteen names read as a fourteen-person
     // business; the fourteen were a CFO, a COO and three SVPs.
-    const _big = findIcpScore({ teamCount: 14, execTitles: ['CFO & Chief Development Officer', 'Chief Operating Officer', 'Senior Vice President, Strategy'], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6 });
-    const _small = findIcpScore({ teamCount: 14, execTitles: [], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6 });
+    // Round 120 raised FIND_ICP_MIN_TERMS to six and these two measured three,
+    // so both came back "not scored" and this comparison stopped comparing
+    // anything. The additions are what every readable lead on the 2026-09-04
+    // press carried, they are IDENTICAL on both arms, and the org chart is
+    // still the only difference between them.
+    const _lead = { adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6,
+      affordBand: 'premium', affordWhy: 'premium tier', reachMeasured: true, ownerCanBuy: false, emailTier: 1,
+      liveChat: true, scheduler: false, callTracking: false };
+    const _big = findIcpScore({ ..._lead, teamCount: 14, execTitles: ['CFO & Chief Development Officer', 'Chief Operating Officer', 'Senior Vice President, Strategy'] });
+    const _small = findIcpScore({ ..._lead, teamCount: 14, execTitles: [] });
     if (!(_big.score < _small.score)) {
       _fails.push(`a fourteen-name leadership page carrying a CFO, a COO and an SVP scores ${_big.score} against ${_small.score} for a fourteen-person crew - a deep org chart is still reading as an ICP-sized business`);
     }
     // One VP at a fifty-person contractor is ordinary. The bar is two.
-    const _oneVp = findIcpScore({ teamCount: 12, execTitles: ['Vice President, Operations'], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6 });
+    const _oneVp = findIcpScore({ ..._lead, teamCount: 12, execTitles: ['Vice President, Operations'] });
     if (_oneVp.score !== _small.score) _fails.push('a single VP is being treated as a corporate org chart, which would demote ordinary contractors');
 
     // ══ SIX - A CONTACT FORM IS NOT A ROSTER ═════════════════════════════
@@ -60528,17 +60536,44 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('return _r ? { ..._r, stagesRun } : { name: null, title: null, score: 0, sources: [], corroborated: false,', " confidence: 'none', stagesRun }; }"))) {
       _fails.push('the dead-site early return in findDecisionMaker dropped stagesRun again, so the OWNER WAVE line says "the resolver did not run" on a lead where stage 1 ran');
     }
-    // Three terms, full marks on each: the unmeasured four LEAVE the denominator.
-    const _three = findIcpScore({ teamCount: 12, adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6 });
-    if (_three.score !== 100) _fails.push(`a lead measured on THREE signals it scores full marks on came out at ${_three.score} — the unmeasured terms are being counted as zero rather than left out`);
-    if (_three.measured !== 3) _fails.push('the three-term fixture reports a different measured count than it has');
-    // == BELOW THREE TERMS THERE IS NO SCORE ================================
-    // Vin's decision after ten name-only leads scored 53 on one term each.
-    for (const [_f, _k] of [[{ teamCount: 12 }, 1], [{ teamCount: 12, reviewCount: 200 }, 2]]) {
+    // The floor's worth, full marks on each: the unmeasured four LEAVE the
+    // denominator. This is the rule the whole table rests on, and it is still
+    // asserted - just at the floor Round 120 raised it to, because the fixture
+    // that used to carry it (three terms) is now the failure it names.
+    const _atFloor = { teamCount: 12, reviewCount: 200, rating: 4.6, affordBand: 'premium',
+      reachMeasured: true, ownerCanBuy: true, emailTier: 1,
+      hiringMarketing: true, hiringMarketingTitles: ['Marketing Manager'] };
+    const _three = findIcpScore(_atFloor);
+    if (_three.score !== 100) _fails.push(`a lead measured on ${_three.measured} signals it scores full marks on came out at ${_three.score} — the unmeasured terms are being counted as zero rather than left out`);
+    if (_three.measured !== FIND_ICP_MIN_TERMS) _fails.push(`the at-the-floor fixture measures ${_three.measured} terms, not the ${FIND_ICP_MIN_TERMS} the floor is set to - it is asserting the rule at the wrong place`);
+    // == BELOW THE FLOOR THERE IS NO SCORE ==================================
+    // Vin's decision after ten name-only leads scored 53 on one term each, and
+    // raised to six on 2026-09-04 after two leads with NO readable website and
+    // nobody named scored 75/100 on four terms - above a lead with a named
+    // co-founder, a published mailbox and a phone. Three maxed terms over a
+    // four-term denominator is a perfect score on a business we know nothing
+    // about. The live shapes are in here now, not just the synthetic ones.
+    for (const [_f, _k] of [
+      [{ teamCount: 12 }, 1],
+      [{ teamCount: 12, reviewCount: 200 }, 2],
+      [{ teamCount: 12, reviewCount: 200, rating: 4.6 }, 3],
+      // American Dream Solar and Window, 2026-09-04: website returned nothing,
+      // no owner, no address, 305 reviews - and it scored 75/100.
+      [{ reviewCount: 305, rating: 4.6, affordBand: 'premium', affordWhy: 'premium', reachMeasured: true, ownerCanBuy: false, emailTier: null }, 4],
+    ]) {
       const _t = findIcpScore(_f);
       if (_t.score !== null || _t.thin !== true) _fails.push(`a lead with ${_k} of ${FIND_ICP_TERMS.length} signals measured is given a numeric score (${_t.score}) - a ratio over ${_k} term(s) is not a fit score and it sorts a lead nobody looked at into the middle of the list`);
-      if (_t.measured !== _k) _fails.push('the thin fixture reports a different measured count than it has');
+      if (_t.measured !== _k) _fails.push(`the thin fixture reports ${_t.measured} measured terms, not the ${_k} it has`);
       if (!/not scored/.test(_t.why || '')) _fails.push('a thin read does not SAY it is not scored, so the row shows a dash with no reason');
+    }
+    // And the term that carries the loudest signal must not fall out of the
+    // score because a SENTENCE could not be built. It did, silently, on every
+    // lead whose titles list was missing.
+    {
+      const _hm = FIND_ICP_TERMS.find(t => t.id === 'hiring').score({ hiringMarketing: true });
+      if (!_hm || _hm.points !== 20) _fails.push('a lead hiring for marketing with no titles list scores nothing - the term throws on the sentence and findIcpScore records it as not measured, which is how the loudest signal in the table went missing in silence');
+      const _ha = FIND_ICP_TERMS.find(t => t.id === 'hiring').score({ hiringAny: true });
+      if (!_ha || !(_ha.points >= 10)) _fails.push('a lead hiring for anything at all with no titles list scores nothing, for the same reason');
     }
     // == THE TIER IS READ STRICTLY ========================================
     // Number(null) is 0 and 0 is finite, so an absent tier read as "solid" and
@@ -61807,8 +61842,18 @@ app.listen(PORT, () => {
     // competent hands. Both directions are asserted, because a rule that only
     // marks leads down is a rule that eventually marks every lead down.
     {
+      // Round 120 raised FIND_ICP_MIN_TERMS to six, and this fixture measured
+      // five - so both archetypes came back "not scored" and the comparison
+      // this block exists for could not run at all. It is a fixture that had
+      // drifted below what a real readable lead looks like (the 2026-09-04
+      // press scored its readable leads on EIGHT of ten), not a rule that is
+      // wrong: the owner sentence and one booking tool are what every one of
+      // those leads carried. Both arms get them, so the archetype comparison
+      // is untouched.
       const _sig = (extra) => Object.assign({
         teamCount: 9, execTitles: [], hiringAny: false, reviewCount: 120, rating: 4.6,
+        ownerNamedOnSite: true, founderPhrase: 'family-owned',
+        liveChat: true, scheduler: false, callTracking: false,
         affordBand: 'premium', affordWhy: 'premium tier', reachMeasured: false,
       }, extra || {});
 
@@ -78392,11 +78437,21 @@ const FIND_ICP_TERMS = [
   {
     id: 'hiring', max: 20, label: 'whether they are hiring for marketing',
     score: (s) => {
-      if (s.hiringMarketing === true) return { points: 20, say: `hiring for ${s.hiringMarketingTitles.slice(0, 2).join(', ') || 'a marketing role'} - a marketing budget being decided right now` };
+      // ══ ROUND 120: A SENTENCE MUST NOT DECIDE WHETHER A TERM SCORES ═══
+      // Both of these read an array that the caller may not have set, and
+      // findIcpScore catches everything a term throws and records it as NOT
+      // MEASURED. So a lead hiring for a marketing role - the loudest signal
+      // in the table - silently left the score whenever the titles list was
+      // missing, and nothing anywhere said so. Found on 2026-09-04 when the
+      // six-term floor turned a fixture's silence into a crash; it had been
+      // returning null on that fixture since the term was written.
+      const _titles = (v) => (Array.isArray(v) ? v : []).filter(Boolean);
+      if (s.hiringMarketing === true) return { points: 20, say: `hiring for ${_titles(s.hiringMarketingTitles).slice(0, 2).join(', ') || 'a marketing role'} - a marketing budget being decided right now` };
       if (s.hiringAny === true) {
         const ops = Array.isArray(s.hiringOpsTitles) ? s.hiringOpsTitles.length : 0;
         const pts = 10 + (ops >= 2 ? 4 : 0) + (s.hiringRecent === true ? 3 : 0);
-        return { points: Math.min(17, pts), say: `hiring (${s.hiringTitles.slice(0, 2).join(', ')}), though not for marketing${ops >= 2 ? ' - two or more field roles open, so the work is growing' : ''}${s.hiringRecent === true ? ', posted within 90 days' : ''}` };
+        const _t = _titles(s.hiringTitles).slice(0, 2).join(', ');
+        return { points: Math.min(17, pts), say: `hiring${_t ? ` (${_t})` : ''}, though not for marketing${ops >= 2 ? ' - two or more field roles open, so the work is growing' : ''}${s.hiringRecent === true ? ', posted within 90 days' : ''}` };
       }
       // ══ ROUND 119: STOP PUNISHING THE QUIET ONES ═══════════════════════
       // Vin, 2026-09-04, choosing it in as many words. Hiring is POSITIVE
@@ -78507,7 +78562,19 @@ const FIND_ICP_TERMS = [
 // "not scored" and sorts under every scored lead. Not a low score: a low
 // score says we checked and it is a bad fit, which is the opposite of what
 // happened.
-const FIND_ICP_MIN_TERMS = 3;
+// Round 120, off the 2026-09-04 ten-lead press. American Dream Solar and Delta
+// Solar Power both scored 75/100 on FOUR of ten signals - no owner, no address,
+// and a website that could not be read at all - and both outranked Oklahoma
+// Foundation Repair, which scored 70 with a named co-founder, a published
+// mailbox and a phone. Three maxed terms over a four-term denominator is a
+// perfect score on a lead we know almost nothing about, and it is exactly the
+// failure this constant was created for: "a ratio over one term is not a fit
+// score". Three was the right floor when the table had seven terms and every
+// one of them measured on a readable site; with ten terms, two of which now
+// leave the score by design (Round 119), a lead sitting at four has told us
+// nothing but its Google listing. It is NOT SCORED and sorts under every scored
+// lead - not a low score, which would say we checked and it is a bad fit.
+const FIND_ICP_MIN_TERMS = 6;
 // ══ A BROKEN WEBSITE IS A LIFT, NOT A TERM ════════════════════════════════
 // Round 119. Vin, 2026-09-04, asked for something no option offered him:
 // *"bad website should def lift a lead - it should especially lift it more if
@@ -78586,7 +78653,7 @@ const findIcpScore = (signals) => {
   const measured = terms.filter(t => t.measured).length;
   if (measured < FIND_ICP_MIN_TERMS) {
     return { score: null, thin: true, measured, of: FIND_ICP_TERMS.length, terms,
-      why: `not scored - only ${measured} of ${FIND_ICP_TERMS.length} signals could be measured, and a ratio over ${measured === 1 ? 'one term' : 'two terms'} is not a fit score` };
+      why: `not scored - only ${measured} of ${FIND_ICP_TERMS.length} signals could be measured, and a ratio over ${measured === 1 ? 'one term' : measured + ' terms'} is not a fit score` };
   }
   // ══ A DEMOTED LEAD MUST SAY SO IN THE NUMBER ══════════════════
   // Vin, asked what the list should do with a lead discovery demoted: "i mean

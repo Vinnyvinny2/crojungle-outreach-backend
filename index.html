@@ -1321,7 +1321,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261004;
+const CLIENT_CONTRACT = 20261005;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5705,10 +5705,22 @@ const laneOf = (c) => {
 // order inside each half.
 const lastRowsLast = (list) => (Array.isArray(list) ? list : []).slice().sort((a, b) => (laneOf(a).last ? 1 : 0) - (laneOf(b).last ? 1 : 0));
 const laneChip = (c) => { const l = laneOf(c); return l.call && l.email ? 'CALL + EMAIL' : l.call ? 'CALL' : l.email ? 'EMAIL' : l.noname ? 'NO NAME YET' : (c && c.contactSizeTier === 'over_ceiling') ? 'OVER THE CEILING' : (c && c.contactSizeTier === 'below_floor') ? 'TOO SMALL' : 'NO LANE'; };
-// The four buckets of the Read tab (Round 112). A lead in both lanes is in both lists.
+// The four buckets of the Read tab (Round 112).
 // Round 115: the fourth bucket is "No lane" - under the floor is one reason, not the only one.
+// ══ ROUND 120: THE EMAIL LANE IS THE ONES THE REP DOES NOT CALL ═══════════
+// Round 112 put a lead in BOTH lists when it was in both lanes, and on the
+// 2026-09-04 10-lead press that made the two buttons identical: "Call list (4)"
+// and "Email lane (4)", the same four businesses, because every one of them was
+// an owner-run core lead - call first, email if no connect. A lane that repeats
+// the lane beside it answers no question.
+//
+// Vin, 2026-09-04: "make sure theyre accurately email only ones." So the email
+// lane is now email AND NOT call - the leads the rep will never dial, which is
+// the population the Research batch is for. A call+email lead is still emailed
+// when the call does not connect; it reaches Research from the call sheet, not
+// from a bucket that hid it among leads nobody is phoning.
 const LANE_TABS = [['call', 'Call list'], ['email', 'Email lane'], ['noname', 'No name yet'], ['bench', 'No lane']];
-const laneHas = (c, k) => { const l = laneOf(c); return k === 'call' ? l.call === true : k === 'email' ? l.email === true : k === 'noname' ? l.noname === true : (!l.call && !l.email && !l.noname); };
+const laneHas = (c, k) => { const l = laneOf(c); return k === 'call' ? l.call === true : k === 'email' ? (l.email === true && l.call !== true) : k === 'noname' ? l.noname === true : (!l.call && !l.email && !l.noname); };
 const laneKey = (c) => { const l = laneOf(c); return l.call ? 'call' : l.email ? 'email' : l.noname ? 'noname' : 'bench'; };
 // The rep's sheet is the CALL lane and nothing else - the CSV, the Google
 // Sheet and the count on the button all read this one rule.
@@ -5718,9 +5730,15 @@ const sizeCell = (c) => !c.contactReadOk ? '' : (c.contactSize || 'not measured'
 // the sheet that says whether they NEED us rather than whether they can pay.
 // FACTS ONLY: "poor (DIY build, no schema)" - never "converts badly", which is
 // a claim about their business we cannot measure from their markup.
+// Round 120, Vin: "dont need a descritpion on why theyre good or bad, just
+// good fair bad." He is right, and the reason is Round 117's: this cell is one
+// of nineteen a rep scans, the grade beside it already carries the detail as a
+// number, and the whole sentence is one tick box away in the `siteWhy` column
+// of the full file. "poor (DIY build, no schema)" was a sentence pretending to
+// be a token.
 const siteCell = (c) => !c.contactReadOk ? ''
   : c.contactSiteMeasured !== true ? 'not read'
-  : shortCell(c.contactSiteShort || c.contactSiteWord || 'not read');
+  : shortCell(c.contactSiteWord || 'not read');
 // Round 119: the same read as one number, sitting beside the address it is
 // about. 10 is a build with nothing we sell missing from it, 1 is the worst we
 // can measure. A site we could not read gets no grade at all - a 1 there would
@@ -8702,7 +8720,14 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       // sentence blamed "no owner, no address and no number" for rows the lane
       // rule kept off the sheet on purpose.
       const _cLane = Object.fromEntries(LANE_TABS.map(([k]) => [k, _cRead.filter(c => laneHas(c, k))]));
-      const _cEmailOnly = _cRead.filter(c => laneHas(c, 'email') && !laneHas(c, 'call'));
+      // Round 120, Vin: "need it to shwo total amount of email ones we have too,
+      // it just shows per run." Both numbers, on the same button: what this press
+      // produced and what the queue holds. Counted over every read lead the
+      // filters show, never over the scope, because the whole point of it is to
+      // answer a question the scope cannot.
+      const _cReadAll = _cShown.filter(c => contactTabOf(c) === 'read');
+      const _cLaneAll = Object.fromEntries(LANE_TABS.map(([k]) => [k, _cReadAll.filter(c => laneHas(c, k))]));
+      const _cEmailOnly = _cLane.email;
       const _cCallNoContact = _cLane.call.filter(c => !hasContactData(c));
       const _cEmailMovable = _cLane.email.filter(c => c && c.name && !alreadyAdded(c.name));
       const _running = !!(contactRun && !contactRun.finishedAt && contactRun.done < contactRun.total);
@@ -8945,7 +8970,9 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
                 style:{ background: contactLane === k ? 'var(--a)' : 'transparent',
                         color: contactLane === k ? '#0b0d10' : 'var(--m2)',
                         border:'1px solid ' + (contactLane === k ? 'var(--a)' : 'var(--b)') } },
-                lab + ' (' + _cLane[k].length + ')'))),
+                lab + ' (' + _cLane[k].length
+                  + ((contactScope === 'run' && _cRunSet.length && _cLaneAll[k].length !== _cLane[k].length)
+                      ? ' of ' + _cLaneAll[k].length : '') + ')'))),
             contactLane === 'email' ? _cap('Email is the lane for these: the rep does not call them. Move them to Research when you are ready to audit and write.') : null,
             contactLane === 'email' && _cEmailMovable.length ? React.createElement('button', {
               className:'btn', style:{ background:'var(--a)', color:'#0b0d10' },
