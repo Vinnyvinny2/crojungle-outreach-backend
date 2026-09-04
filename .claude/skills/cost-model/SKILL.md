@@ -27,6 +27,7 @@ Three separate sessions proposed cuts to a bill nobody had measured, and each ca
 - **Google Places:** one Place Details call per lead once DataForSEO is credentialed; both text searches on the research path are DataForSEO FALLBACKS (round-081).
 - **DataForSEO:** about $9 per 1,000 leads for the pack and organic reads; the Labs traffic/keyword pair is opt-in (`DFS_LABS=on`, ~$25 per 1,000) because no rung, email or gate can consume it (round-053, round-081).
 - **Apify:** 90 reviews a lead, billed per review, so `APIFY_MAX_REVIEWS` IS the Apify line — and it must move together with `REVIEW_CORPUS_CHARS`, or reviews are bought that the model never reads (round-054).
+  **LIVE AND UNFIXED, 2026-09-04** ([§120](../../../docs/history/round-120.md)): `⛔ REVIEW CORPUS` fired on two of ten leads — **15 reviews on one and 9 on another were paid for and never shown to the model**, because 36,000 characters cannot hold 90 reviews. Raise `REVIEW_CORPUS_CHARS` or lower `APIFY_MAX_REVIEWS` on Render; the log line names the number every time it happens.
 - **Per 1,000 audited leads:** ~$334 after the DataForSEO move (round-053), ~$253–275 after round-057's cuts. Both are arithmetic over measured calls, not an invoice.
 
 ## The Find and contact path, per press (round-100, measured)
