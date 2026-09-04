@@ -54,6 +54,9 @@ Each of these feeds a finding that has a real reply behind it or gates an absenc
 - **`DM_REGISTRY` off** since 2026-09-02: 0 names for 11 buys ([§109](../../../docs/history/round-109.md)).
 - **`DM_CHAMBER` off** since 2026-09-04: 0 names for 11 buys, and it only ever fired on leads the trade query had already failed ([§118](../../../docs/history/round-118.md)).
 - **No paid owner search on a branch outlet** since 2026-09-04: three national brand outlets cost 10 credits and 3.5 minutes each and named nobody ([§117](../../../docs/history/round-117.md)).
+- **The branch tell widened** 2026-09-04: a `locations.`/`stores.` subdomain, and a city slug carried inside a longer path segment. Freeway Insurance was the 2026-09-04 run's most expensive lead at **13 credits for nobody named**, and it was a branch by both of the tell's own tests ([§119](../../../docs/history/round-119.md)).
+
+**Two dead accounts cost SCORE, not credits** ([§119](../../../docs/history/round-119.md)): the Apify 403 caps the `founder` term at 18 of 25 on every lead (nobody's review replies are read) and an out-of-credits email verifier drops `reach` from 15 to 10. Together **6 points a lead**, and neither is a code problem.
 
 ## Known and deliberately not done
 
