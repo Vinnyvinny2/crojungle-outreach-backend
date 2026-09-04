@@ -36,7 +36,7 @@ free sources were on the table and none was used fully.
   and not Mike. `RETIRED_OTHER_RE` stands it down beside a service word: a
   retired firefighter who owns the shop is not retired from it. Applied on
   every source: `parseTeamRoster` marks a row `retired` (the title says it, or
-  the text beside the name does) and `rankRosterOwners` skips it, with a
+  the text beside the name does, and the mark clears `isOwner`, so `rankRosterOwners` never picks it), with a
   ROSTER line naming who was skipped; the brain result and the regex
   backstop refuse the name (`DM/brain … is retired per their own page`); the
   web-search prompt warns and the acceptance rejects (`… retired per the
