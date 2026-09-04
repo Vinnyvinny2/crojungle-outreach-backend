@@ -27,6 +27,7 @@ Three separate sessions proposed cuts to a bill nobody had measured, and each ca
 - **Google Places:** one Place Details call per lead once DataForSEO is credentialed; both text searches on the research path are DataForSEO FALLBACKS (round-081).
 - **DataForSEO:** about $9 per 1,000 leads for the pack and organic reads; the Labs traffic/keyword pair is opt-in (`DFS_LABS=on`, ~$25 per 1,000) because no rung, email or gate can consume it (round-053, round-081).
 - **Apify:** 90 reviews a lead, billed per review, so `APIFY_MAX_REVIEWS` IS the Apify line — and it must move together with `REVIEW_CORPUS_CHARS`, or reviews are bought that the model never reads (round-054).
+  **FIXED IN CODE, [§121](../../../docs/history/round-121.md) — do NOT raise the Render setting.** The `⛔ REVIEW CORPUS` line told the operator to raise `REVIEW_CORPUS_CHARS`, and that was the wrong advice: the clip was sized as `floor(budget/n) - 18`, which pays for the star prefix and the row separator and nothing else, while the row ALSO carries `"Response from the owner: "` plus half the clip again on every review that has one. A bigger budget would have bought the same arithmetic error. The clip is solved against the row it actually builds now, with the reply share measured.
 - **Per 1,000 audited leads:** ~$334 after the DataForSEO move (round-053), ~$253–275 after round-057's cuts. Both are arithmetic over measured calls, not an invoice.
 
 ## The Find and contact path, per press (round-100, measured)
@@ -53,6 +54,8 @@ Each of these feeds a finding that has a real reply behind it or gates an absenc
 
 - **`DM_REGISTRY` off** since 2026-09-02: 0 names for 11 buys ([§109](../../../docs/history/round-109.md)).
 - **`DM_CHAMBER` off** since 2026-09-04: 0 names for 11 buys, and it only ever fired on leads the trade query had already failed ([§118](../../../docs/history/round-118.md)).
+- **A per-lead ceiling of 10 credits** since 2026-09-04: one lead spent 14 on six searches and four page buys and named nobody. It stops the next purchase, never unwinds one ([§121](../../../docs/history/round-121.md)).
+- **The size lookup is not bought when the owner wave already found nobody**, and the BBB plain fetch is retired at 8 of 8 403s ([§121](../../../docs/history/round-121.md)).
 - **No paid owner search on a branch outlet** since 2026-09-04: three national brand outlets cost 10 credits and 3.5 minutes each and named nobody ([§117](../../../docs/history/round-117.md)).
 - **The branch tell widened** 2026-09-04: a `locations.`/`stores.` subdomain, and a city slug carried inside a longer path segment. Freeway Insurance was the 2026-09-04 run's most expensive lead at **13 credits for nobody named**, and it was a branch by both of the tell's own tests ([§119](../../../docs/history/round-119.md)).
 

@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261004;
+const CONTRACT_VERSION = 20261005;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -922,7 +922,11 @@ const fcSerial = (fn, kind) => {
 // cannot forget it — the fcSerial comment PROMISED exactly that ("the endpoint
 // is read off the response's own URL") and only delivered it to the limit
 // learning, never to the pacing.
-const fcCall = (url, opts, timeout) => fcSerial(() => fetchT(url, opts, timeout), fcKindOf(url));
+// Round 121: fetchTr, not fetchT - one extra attempt on a REFUSED or dropped
+// connection, so a blip does not come back as an empty result set that every
+// caller reads as a measured absence. The pacing and serialisation are
+// unchanged; the retry sits inside the slot fcSerial already granted.
+const fcCall = (url, opts, timeout) => fcSerial(() => fetchTr(url, opts, timeout), fcKindOf(url));
 
 const safeJson = async (r) => { try { return await r.json(); } catch { return {}; } };
 const safeText = async (r) => { try { return await r.text(); } catch { return ''; } };
@@ -1139,6 +1143,65 @@ const fetchT = (url, opts={}, ms=10000) => {
     .then((r) => { netNote(url, Date.now() - _t0, true); return r; },
           (e) => { netNote(url, Date.now() - _t0, false); throw e; })
     .finally(() => clearTimeout(timer));
+};
+// ══ A DROPPED CONNECTION IS NOT AN ANSWER ═══════════════════════════════════
+// Round 121. Three transport failures in the 2026-09-04 press and not one of
+// them was retried or even distinguished:
+//   DM/brain failed: request to the Anthropic messages endpoint failed, reason:
+//   firecrawlSearch error: ... connect ECONNREFUSED 35.245.250.27:443   (twice)
+// (the endpoint is named in words above on purpose: UNMETERED ANTHROPIC CALLS
+// greps this file for that URL and a comment quoting it reads as a call site)
+// The Anthropic one lost the owner for that lead AND wasted the Firecrawl pages
+// already bought for its corpus; the Firecrawl ones returned [] , which every
+// caller reads as "we asked the web and it has nothing" - and a total miss then
+// writes a FOURTEEN-DAY negative memory against that business. A blip was
+// blocking a lead from being searched again for a fortnight, which is PART 3
+// exactly: an absence claim requires that we actually looked.
+//
+// The classification already existed, inline in verifyEmailSMTP's catch, and it
+// was the only place in the file that could tell ENOTFOUND from ECONNREFUSED
+// from a slow handshake. It is declared once here and read by both, because two
+// hand-kept copies of one rule is the disease this file produces most.
+//
+// A TIMEOUT is deliberately NOT a transport failure for retry purposes: it
+// already carries meaning at a dozen call sites, and retrying one doubles a
+// wall clock that is usually already the problem.
+const transportFailure = (e) => {
+  const m = String((e && (e.code || e.message)) || '');
+  if (!m) return { transport: false, kind: '', why: '' };
+  if (/ENOTFOUND|EAI_AGAIN/i.test(m)) return { transport: true, kind: 'dns', why: 'DNS could not resolve the host from this server' };
+  if (/ECONNREFUSED|ECONNRESET|EPIPE|socket hang up|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH/i.test(m)) return { transport: true, kind: 'refused', why: 'the host refused or dropped the connection' };
+  if (/CERT|TLS|SSL/i.test(m)) return { transport: true, kind: 'tls', why: 'the TLS handshake failed' };
+  // node-fetch wraps a socket-level failure as "request to <url> failed, reason:"
+  // and the reason can be EMPTY - which is the exact shape of the DM/brain line.
+  if (/^request to .* failed/i.test(m)) return { transport: true, kind: 'socket', why: 'the connection failed before any answer came back' };
+  return { transport: false, kind: '', why: '' };
+};
+const FETCH_RETRY_MS = 700;
+// fetchtest.js lifts the source BETWEEN fakeUpstreamUrl and fetchT and evals it,
+// so anything declared in that gap becomes part of the function it extracts and
+// the harness dies on a syntax error. This block sits below fetchT for that
+// reason and no other.
+// The retry lives OUTSIDE fetchT rather than inside it, because fetchT owns the
+// abort/timeout race and adding a loop in there is how that ordering comment
+// above stops being true. One extra attempt, only on a transport failure, only
+// when the caller has not already consumed the body.
+// _impl is a test seam and nothing else: fetchT closes over its own import, so
+// a boot check cannot count attempts by stubbing global.fetch. It defaults to
+// the real door and no production call site passes it - a check pins that.
+const fetchTr = async (url, opts = {}, ms = 10000, _impl) => {
+  const _f = _impl || fetchT;
+  try { return await _f(url, opts, ms); }
+  catch (e) {
+    const _t = transportFailure(e);
+    if (!_t.transport) throw e;
+    await new Promise(r => setTimeout(r, FETCH_RETRY_MS));
+    try {
+      const r = await _f(url, opts, ms);
+      console.log(`↻ RETRY OK [${String(url).replace(/^https?:\/\//, '').split('/')[0]}]: ${_t.why}, and the second attempt answered. The first would have been reported as an empty result.`);
+      return r;
+    } catch (e2) { throw e2; }
+  }
 };
 
 app.get('/', (req, res) => res.json({ status: 'CROJungle Backend v9 — full-stack: stacking + combos + accuracy guards + reachability playbook', sources: ['adzuna_ai','sec_edgar','google_news','bizbuysell','facebook_ads(token)'], ok: true }));
@@ -3638,7 +3701,12 @@ const anthropicFetch = async (url, opts, timeoutMs, label, o = {}) => {
   // not fire in any configuration because their settings were globals, so the
   // check only ever exercised the case where nothing can go wrong. Production
   // passes nothing and gets fetchT.
-  const _send = (o && o.fetchImpl) || fetchT;
+  // Round 121: fetchTr. A socket-level failure here returned null from
+  // findOwnerViaBrain, which is indistinguishable to every caller from "no
+  // owner on this page" - and it threw away the Firecrawl pages already bought
+  // for that corpus. The retryOnTimeout loop below is untouched: it keys off
+  // the literal word "timeout" and a transport failure never carried it.
+  const _send = (o && o.fetchImpl) || fetchTr;
   let r = null;
   for (let attempt = 1; attempt <= tries; attempt++) {
     try { r = await _send(url, opts, timeoutMs); } catch (e) {
@@ -5177,7 +5245,7 @@ const LANE_TIERS = { call: ['entry', 'core', 'upper'], email: ['core', 'upper', 
 // And the call lane means a NAMED owner within reach: a read lead with a
 // phone and nobody named is the "no name yet" bucket, off the rep's sheet.
 const SIZE_WORD_TIER = { low: 'entry', medium: 'core', high: 'upper' };
-const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national } = {}) => {
+const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national, siteless, phone } = {}) => {
   const why = [];
   let t = SCALE_TIERS.includes(tier) ? tier : null;
   let measured = !!t;
@@ -5211,13 +5279,30 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
   // the rep asks for the marketing head. Only a TheirStack lead (no phone) and
   // a product company (a sales line) are never on it.
   const inCall = (LANE_TIERS.call.includes(t) || reach) && !ts && !prod;
-  const call = inCall && named;
-  const noname = inCall && !named;
+  // ══ ROUND 121: A BUSINESS WITH NO WEBSITE IS THE CLEAREST LEAD WE FIND ══
+  // Vin, 2026-09-04, ruling on two leads from that press: Delta Solar Power
+  // (232 reviews) and American Dream Solar (305), both with a phone and no
+  // working website, both sitting in No-name-yet where the rep never saw them.
+  //
+  // They can NEVER be named: with no pages, the roster, the model read and the
+  // regex backstop all refuse on their first line and the paid wave is
+  // unreachable behind the dead-site return. So "wait until a name is found"
+  // means "never", and Round 112's rule - the call lane means a named owner -
+  // was quietly swallowing the shape the finder deliberately keeps. The
+  // discovery path says so in its own words: "a plumber with two hundred
+  // reviews and no website is the most obvious problem in the entire pipeline
+  // - no audit needed, no ambiguity, and it is exactly what a rebuild is for."
+  //
+  // Ranked LAST, like the §114 hedge, and only with a number to dial: a call
+  // lead nobody can phone is not a call lead.
+  const _sitelessCall = siteless === true && !!phone && inCall && !named;
+  const call = inCall && (named || _sitelessCall);
+  const noname = inCall && !named && !_sitelessCall;
   // Round 115: a product company is an email lead whatever the tier GUESS - a
   // manufacturer's reviews do not measure it (Mission Solar, 37 reviews, was
   // "entry" and got no lane at all). A measured below-floor still benches.
   const email = named && (LANE_TIERS.email.includes(t) || (prod && t !== 'below_floor'));
-  const last = call && (layered || !!big);
+  const last = call && (layered || !!big || _sitelessCall);
   if (t === 'below_floor') why.push('under the floor - benched');
   if (t === 'over_ceiling') why.push(reach ? `over the call cap but owner-run and measured under ${_usdShort(ICP_CALL_REACH_CEILING)} - still a call` : `over the call cap (${SCALE_BAND_SAY.over_ceiling}) - email, the marketing decision-maker`);
   if (layered && inCall) why.push('layered business - on the call sheet last, ask for the marketing head');
@@ -5225,6 +5310,7 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
   if (big && !inCall && LANE_TIERS.email.includes(t)) why.push(`${big} - email, the marketing decision-maker at head office`);
   if (ts && LANE_TIERS.call.includes(t)) why.push('a TheirStack lead - email only');
   if (prod && LANE_TIERS.call.includes(t)) why.push(LANE_TIERS.email.includes(t) ? 'a product company - email only' : 'a product company - email whatever the size guess, its reviews do not measure a manufacturer');
+  if (_sitelessCall) why.push('no working website, so nobody can be named from their own pages - on the call sheet last, with the number to ask who runs it');
   if (noname) why.push('nobody named yet - off the call sheet until a name is found');
   if (LANE_TIERS.email.includes(t) && !email && !noname) why.push('nobody named to write to');
   if (call && email && !last) why.push('owner within reach and can afford premium - call first, email if no connect');
@@ -8657,6 +8743,40 @@ const LEADERSHIP_URL_HINTS = /(about|team|leadership|management|our-?story|who-?
 // AsyncLocalStorage gives each request its own ledger that survives every await.
 const { AsyncLocalStorage } = require('node:async_hooks');
 const FC_LEDGER = new AsyncLocalStorage();
+// ══ A PER-LEAD CEILING, SHAPED LIKE THE DAY CEILING BESIDE IT ══════════════
+// Round 121 (Vin, 2026-09-04, ruling on American Driveway of Charlotte: 14
+// Firecrawl credits, six paid searches, four page buys, and NOBODY NAMED).
+// Until now the only ceiling between the account and a lead like that was the
+// whole-DAY one, checked once at route entry - grep this file for a comparison
+// on a spent field before this line and there is not one.
+//
+// It stops the NEXT purchase, never the one already made, which is the rule
+// budgetRefusal states twenty lines from here: "a lead already running finishes
+// whatever it costs, because a half-lead is pure waste." The difference is that
+// a lead can now finish EARLY, and the row says so, and the log names what was
+// not bought - so the next batch answers whether the cap ever cost us a name
+// instead of leaving it to be argued about.
+const FIND_LEAD_CREDIT_CAP = Math.max(0, Number(process.env.FIND_LEAD_CREDIT_CAP || 10) || 0);
+const leadCreditsSpent = () => { const l = FC_LEDGER.getStore(); return (l && Number(l.spent)) || 0; };
+const leadCapHit = () => FIND_LEAD_CREDIT_CAP > 0 && leadCreditsSpent() >= FIND_LEAD_CREDIT_CAP;
+// Named so the row and the log can say WHAT was skipped rather than that
+// something was. Records the first refusal only: after that the lead is done
+// buying and a list of everything it would have wanted is noise.
+const leadCapRefuse = (what) => {
+  const l = FC_LEDGER.getStore();
+  // No "if (!l) return false" here on purpose: it was written, and reverting it
+  // left the check GREEN because leadCapHit already covers the case -
+  // leadCreditsSpent reads the same store and answers 0 without one, so the cap
+  // can never be hit outside a lead. A guard whose removal changes nothing is
+  // deleted rather than kept, which is this repo's falsification rule.
+  if (!leadCapHit()) return false;
+  if (!l.capped) {
+    l.capped = { at: leadCreditsSpent(), first: what, skipped: [] };
+    console.log(`\u{1F6D1} LEAD CAP: this lead has spent ${l.capped.at} Firecrawl credits, which is the per-lead ceiling (${FIND_LEAD_CREDIT_CAP}). The ${what} is NOT bought, and neither is anything after it. Everything already measured is kept. Grep this line across a batch: if the leads that hit it were going to be named, the cap is too low and FIND_LEAD_CREDIT_CAP is the one number to move.`);
+  }
+  if (l.capped.skipped.length < 8 && !l.capped.skipped.includes(what)) l.capped.skipped.push(what);
+  return true;
+};
 
 // Screenshots are the one rate the public sources disagree on: Firecrawl's own blog
 // lists surcharges for JSON extraction, enhanced proxy and audio but NOT screenshots,
@@ -9390,6 +9510,10 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
 const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true, tag = '') => {
   if (!fcKey || !query) return [];
   if (fcCreditsBlocked()) return [];   // fail fast — no point firing doomed calls
+  // Round 121: the per-lead ceiling. A search is the most expensive single
+  // purchase on the route at 2 credits, and it is what ran American Driveway to
+  // 14 for nobody named.
+  if (leadCapRefuse(tag ? `${tag} search` : 'search')) return [];
   try {
     const r = await fcCall('https://api.firecrawl.dev/v1/search', {
       method: 'POST',
@@ -9424,8 +9548,23 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true, ta
       content: (x.markdown || x.content || '').slice(0, 6000),
     })).filter(x => x.url);
   } catch(e) {
-    console.log('firecrawlSearch error:', e.message);
-    return [];
+    // ══ [] MEANT "THE WEB HAS NOTHING". IT ALSO MEANT "WE NEVER ASKED." ═══
+    // Round 121. Two ECONNREFUSED here on 2026-09-04, and the empty array they
+    // returned is read by every caller as a measured absence - one of which
+    // then wrote a fourteen-day negative memory against that business. The
+    // array is still empty, because callers iterate it; the FACT that we could
+    // not ask rides on a non-enumerable flag beside it, so nothing that treats
+    // the result as a list has to change and nothing that asks "did we look?"
+    // gets the wrong answer.
+    const _t = transportFailure(e);
+    const _out = [];
+    if (_t.transport) {
+      Object.defineProperty(_out, 'couldNotAsk', { value: _t.why, enumerable: false });
+      console.log(`firecrawlSearch COULD NOT ASK: ${_t.why} (${e.message}). This is not "the web has nothing" - no negative is remembered from it, and the lead is searched again next run.`);
+    } else {
+      console.log('firecrawlSearch error:', e.message);
+    }
+    return _out;
   }
 };
 
@@ -9936,6 +10075,14 @@ const fcHostNotAnswering = (url) => {
 // opts.capture receives the raw markup. Requesting rawHtml and dropping it is
 // how seven pages were bought and one page's markup was read (round 100), so a
 // caller that needs it can take it here rather than fetching the page twice.
+// Round 121: the per-lead ceiling applies to page buys too - four of American
+// Driveway's fourteen credits were interior pages on a site that refused a
+// plain fetch. Declared as a wrapper rather than edited into the body so the
+// retry, rate-limit and empty-markdown loops below are untouched.
+const firecrawlScrapeCapped = async (fcKey, url, ...rest) => {
+  if (leadCapRefuse('page read')) return '';
+  return firecrawlScrape(fcKey, url, ...rest);
+};
 const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS, opts = null) => {
   const _shot = !(opts && opts.shot === false);
   const _capture = (opts && typeof opts.capture === 'function') ? opts.capture : null;
@@ -10603,6 +10750,9 @@ const normaliseRecipient = (e) => {
   const local = localRaw.split('+')[0].replace(/\./g, '');
   return `${local}@${domain}`;
 };
+// UNKNOWN is a fact about the probe's moment, not about the domain, so it is
+// remembered only long enough to stop a batch re-paying for it lead after lead.
+const CATCHALL_UNKNOWN_TTL_MS = 10 * 60 * 1000;
 const isCatchAllDomain = async (domain, verifierKey) => {
   if (!verifierKey || !domain) return null;
   if (catchAllCache.has(domain)) return catchAllCache.get(domain);
@@ -10639,7 +10789,15 @@ const isCatchAllDomain = async (domain, verifierKey) => {
     // res2 errors. Deciding and caching from res alone fired the single-sample
     // path exactly where two samples matter most.
     if (res2.error) {
-      console.log(`Catch-all probe [${domain}]: second probe errored (${res2.error}) — one sample may not decide, recording UNKNOWN and not caching.`);
+      // Round 121: cached, briefly. It used to return WITHOUT caching, so every
+      // later lead on the same domain re-paid two probes and up to sixty
+      // seconds of wall clock to learn the same nothing. UNKNOWN is a real
+      // answer about the moment, not about the domain, so it expires on its own
+      // rather than sticking for the life of the process the way a measured
+      // verdict does.
+      catchAllCache.set(domain, null);
+      setTimeout(() => { if (catchAllCache.get(domain) === null) catchAllCache.delete(domain); }, CATCHALL_UNKNOWN_TTL_MS).unref?.();
+      console.log(`Catch-all probe [${domain}]: second probe errored (${res2.error}) — one sample may not decide, recording UNKNOWN for ${Math.round(CATCHALL_UNKNOWN_TTL_MS / 60000)} minutes rather than re-probing it on every lead. The address routes that do not read an SMTP verdict still run.`);
       return null;
     }
     if (!res2.error) {
@@ -11278,7 +11436,36 @@ const parseBbbProfile = (html) => {
   }
   return { measured: text.length > 200, employees: emp ? Number(emp[1]) : null, started: started ? Number(started[1]) : null, management };
 };
+// ══ RETIRED ON ITS OWN CONDITION — round 121 ══════════════════════════════
+// Round 116 added this as a FREE size and owner source. Round 117 found it
+// 403ing 2 of 2, replaced the header set with a full Chrome fingerprint, and
+// wrote the retirement rule into the comment below in as many words: "if the
+// next batch is still 403 on every attempt the rung is retired rather than
+// kept as a line of log noise."
+//
+// The next batch was 2026-09-04. FOUR attempts, FOUR HTTP 403s - Golden
+// Plumbing, Anytime Garage Door, Schiff & Associates, Windows Doors & More,
+// and four more the run before. The condition is met, and it is met on the
+// build that already carries the better headers, so this is not a fingerprint
+// worth another round: BBB is refusing Render's address, not our User-Agent.
+//
+// Switched OFF rather than deleted, and the parser is untouched: the profile
+// URL is still in hand from the size search, so buying it through Firecrawl for
+// one credit is the obvious successor - but that is a spend INCREASE in the
+// round that just capped per-lead spend, so it waits for a measurement rather
+// than being guessed at now. BBB_PROFILE=1 turns it back on for that test.
+const BBB_PROFILE_ON = /^(?:1|true|on|yes)$/i.test(String(process.env.BBB_PROFILE || ''));
+let _bbbRetiredSaid = false;
 const fetchBbbProfile = async (url) => {
+  if (!BBB_PROFILE_ON) {
+    if (!_bbbRetiredSaid) {
+      _bbbRetiredSaid = true;
+      // No mention of the paid reader by name in here: a boot check asserts
+      // this function's own source never names it, which is how it stays free.
+      console.log('SIZE: the BBB profile read is OFF - it answered HTTP 403 on every attempt across two batches (8 of 8), which is the retirement condition its own comment set in Round 117. Said once per process, not once per lead, instead of a line on every lead that reads like a fault. Set BBB_PROFILE=1 to try it again; the parser and the URL-finder are untouched.');
+    }
+    return { ok: false, why: 'retired - 403 on every attempt across two batches' };
+  }
   try {
     // Round 117: 2 of 2 attempts came back 403 on 2026-09-04. The old header
     // set was a two-part Chrome version with an Accept of "text/html" and
@@ -13399,9 +13586,13 @@ ${corpus}` }]
     let hits = [];
     let corpus = '';
     let parsed = {};
+    // Round 121: set the moment ANY query in this wave could not be asked, so
+    // the negative memo below can tell a measured miss from a network failure.
+    let _couldNotAsk = '';
     for (let _qi = 0; _qi < queries.length; _qi++) {
       const _batch = await firecrawlSearch(fcKey, queries[_qi], 2, false, _tags[_qi] || 'owner_search').catch(() => []); // snippet-only: owner names live in BBB/Manta snippets
       const _new = Array.isArray(_batch) ? _batch : [];
+      if (_batch && _batch.couldNotAsk) _couldNotAsk = _batch.couldNotAsk;
       if (!_new.length) continue;
       hits = hits.concat(_new).slice(0, 4);
       corpus = hits.map(h =>
@@ -13415,6 +13606,15 @@ ${corpus}` }]
     }
     if (hits.length === 0) return null;
     if (!parsed.name || parsed.name === 'null' || !looksLikeRealName(parsed.name)) {
+      // Round 121: a negative is only worth remembering if it was MEASURED. If
+      // any query in this wave could not be asked - a refused connection, a DNS
+      // failure - then "no owner in the results" is a fact about our network and
+      // not about them, and writing it here blocks the business for fourteen
+      // days. PART 3: an absence claim requires that we actually looked.
+      if (_couldNotAsk) {
+        console.log(`DM/websearch [${companyName}]: no owner in the results, but ${_couldNotAsk} - so nothing is remembered and this lead is searched again next run. A negative we did not measure is not a negative.`);
+        return null;
+      }
       rememberDmSearchFailed(_negKey);
       console.log(`DM/websearch [${companyName}]: no owner found in web results \u2014 remembering this for ${DM_NEGATIVE_TTL_DAYS} days so the same ~12 credits are not spent again on the same negative.`);
       return null;
@@ -31323,10 +31523,41 @@ const buildReviewCorpus = (reviews, opts) => {
   let clip = wanted;
   let out = build(clip);
   if (out.len > budget && list.length) {
-    // The per-review share of the budget, minus the fixed prefix each row
-    // carries. Floored: a clip under REVIEW_CLIP_FLOOR cannot hold a complaint,
-    // and a corpus of truncated fragments would produce patterns nobody wrote.
-    clip = Math.max(REVIEW_CLIP_FLOOR, Math.floor(budget / list.length) - 18);
+    // ══ THE CLIP MUST BUDGET FOR THE ROW IT ACTUALLY BUILDS ══════════════
+    // Round 121. This was `floor(budget / list.length) - 18`, and the 18 pays
+    // for the star prefix and the row separator and nothing else. But
+    // formatReviewForMining APPENDS, on every review that has one,
+    // "\nResponse from the owner: " plus half the clip again - 26 + clip/2,
+    // which at clip 382 is another 217 characters, more than half a row.
+    //
+    // So on any lead whose owner answers their reviews the corpus overshot and
+    // the tail was dropped: 15 of 90 on System Pavers (replies on 74 of 75) and
+    // 9 of 90 on A2Z (68 of 81) on 2026-09-04. Reviews we PAID Apify for and
+    // never showed the model - and the log told the operator to go and change a
+    // Render setting, which would have bought a bigger budget for the same
+    // arithmetic error.
+    //
+    // Solve it against the real row instead. With r = the share of reviews that
+    // carry a reply, a row costs  10 (prefix) + 2 (separator) + clip
+    //                           + r * (26 + clip/2)
+    // so the clip the budget can actually afford is
+    //     (budget/n - 12 - 26r) / (1 + r/2)
+    // Floored exactly as before: a clip under REVIEW_CLIP_FLOOR cannot hold a
+    // complaint, and a corpus of truncated fragments would produce patterns
+    // nobody wrote. The drop below stays as the last resort.
+    // The constants are the row MEASURED, not estimated:
+    //   "[no rating] "                        12  the widest star prefix
+    //   _clip's own " …" on a truncated text   2
+    //   the "+ 2" the reduce adds per row      2
+    //   "\nResponse from the owner: "         26  only when there is a reply
+    //   _clip's " …" on that reply             2  only when there is a reply
+    // plus one character of headroom, so a rounding step cannot put the sum a
+    // single character over and cost a whole review.
+    const REVIEW_ROW_FIXED = 17;        // 12 + 2 + 2, + 1 headroom
+    const REVIEW_REPLY_FIXED = 28;      // 26 + 2
+    const _replyShare = list.reduce((n, r) => n + (r && r.ownerReply ? 1 : 0), 0) / list.length;
+    const _afford = ((budget / list.length) - REVIEW_ROW_FIXED - (REVIEW_REPLY_FIXED * _replyShare)) / (1 + (_replyShare / 2));
+    clip = Math.max(REVIEW_CLIP_FLOOR, Math.floor(_afford));
     out = build(clip);
   }
   let used = list;
@@ -34734,39 +34965,6 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // Our own pattern guesses failed SMTP, but Hunter may have the address indexed
     // from a public source, or know a house pattern we never guessed (e.g. a
     // nickname mailbox like sam@ instead of slotze@).
-    // CREDIT GUARD: email-finder costs a Hunter credit and the free plan is 50/month.
-    // Only spend it when it is genuinely the deciding factor — we have a confirmed
-    // decision-maker, no address yet, and every free route has already failed. Never
-    // for a generic/role name, and never when the domain is catch-all (that path is
-    // already sendable without paying).
-    const worthACredit = hunterKey && name && looksLikeRealName(name) && catchAll !== true;
-    if (worthACredit) {
-      const hf = await hunterFindPersonEmail(domain, name, hunterKey);
-      // Record that the last paid route was CLOSED rather than empty, so nothing
-      // downstream reports "no defensible address found" for a lookup we never got
-      // to make. The distinction is the whole point: one is a fact about them, the
-      // other is a fact about our account.
-      if (hf && hf.unavailable) {
-        _lookupBlocked = hf.reason;
-        console.log(`EMAIL [${domain}]: could NOT check ${name} \u2014 ${_lookupBlocked === 'hunter_rate_limited' ? 'Hunter is rate-limited right now, which is a speed limit and not an empty balance \u2014 re-running this lead in a minute will ask again' : 'Hunter out of credits'}. This is not evidence that no address exists.`);
-      }
-      if (hf && hf.email) {
-        // Only trust it if Hunter actually SOURCED it, or SMTP confirms it. A bare
-        // pattern guess at ~60 confidence is how people get blacklisted.
-        if (hf.sourced && hf.score >= 80) {
-          console.log(`\u2713 EMAIL [${domain}] recovered by Hunter Finder (sourced, ${hf.score}): ${hf.email}`);
-          return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null, score: Math.min(95, hf.score) };
-        }
-        if (verifierKey) {
-          const v = await verifyEmailSMTP(hf.email, verifierKey);
-          if (v.valid === true) {
-            console.log(`\u2713 EMAIL [${domain}] Hunter Finder + SMTP confirmed: ${hf.email}`);
-            return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null };
-          }
-        }
-        console.log(`EMAIL [${domain}]: Hunter Finder returned ${hf.email} at confidence ${hf.score} but it is unsourced/unverified \u2014 not sendable`);
-      }
-    }
 
     // EPONYMOUS BUSINESS = the address is the owner's, and we can say so.
     // When the company is named after this person — "Claude Reynolds Insurance" with
@@ -34904,6 +35102,62 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
         }
         if (v.error) break;   // verifier died mid-loop — stop, do not draw conclusions
         await new Promise(r => setTimeout(r, 200));
+      }
+    }
+
+    // ══ AN UNKNOWN CATCH-ALL CLOSED A ROUTE THAT DOES NOT NEED SMTP ══════
+    // Round 121. Premier Home Pros, 2026-09-04: a real owner, a real domain,
+    // and the address shipped as a blocked guess. isCatchAllDomain fires two
+    // probes that must agree; the second hit the 30-second cap, so it returned
+    // null - UNKNOWN - which is correct and deliberate. But the consumer above
+    // reads `catchAll === false`, and that ONE gate wrapped the pattern probes,
+    // the nickname pass, the house pattern, the company-mailbox probe AND this
+    // block - whose own guard is already `catchAll !== true` and would have
+    // admitted null perfectly well. A guard written to handle UNKNOWN, sitting
+    // inside a block UNKNOWN can never enter.
+    //
+    // Worse, the SMTP timeout line tells the operator in as many words that
+    // "it does NOT block the send: the address falls back to Hunter
+    // verification and to the learned-pattern route" - a sentence about our own
+    // system that was not true on this path.
+    //
+    // So the Hunter finder moved DOWN here, out of the SMTP-gated block. On a
+    // known-good domain nothing changes: the free and SMTP routes above still
+    // run first and return before this, so no extra credit is ever spent. On an
+    // UNKNOWN domain this is now reachable, which is what the log always said.
+    // The routes that genuinely need a definite non-catch-all answer - anything
+    // that reads an SMTP verdict - stay above, where they were.
+    // CREDIT GUARD: email-finder costs a Hunter credit and the free plan is 50/month.
+    // Only spend it when it is genuinely the deciding factor — we have a confirmed
+    // decision-maker, no address yet, and every free route has already failed. Never
+    // for a generic/role name, and never when the domain is catch-all (that path is
+    // already sendable without paying).
+    const worthACredit = hunterKey && name && looksLikeRealName(name) && catchAll !== true;
+    if (worthACredit) {
+      const hf = await hunterFindPersonEmail(domain, name, hunterKey);
+      // Record that the last paid route was CLOSED rather than empty, so nothing
+      // downstream reports "no defensible address found" for a lookup we never got
+      // to make. The distinction is the whole point: one is a fact about them, the
+      // other is a fact about our account.
+      if (hf && hf.unavailable) {
+        _lookupBlocked = hf.reason;
+        console.log(`EMAIL [${domain}]: could NOT check ${name} \u2014 ${_lookupBlocked === 'hunter_rate_limited' ? 'Hunter is rate-limited right now, which is a speed limit and not an empty balance \u2014 re-running this lead in a minute will ask again' : 'Hunter out of credits'}. This is not evidence that no address exists.`);
+      }
+      if (hf && hf.email) {
+        // Only trust it if Hunter actually SOURCED it, or SMTP confirms it. A bare
+        // pattern guess at ~60 confidence is how people get blacklisted.
+        if (hf.sourced && hf.score >= 80) {
+          console.log(`\u2713 EMAIL [${domain}] recovered by Hunter Finder (sourced, ${hf.score}): ${hf.email}`);
+          return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null, score: Math.min(95, hf.score) };
+        }
+        if (verifierKey) {
+          const v = await verifyEmailSMTP(hf.email, verifierKey);
+          if (v.valid === true) {
+            console.log(`\u2713 EMAIL [${domain}] Hunter Finder + SMTP confirmed: ${hf.email}`);
+            return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null };
+          }
+        }
+        console.log(`EMAIL [${domain}]: Hunter Finder returned ${hf.email} at confidence ${hf.score} but it is unsourced/unverified \u2014 not sendable`);
       }
     }
 
@@ -55793,8 +56047,14 @@ app.listen(PORT, () => {
       // and no production call site hand-rolls the old wrapper: fcCall derives
       // the kind from the URL by construction, so the census is one line.
       const _src = selfSourceNoCommentsLF();
-      const _bare = (_src.match(new RegExp(_n('fcSerial\\(\\(\\) => ', 'fetchT\\('), 'g')) || []).length;
+      // Round 121 moved the one permitted wrapper from fetchT to fetchTr, so a
+      // refused connection is retried once before it comes back as an empty
+      // result set. The census still expects exactly one, and now also refuses
+      // a hand-roll that skips the retry by calling fetchT directly.
+      const _bare = (_src.match(new RegExp(_n('fcSerial\\(\\(\\) => ', 'fetchTr\\('), 'g')) || []).length;
       if (_bare !== 1) _fails.push(`${_bare} call site(s) hand-roll the old arrow wrapper — only the fcCall definition itself may, because a hand-rolled site queues as kind 'other' and paces at the 7.5-second unknown-plan default`);
+      const _noRetry = (_src.match(new RegExp(_n('fcSerial\\(\\(\\) => ', 'fetchT\\('), 'g')) || []).length;
+      if (_noRetry !== 0) _fails.push(`${_noRetry} Firecrawl call site(s) go through fetchT rather than fetchTr, so a refused connection there still comes back as an empty result set and reads as "the web has nothing"`);
       if (_fails.length) {
         console.log(`⛔ SEARCH SLOT CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
       } else {
@@ -55803,6 +56063,180 @@ app.listen(PORT, () => {
     } catch (e) {
       console.log(`⛔ SEARCH SLOT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
     } finally { bootRelease(); }
+  })();
+
+  // ══ LEAD CEILING CHECK — round 121 ══════════════════════════════════════
+  // Vin, 2026-09-04, on American Driveway of Charlotte: fourteen Firecrawl
+  // credits, six paid searches, four page buys, nobody named. Until this round
+  // the ONLY ceiling between the account and a lead like that was the whole-day
+  // one, checked once at route entry - there was no comparison on the ledger's
+  // spend anywhere in the file.
+  //
+  // EXECUTED inside a real ledger scope, because the whole mechanism is an
+  // AsyncLocalStorage read and a fixture that stubs it proves nothing.
+  try {
+    const _fails = [];
+    if (!(FIND_LEAD_CREDIT_CAP > 0)) _fails.push('the per-lead credit ceiling is switched off, so one lead can spend the whole day budget on its own');
+    FC_LEDGER.run({ spent: 0, saved: 0, ops: 0 }, () => {
+      const _l = FC_LEDGER.getStore();
+      if (leadCapHit()) _fails.push('a lead that has spent nothing is already capped');
+      if (leadCapRefuse('owner_name search') !== false) _fails.push('a lead that has spent nothing is refused its first purchase');
+      _l.spent = FIND_LEAD_CREDIT_CAP - 1;
+      if (leadCapRefuse('owner_name search') !== false) _fails.push(`a lead one credit under the ceiling is refused - the ceiling must stop the NEXT purchase, not the one that reaches it`);
+      _l.spent = FIND_LEAD_CREDIT_CAP;
+      if (leadCapRefuse('owner_directory search') !== true) _fails.push('a lead AT the ceiling is allowed to keep buying, so the ceiling is a report and not a gate - which is exactly what the ledger was before this round');
+      if (!_l.capped) _fails.push('the lead was capped and the row cannot say so');
+      else {
+        if (_l.capped.at !== FIND_LEAD_CREDIT_CAP) _fails.push('the row records the wrong spend at the moment the ceiling bit');
+        if (_l.capped.first !== 'owner_directory search') _fails.push('the row does not name WHICH purchase was refused first');
+        if (!_l.capped.skipped.includes('owner_directory search')) _fails.push('the row does not list what was skipped, so a batch cannot answer whether the ceiling ever cost a name');
+      }
+      // And it keeps recording what else it turned away, bounded. Guarded:
+      // the first draft read _l.capped.skipped here unconditionally, so a build
+      // with the ceiling switched off crashed the check instead of failing it -
+      // "COULD NOT RUN" names the check, not the defect, and falsification is
+      // where that showed up.
+      for (let k = 0; k < 20; k++) leadCapRefuse('page read ' + k);
+      if (_l.capped && _l.capped.skipped.length > 8) _fails.push('the skipped list is unbounded, so one capped lead can fill the log');
+      // Work already bought is never thrown away: the ceiling refuses, it does
+      // not unwind. spent is untouched by a refusal.
+      if (_l.spent !== FIND_LEAD_CREDIT_CAP) _fails.push('a refusal changed what the lead had already spent - the ceiling must stop the next purchase, never undo one');
+    });
+    // Outside a ledger scope nothing is capped: the audit path and the boot
+    // itself must not inherit a Find-route ceiling.
+    if (leadCapRefuse('search') !== false) _fails.push('a call with no lead ledger at all is capped, so every other route in this file inherits the Find ceiling - the ceiling must read the PER-LEAD ledger and answer no when there is not one');
+    // The wires.
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    for (const [_needle, _msg] of [
+      [_n("if (leadCapRefuse(tag ? `${tag} search` :", " 'search')) return [];"), 'the paid search door does not consult the ceiling, so the most expensive purchase on the route is uncapped'],
+      [_n("if (leadCapRefuse('page read'))", " return '';"), 'the page-buy door does not consult the ceiling - four of American Driveway\'s fourteen credits were interior pages'],
+      // Round 121: the early stop applied ONLY where pages were free. The
+      // saving is worth nothing there and a credit a page where the site
+      // refused a plain fetch, so the guard that switched it off is gone.
+      [_n('if (i + _wave < picks.length) {', "\n        const _soFar = pages.filter(rosterEligiblePage)"), 'the "their own pages already name an owner, stop reading" rule is gated on the pages being FREE again - which is backwards: it saves nothing where pages are free and a credit a page where they are not'],
+      [_n('out.capped = led.capped', '\n    ? {'), 'the ceiling never reaches the row, so the rep cannot tell a lead that ran out of budget from one that had nothing to find'],
+    ]) if (!_src.includes(_needle)) _fails.push(_msg);
+    if (_fails.length) console.log(`⛔ LEAD CEILING CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ LEAD CEILING CHECK: one lead can no longer spend the day's budget on its own. The ceiling is ${FIND_LEAD_CREDIT_CAP} Firecrawl credits and it is shaped like the day ceiling beside it - it stops the NEXT purchase and never unwinds one already made, so a lead finishes early instead of half-finished. Executed inside a real ledger scope in both directions: under the ceiling nothing is refused, at it every further search and page read is, the row names what was skipped, the list is bounded, and a call outside any lead scope is never capped so no other route inherits it.`);
+  } catch (e) {
+    console.log(`⛔ LEAD CEILING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ ADDRESS ROUTE CHECK — round 121 ═════════════════════════════════════
+  // Premier Home Pros, 2026-09-04: a real owner, a real domain, and the address
+  // shipped as a BLOCKED guess. The catch-all probe's second sample timed out,
+  // so it returned null (UNKNOWN) - correct - and one gate reading
+  // `catchAll === false` then closed the pattern probes, the nickname pass, the
+  // house pattern, the company mailbox AND the Hunter finder, whose own guard is
+  // `catchAll !== true` and would have admitted null.
+  //
+  // Asserted BY POSITION on the real source, because no fixture can see it: the
+  // defect is which side of a brace a block sits on.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    const _gate = _src.indexOf(_n('if (catchAll === false', ' && verifierKey) {'));
+    const _hunter = _src.indexOf(_n('const worthACredit = hunterKey && name', ' && looksLikeRealName(name) && catchAll !== true;'));
+    // A CODE anchor, not a comment one. The first draft of this used the
+    // "Genuinely nothing left" comment - and selfSourceNoCommentsLF STRIPS
+    // comments, so the index was -1, lastIndexOf searched from position 0, and
+    // the whole positional assertion passed on a build with the block moved
+    // back inside. Falsification caught it: the revert stayed GREEN. A check
+    // that cannot fail is not a check.
+    const _nothingLeft = _src.indexOf(_n('const _smtpActuallyRan = (catchAll === false', ' && !!verifierKey && !verifierBlocked());'));
+    if (_gate < 0) _fails.push('the SMTP-gated block could not be found, so nothing here is being checked');
+    else if (_hunter < 0) _fails.push('the Hunter email-finder is not guarded on \'catchAll !== true\' - either it was renamed, or its guard was tightened to === false, which is the 2026-09-04 defect: an UNKNOWN catch-all closing the one paid route that does not read an SMTP verdict');
+    else if (_hunter < _gate) _fails.push('the Hunter finder runs BEFORE the free and SMTP routes, so every lead pays a Hunter credit for an address the probes would have found for nothing');
+    else if (_nothingLeft < 0) _fails.push('the give-up branch could not be located, so the position of the Hunter finder is not being checked at all');
+    else if (_hunter > _nothingLeft) _fails.push('the Hunter finder sits after the give-up branch, so it can never run at all');
+    // The structural fact: it must not be INSIDE the catchAll === false block.
+    // Two sharper-looking tests were written and thrown away first, and both
+    // are worth recording because both PASSED on a build with the block moved
+    // back inside. Matching the block's closing brace by position kept finding
+    // the Hunter block's own four-space brace; counting nesting depth from the
+    // gate counts every brace in every string and template literal between
+    // them. What "inside" actually looks like in this file is INDENTATION: the
+    // gated block's contents sit at six spaces, everything at function level
+    // sits at four. That is the whole test, and falsification agrees with it.
+    else if (!_src.includes(_n('\n    const worthACredit', ' = hunterKey'))) {
+      _fails.push('the Hunter finder is indented as a nested block, which in this function means it is back inside the catchAll === false gate - so an UNKNOWN catch-all closes a route whose own guard already admits UNKNOWN, and the SMTP timeout line promises the operator that exact fallback');
+    }
+    // And the UNKNOWN is remembered, briefly, rather than re-probed per lead.
+    if (!_src.includes(_n('catchAllCache.set(domain,', ' null);'))) _fails.push('an UNKNOWN catch-all is not cached at all, so every later lead on that domain re-pays two probes and up to sixty seconds to learn the same nothing');
+    if (!_src.includes(_n('catchAllCache.delete(domain); }, CATCHALL_UNKNOWN', '_TTL_MS)'))) _fails.push('the UNKNOWN catch-all is cached forever - it is a fact about the probe\'s moment, not about the domain, and a permanent one would disable the SMTP path for the life of the process');
+    if (!(CATCHALL_UNKNOWN_TTL_MS > 0 && CATCHALL_UNKNOWN_TTL_MS <= 60 * 60 * 1000)) _fails.push(`the UNKNOWN cache lives ${CATCHALL_UNKNOWN_TTL_MS}ms - long enough to outlast the condition that caused it`);
+    if (_fails.length) console.log(`⛔ ADDRESS ROUTE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ ADDRESS ROUTE CHECK: an UNKNOWN catch-all no longer closes the routes that never needed an SMTP verdict. The Hunter email-finder sits below the SMTP-gated block, so a known-good domain still tries every free and probed route first and spends no extra credit, while a domain whose second probe timed out can finally reach the fallback the timeout line has always promised the operator. UNKNOWN is remembered for ${Math.round(CATCHALL_UNKNOWN_TTL_MS / 60000)} minutes - a fact about the probe's moment, not about the domain - instead of being re-bought on every lead in the batch.`);
+  } catch (e) {
+    console.log(`⛔ ADDRESS ROUTE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ TRANSPORT TRUTH CHECK — round 121 ═══════════════════════════════════
+  // "We could not ask" and "we asked and there is nothing" are different facts
+  // and this file could not tell them apart. On 2026-09-04 two searches died at
+  // ECONNREFUSED, returned [], and one of those empty arrays wrote a FOURTEEN-
+  // DAY negative memory against a real business - a lead blocked from being
+  // searched again for a fortnight by a dropped connection. PART 3: an absence
+  // claim requires that we actually looked.
+  (async () => {
+   try {
+    const _fails = [];
+    // 1. The classifier, on the exact shapes the live log produced.
+    const _mk = (msg, code) => Object.assign(new Error(msg), code ? { code } : {});
+    for (const [_e, _want] of [
+      [_mk('connect ECONNREFUSED 35.245.250.27:443'), true],
+      [_mk('request to https://x/y failed, reason: '), true],
+      [_mk('getaddrinfo ENOTFOUND api.example.com'), true],
+      [_mk('socket hang up'), true],
+      [_mk('unable to verify the first certificate', 'CERT_HAS_EXPIRED'), true],
+      // A timeout is NOT one: it carries meaning at a dozen call sites and
+      // retrying one doubles a wall clock that is usually already the problem.
+      [_mk('timeout'), false],
+      [_mk('The user aborted a request.'), false],
+      // And an HTTP-shaped answer is an answer.
+      [_mk('Unexpected token < in JSON at position 0'), false],
+      [_mk(''), false],
+    ]) {
+      if (transportFailure(_e).transport !== _want) {
+        _fails.push(`transportFailure reads "${_e.message || '(empty)'}" as ${transportFailure(_e).transport ? 'a transport failure' : 'an answer'} - ${_want ? 'a dropped connection is being treated as a measured result' : 'a real answer is being retried and re-billed'}`);
+      }
+    }
+    // 2. The one door retries, and it retries ONCE.
+    {
+      let _tries = 0;
+      const _boom = () => { _tries += 1; return Promise.reject(_mk('connect ECONNREFUSED 1.2.3.4:443')); };
+      await fetchTr('https://example.invalid/probe', {}, 200, _boom).then(() => {}, () => {});
+      if (_tries !== 2) _fails.push(`a refused connection was attempted ${_tries} time(s) - it must be retried exactly once, so a blip costs a pause and not a lead`);
+      // A real answer is never re-billed, and a timeout is never retried.
+      let _okTries = 0;
+      await fetchTr('https://example.invalid/ok', {}, 200, () => { _okTries += 1; return Promise.resolve({ ok: true }); }).then(() => {}, () => {});
+      if (_okTries !== 1) _fails.push(`a successful call was made ${_okTries} times - the retry is firing on answers and every figure this build reports would be double`);
+      let _toTries = 0;
+      await fetchTr('https://example.invalid/slow', {}, 200, () => { _toTries += 1; return Promise.reject(_mk('timeout')); }).then(() => {}, () => {});
+      if (_toTries !== 1) _fails.push(`a timeout was attempted ${_toTries} times - retrying one doubles a wall clock that is usually already the problem`);
+      // A census of the seam's call sites was drafted here and deleted: the
+      // regex it needed matched this check's OWN three calls and went red on a
+      // healthy build. SEARCH SLOT CHECK records the rule twenty lines up - a
+      // check that fires on healthy code costs exactly what one that misses a
+      // fault costs, because it is the one somebody switches off, taking the
+      // real assertions beside it. The three behaviours above are the guard.
+    }
+    // 3. The wires, because a classifier nothing reads is nothing.
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    for (const [_needle, _msg] of [
+      [_n('const _t = transportFailure', '(e);'), 'the search door no longer classifies its own failure, so a refused connection comes back as an empty result set again'],
+      [_n("Object.defineProperty(_out, 'couldNotAsk',", ' { value: _t.why, enumerable: false });'), 'the search result cannot say it was never asked, so every caller reads a network failure as a measured absence'],
+      [_n('if (_couldNotAsk) {', "\n        console.log(`DM/websearch"), 'the negative memo does not check whether the search could be asked - a dropped connection blocks that business for fourteen days'],
+      [_n('const _send = (o && o.fetchImpl)', ' || fetchTr;'), 'the model door is back on the un-retried fetch, so a socket failure loses the owner AND the Firecrawl pages already bought for its corpus'],
+    ]) if (!_src.includes(_needle)) _fails.push(_msg);
+    if (_fails.length) console.log(`⛔ TRANSPORT TRUTH CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ TRANSPORT TRUTH CHECK: a dropped connection is told apart from an answer, at the one door every outbound call passes through, and retried exactly once before anything downstream is allowed to call it a result. A timeout is deliberately not in that set - it already means something at a dozen call sites. The search door carries "we could not ask" beside its empty array, and the owner negative memo refuses to remember a fourteen-day absence it never measured: two ECONNREFUSEDs on 2026-09-04 returned [] and one of them blocked a real business from being searched again for a fortnight.`);
+   } catch (e) {
+    console.log(`⛔ TRANSPORT TRUTH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+   }
   })();
 
   // ══ THE FOUR SIGNALS ADDED FOR THE MONEY MAP, EXECUTED BOTH WAYS ═══════
@@ -58660,13 +59094,21 @@ app.listen(PORT, () => {
     // FIVE - a leadership page is not a headcount. Alliance scored 75/100, the
     // HIGHEST in that run, because fourteen names read as a fourteen-person
     // business; the fourteen were a CFO, a COO and three SVPs.
-    const _big = findIcpScore({ teamCount: 14, execTitles: ['CFO & Chief Development Officer', 'Chief Operating Officer', 'Senior Vice President, Strategy'], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6 });
-    const _small = findIcpScore({ teamCount: 14, execTitles: [], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6 });
+    // Round 120 raised FIND_ICP_MIN_TERMS to six and these two measured three,
+    // so both came back "not scored" and this comparison stopped comparing
+    // anything. The additions are what every readable lead on the 2026-09-04
+    // press carried, they are IDENTICAL on both arms, and the org chart is
+    // still the only difference between them.
+    const _lead = { adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6,
+      affordBand: 'premium', affordWhy: 'premium tier', reachMeasured: true, ownerCanBuy: false, emailTier: 1,
+      liveChat: true, scheduler: false, callTracking: false };
+    const _big = findIcpScore({ ..._lead, teamCount: 14, execTitles: ['CFO & Chief Development Officer', 'Chief Operating Officer', 'Senior Vice President, Strategy'] });
+    const _small = findIcpScore({ ..._lead, teamCount: 14, execTitles: [] });
     if (!(_big.score < _small.score)) {
       _fails.push(`a fourteen-name leadership page carrying a CFO, a COO and an SVP scores ${_big.score} against ${_small.score} for a fourteen-person crew - a deep org chart is still reading as an ICP-sized business`);
     }
     // One VP at a fifty-person contractor is ordinary. The bar is two.
-    const _oneVp = findIcpScore({ teamCount: 12, execTitles: ['Vice President, Operations'], adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6 });
+    const _oneVp = findIcpScore({ ..._lead, teamCount: 12, execTitles: ['Vice President, Operations'] });
     if (_oneVp.score !== _small.score) _fails.push('a single VP is being treated as a corporate org chart, which would demote ordinary contractors');
 
     // ══ SIX - A CONTACT FORM IS NOT A ROSTER ═════════════════════════════
@@ -59689,6 +60131,34 @@ app.listen(PORT, () => {
     if (_tg({ name: 'Darrel Jones' }, { name: 'Jane Smith', title: 'Director of Marketing' }, 'layered') !== 'marketing') _fails.push('a layered business with both found does not target the marketing head');
     if (_tg({ name: 'Darrel Jones' }, null, 'layered') !== 'owner') _fails.push('a layered business with no marketing head loses the owner it did find');
     if (_tg(null, null, 'layered') !== 'none') _fails.push('a layered business with nobody found claims a target');
+    // ══ ROUND 121: A WAY IN IS NOT NOTHING ═════════════════════════════════
+    // A2Z Construction, 2026-09-04: owner-run by its own pages, eight credits
+    // of paid searches, nobody named - and the row said "nobody reachable was
+    // found" for a shape where a director-level marketing person is exactly
+    // what we should be holding.
+    if (_tg(null, { name: 'Jane Smith', title: 'Director of Marketing' }, 'owner') !== 'marketing') {
+      _fails.push('an owner-run business whose pages name nobody throws away a director-level marketing person and reports nobody reachable - the row says we have nothing while we are holding a name and a title');
+    }
+    if (_tg(null, null, 'owner') !== 'none') _fails.push('an owner-run business with nobody found at all claims a target');
+    {
+      // ...and it must NOT read as a buyer. PART 3: at an owner-run business
+      // the OWNER is the buyer; this person is the way in, nothing more.
+      const _w = targetFor({ owner: null, marketingLead: { name: 'Jane Smith', title: 'Director of Marketing' }, layers: 'owner' }).why;
+      if (!/cannot sign|who can sign|way in/.test(_w)) _fails.push(`the row does not say this person cannot sign: "${_w}"`);
+      if (/decision-maker|reachable decision/.test(_w)) _fails.push('an owner-run business calls a marketing director the decision-maker, which is the PART 3 rule inverted');
+    }
+    // And the call site: the one route left after the owner ladder fails must
+    // be asked BECAUSE the ladder failed, not because the business is layered.
+    {
+      // Assembled at runtime so the needle cannot find itself in this check's
+      // own source. `_n` belongs to a later check in this same block, so this
+      // one carries its own.
+      const _n121 = (a, b) => a + b;
+      const _src121 = selfSourceNoCommentsLF();
+      const _hg = _n121('if (!_ml && hunterKey && website && (_layers.verdict ===', " 'layered' || _nobodyNamed)) {");
+      if (!_src121.includes(_hg)) _fails.push('the marketing lookup is gated on the business being layered again, so the one free-ish route left after the owner ladder fails is switched off on exactly the leads where it failed');
+      if (!_src121.includes(_n121('const _nobodyNamed = !(out.owner', ' && out.owner.name);'))) _fails.push('nothing measures whether the lead ended with nobody named, so the lookup cannot be aimed at that case');
+    }
     // The demotions: lifted when the reachable decision-maker was found, and high ranks below medium.
     if (demotionPenalty({ aboveSizeCeiling: true, marketingLeadFound: true }).points !== 0) _fails.push('the review-ceiling mark stays on a lead whose reachable marketing head was found');
     // ══ ROUND 112: MEASURE, DO NOT GUESS - AND ONE RULER FOR THE SHEET AND THE LANE ══
@@ -59791,6 +60261,23 @@ app.listen(PORT, () => {
       const _lu = lanesFor({ tier: 'upper', layers: 'layered', source: 'google_places', target: 'owner' });
       if (laneWord(_lu) !== 'call + email' || _lu.last !== true) _fails.push('a layered upper business whose only name is the owner is off the call sheet');
       if (lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'owner' }).last !== false) _fails.push('an owner-run core business is ranked last');
+      // ══ ROUND 121: NO WEBSITE, A PHONE, AND HUNDREDS OF REVIEWS ══════════
+      // Vin's ruling, 2026-09-04, on Delta Solar Power and American Dream
+      // Solar. They can never be named - with no pages the roster, the model
+      // read and the backstop all refuse on their first line and the paid wave
+      // sits behind the dead-site return - so "wait for a name" meant "never".
+      {
+        const _sl = lanesFor({ tier: 'core', layers: 'unmeasured', source: 'google_places', target: 'none', siteless: true, phone: '+1 210-687-7675' });
+        if (_sl.call !== true) _fails.push('a business with a phone, real volume and NO working website is still off the call sheet - it can never be named from pages that do not exist, so this is not "waiting for a name", it is never');
+        if (_sl.noname !== false) _fails.push('a website-less lead is on the call sheet AND in the no-name bucket, so the rep sees it twice');
+        if (_sl.last !== true) _fails.push('a website-less lead is not ranked last, so a row with nobody named outranks a row with an owner and an address');
+        if (!/no working website/.test(_sl.why)) _fails.push('the row does not say WHY nobody is named on a website-less lead, so the rep cannot tell it from a resolver failure');
+        // The two ways it must NOT fire.
+        const _noPhone = lanesFor({ tier: 'core', layers: 'unmeasured', source: 'google_places', target: 'none', siteless: true, phone: '' });
+        if (_noPhone.call !== false || _noPhone.noname !== true) _fails.push('a website-less lead with NO number to dial is put on the call sheet - a call lead nobody can phone is not a call lead');
+        const _readable = lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'none', siteless: false, phone: '+1 555-000-1111' });
+        if (_readable.call !== false || _readable.noname !== true) _fails.push('a lead whose pages we READ and could not name anybody on is treated as website-less, which would put every resolver failure on the sheet');
+      }
       if (demotionPenalty({ laneLast: true }).points !== -8 || demotionPenalty({ laneLast: false }).points !== 0) _fails.push('the layered-last demotion does not rank a layered lead below the owner-run ones');
       if (_ln({ tier: 'core', layers: 'owner', source: 'theirstack', target: 'owner' }) !== 'email') _fails.push('a TheirStack lead reached the call sheet');
       if (_ln({ tier: 'entry', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('an entry owner-run business is not call only');
@@ -59847,7 +60334,8 @@ app.listen(PORT, () => {
       [_n('findSizeViaSearch(sizeName, website, fcKey,', ' apiKey, leadLocation, { reviewCount: signals.reviewCount });'), 'the size lookup is never bought, is bought on the outlet name instead of the brand, or cannot see the review count that decides the second query'],
       [_n("const sizeName = (out.chain && out.chain.kind === 'network'", ' && out.chain.brand) ? out.chain.brand : name;'), 'a branch network is measured as one outlet again (ClearChoice, 2026-09-03)'],
       [_n('if ((signals.branchNetwork === true || signals.peOwned === true || signals.nationalOperator === true)', " && _layers.verdict === 'owner') {"), 'a branch network, PE-owned or national lead reads as owner-run off its own page again, so a held-back name reaches the sheet as the owner'],
-      [_n('if (!sizeMeasured(', 'signals) && website) {'), 'the size lookup is bought on a lead that measured its size, or skipped on one that only guessed it'],
+      [_n('if (!sizeMeasured(signals) && website', ' && !_ownerWaveFoundNobody) {'), 'the size lookup is bought on a lead that measured its size, on one with no website, or on one the owner wave already came back empty on - a size decides the tier and the tier decides the lane, and a lead with no name has no call lane to be sorted into'],
+      [_n('const _ownerWaveFoundNobody = _ownerAttempted === true', ' && !(out.owner && out.owner.name);'), 'nothing measures whether the owner wave ran and found nobody, so the size wave cannot be aimed away from those leads'],
       [_n('sizeWord: _size.band, sizeConfidence: _size.confidence,', ' affordBand: signals.affordBand ||'), 'the lane does not read the sheet\'s own guess, so the two can disagree'],
       [_n("signals.scaleBand = (_scale && !_scale.guess) ?", ' _scale.band : null;'), 'a tenure guess decides the tier the lanes read'],
       [_n('site:linkedin.com/company OR ', 'site:bbb.org'), 'the size lookup has no second query, so a miss on the revenue directories stays a miss'],
@@ -59858,7 +60346,10 @@ app.listen(PORT, () => {
       [_n('const _negKey = loc ? ', '`${domain}|${loc}` : domain;'), 'the web-search negative memo is keyed on the domain alone, so a city-less miss blocks the search for 14 days after the city is fixed'],
       [_n('out.product = readProductCompanyTells({', ' pages, links });'), 'the contact read no longer looks for a product company'],
       [_n('product: signals.product', 'Company, usd: signals.scaleUsd,'), 'the product verdict or the measured dollars never reach the lane'],
-      [_n('network: signals.branchNetwork === true, peOwned: signals.peOwned === true,', ' national: signals.nationalOperator === true });'), 'the branch-network, PE-owned and national marks never reach the lane'],
+      [_n('network: signals.branchNetwork === true, peOwned: signals.peOwned === true,', ' national: signals.nationalOperator === true,'), 'the branch-network, PE-owned and national marks never reach the lane'],
+      // Round 121: the two facts that put a website-less business in front of
+      // the rep. Both are already measured; the lane could not see either.
+      [_n('siteless: signals.readable !== true,', ' phone: !!out.phone });'), 'the lane cannot tell a lead whose pages we could not read from one we simply have not named, so Vin\'s ruling that a business with a phone and no website belongs on the call sheet is dead at the call site'],
       [_n('signals.scaleUsd = (_scale && !_scale.guess', ' && Number(_scale.usd) > 0) ? Number(_scale.usd) : null;'), 'the measured dollars never reach the signals, or a tenure guess supplies them'],
       [_n('signals.laneLast = _lanes.last', ' === true;'), 'the lane says "last" and the score never hears it, so a layered lead is not ranked last'],
       [_n('c.verifiedEmployees > ', 'ICP_EMPLOYEE_BLOCK) {'), 'the discovery employee gate is back on a literal'],
@@ -59936,7 +60427,20 @@ app.listen(PORT, () => {
     if (_bn.employees !== null || _bn.started !== null || _bn.management.length) _fails.push('an ordinary page yields BBB fields');
     if (!BBB_PROFILE_RE.test('https://www.bbb.org/us/nc/raleigh/profile/bathroom-remodel/gid-renovation-inc-0593-90314457')) _fails.push('the live BBB profile URL shape is not recognised');
     if (BBB_PROFILE_RE.test('https://www.bbb.org/search?find_text=roofing')) _fails.push('a BBB search page is taken for a profile');
-    if (!/fetchT\(/.test(String(fetchBbbProfile)) || /fcCall|firecrawl/i.test(String(fetchBbbProfile))) _fails.push('the BBB profile is fetched through Firecrawl - it must be a plain fetch, never a credit');
+    if (!/fetchT\(/.test(String(fetchBbbProfile)) || /fcCall|firecrawl/i.test(String(fetchBbbProfile))) _fails.push('the BBB profile is fetched through the paid page reader - it must be a plain fetch, never a credit');
+    // ══ ROUND 121: RETIRED ON THE CONDITION ITS OWN COMMENT SET ═══════════
+    // Round 117 wrote the rule: "if the next batch is still 403 on every
+    // attempt the rung is retired rather than kept as a line of log noise."
+    // The next batch was four attempts and four 403s. It is off behind a knob,
+    // not deleted - the parser above is still asserted in full, so the day
+    // somebody buys the page through the paid reader it has a reader waiting.
+    if (typeof BBB_PROFILE_ON !== 'boolean') _fails.push('the BBB retirement is not a boolean knob, so an unset env var could read as truthy and re-open a rung that has never once answered');
+    if (BBB_PROFILE_ON !== false) _fails.push('the BBB profile fetch is ON by default again - eight of eight attempts across two batches came back 403, which is the retirement condition Round 117 wrote into its own comment');
+    // This check is synchronous, so the retired return is asserted on the
+    // function's own source rather than by awaiting it - the early exit is one
+    // literal and it either sits above the fetch or it does not.
+    if (!/retired - 403 on every attempt/.test(String(fetchBbbProfile))) _fails.push('a retired BBB read does not report ITSELF as retired, so the caller cannot tell "we did not ask" from "they refused us"');
+    if (String(fetchBbbProfile).indexOf('BBB_PROFILE_ON') > String(fetchBbbProfile).indexOf('fetchT(')) _fails.push('the retirement is checked AFTER the fetch, so the request goes out anyway and the knob is decoration');
     // Round 117: 2 of 2 attempts came back 403 on 2026-09-04 against a
     // two-part Chrome version and an Accept of "text/html" - a fingerprint no
     // browser sends. This asserts the header SET, not that BBB answers: that
@@ -60528,17 +61032,44 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('return _r ? { ..._r, stagesRun } : { name: null, title: null, score: 0, sources: [], corroborated: false,', " confidence: 'none', stagesRun }; }"))) {
       _fails.push('the dead-site early return in findDecisionMaker dropped stagesRun again, so the OWNER WAVE line says "the resolver did not run" on a lead where stage 1 ran');
     }
-    // Three terms, full marks on each: the unmeasured four LEAVE the denominator.
-    const _three = findIcpScore({ teamCount: 12, adsCode: null, hiringAny: null, hiringMarketing: null, reviewCount: 200, rating: 4.6 });
-    if (_three.score !== 100) _fails.push(`a lead measured on THREE signals it scores full marks on came out at ${_three.score} — the unmeasured terms are being counted as zero rather than left out`);
-    if (_three.measured !== 3) _fails.push('the three-term fixture reports a different measured count than it has');
-    // == BELOW THREE TERMS THERE IS NO SCORE ================================
-    // Vin's decision after ten name-only leads scored 53 on one term each.
-    for (const [_f, _k] of [[{ teamCount: 12 }, 1], [{ teamCount: 12, reviewCount: 200 }, 2]]) {
+    // The floor's worth, full marks on each: the unmeasured four LEAVE the
+    // denominator. This is the rule the whole table rests on, and it is still
+    // asserted - just at the floor Round 120 raised it to, because the fixture
+    // that used to carry it (three terms) is now the failure it names.
+    const _atFloor = { teamCount: 12, reviewCount: 200, rating: 4.6, affordBand: 'premium',
+      reachMeasured: true, ownerCanBuy: true, emailTier: 1,
+      hiringMarketing: true, hiringMarketingTitles: ['Marketing Manager'] };
+    const _three = findIcpScore(_atFloor);
+    if (_three.score !== 100) _fails.push(`a lead measured on ${_three.measured} signals it scores full marks on came out at ${_three.score} — the unmeasured terms are being counted as zero rather than left out`);
+    if (_three.measured !== FIND_ICP_MIN_TERMS) _fails.push(`the at-the-floor fixture measures ${_three.measured} terms, not the ${FIND_ICP_MIN_TERMS} the floor is set to - it is asserting the rule at the wrong place`);
+    // == BELOW THE FLOOR THERE IS NO SCORE ==================================
+    // Vin's decision after ten name-only leads scored 53 on one term each, and
+    // raised to six on 2026-09-04 after two leads with NO readable website and
+    // nobody named scored 75/100 on four terms - above a lead with a named
+    // co-founder, a published mailbox and a phone. Three maxed terms over a
+    // four-term denominator is a perfect score on a business we know nothing
+    // about. The live shapes are in here now, not just the synthetic ones.
+    for (const [_f, _k] of [
+      [{ teamCount: 12 }, 1],
+      [{ teamCount: 12, reviewCount: 200 }, 2],
+      [{ teamCount: 12, reviewCount: 200, rating: 4.6 }, 3],
+      // American Dream Solar and Window, 2026-09-04: website returned nothing,
+      // no owner, no address, 305 reviews - and it scored 75/100.
+      [{ reviewCount: 305, rating: 4.6, affordBand: 'premium', affordWhy: 'premium', reachMeasured: true, ownerCanBuy: false, emailTier: null }, 4],
+    ]) {
       const _t = findIcpScore(_f);
       if (_t.score !== null || _t.thin !== true) _fails.push(`a lead with ${_k} of ${FIND_ICP_TERMS.length} signals measured is given a numeric score (${_t.score}) - a ratio over ${_k} term(s) is not a fit score and it sorts a lead nobody looked at into the middle of the list`);
-      if (_t.measured !== _k) _fails.push('the thin fixture reports a different measured count than it has');
+      if (_t.measured !== _k) _fails.push(`the thin fixture reports ${_t.measured} measured terms, not the ${_k} it has`);
       if (!/not scored/.test(_t.why || '')) _fails.push('a thin read does not SAY it is not scored, so the row shows a dash with no reason');
+    }
+    // And the term that carries the loudest signal must not fall out of the
+    // score because a SENTENCE could not be built. It did, silently, on every
+    // lead whose titles list was missing.
+    {
+      const _hm = FIND_ICP_TERMS.find(t => t.id === 'hiring').score({ hiringMarketing: true });
+      if (!_hm || _hm.points !== 20) _fails.push('a lead hiring for marketing with no titles list scores nothing - the term throws on the sentence and findIcpScore records it as not measured, which is how the loudest signal in the table went missing in silence');
+      const _ha = FIND_ICP_TERMS.find(t => t.id === 'hiring').score({ hiringAny: true });
+      if (!_ha || !(_ha.points >= 10)) _fails.push('a lead hiring for anything at all with no titles list scores nothing, for the same reason');
     }
     // == THE TIER IS READ STRICTLY ========================================
     // Number(null) is 0 and 0 is finite, so an absent tier read as "solid" and
@@ -60722,7 +61253,7 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('scrapeEmailsFromSite(website, fcKey, homepageContent, siteConfirmed, siteIsDown,', ' freePages)'))) {
       _fails.push('the email engine is no longer handed the pages we already hold, so a contact page in memory is bought again from Firecrawl');
     }
-    if (!_src.includes(_n('const md = await firecrawlScrape(fcKey, website, 40000, FC_CACHE_MS, { shot: false,', ' capture: (h) => { _html = h || \'\'; } });'))) {
+    if (!_src.includes(_n('const md = await firecrawlScrapeCapped(fcKey, website, 40000, FC_CACHE_MS, { shot: false,', ' capture: (h) => { _html = h || \'\'; } });'))) {
       _fails.push('the Find fallback scrape is asking for a full-page render again — the most expensive thing on the menu, on a read that never looks at a picture');
     }
     if (!_src.includes(_n('fcKey: allowBuy ? fcKey :', " '',"))) {
@@ -61807,8 +62338,18 @@ app.listen(PORT, () => {
     // competent hands. Both directions are asserted, because a rule that only
     // marks leads down is a rule that eventually marks every lead down.
     {
+      // Round 120 raised FIND_ICP_MIN_TERMS to six, and this fixture measured
+      // five - so both archetypes came back "not scored" and the comparison
+      // this block exists for could not run at all. It is a fixture that had
+      // drifted below what a real readable lead looks like (the 2026-09-04
+      // press scored its readable leads on EIGHT of ten), not a rule that is
+      // wrong: the owner sentence and one booking tool are what every one of
+      // those leads carried. Both arms get them, so the archetype comparison
+      // is untouched.
       const _sig = (extra) => Object.assign({
         teamCount: 9, execTitles: [], hiringAny: false, reviewCount: 120, rating: 4.6,
+        ownerNamedOnSite: true, founderPhrase: 'family-owned',
+        liveChat: true, scheduler: false, callTracking: false,
         affordBand: 'premium', affordWhy: 'premium tier', reachMeasured: false,
       }, extra || {});
 
@@ -71823,6 +72364,31 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (_long.chars > REVIEW_CORPUS_CHARS) _fails.push(`the long corpus is ${_long.chars} characters against a budget of ${REVIEW_CORPUS_CHARS}`);
     if (_long.clipChars < REVIEW_CLIP_FLOOR) _fails.push(`the clip fell to ${_long.clipChars} characters, below the floor a complaint needs to survive`);
 
+    // ══ 2b. ROUND 121: THE SHAPE EVERY FIXTURE ABOVE COULD NOT REACH ══════
+    // Every review built above carries ownerReply: '', and the row an owner
+    // reply produces is HALF AS LONG AGAIN - "\nResponse from the owner: " plus
+    // half the clip. The clip formula paid for the star prefix and the
+    // separator and nothing else, so on a lead whose owner answers their
+    // reviews the corpus overshot and the tail was binned: 15 of 90 on System
+    // Pavers (replies on 74 of 75) and 9 of 90 on A2Z (68 of 81), 2026-09-04.
+    //
+    // Case 2 above is that lead exactly except for the replies, and it was
+    // green throughout. A fixture that cannot reach the mechanism is not a
+    // check - it is the trap check-writing-traps names, and this is the second
+    // time this round it has been found live.
+    const _replied = (n, len, replyLen) => _rev(n, len).map((r) => Object.assign({}, r, {
+      ownerReply: 'Thank you for the feedback, we appreciate it. ' + 'r'.repeat(Math.max(0, replyLen - 46)),
+    }));
+    const _rep90 = buildReviewCorpus(_replied(90, 2000, 800), { budget: REVIEW_CORPUS_CHARS, clip: REVIEW_CLIP_CHARS });
+    if (_rep90.dropped !== 0) _fails.push(`${_rep90.dropped} of ninety reviews were bought from Apify and never shown to the model, because the clip does not budget for the owner reply it appends - the live defect of 2026-09-04`);
+    if (_rep90.mined !== 90) _fails.push(`only ${_rep90.mined} of ninety replied-to reviews reached the model`);
+    if (_rep90.chars > REVIEW_CORPUS_CHARS) _fails.push(`the replied-to corpus is ${_rep90.chars} characters against a budget of ${REVIEW_CORPUS_CHARS} - the arithmetic still does not describe the row it builds`);
+    if (_rep90.clipChars < REVIEW_CLIP_FLOOR) _fails.push(`the clip fell to ${_rep90.clipChars} on a replied-to corpus, below the floor a complaint needs to survive`);
+    // Half replied: the share must be MEASURED, not assumed one way or other.
+    const _half = buildReviewCorpus(_rev(90, 2000).map((r, i) => (i % 2 ? r : Object.assign({}, r, { ownerReply: 'Thanks for the note. ' + 'r'.repeat(600) }))), { budget: REVIEW_CORPUS_CHARS, clip: REVIEW_CLIP_CHARS });
+    if (_half.dropped !== 0) _fails.push(`${_half.dropped} dropped when half the reviews carry a reply - the clip is being sized on an assumed share rather than the one in front of it`);
+    if (!(_half.clipChars > _rep90.clipChars)) _fails.push('a corpus where half the reviews carry a reply is clipped no harder than one where all of them do, so the reply share is not reaching the arithmetic at all');
+
     // 3. The extreme, where dropping is the only honest answer left. It must
     //    still be REPORTED rather than silent, and mined must match the text.
     const _huge = buildReviewCorpus(_rev(600, 900), { budget: REVIEW_CORPUS_CHARS, clip: REVIEW_CLIP_CHARS });
@@ -77514,6 +78080,19 @@ const targetFor = ({ owner, marketingLead, layers } = {}) => {
   }
   if (hasOwner) return { target: 'owner', why: layers === 'layered' ? 'layered business, but no marketing decision-maker was found - expect the owner not to answer' : 'the owner is within reach' };
   if (layers === 'layered') return { target: 'none', why: 'layered business and no marketing decision-maker found' };
+  // ══ ROUND 121: A WAY IN IS NOT A BUYER, AND IT IS NOT NOTHING ═══════════
+  // An owner-run business whose pages name nobody used to return "none" even
+  // when a director-level marketing person had been found, because the branch
+  // above it tests `layered`. The row then said nobody was reachable while we
+  // were holding a name and a title.
+  //
+  // PART 3 is untouched: at an owner-run business the OWNER is the buyer, so
+  // this person cannot sign and marketingLead.canBuy stays false. What the
+  // sentence says is what is true - here is a real human at director level, and
+  // the rep asks them who owns it.
+  if (marketingLead && marketingLead.name) {
+    return { target: 'marketing', why: `nobody who can sign was found on their pages - ${marketingLead.name} (${marketingLead.title}) is the way in; ask them who owns the business` };
+  }
   return { target: 'none', why: 'nobody reachable was found' };
 };
 // Hunter's own department and seniority filters - LinkedIn-biased toward VPs
@@ -78392,11 +78971,21 @@ const FIND_ICP_TERMS = [
   {
     id: 'hiring', max: 20, label: 'whether they are hiring for marketing',
     score: (s) => {
-      if (s.hiringMarketing === true) return { points: 20, say: `hiring for ${s.hiringMarketingTitles.slice(0, 2).join(', ') || 'a marketing role'} - a marketing budget being decided right now` };
+      // ══ ROUND 120: A SENTENCE MUST NOT DECIDE WHETHER A TERM SCORES ═══
+      // Both of these read an array that the caller may not have set, and
+      // findIcpScore catches everything a term throws and records it as NOT
+      // MEASURED. So a lead hiring for a marketing role - the loudest signal
+      // in the table - silently left the score whenever the titles list was
+      // missing, and nothing anywhere said so. Found on 2026-09-04 when the
+      // six-term floor turned a fixture's silence into a crash; it had been
+      // returning null on that fixture since the term was written.
+      const _titles = (v) => (Array.isArray(v) ? v : []).filter(Boolean);
+      if (s.hiringMarketing === true) return { points: 20, say: `hiring for ${_titles(s.hiringMarketingTitles).slice(0, 2).join(', ') || 'a marketing role'} - a marketing budget being decided right now` };
       if (s.hiringAny === true) {
         const ops = Array.isArray(s.hiringOpsTitles) ? s.hiringOpsTitles.length : 0;
         const pts = 10 + (ops >= 2 ? 4 : 0) + (s.hiringRecent === true ? 3 : 0);
-        return { points: Math.min(17, pts), say: `hiring (${s.hiringTitles.slice(0, 2).join(', ')}), though not for marketing${ops >= 2 ? ' - two or more field roles open, so the work is growing' : ''}${s.hiringRecent === true ? ', posted within 90 days' : ''}` };
+        const _t = _titles(s.hiringTitles).slice(0, 2).join(', ');
+        return { points: Math.min(17, pts), say: `hiring${_t ? ` (${_t})` : ''}, though not for marketing${ops >= 2 ? ' - two or more field roles open, so the work is growing' : ''}${s.hiringRecent === true ? ', posted within 90 days' : ''}` };
       }
       // ══ ROUND 119: STOP PUNISHING THE QUIET ONES ═══════════════════════
       // Vin, 2026-09-04, choosing it in as many words. Hiring is POSITIVE
@@ -78507,7 +79096,19 @@ const FIND_ICP_TERMS = [
 // "not scored" and sorts under every scored lead. Not a low score: a low
 // score says we checked and it is a bad fit, which is the opposite of what
 // happened.
-const FIND_ICP_MIN_TERMS = 3;
+// Round 120, off the 2026-09-04 ten-lead press. American Dream Solar and Delta
+// Solar Power both scored 75/100 on FOUR of ten signals - no owner, no address,
+// and a website that could not be read at all - and both outranked Oklahoma
+// Foundation Repair, which scored 70 with a named co-founder, a published
+// mailbox and a phone. Three maxed terms over a four-term denominator is a
+// perfect score on a lead we know almost nothing about, and it is exactly the
+// failure this constant was created for: "a ratio over one term is not a fit
+// score". Three was the right floor when the table had seven terms and every
+// one of them measured on a readable site; with ten terms, two of which now
+// leave the score by design (Round 119), a lead sitting at four has told us
+// nothing but its Google listing. It is NOT SCORED and sorts under every scored
+// lead - not a low score, which would say we checked and it is a bad fit.
+const FIND_ICP_MIN_TERMS = 6;
 // ══ A BROKEN WEBSITE IS A LIFT, NOT A TERM ════════════════════════════════
 // Round 119. Vin, 2026-09-04, asked for something no option offered him:
 // *"bad website should def lift a lead - it should especially lift it more if
@@ -78586,7 +79187,7 @@ const findIcpScore = (signals) => {
   const measured = terms.filter(t => t.measured).length;
   if (measured < FIND_ICP_MIN_TERMS) {
     return { score: null, thin: true, measured, of: FIND_ICP_TERMS.length, terms,
-      why: `not scored - only ${measured} of ${FIND_ICP_TERMS.length} signals could be measured, and a ratio over ${measured === 1 ? 'one term' : 'two terms'} is not a fit score` };
+      why: `not scored - only ${measured} of ${FIND_ICP_TERMS.length} signals could be measured, and a ratio over ${measured === 1 ? 'one term' : measured + ' terms'} is not a fit score` };
   }
   // ══ A DEMOTED LEAD MUST SAY SO IN THE NUMBER ══════════════════
   // Vin, asked what the list should do with a lead discovery demoted: "i mean
@@ -78950,7 +79551,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       // the markup and never the picture - the render is the most expensive
       // thing on the menu and nothing in a contact list looks at it.
       let _html = '';
-      const md = await firecrawlScrape(fcKey, website, 40000, FC_CACHE_MS, { shot: false, capture: (h) => { _html = h || ''; } });
+      const md = await firecrawlScrapeCapped(fcKey, website, 40000, FC_CACHE_MS, { shot: false, capture: (h) => { _html = h || ''; } });
       if (md || _html) {
         out.readVia = 'Firecrawl (their site refused a plain fetch)';
         pages.push({ url: website, intent: 'home', html: _html, text: _html ? plainTextFromHtml(_html) : String(md) });
@@ -79018,7 +79619,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         if (r.ok) return { pick, html: r.html, text: r.text };
         if (viaFirecrawl && fcKey && !fcCreditsBlocked()) {
           let _h = '';
-          const md = await firecrawlScrape(fcKey, pick.url, 30000, FC_CACHE_MS, { shot: false, capture: (h) => { _h = h || ''; } });
+          const md = await firecrawlScrapeCapped(fcKey, pick.url, 30000, FC_CACHE_MS, { shot: false, capture: (h) => { _h = h || ''; } });
           if (md || _h) return { pick, html: _h, text: _h ? plainTextFromHtml(_h) : String(md) };
         }
         return null;
@@ -79026,7 +79627,14 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       for (const g of got) if (g) _keep(g.pick.url, g.pick.intent, g.html, g.text);
       // Free, pure, no model call: if their own pages already name an owner we
       // can stop reading and the paid wave is never bought.
-      if (!viaFirecrawl && i + _wave < picks.length) {
+      //
+      // ══ ROUND 121: AND IT WAS SWITCHED OFF WHERE PAGES COST MONEY ═══════
+      // This read `!viaFirecrawl`, so the one rule that stops reading once the
+      // owner is named applied ONLY on the leads where the remaining pages were
+      // free - and never on the leads where each one costs a credit. Backwards:
+      // the saving is worth nothing when the pages are free and a credit a page
+      // when they are not. The roster parse is free and pure either way.
+      if (i + _wave < picks.length) {
         const _soFar = pages.filter(rosterEligiblePage).map(p => String(p.text || '')).join('\n');
         if (parseTeamRoster(_soFar, name).some(r => r.isOwner)) {
           console.log(`\u{1F50E} FIND READ [${name}]: their own pages name an owner after ${pages.length} page(s), so the remaining ${picks.length - i - _wave} were not read and no paid lookup is needed.`);
@@ -79602,7 +80210,20 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   out.sizeLookup = { bought: false, source: '', why: 'a size was published, nothing bought' };
   // Never on a lead with no website: that lead spends nothing, by the rule the
   // free read already keeps (a name alone matches the wrong company anyway).
-  if (!sizeMeasured(signals) && website) {
+  // ══ ROUND 121: A SIZE ON A LEAD NOBODY CAN CALL IS WORTH NOTHING ══════
+  // This tested only whether a size was missing and a website existed, so the
+  // revenue and headcount searches were bought even when the owner wave had
+  // already come back with nobody at all - four of American Driveway's fourteen
+  // credits, on a lead that was going nowhere. The size decides the TIER and
+  // the tier decides the LANE, and a lead with no name has no call lane to be
+  // sorted into. It still runs whenever a name was found, and whenever the
+  // owner ladder never ran at all (a branch, or the paid search switched off),
+  // because there the size is what the email lane is sorted by.
+  const _ownerWaveFoundNobody = _ownerAttempted === true && !(out.owner && out.owner.name);
+  if (_ownerWaveFoundNobody) {
+    console.log(`\u{1F4CF} SIZE LOOKUP [${name}]: not bought - the owner wave already came back with nobody, and a size on a lead we cannot call decides a lane it will never be in. ~4 Firecrawl credits saved.`);
+  }
+  if (!sizeMeasured(signals) && website && !_ownerWaveFoundNobody) {
     out.sizeLookup = { bought: true, source: '', why: 'nothing measured about their size' };
     try {
       const _capi = (companiesApiKey && website) ? await enrichViaCompaniesAPI(website, companiesApiKey) : null;
@@ -79655,7 +80276,20 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   }
   out.layers = { verdict: _layers.verdict, why: _layers.why };
   let _ml = pickMarketingLead(signals.teamNames, signals.teamTitles);
-  if (!_ml && _layers.verdict === 'layered' && hunterKey && website) {
+  // ══ ROUND 121: ASK WHEN WE HAVE NOBODY, NOT ONLY WHEN THEY HAVE AN ORG ══
+  // This read `_layers.verdict === 'layered'` and nothing else, so the one
+  // route left after the owner ladder has failed was switched OFF on exactly
+  // the leads that had failed. A2Z Construction, 2026-09-04: "layers owner
+  // (family-owned on their site)", eight Firecrawl credits of paid searches,
+  // NO decision-maker found in any source - and Hunter, which costs one Hunter
+  // credit and no Firecrawl at all, was never asked, because the business did
+  // not happen to have an org chart.
+  //
+  // The gate was asking whether THEY are layered. The question that decides
+  // whether to spend is whether WE have anybody. A guard in the wrong function,
+  // the class `bug-classes` records.
+  const _nobodyNamed = !(out.owner && out.owner.name);
+  if (!_ml && hunterKey && website && (_layers.verdict === 'layered' || _nobodyNamed)) {
     try { _ml = await findMarketingLeadViaHunter(website, hunterKey, name); } catch (e) { notes.push(`the marketing decision-maker lookup failed (${e && e.message})`); }
   }
   out.marketingLead = _ml ? { name: _ml.name, title: _ml.title, canBuy: _layers.verdict === 'layered', sources: [_ml.source], email: _ml.email || '', emailTier: null, emailGrade: '', sendable: false } : null;
@@ -79685,7 +80319,10 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   }
   signals.marketingLeadFound = out.target === 'marketing';
   // ══ WHICH LANE (Round 111) ═══════════════════════════════════════════
-  const _lanes = lanesFor({ tier: signals.scaleBand, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true });
+  // siteless: their pages could not be read AT ALL - no website on the listing,
+  // or a site that returned nothing. readable is the same flag readLayers uses
+  // to refuse a layers verdict, so the two cannot disagree about what we saw.
+  const _lanes = lanesFor({ tier: signals.scaleBand, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true, siteless: signals.readable !== true, phone: !!out.phone });
   out.lanes = _lanes;
   // Round 114: a layered or owned-elsewhere lead on the call sheet ranks LAST.
   signals.laneLast = _lanes.last === true;
@@ -79705,6 +80342,13 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     firecrawl: Math.round((led.spent || 0) * 100) / 100,
     anthropicUsd: Math.round((led.anthropicUsd || 0) * 10000) / 10000,
   };
+  // Round 121 (Vin: "cap it, and say so on the row"). A lead that stopped
+  // buying says so, and names what it did not buy - so a batch answers whether
+  // the ceiling ever cost a name, rather than leaving it to be argued about.
+  out.capped = led.capped
+    ? { at: led.capped.at, cap: FIND_LEAD_CREDIT_CAP, first: led.capped.first, skipped: led.capped.skipped.slice(),
+        why: `stopped buying at ${led.capped.at} of ${FIND_LEAD_CREDIT_CAP} Firecrawl credits; not bought: ${led.capped.skipped.join(', ')}` }
+    : null;
   // Round 118: WHICH paid searches this lead bought, at 2 credits each. The
   // OWNER WAVE line already says whether the wave fired and what it produced;
   // this says what it was made of, so "which of these searches earns its keep"
@@ -79762,6 +80406,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       + `${_src.length ? `, from ${_src.join('+')}${_free ? ' (all free sources)' : ''}` : ''}`
       + `${out.ownerStagesRun === null ? ' (the resolver did not run on this lead)' : ''}, ${out.spend.firecrawl} credit(s) on the lead.`
       + _searchMix()
+      + (out.capped ? ` | CAPPED: ${out.capped.why}` : '')
       + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan. The searches: line names WHICH paid search ran, so the next round cuts on evidence rather than on a hunch.'));
     _ownerWaveLectured = true;
   }
