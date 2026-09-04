@@ -59418,6 +59418,30 @@ app.listen(PORT, () => {
     if (!_two.some(r => r.name === 'Dusty Hannah' && r.isOwner)) _fails.push('an ordinary two-word roster entry stopped resolving, so the mononym pass has broken the main pass');
     if (_two.some(r => r.mononym)) _fails.push('a two-word name is being marked as a mononym');
 
+    // ── 4b. ROUND 117: A BRANCH POINTS AT ONE PAGE INSIDE A BIGGER SITE ─
+    // The four live shapes from the 2026-09-04 run that the three older tells
+    // each missed for a different reason, and the shapes that must NOT fire:
+    // a listing pointing at its own home page, and a business named after the
+    // town whose page it points at.
+    const _ot = (n, u, c) => readOutletTell({ name: n, homeUrl: u, city: c });
+    for (const [n, u, c] of [
+      ['Champion Replacement Windows of Raleigh', 'https://www.championwindow.com/Raleigh', 'Durham, NC'],
+      ['Pella Windows and Doors Showroom of Raleigh, NC', 'https://www.pella.com/locations/nc/durham', 'Durham, NC'],
+      ['Sono Bello Kansas City', 'https://www.sonobello.com/locations/kansas-city', 'Overland Park, KS'],
+      ['UrgentVet - Carytown', 'https://urgentvet.com/location/carytown-richmond-va/', 'Richmond, VA'],
+    ]) if (!_ot(n, u, c).isOutlet) _fails.push(`"${n}" is not read as a branch on a brand's own site - that shape cost ten credits each and named nobody, three times out of three, on 2026-09-04`);
+    for (const [n, u, c] of [
+      ['Arlington Concrete', 'https://arlingtonconcreteco.com/', 'Columbus, OH'],
+      ['Arlington Concrete', 'https://arlingtonconcreteco.com/arlington', 'Arlington, OH'],
+      ['Vessels Plumbing & Services Inc', 'https://vesselsplumbing.com/', 'Louisville, KY'],
+      ['Joe Plumbing - Raleigh', 'https://joeplumbing.com/', 'Raleigh, NC'],
+      ['Some Roofer', 'https://someroofer.com/home', 'Dallas, TX'],
+      ['Independent Dental', 'https://independentdental.com/locations', 'Tulsa, OK'],
+    ]) if (_ot(n, u, c).isOutlet) _fails.push(`"${n}" at ${u} is read as somebody else's branch - either a listing pointing at its own home page or a business named after its own town`);
+    if (_ot('Nothing Read Co', '', 'Tulsa, OK').measured !== false) _fails.push('a lead whose site we never opened claims to have been measured for the branch tell');
+    if (_ot('Sono Bello Kansas City', 'https://www.sonobello.com/locations/kansas-city', 'Overland Park, KS').brand !== 'Sono Bello') _fails.push('the brand behind a branch is not the listing name minus the city, so the size lookup searches one outlet');
+    if (readChainEvidence({ pages: [{ url: 'https://www.pella.com/locations/nc/durham', text: 'x', html: '<p>x</p>' }], name: 'Pella Windows and Doors Showroom of Raleigh, NC' }).isChain !== true) _fails.push('a Places name ending ", NC" defeats the territory tell again');
+
     // ── 5. THE CALL SITES ──────────────────────────────────────────────
     // A fixture supplies its own arguments and therefore cannot see a caller.
     const _src = selfSourceNoCommentsLF();
@@ -59429,6 +59453,9 @@ app.listen(PORT, () => {
       [_nd('if (out.chain.isChain && out.chain.kind', " === 'franchise') {"), 'a branch network is dropped as a franchise again, or a franchise is kept (Round 114: only franchise evidence drops)'],
       [_nd('signals.branchNetwork', ' = true;'), 'a branch network is read and never marked, so the lane cannot route it to email'],
       [_nd('if (apiKey && name &&', ' !out.notIcp) {'), 'a chain outlet still buys the paid owner wave'],
+      [_nd('out.outlet = readOutletTell({ name, homeUrl:', ' ((pages || []).find(p'), 'the contact read no longer asks where their own Google listing points, so a branch on a brand site is read as an independent'],
+      [_nd('const _headOffice = signals.branchNetwork', ' === true;'), 'the head-office rule no longer reads the branch mark'],
+      [_nd('const paidOwner = opts.paidOwnerLookup !== false', ' && !_headOffice;'), 'a branch of a national brand buys the paid owner wave again - ten credits and three minutes for a signer who sits at head office'],
       [_nd('if (website &&', ' !out.notIcp) {'), 'a chain outlet still buys the address lookup'],
       [_nd('out.nonprofit = readNonprofitEvidence({ pages,', ' links });'), 'the contact read no longer looks for nonprofit evidence at all'],
       [_nd('if (!out.notIcp && out.nonprofit', '.isNonprofit) {'), 'a nonprofit is read and then bought anyway - the verdict does not reach notIcp'],
@@ -77140,6 +77167,61 @@ const findMarketingLeadViaHunter = async (website, hunterKey, companyName) => {
   console.log(`HUNTER MARKETING [${companyName}]: \u2713 ${name} (${hit.position}) via Hunter's marketing filter, confidence ${hit.confidence || '?'}.`);
   return { name, title: String(hit.position || '').trim(), email: hit.value || '', confidence: hit.confidence || null, source: 'hunter' };
 };
+// == A BRANCH POINTS AT ONE PAGE INSIDE SOMEBODY ELSE'S SITE ==============
+// Round 117. Three national brands were read at full price on 2026-09-04 and
+// named nobody: Champion Replacement Windows of Raleigh (championwindow.com,
+// its listing pointing at /Raleigh), Pella Windows and Doors Showroom of
+// Raleigh, NC (pella.com, /locations/nc/durham) and Sono Bello Kansas City
+// (sonobello.com, /locations/kansas-city). Ten Firecrawl credits and three and
+// a half minutes each, and between them they took that run's "owner named"
+// score from 82% to 72% - a resolver that was working, marked down for looking
+// for owners who are not there.
+//
+// Each missed a DIFFERENT existing tell, and every one of those tells demands
+// one exact idiom: Round 113's suffix wants " - City", Round 115's territory
+// wants " of City" with no comma in it, chainLocationPath wants a STATE
+// segment. The shape all three share needs no brand list and no punctuation at
+// all: an independent business's Google listing points at its HOME PAGE, and a
+// branch's points at one page inside a bigger site. In that same 25-lead run
+// twenty-one listings pointed at "/", and every one of the four that did not
+// was a branch.
+//
+// It MARKS, it never drops (Vin's 114 ruling: a big company is an email lead,
+// never deleted), so a false positive costs one owner search not bought -
+// which is why the city-in-the-path arm also refuses to fire when the business
+// is NAMED after the town (arlingtonconcreteco.com/arlington is Arlington
+// Concrete's own site, not a branch of anything).
+const OUTLET_PATH_RE = /^\/(?:locations?|stores?|showrooms?|branch(?:es)?|offices?|dealers?|centers?|centres?)(?:\/|$)/i;
+const placeSlug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const readOutletTell = ({ name, homeUrl, city } = {}) => {
+  const u = String(homeUrl || '');
+  if (!u) return { measured: false, isOutlet: false, why: '', brand: '', path: '' };
+  const host = ((u.match(/^https?:\/\/([^\/]+)/) || ['', ''])[1]).toLowerCase().replace(/^www\./, '').replace(/\..*$/, '').replace(/[^a-z0-9]/g, '');
+  const path = u.replace(/^https?:\/\/[^\/]+/, '').replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
+  if (!path || path === '/') return { measured: true, isOutlet: false, why: '', brand: '', path: '/' };
+  const segs = path.split('/').filter(Boolean).map(placeSlug);
+  // Every trailing run of the listing name that could be a place: "Raleigh",
+  // "Kansas City", "... of Raleigh, NC". Longest first, so "Sono Bello Kansas
+  // City" gives up "Kansas City" and keeps "Sono Bello" as the brand rather
+  // than keeping "Sono" - the brand is what the size lookup searches on.
+  const tails = [];
+  const _w = String(name || '').replace(/,\s*[A-Z]{2}\.?$/, '').trim().split(/\s+/);
+  for (let k = Math.min(3, _w.length - 1); k >= 1; k--) {
+    const run = _w.slice(_w.length - k).join(' ');
+    if (!/^[A-Z]/.test(run)) continue;
+    tails.push({ slug: placeSlug(run), brand: _w.slice(0, _w.length - k).join(' ').replace(/\s+(?:of|at|in|[-–—])$/i, '').trim() });
+  }
+  const _cityTail = { slug: placeSlug(String(city || '').split(',')[0]), brand: '' };
+  // A business named after its own town publishes /arlington on its OWN site,
+  // so the town has to be absent from the domain for the path to prove anything.
+  const ours = (slug) => host.length >= 4 && slug && host.includes(slug.replace(/-/g, ''));
+  const match = tails.concat([_cityTail]).find(t => t.slug && t.slug.length >= 4 && segs.includes(t.slug) && !ours(t.slug));
+  if (OUTLET_PATH_RE.test(path) && segs.length >= 2) {
+    return { measured: true, isOutlet: true, why: `their Google listing points at one location's page inside a bigger site (${path})`, brand: (match && match.brand) || '', path };
+  }
+  if (match) return { measured: true, isOutlet: true, why: `their Google listing points at /${match.slug} inside ${host}'s own site rather than at a home page of their own`, brand: match.brand || '', path };
+  return { measured: true, isOutlet: false, why: '', brand: '', path };
+};
 const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
   const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
   const titles = (Array.isArray(rosterTitles) ? rosterTitles : []).map(t => String(t || ''));
@@ -77170,7 +77252,10 @@ const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
   // system - the naming Overhead Door, Archadeck, ServPro and Molly Maid all
   // use. The name alone is not enough ("Roofers of Tampa" is a trade name);
   // the brand domain plus the city path is.
-  const _ofCity = String(name || '').match(/^(.{3,60}?) of ([A-Z][A-Za-z.'\s]{2,30})$/);
+  // Round 117: a Places name ends ", NC" as often as it ends with the city, and
+  // the character class here has no comma in it - "Pella Windows and Doors
+  // Showroom of Raleigh, NC" could not match at all.
+  const _ofCity = String(name || '').replace(/,\s*[A-Z]{2}\.?$/, '').match(/^(.{3,60}?) of ([A-Z][A-Za-z.'\s]{2,30})$/);
   const _brandSlug = _ofCity ? _ofCity[1].toLowerCase().replace(/[^a-z0-9]+/g, '') : '';
   const _citySlug = _ofCity ? _ofCity[2].trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') : '';
   const _ofPage = (_ofCity && _brandSlug.length >= 4) ? read.find(p => {
@@ -77179,6 +77264,11 @@ const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
     const path = u.replace(/^https?:\/\/[^\/]+/, '').toLowerCase().replace(/[?#].*$/, '').replace(/\/+$/, '');
     // Either direction: 'overheaddoor' is inside 'overheaddoorcompany' and 'archadeck' is 'archadeck'.
     const core = _brandSlug.replace(/(company|corporation|corp|inc|llc|co)$/, '');
+    // Round 117 left this at truncation-only on purpose. Widening it to the
+    // brand's first word would match "Champion Replacement Windows of Raleigh"
+    // on championwindow.com and DROP it as a franchise territory, and Vin ruled
+    // on 2026-09-04 that a brand outlet is kept as an email lead with the paid
+    // owner search stood down. readOutletTell marks that shape instead.
     const hostMatch = host.length >= 4 && core.length >= 4 && (host.includes(core) || core.includes(host));
     return hostMatch && (path === '/' + _citySlug || path.startsWith('/' + _citySlug + '/'));
   }) : null;
@@ -78447,6 +78537,18 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     // blindness is the guard-too-tight failure. It says what is unknown.
     notes.push('we could not read enough of their site to tell an independent business from a branch of a bigger one \u2014 that is a gap in what we read, not a finding about them');
   }
+  // Round 117: and the cheapest tell of all - where their own Google listing
+  // points. Read off the URL we already resolved, so it costs nothing at all.
+  out.outlet = readOutletTell({ name, homeUrl: ((pages || []).find(p => p && p.intent === 'home') || {}).url || website, city: leadLocation });
+  if (!out.notIcp && out.outlet.isOutlet && signals.branchNetwork !== true) {
+    signals.branchNetwork = true;
+    out.chain = Object.assign({}, out.chain || {}, {
+      measured: true, isChain: true, kind: 'network',
+      brand: (out.chain && out.chain.brand) || out.outlet.brand || '',
+      why: [(out.chain && out.chain.why) || '', out.outlet.why].filter(Boolean).join('; '),
+    });
+    notes.push(`a branch of a bigger operation — ${out.outlet.why}. Kept as an email lead: the local number reaches a branch, and the marketing decision-maker at head office is the target.`);
+  }
   // Same seat as the chain read, same reason: everything after this line
   // costs credits, and a nonprofit has no owner to sell to.
   out.nonprofit = readNonprofitEvidence({ pages, links });
@@ -78544,8 +78646,18 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // then read this tab's careers page - fetched on purpose, for the hiring
   // signal - as a list of the company's owners.
   const interior = pages.slice(1).map(p => ({ url: p.url, text: p.text, intent: p.intent }));
-  const paidOwner = opts.paidOwnerLookup !== false;
+  // Round 117 (Vin, 2026-09-04): a branch has no local owner to buy. Champion,
+  // Pella and Sono Bello each bought the whole paid wave on 2026-09-04 and
+  // named nobody, three times out of three, because the person who signs at a
+  // branch sits at head office. The lead is KEPT - 114 stands, it is an email
+  // lead - and the FREE stage still runs on their own pages; only the paid
+  // searches are stood down, and the marketing head Hunter looks for is the
+  // target on a branch anyway.
+  const _headOffice = signals.branchNetwork === true;
+  const paidOwner = opts.paidOwnerLookup !== false && !_headOffice;
   out.paidOwnerLookup = paidOwner;
+  out.paidOwnerHeadOffice = _headOffice;
+  if (_headOffice) console.log(`DM [${name}]: a branch of a bigger operation - the signer is at head office, so the paid owner search was not bought (~10 Firecrawl credits saved)`);
   // null means the resolver never ran on this lead, which is a different thing
   // from "it ran and bought nothing". Undefined would read as the second.
   out.ownerStagesRun = null;
@@ -78920,7 +79032,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan.'));
     _ownerWaveLectured = true;
   }
-  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
+  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerHeadOffice === true ? 'FREE STAGE ONLY (a branch of a bigger operation - the signer is at head office)' : out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
   return out;
 };
 
