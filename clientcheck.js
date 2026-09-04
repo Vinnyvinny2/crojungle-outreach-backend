@@ -2358,7 +2358,7 @@ let contactTally = null;
                  // resolver's source ids are said the way a rep would say them.
                  'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN',
                  // Round 110: size and target cells.
-                 'targetOf', 'SHORT_CELL_MAX', 'shortCell', 'nameWithFlag', 'sizeCell', 'targetCell', 'targetWhyCell', 'websiteCell', 'lastRowsLast',
+                 'targetOf', 'SHORT_CELL_MAX', 'shortCell', 'nameWithFlag', 'sizeCell', 'siteCell', 'targetCell', 'targetWhyCell', 'websiteCell', 'lastRowsLast',
                  // Round 111: the lane helpers the rep's sheet is filtered through.
                  'laneOf', 'laneChip', 'exportableContact', 'LANE_TABS', 'laneHas', 'laneKey'];
   const got2 = {};
@@ -2377,7 +2377,7 @@ let contactTally = null;
         + '\nreturn { tabOf: contactTabOf, tabs: CONTACT_TABS, cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
         + ' mergeView: mergeFindView, latestRun: latestRunIdOf, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
-        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, targetCell, targetWhyCell, shortCell, SHORT_CELL_MAX, laneOf, laneChip, exportableContact, laneHas, laneKey, laneTabs: LANE_TABS, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
+        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, siteCell, targetCell, targetWhyCell, shortCell, SHORT_CELL_MAX, laneOf, laneChip, exportableContact, laneHas, laneKey, laneTabs: LANE_TABS, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
         + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
         + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT,'
         + ' generic: isGenericMailbox };')();
@@ -2679,7 +2679,22 @@ let contactTally = null;
         for (const k of ['ownerGrade', 'emailGrade', 'emailSafeToSend', 'ownerHowSure', 'emailConfidence']) {
           if (M.lean.indexOf(k) >= 0) fails.push(`the lean file carries "${k}" again - the grades and the sentences left the export on 2026-09-02`);
         }
-        for (const k of ['size', 'target', 'marketingLead', 'marketingLeadEmail']) {
+        // Round 118: the website read is on the sheet, and it says nothing at
+        // all on a lead whose site we could not read.
+        const _siteRows = M.rows([
+          { name: 'Poor Co', contactReadOk: true, contactOwner: 'P Q', contactPhone: '5551110000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: true, contactSiteWord: 'poor', contactSiteShort: 'poor (DIY build, no schema)', contactSiteGap: 22, contactSiteWhy: 'it is a DIY website-builder template; no business schema in their code' },
+          { name: 'Good Co', contactReadOk: true, contactOwner: 'G H', contactPhone: '5552220000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: true, contactSiteWord: 'strong', contactSiteShort: 'strong', contactSiteGap: 0, contactSiteWhy: 'nothing wrong with their site that we can see from its code' },
+          { name: 'Unread Co', contactReadOk: true, contactOwner: 'U V', contactPhone: '5553330000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: false, contactSiteWhy: 'we could not read enough of their site to judge the build' },
+        ]);
+        const _byName = (n) => _siteRows.find(r => r.company === n) || {};
+        if (_byName('Poor Co').site !== 'poor (DIY build, no schema)') fails.push(`the website verdict is not on the sheet (got ${JSON.stringify(_byName('Poor Co').site)})`);
+        if (_byName('Good Co').site !== 'strong') fails.push('a business with a good website does not say so');
+        if (_byName('Unread Co').site !== 'not read') fails.push('a lead whose website we could not read is given a verdict on it anyway - the absence claim this system exists to refuse');
+        if (!/DIY website-builder/.test(String(_byName('Poor Co').siteWhy))) fails.push('the full file lost the sentence saying what is missing from the website');
+        if (/converts badly|conversion rate/i.test(String(_byName('Poor Co').site) + String(_byName('Poor Co').siteWhy))) fails.push('the website cell claims something about how their site CONVERTS, which is their analytics and not our markup read');
+        if (M.siteCell({ name: 'Never Read Co', contactSiteMeasured: true, contactSiteShort: 'poor' }) !== '') fails.push('a lead that was never read gets a website verdict');
+        if (M.lean.indexOf('siteWhy') >= 0) fails.push('the long website sentence is back in the lean file');
+        for (const k of ['size', 'site', 'target', 'marketingLead', 'marketingLeadEmail']) {
           if (M.lean.indexOf(k) < 0) fails.push(`the lean file does not carry "${k}" - the rep asked for size and who to go to`);
         }
         if (M.cols.some(c => c[0] === 'ownerGrade' || c[0] === 'emailGrade' || c[0] === 'emailSafeToSend')) fails.push('a grade column is back in the declared table');

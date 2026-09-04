@@ -610,7 +610,24 @@ const runLead = async (b, over, capMs) => {
       'the reach term is not measured on a lead that produced a named owner and a published address, so the score is being computed before the lookups again');
     ok(HJ.icp && (HJ.icp.terms || []).some(t => t.id === 'afford' && t.measured),
       'the affordability band is not reaching the contact score, so the Find card, the CSV and contactRankFor are back to three verdicts about one business');
-    ok(HJ.icp && HJ.icp.score >= 80, `a business with ad spend, a crew, a marketing hire, 180 reviews and 4.6 stars scored ${HJ.icp && HJ.icp.score}/100`);
+    // Round 118 moved this from 80 to 75, and the reason is arithmetic rather
+    // than a slipped standard: the eleventh term (sitegap, max 25) measures on
+    // this lead and scores 14, so the denominator grows by 25 while the points
+    // grow by 14 and the same business lands at 78 instead of 81. That is the
+    // term working - this fixture's site has no schema, no form and a default
+    // title, which is a mediocre website and therefore a mediocre website
+    // prospect. A lead with a GOOD site scores 0 of those 25 by design.
+    ok(HJ.icp && HJ.icp.score >= 75, `a business with ad spend, a crew, a marketing hire, 180 reviews and 4.6 stars scored ${HJ.icp && HJ.icp.score}/100`);
+    // THE WEBSITE READ, end to end over HTTP. No boot fixture can see this:
+    // readSiteBuild runs inside the route, on pages the route fetched itself.
+    ok(HJ.icp && (HJ.icp.terms || []).some(t => t.id === 'sitegap' && t.measured),
+      'the website term is not measured on a lead whose site we read, so the one signal that says whether they NEED us never reaches the score');
+    ok(HJ.site && HJ.site.measured === true && typeof HJ.site.gap === 'number',
+      `the website read did not arrive on the contact response: ${JSON.stringify(HJ.site && [HJ.site.measured, HJ.site.gap])}`);
+    ok(HJ.site && /no business schema/.test(String(HJ.site.why || '')),
+      `the website read did not notice this fixture has no schema markup: ${JSON.stringify(HJ.site && HJ.site.why)}`);
+    ok(HJ.site && !/converts? badly|conversion rate/i.test(String(HJ.site.why || '')),
+      'the website read claims something about how their site CONVERTS - that is their analytics, not our markup read');
     // THE OWNER, from the shared resolver, off pages nobody paid for.
     ok(HJ.owner && /Pete Barnes/.test(String(HJ.owner.name || '')), `the owner named on their own team page was not resolved: ${JSON.stringify(HJ.owner)}`);
     // THE ADDRESS, off the free contact page.
