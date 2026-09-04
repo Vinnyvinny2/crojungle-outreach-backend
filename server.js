@@ -17602,6 +17602,15 @@ const HARM_LADDER = [
 ];
 
 // Runs against measurements, not prose. Returns everything true, worst first.
+// Round 118: declared once, read by measureAbandonment on the audit path and by
+// readSiteBuild on the Find path. It was inline in one of them, and the Find
+// read needs exactly the same rule - two hand-kept copies of one regex is the
+// failure this file records most.
+const COPYRIGHT_YEAR_RE = /(?:©|&copy;|&#0?169;|\(c\)|copyright)[^\n]{0,90}?((?:19|20)\d{2})(?:\s*[-–—]\s*((?:19|20)\d{2}))?/gi;
+const copyrightYearFrom = (text) => {
+  const ys = [...String(text || '').matchAll(COPYRIGHT_YEAR_RE)].flatMap(m => [Number(m[1]), Number(m[2])].filter(Boolean));
+  return ys.length ? Math.max(...ys) : null;
+};
 // Three cheap reads over text we already scraped. No fetch, no credit.
 const measureAbandonment = (text) => {
   const t = String(text || '');
@@ -17621,7 +17630,7 @@ const measureAbandonment = (text) => {
   //
   // A decade-old copyright is one of the strongest website-rebuild signals we can
   // find, and it is free \u2014 missing it costs a whole product fit.
-  const years = [...t.matchAll(/(?:\u00a9|&copy;|&#0?169;|\(c\)|copyright)[^\n]{0,90}?((?:19|20)\d{2})(?:\s*[-\u2013\u2014]\s*((?:19|20)\d{2}))?/gi)]
+  const years = [...t.matchAll(COPYRIGHT_YEAR_RE)]
     .flatMap(m => [Number(m[1]), Number(m[2])].filter(Boolean));
   const copyrightYear = years.length ? Math.max(...years) : null;
   // If a plausible year sits in the text but no copyright context matched, say
@@ -77396,6 +77405,190 @@ const readOutletTell = ({ name, homeUrl, city } = {}) => {
   if (match) return { measured: true, isOutlet: true, why: `their Google listing points at /${match.slug} inside ${host}'s own site rather than at a home page of their own`, brand: match.brand || '', path };
   return { measured: true, isOutlet: false, why: '', brand: '', path };
 };
+// ══ IS THE WEBSITE THE THING WE SELL? ═════════════════════════════════════
+// Round 118. Vin, 2026-09-04: *"a high quality prospect is a bunch of things -
+// a company with a bad or poor website ... how clean is the code on the back
+// end ... is it set up to rank for GEO (AI), is it set up for SEO in general -
+// this stuff is vital."* Ten scoring terms and 195 points, and not one of them
+// asked whether the thing CROJungle sells is broken. We measured whether a
+// business SPENDS on marketing and never whether its website works.
+//
+// It costs nothing. Every page here was already downloaded for the owner hunt,
+// and on the 2026-09-04 run those page reads were 27 of 195 credits while the
+// owner searches were 168. There is no model call in this function at all:
+// code assembles the facts (PART 3).
+//
+// NOTHING HERE IS A SECOND IMPLEMENTATION. readSeoSignals already classifies
+// schema properly - including the trap that Wix and Squarespace auto-inject
+// WebSite/Organization boilerplate so bare ld+json proves nothing - readSiteAge
+// already carries the dated-build markers with their sentences written, and
+// detectPlatform already fingerprints the DIY builders. All three were audit-
+// path only and Find had never called them.
+//
+// THE LIMIT, and it is in the sentences this produces: we measure whether a
+// site is BUILT to convert. We cannot see whether it DOES convert - that needs
+// their analytics. Every fault below is a fact about their markup.
+const AI_CRAWLER_AGENTS = ['gptbot', 'chatgpt-user', 'oai-searchbot', 'claudebot', 'anthropic-ai', 'perplexitybot', 'ccbot', 'google-extended', 'applebot-extended', 'bytespider', 'meta-externalagent'];
+// A real robots.txt parser, because the question is per-agent: consecutive
+// User-agent lines share the rules that follow them, and "Disallow: /" under
+// one agent says nothing about another.
+const robotsBlocksAi = (txt) => {
+  const t = String(txt || '');
+  if (!t.trim() || t.length > 200000) return { checked: false, blocked: [], all: false };
+  const groups = []; let cur = null;
+  for (const raw of t.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, '').trim();
+    if (!line) continue;
+    const ua = line.match(/^user-agent\s*:\s*(.+)$/i);
+    if (ua) {
+      if (!cur || cur.rules.length) { cur = { agents: [], rules: [] }; groups.push(cur); }
+      cur.agents.push(ua[1].trim().toLowerCase());
+      continue;
+    }
+    const rule = line.match(/^(disallow|allow)\s*:\s*(.*)$/i);
+    if (rule && cur) cur.rules.push({ allow: /^allow$/i.test(rule[1]), path: rule[2].trim() });
+  }
+  const blocksRoot = (g) => g.rules.some(r => !r.allow && r.path === '/') && !g.rules.some(r => r.allow && r.path === '/');
+  const blocked = [];
+  for (const g of groups) {
+    if (!blocksRoot(g)) continue;
+    for (const a of g.agents) if (AI_CRAWLER_AGENTS.includes(a)) blocked.push(a);
+  }
+  const all = groups.some(g => g.agents.includes('*') && blocksRoot(g));
+  return { checked: true, blocked: [...new Set(blocked)], all };
+};
+// What a crawler that does not run JavaScript actually sees.
+const rawReadableChars = (html) => String(html || '')
+  .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<!--[\s\S]*?-->/gi, ' ')
+  .replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim().length;
+const FORM_BUILDER_RE = /(?:js|embed|static)\.(?:hsforms|typeform|jotform)\.|forms\.gle\/|wufoo\.com\/|formstack\.com\/|gravityforms|ninjaforms|wpcf7|contact-form-7|formidable/i;
+// Each fault names the product family the gap points at, so the row can say
+// what the work IS and not only that something is wrong. `need` is the
+// readable precondition: without it the fault is NOT MEASURED, never "false".
+const SITE_GAP_TERMS = [
+  // `need` is the readable precondition, and it is split the way
+  // readFindIcpSignals states the rule at its own head: A POSITIVE IS A
+  // POSITIVE ON ANY PAGE; AN ABSENCE NEEDS READABLE TEXT. 'markup' is 500 raw
+  // bytes and is enough to say a tag IS there; 'home' additionally needs
+  // FIND_ABSENCE_TEXT_FLOOR of real text before we may say a tag is NOT.
+  // Without the split, a JavaScript-painted shell - which has no readable text
+  // by definition - suppressed the one fault that describes it.
+  { id: 'noindex',     group: 'seo',      points: 5, need: 'markup',  family: 'search_absence', say: 'their own code tells search engines not to index the page' },
+  { id: 'noSchema',    group: 'geo',      points: 5, need: 'home',    family: 'search_absence', say: 'no business schema in their code, so AI search has nothing structured to read' },
+  { id: 'jsOnly',      group: 'geo',      points: 4, need: 'markup',  family: 'search_absence', say: 'the page is painted by JavaScript, so a crawler that does not run it sees almost nothing' },
+  { id: 'blocksAi',    group: 'geo',      points: 2, need: 'robots',  family: 'search_absence', say: 'their robots.txt tells the AI crawlers to stay out' },
+  { id: 'datedBuild',  group: 'build',    points: 5, need: 'markup',  family: 'dated_site',     say: 'the build is years out of date' },
+  { id: 'diyBuilder',  group: 'build',    points: 3, need: 'markup',  family: 'dated_site',     say: 'it is a DIY website-builder template' },
+  { id: 'noForm',      group: 'converts', points: 4, need: 'contact', family: 'conversion_leak', say: 'there is no enquiry form anywhere we read' },
+  { id: 'noClickToCall', group: 'converts', points: 3, need: 'contact', family: 'conversion_leak', say: 'the phone number is not tappable on a phone' },
+  { id: 'weakTitle',   group: 'seo',      points: 2, need: 'home',    family: 'search_absence', say: 'the page title is a default, so search results show nothing about what they do' },
+  { id: 'thinAlt',     group: 'seo',      points: 1, need: 'home',    family: 'search_absence', say: 'most images carry no alt text' },
+];
+const SITE_GAP_MAX = 25;
+const SITE_GAP_WORD = (n) => n >= 16 ? 'poor' : n >= 10 ? 'weak' : n >= 4 ? 'fair' : 'strong';
+const readSiteBuild = ({ pages, links, website, companyName, city, trade, robots, llms } = {}) => {
+  const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
+  const home = read.find(p => p && p.intent === 'home') || read[0] || null;
+  const homeHtml = String((home && home.html) || '');
+  // TWO floors, both of them the ones already declared: 500 raw bytes of markup
+  // (checkBuiltWith, detectPlatform and findPlainFetch all use that number) AND
+  // FIND_ABSENCE_TEXT_FLOOR of readable text. The first alone is not enough -
+  // the Floor Gurus page cleared 500 bytes on its <script> tag and 258
+  // characters of text, and the first cut of this function asserted "no
+  // schema" off it. An absence needs a page we actually read.
+  const _readable = (p) => {
+    const t = String((p && p.text) || '');
+    if (t.length >= 200) return t.length;
+    return String((p && p.html) || '').replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().length;
+  };
+  const textChars = read.reduce((n, p) => n + _readable(p), 0);
+  const markupRead = homeHtml.length >= 500;
+  const homeRead = markupRead && textChars >= FIND_ABSENCE_TEXT_FLOOR;
+  const contactRead = read.some(p => p && p.intent === 'contact' && (String(p.html || '').length >= 500 || String(p.text || '').length >= 200));
+  const navRead = homeRead && (homeHtml.match(/<a\s/gi) || []).length >= 3;
+  const allHtml = read.map(p => String(p.html || '')).join('\n');
+  const seo = markupRead ? readSeoSignals(homeHtml, { companyName, city, trade }) : { checked: false };
+  const age = markupRead ? readSiteAge({
+    rawHtml: homeHtml,
+    hasViewport: /<meta[^>]+name=["']viewport["'][^>]*>/i.test(homeHtml),
+    isHttps: /^https:/i.test(String((home && home.url) || website || '')),
+    copyrightYear: copyrightYearFrom(String((home && home.text) || '') || homeHtml),
+  }) : { checked: false, markers: [] };
+  const platform = markupRead ? detectPlatform(homeHtml) : { platform: '', confidence: 'unreadable', isDiy: null, builder: '' };
+  const rb = robotsBlocksAi(robots);
+  // A crawler that does not run JavaScript reads the RAW html. If Firecrawl
+  // rendered the page for us the text is present and this cannot fire, which
+  // is the safe direction: it under-claims rather than inventing a fault.
+  const jsOnly = markupRead && homeHtml.length >= 12000 && rawReadableChars(homeHtml) < 500;
+  const hasForm = /<form\b/i.test(allHtml) || FORM_BUILDER_RE.test(allHtml);
+  const hasTel = /href=["']\s*tel:/i.test(allHtml);
+  const hits = {
+    noindex: seo.checked ? seo.noindex === true : null,   // the tag IS there: a positive
+    noSchema: seo.checked ? (seo.businessSchema !== true) : null,
+    jsOnly: markupRead ? jsOnly : null,
+    blocksAi: rb.checked ? (rb.blocked.length > 0 || rb.all) : null,
+    datedBuild: age.checked ? age.dated === true : null,
+    diyBuilder: platform.confidence === 'unreadable' ? null : platform.isDiy === true,
+    // NOT measured on a JS-painted page: the form and the tel: link may be
+    // drawn by the JavaScript we did not run, and "there is no enquiry form"
+    // would then be a false sentence about a real business. The GEO faults
+    // above still stand - a crawler that does not run JS sees none of it either.
+    noForm: (!jsOnly && (contactRead || navRead)) ? !hasForm : null,
+    noClickToCall: (!jsOnly && navRead) ? !hasTel : null,
+    weakTitle: seo.checked ? (!seo.title || seo.titleIsDefault === true) : null,
+    thinAlt: (seo.checked && seo.imgCount >= 4) ? (seo.imgAltCount / seo.imgCount) < 0.5 : null,
+  };
+  const need = { markup: markupRead, home: homeRead, contact: homeRead && (contactRead || navRead), robots: rb.checked };
+  const faults = [], clean = [];
+  let gap = 0, measured = 0;
+  for (const t of SITE_GAP_TERMS) {
+    if (need[t.need] !== true || hits[t.id] === null || hits[t.id] === undefined) continue;
+    measured++;
+    if (hits[t.id] === true) { gap += t.points; faults.push({ id: t.id, group: t.group, family: t.family, points: t.points, say: t.say }); }
+    else clean.push(t.id);
+  }
+  // The markers readSiteAge already wrote sentences for, so the row can name
+  // the fault a person can see rather than repeating "the build is dated".
+  const agedSay = (age.markers || []).filter(m => m && m.visible).slice(0, 2).map(m => m.say);
+  // A fault that FIRED is evidence whatever else we could read. Nothing firing
+  // is only evidence when we could read enough text to have seen an absence -
+  // otherwise "no faults" means "we could not look", and scoring that as a
+  // clean site would mark the lead down for our blindness.
+  const judged = homeRead || faults.length > 0;
+  return {
+    measured: judged,
+    termsMeasured: measured,
+    gap: Math.min(SITE_GAP_MAX, gap),
+    rawGap: gap,
+    word: judged ? SITE_GAP_WORD(Math.min(SITE_GAP_MAX, gap)) : '',
+    faults, clean,
+    platform: platform.platform || '', builder: platform.builder || '', isDiy: platform.isDiy,
+    schema: seo.checked ? (seo.businessSchema === true ? 'business' : seo.boilerplateOnly ? 'boilerplate only' : (seo.schemaTypes || []).length ? 'other' : 'none') : '',
+    robotsChecked: rb.checked, aiBlocked: rb.blocked, robotsBlocksAll: rb.all,
+    llmsTxt: llms === null || llms === undefined ? null : String(llms).trim().length > 0,
+    agedSay,
+    // The families the gaps point at, deduped - what the work IS.
+    families: [...new Set(faults.map(f => f.family))],
+    why: faults.length ? faults.map(f => f.say).join('; ')
+      : homeRead ? 'nothing wrong with their site that we can see from its code'
+      : 'we could not read enough of their site to judge the build',
+  };
+};
+// /robots.txt and /llms.txt: two plain fetches, no Firecrawl, no model. A
+// refusal is one returned null and nothing else - the Round 116 BBB rule. Both
+// files are tiny by convention; anything over 200KB is not one of them.
+const fetchSiteFile = async (website, path) => {
+  try {
+    const origin = new URL(String(website).startsWith('http') ? website : 'https://' + website).origin;
+    const r = await fetchT(origin + path, { headers: { 'User-Agent': FIND_UA, 'Accept': 'text/plain,*/*' } }, 8000);
+    if (!r || !r.ok) return null;
+    const t = String(await r.text()).slice(0, 200000);
+    // A site that serves its 404 page as HTML for every path has not got one.
+    if (/^\s*<(?:!doctype|html)/i.test(t)) return null;
+    return t;
+  } catch (e) { void e; return null; }
+};
 const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
   const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
   const titles = (Array.isArray(rosterTitles) ? rosterTitles : []).map(t => String(t || ''));
@@ -78742,6 +78935,30 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       why: [(out.chain && out.chain.why) || '', out.outlet.why].filter(Boolean).join('; '),
     });
     notes.push(`a branch of a bigger operation — ${out.outlet.why}. Kept as an email lead: the local number reaches a branch, and the marketing decision-maker at head office is the target.`);
+  }
+  // ── AND IS THE WEBSITE THE THING WE SELL? ──────────────────────────────
+  // Round 118 (Vin, 2026-09-04: "a company with a bad or poor website ... is it
+  // set up to rank for GEO (AI), is it set up for SEO in general"). Ten scoring
+  // terms and not one of them asked whether what we sell is broken.
+  //
+  // Free, twice over: the pages were downloaded for the owner hunt, and the two
+  // fetches below are plain HTTP with no Firecrawl credit and no model call.
+  // They run in parallel with each other and only on a lead with a website.
+  const [_robots, _llms] = website
+    ? await Promise.all([fetchSiteFile(website, '/robots.txt'), fetchSiteFile(website, '/llms.txt')])
+    : [null, null];
+  out.site = readSiteBuild({ pages, links, website, companyName: name, city: leadLocation,
+    trade: String((company && company.industry) || ''), robots: _robots, llms: _llms });
+  if (out.site.measured) {
+    console.log(`\u{1F5A5} SITE [${name}]: ${out.site.word} (gap ${out.site.gap}/${SITE_GAP_MAX} on ${out.site.termsMeasured} check(s))`
+      + `${out.site.platform ? ` | ${out.site.platform}${out.site.builder ? '/' + out.site.builder : ''}${out.site.isDiy ? ' (DIY builder)' : ''}` : ''}`
+      + ` | schema ${out.site.schema || 'not read'}`
+      + `${out.site.robotsChecked ? (out.site.aiBlocked.length ? ` | robots.txt blocks ${out.site.aiBlocked.join(', ')}` : out.site.robotsBlocksAll ? ' | robots.txt blocks everything' : ' | robots.txt lets the AI crawlers in') : ' | no robots.txt'}`
+      + `${out.site.llmsTxt === true ? ' | has llms.txt' : ''}`
+      + ` — ${out.site.why}`
+      + `${out.site.families.length ? ` | the work: ${out.site.families.join(', ')}` : ''}`);
+  } else if (website) {
+    console.log(`\u{1F5A5} SITE [${name}]: not judged — ${out.site.why}. Nothing about their build is claimed either way.`);
   }
   // Same seat as the chain read, same reason: everything after this line
   // costs credits, and a nonprofit has no owner to sell to.
