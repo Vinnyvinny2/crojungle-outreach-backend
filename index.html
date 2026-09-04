@@ -1321,7 +1321,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20260930;
+const CLIENT_CONTRACT = 20261001;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -6076,7 +6076,10 @@ const findRunTally = (companies) => {
     repReady: 0, pivotReady: 0,
     gConfirmed: 0, gStated: 0, gInferred: 0, gUnconfirmed: 0,
     email: 0, tier1: 0, tier2: 0, tier3: 0, tier4: 0, sendable: 0,
-    phone: 0, verifierOff: 0 };
+    phone: 0, verifierOff: 0,
+    // Round 116: the score the proof runs are measured on - how many sizes
+    // were measured (sure / likely) against guessed or not measured at all.
+    sizeSure: 0, sizeLikely: 0, sizeGuess: 0, sizeUnknown: 0 };
   for (const c of read) {
     const _phone = !!String(c.contactPhone || c.phone || '').replace(/\D/g, '');
     const _kept = c.contactNotFit !== true;
@@ -6101,6 +6104,10 @@ const findRunTally = (companies) => {
       if (c.contactEmailSendable === true) t.sendable++;
     }
     if (_phone) t.phone++;
+    if (_kept) {
+      const _sc = String(c.contactSizeConfidence || '');
+      if (_sc === 'sure') t.sizeSure++; else if (_sc === 'likely') t.sizeLikely++; else if (_sc === 'guess') t.sizeGuess++; else t.sizeUnknown++;
+    }
     // The SERVER's own answer. This used to grep contactNotes for the word
     // "verifier" and no note written anywhere on the contact path contains it,
     // so the counter was dead and always printed nothing - on exactly the runs
@@ -6145,6 +6152,11 @@ const findTallyLine = (t) => {
   if (t.gUnconfirmed) grades.push(t.gUnconfirmed + ' we cannot stand behind');
   if (grades.length) s += ' Owners: ' + grades.join(', ') + '.';
   if (tiers.length) s += ' Addresses: ' + tiers.join(', ') + '.';
+  // Round 116: the size score, so a run can be judged off the panel.
+  if (t.sizeSure + t.sizeLikely + t.sizeGuess + t.sizeUnknown) {
+    const _m = t.sizeSure + t.sizeLikely;
+    s += ' Sizes: ' + _m + ' measured' + (t.readable ? ' (' + Math.round((_m / t.read) * 100) + '%)' : '') + ' - ' + t.sizeSure + ' sure, ' + t.sizeLikely + ' likely; ' + t.sizeGuess + ' a guess, ' + t.sizeUnknown + ' not measured.';
+  }
   if (t.verifierOff) s += ' ' + t.verifierOff + ' lead(s) were read while the email verifier was not answering, so those addresses are pattern-built at best - a fact about us, not about them.';
   if (!t.readable) s += ' Under 12 reads, so these are counts and not rates.';
   return s;
