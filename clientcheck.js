@@ -2360,7 +2360,11 @@ let contactTally = null;
                  // Round 110: size and target cells.
                  'targetOf', 'SHORT_CELL_MAX', 'shortCell', 'nameWithFlag', 'sizeCell', 'siteCell', 'siteGradeCell', 'targetCell', 'targetWhyCell', 'websiteCell', 'lastRowsLast',
                  // Round 111: the lane helpers the rep's sheet is filtered through.
-                 'laneOf', 'laneChip', 'exportableContact', 'LANE_TABS', 'laneHas', 'laneKey'];
+                 'laneOf', 'laneChip', 'exportableContact', 'LANE_TABS', 'laneHas', 'laneKey',
+                 // Round 122: the two rules that decide whether work we PAID for
+                 // survives - the cloud merge and the queue cap. Both pure, both
+                 // executed below rather than read.
+                 'queueRowAnswered', 'queueRowStamp', 'mergeQueueRow', 'queueKeepRank', 'capQueue'];
   const got2 = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED2.includes(n.id.name) && n.init) {
@@ -2378,6 +2382,7 @@ let contactTally = null;
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
         + ' mergeView: mergeFindView, latestRun: latestRunIdOf, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
         + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, siteCell, targetCell, targetWhyCell, shortCell, SHORT_CELL_MAX, laneOf, laneChip, exportableContact, laneHas, laneKey, laneTabs: LANE_TABS, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
+        + ' mergeQueueRow, capQueue, queueKeepRank, queueRowAnswered,'
         + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
         + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT,'
         + ' generic: isGenericMailbox };')();
@@ -2580,24 +2585,98 @@ let contactTally = null;
         }
       }
 
+      // ══ ROUND 122: WORK WE PAID FOR MUST SURVIVE ═══════════════════════
+      // Vin, 2026-09-04: "the queue at the top of the UI doesnt update with
+      // the ones we read it still says alot in the queue."
+      // Two mechanisms could silently throw away a paid read - the Supabase
+      // restore, which let the cloud row win every collision, and the queue
+      // cap, which kept the HEAD of a list a Find press PREPENDS to. A source
+      // needle proves neither, so these run the real functions.
+      {
+        const _iso = (s) => new Date(s).toISOString();
+    // 1. THE CLOUD MAY NOT UN-READ A LEAD. The exact live shape: the row was
+    //    pushed to Supabase BEFORE the read, so it carries no contact keys at
+    //    all, and the local copy is the one that was read.
+    const _localRead = { name: 'Acme Roofing', icpScore: 60, contactReadOk: true, contactAt: _iso('2026-09-04T10:00:00Z'),
+                         contactOwner: 'Al Acme', contactPhone: '5550001111', contactLanes: { call: true, email: false, noname: false, last: false },
+                         exportedAt: _iso('2026-09-04T11:00:00Z'), exportedTo: ['csv'] };
+    const _cloudStale = { name: 'Acme Roofing', icpScore: 71 };
+    const _m1 = M.mergeQueueRow(_localRead, _cloudStale);
+    if (_m1.contactReadOk !== true) fails.push('a lead this browser READ comes back unread after the cloud restore - the credits are spent and the panel puts it back in the queue');
+    if (_m1.contactOwner !== 'Al Acme') fails.push('the cloud restore drops the owner off a lead that was read, so a paid name is lost');
+    if (_m1.exportedAt !== _iso('2026-09-04T11:00:00Z') || (_m1.exportedTo || []).join() !== 'csv') fails.push('the cloud restore erases the export stamp, so the panel can no longer say which rows are already in the spreadsheet');
+    if (_m1.icpScore !== 71) fails.push('the cloud restore no longer takes the newer discovery score, which is the reason the cloud wins at all');
+    // 2. AND IN THE OTHER DIRECTION - a read on another machine must land here.
+    const _m2 = M.mergeQueueRow({ name: 'Acme Roofing', icpScore: 60 }, Object.assign({}, _localRead, { icpScore: 71 }));
+    if (_m2.contactReadOk !== true || _m2.contactOwner !== 'Al Acme') fails.push('a read banked on another machine does not arrive in this browser, so the same lead is paid for twice');
+    // 3. A FAILED read must not beat a successful one, whichever side it is on.
+    const _failed = { name: 'Acme Roofing', contactReadOk: false, contactFailedAt: 1, contactNotes: ['no response'] };
+    if (M.mergeQueueRow(_localRead, _failed).contactReadOk !== true) fails.push('a FAILED read arriving from the cloud overwrites a successful one, which is exactly the race the per-lead queue push used to create');
+    // 4. THE CAP EVICTS WHAT IS FREE TO FIND AGAIN, NEVER WHAT WE BOUGHT.
+    //    The live shape: a Find press PREPENDS its fresh unread leads, so the
+    //    old .slice(0, MAX) kept the new ones and binned the read ones.
+    const _fresh = Array.from({ length: 3 }, (_, i) => ({ name: 'New ' + i }));
+    const _paid = { name: 'Paid Co', contactReadOk: true, contactOwner: 'O', contactPhone: '5550002222',
+                    contactLanes: { call: true, email: false, noname: false, last: false } };
+    const _kept = M.capQueue([..._fresh, _paid], 3).map(c => c.name);
+    if (_kept.indexOf('Paid Co') < 0) fails.push('the queue cap throws away a lead we PAID to read to make room for one that cost nothing - and an un-exported call lead is the most valuable row in the app');
+    if (M.capQueue([_paid, ..._fresh], 4).length !== 4) fails.push('the queue cap drops rows when it is not over the limit');
+    // An exported read outranks an unread one, and an UN-exported call lead
+    // outranks both: it is the only row that still owes Vin an export.
+    if (!(M.queueKeepRank(_paid) > M.queueKeepRank(Object.assign({}, _paid, { exportedAt: _iso('2026-09-04T11:00:00Z') })))) {
+      fails.push('an un-exported call lead no longer outranks an exported one at the cap, so the queue bins the rows that have not been handed over yet');
+    }
+    if (!(M.queueKeepRank(_paid) > M.queueKeepRank({ name: 'x' }))) fails.push('a read lead no longer outranks an unread one at the cap');
+      }
+
       // AND THE CALL SITES, because a fixture supplies its own arguments and
       // therefore cannot see a caller. Three wires, and the middle one is the
       // whole point: counting alone would leave "a read lead leaves the pool"
       // true of the numbers and false of the list.
       {
         const _need = [
-          ['the panel no longer renders a tab per contact state', "CONTACT_TABS.map(([k, lab]) =>"],
+          ['the panel no longer renders a tab per contact state', "CONTACT_TABS.filter(([k]) => _tabCount[k] > 0 || contactTab === k).map(([k, lab]) =>"],
+          // ══ ROUND 122: A ZERO IS NOT DRAWN, AND THE TAB YOU STAND ON STAYS ══
+          // "theres a million diffrent numebrs in this contact section." Two of
+          // them were "Nothing to read 0" and "No lane (0 of 7)", taking up a
+          // row each to say nothing. The `|| contactTab === k` half is not
+          // cosmetic: without it the tab you are standing on vanishes the
+          // moment its last lead moves, and the panel renders with no active
+          // tab at all.
+          ['an empty contact tab is drawn anyway, so a zero takes up a row to say nothing', "_tabCount[k] > 0 || contactTab === k"],
+          ['an empty lane is drawn anyway, or the lane you are standing on vanishes when its last lead leaves', "_cLane[k].length > 0 || contactLane === k"],
           // Round 119: the list reads _scoped, not _cShown - the SAME population
           // the lane counts, the export and the move button read. The two
           // disagreeing is how "only 18 in the email lane" happened on a queue
           // carrying hundreds.
           ['the rendered list is not filtered by the tab AND by the scope, so the lane count and the cards under it describe different populations - "only 18 in the email lane" on a queue carrying hundreds', "_scoped.filter(c => contactTabOf(c) === contactTab)"],
           ['the lane counts and the rendered list read different populations again - the count says one press and the list shows the whole queue', "const _cLane = Object.fromEntries(LANE_TABS.map(([k]) => [k, _cRead.filter(c => laneHas(c, k))]));"],
-          ['the scope switch is not on the Lane row, where the numbers it decides are', "onClick: () => setContactScope(k) }, lab))) : null,\n            (_cRunSet.length && contactScope === 'run')"],
-          // Round 120, Vin: "need it to shwo total amount of email ones we have
-          // too, it just shows per run." Both numbers on the one button.
-          ['the lane button shows only this press, so the queue total Vin asked for is nowhere on the panel', "+ ((contactScope === 'run' && _cRunSet.length && _cLaneAll[k].length !== _cLane[k].length)"],
-          ['the all-time lane counts are computed off the scoped pool, so the "of N" repeats the number beside it', "const _cReadAll = _cShown.filter(c => contactTabOf(c) === 'read');"],
+          // ══ ROUND 122: THE RUN IS THE VIEW, AND NO TOGGLE DECIDES IT ══════
+          // Vin, 2026-09-04: "when I do a run it needs to be easy to export the
+          // ones I just did... I don't really care to go back to ones I already
+          // read I have a sheet to do that."
+          // The scope switch used to sit here. It DEFAULTED to the whole queue
+          // and it was PERSISTED, so "Download CSV (N)" could silently mean all
+          // 380 read leads instead of the 15 he had just run - which is how
+          // rows already pasted into Excel get pasted in again. These three
+          // needles are what stops a later round quietly reinstating it.
+          ['the run is no longer the default view - a scope toggle decides it again, and the download button can silently mean the whole queue', "const _scoped = (contactView === 'unexported') ? _cNeverExported"],
+          ['the view scope is persisted again, so it survives a session and the download button means whatever it meant last time', 'saveFindView({ activeTab, verifiedOnly, winFilter, contactPlacesOnly, contactSort, contactTab, pullFilters })'],
+          ['the "never exported" recovery is gone, so a second press before an export buries the first run for good', "_cShown.filter(c => exportableContact(c) && !c.exportedAt)"],
+          // The queue total survives as ONE footer number instead of a second
+          // opinion appended to every lane button as " of N", which read as a
+          // fraction (15 out of 336) and meant something else entirely.
+          ['the queue total is gone from the footer, so the panel cannot say how much runway is left', "const _cReadAll = _cShown.filter(c => contactTabOf(c) === 'read');"],
+          // ══ AND THE CAP'S CALL SITE, WHICH IS HALF THE CHECK ══════════════
+          // capQueue is executed above against real fixtures, but the defect was
+          // never in a function - it was the raw .slice(0, FIND_QUEUE_MAX) at the
+          // ONE place a Find press merges its results. The falsification found
+          // this gap: reverting that line alone left every capQueue assertion
+          // green, because a fixture supplies its own arguments and cannot see a
+          // caller.
+          ['a Find press caps the queue by POSITION again - it prepends its new leads and keeps the head, so the rows it bins are the oldest, which are the ones we paid to read', "const merged = capQueue([...newOnes, ...existing], FIND_QUEUE_MAX);"],
+          ['the durable Supabase copy caps by position, so the cloud drops different leads than the screen does', "const rows = capQueue(arr, FIND_QUEUE_MAX).map(c => ({"],
+          ['the lane button prints a second "of N" number again - it reads as a fraction and means "this run, and the queue"', "lab + ' (' + _cLane[k].length + ')'"],
           ['the tab counts are not computed from the same pool the list is', "for (const c of _cShown) { const t = contactTabOf(c);"],
           ['the spending band is no longer confined to the not-read tab', "contactTab !== 'unread' ? null : _cUnread.length === 0 ? _band('Read',"],
         ];
@@ -3286,9 +3365,15 @@ let contactTally = null;
   for (const [why, a, b] of [
     ['the draw pool no longer excludes a lead with nothing to read, so it is asked again on every press', '&& c.contactUnreadable !== true', ' && c.name);'],
     ['a lead with something to read no longer sorts above one with nothing, so name-only leads lead the draw again', 'const sorted = [...withReach].sort((a,b) =>\n        (_readable(b) - _readable(a))', ' || ((b.reachPredict||0)'],
-    ['the CSV download no longer stamps the rows it handed out', "if (n) _stamp(_cExportable,", " 'csv'); },"],
-    ['the sheet send no longer stamps the rows it handed out', "_stamp(_cExportable, 'sheet'", ');'],
-    ['the view state is no longer written on change, so a refresh resets Show all', 'React.useEffect(() => saveFindView({ activeTab, verifiedOnly, winFilter,', ' contactPlacesOnly, contactSort, contactScope, contactTab, pullFilters }),'],
+    // Round 122: both exports moved into ONE handler each, because the run
+    // block and the Export band now hand out the same rows and two copies of
+    // an export handler is the "two hand-kept copies of one rule" class. The
+    // stamp is still the thing being pinned - without it the panel cannot tell
+    // Vin which rows are already in his spreadsheet.
+    ['the CSV download no longer stamps the rows it handed out', "        _stamp(_cExportable, ", "'csv');\n      };"],
+    ['the sheet send no longer stamps the rows it handed out', "            _stamp(_cExportable, ", "'sheet');\n          }"],
+    ['the run block no longer shares the Export band\'s one download handler, so the two places can hand out different rows', "React.createElement('button', { className:'btn btn-g', onClick: _export", "Csv },"],
+    ['the view state is no longer written on change, so a refresh resets Show all', 'React.useEffect(() => saveFindView({ activeTab, verifiedOnly, winFilter,', ' contactPlacesOnly, contactSort, contactTab, pullFilters }),'],
     ['the run id no longer rides every lead a run touched', "fields = Object.assign({ contactRunId: runId },", ' fields);'],
     ['the run set is no longer recovered from the data after a refresh', "const _runId = (contactRun && contactRun.runId) ||", ' latestRunIdOf(_cShown);'],
     ['the export band no longer says why it has nothing to export', "(_cRead.length && !_cExportable.length) ? _cap('Nothing to export: '", " + _cRead.length"],
@@ -3326,7 +3411,16 @@ let contactTally = null;
     [_nn('_band(', "'Scope',"), 'the scope band is gone, so the control that decides what a press BUYS is no longer beside the press'],
     [_nn('_band(', "'Read',"), 'the read band is gone'],
     [_nn('_band(', "'Export',"), 'the export band is gone, so the CSV, the sheet and the column choice are loose in the stack again'],
-    [_nn('_band(', "'Result',"), 'the result band is gone, so what came back is interleaved with what to press again'],
+    // ══ ROUND 122: THE RESULT BAND BECAME A DISCLOSURE ═══════════════════
+    // The Result band opened with a sentence carrying about thirty numbers,
+    // and the one line under it that answered Vin's actual question - why the
+    // csv says 15 when the loading bar said 17 - was buried beneath it. The
+    // sentence is NOT deleted: findTallyLine still builds it, it still reads
+    // the same population, and it is one click away under "what happened in
+    // this run", beside the number it explains. These two needles are what
+    // stop it being dropped rather than moved.
+    [_nn('what happened in ', 'this run'), 'the run summary has no disclosure to live in, so the thirty-number sentence is either back on the headline or gone'],
+    [_nn('findTallyLine(findRunTally(', '_scoped))'), 'the tally sentence is no longer rendered anywhere, so a run can no longer be accounted for at all'],
   ]) {
     if (html.indexOf(needle) < 0) fails.push(why);
   }
@@ -3725,8 +3819,11 @@ let findStat = null;
   if (/const local = loadDiscovered\(\);\s*\r?\n\s*if \(local\.length > 0\) return;/.test(src)) {
     fails.push('the Find queue restore still returns early whenever localStorage holds anything, so a run banked on another machine is invisible in this browser forever');
   }
-  if (!/const merged = Array\.from\(_byName\.values\(\)\)/.test(src)) {
+  if (!/const merged = capQueue\(Array\.from\(_byName\.values\(\)\)/.test(src)) {
     fails.push('the Find queue restore no longer MERGES the cloud with local work - replacing would delete a company queued in this tab and not yet pushed, which is the guard pointed the other way');
+  }
+  if (!/_byName\.set\(k, mergeQueueRow\(_byName\.get\(k\), c\)\)/.test(src)) {
+    fails.push('the Find queue restore overwrites a local row with the cloud row again, so a lead this browser has READ comes back as unread with the credits already spent');
   }
 }
 

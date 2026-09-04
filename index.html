@@ -1321,7 +1321,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261005;
+const CLIENT_CONTRACT = 20261006;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5576,7 +5576,7 @@ const contactRequestBody = (company, settings) => {
 // screen saying why - and the export dropped to 62. One key, one merge.
 const FIND_VIEW_KEY = 'cj_find_view_v1';
 const FIND_VIEW_DEFAULTS = { activeTab: 'all', verifiedOnly: true, winFilter: 'any', contactPlacesOnly: false,
-  contactSort: false, contactScope: 'queue', contactTab: 'unread', pullFilters: null };
+  contactSort: false, contactTab: 'unread', pullFilters: null };
 // Pure, so the check can execute it: a saved key wins, an absent one keeps its default.
 const mergeFindView = (saved) => {
   const out = Object.assign({}, FIND_VIEW_DEFAULTS);
@@ -5614,6 +5614,48 @@ const stampExportedRows = (list, names, dest, nowIso) => (Array.isArray(list) ? 
 });
 const exportedCell = (c) => (c && c.exportedAt)
   ? (String(c.exportedAt).slice(0, 10) + ' to ' + ((c.exportedTo || []).join(' and ') || 'a file')) : '';
+// ══ A READ IS MONOTONIC, AND SO IS AN EXPORT ═══════════════════════════════
+// Vin, 2026-09-04: "the queue at the top of the UI doesnt update with the ones
+// we read it still says alot in the queue."
+// The Supabase restore let the cloud row win every name collision outright, on
+// the reasoning that "its score is the newer one" - but a SCORE is not read
+// state. A queue row pushed to Supabase BEFORE a lead was read carries no
+// contact keys at all (and a row pushed by a FAILED read carries
+// contactReadOk:false), so on the next page load it overwrote a local row that
+// WAS read. The lead went back into "Not read" with the Firecrawl credits
+// already spent, and its exportedAt - the only record of what is already in
+// Vin's spreadsheet - was erased with it.
+// The rule, and it runs in BOTH directions so it cannot be defeated by which
+// copy happens to be older: discovery fields come from the cloud, contact
+// fields come from whichever side actually answered, and an export stamp is
+// never erased. Pure, so the check can execute it rather than read it.
+const queueRowAnswered = (c) => !!(c && (c.contactReadOk === true || c.contactNotFit === true || c.contactUnreadable === true));
+const queueRowStamp = (c) => queueRowAnswered(c) ? String((c && c.contactAt) || '0') : '';
+const mergeQueueRow = (local, cloud) => {
+  if (!local) return cloud || null;
+  if (!cloud) return local;
+  // The cloud's discovery half is the newer one - score, signals, listing.
+  const out = Object.assign({}, local, cloud);
+  // The contact half moves as ONE block from the side that answered, so a
+  // half-written row can never mix one side's owner with the other's lanes.
+  const _ls = queueRowStamp(local), _cs = queueRowStamp(cloud);
+  const keep = (_ls && _cs) ? (_ls >= _cs ? local : cloud) : (_ls ? local : (_cs ? cloud : null));
+  if (keep) {
+    for (const k of Object.keys(out)) { if (k.slice(0, 7) === 'contact') delete out[k]; }
+    for (const k of Object.keys(keep)) { if (k.slice(0, 7) === 'contact') out[k] = keep[k]; }
+  }
+  const _lx = (local && local.exportedAt) || '', _cx = (cloud && cloud.exportedAt) || '';
+  if (_lx || _cx) {
+    out.exportedAt = _lx > _cx ? _lx : _cx;
+    const _to = [];
+    for (const d of [].concat(Array.isArray(local.exportedTo) ? local.exportedTo : [],
+                              Array.isArray(cloud.exportedTo) ? cloud.exportedTo : [])) {
+      if (d && _to.indexOf(d) < 0) _to.push(d);
+    }
+    out.exportedTo = _to;
+  }
+  return out;
+};
 // ══ SHORT STUFF IN THE ROWS ══════════════════════════════════════════════
 // Vin, 2026-09-04, reading the live sheet: "we need to have short stuff in the
 // rows so we can fit everyhting in as u see for some of them." The SECOND time
@@ -5725,6 +5767,34 @@ const laneKey = (c) => { const l = laneOf(c); return l.call ? 'call' : l.email ?
 // The rep's sheet is the CALL lane and nothing else - the CSV, the Google
 // Sheet and the count on the button all read this one rule.
 const exportableContact = (c) => contactTabOf(c) === 'read' && hasContactData(c) && laneOf(c).call === true;
+// ══ THE QUEUE CAP THREW AWAY THE LEADS WE PAID FOR ═════════════════════════
+// The cap was applied as [...newOnes, ...existing].slice(0, FIND_QUEUE_MAX):
+// a Find press PREPENDS its ~120 fresh leads and the slice keeps the HEAD, so
+// everything discarded came off the tail - the oldest rows, which are the READ
+// ones. A lead that cost ~4.7 Firecrawl credits was binned to make room for a
+// lead that cost nothing, and an unread one always survived a read one.
+// Rank instead of position. Highest kept last: a read call-lane lead that has
+// NOT been exported yet is the whole point of the machine and goes last of all;
+// then any read lead (we paid for it); then a settled verdict (cheap, but it
+// stops us buying the same refusal twice); then unread, which is free to find
+// again. Ties hold their existing order, so the score sort above still decides
+// within a rank. Pure, so the check can execute it.
+const queueKeepRank = (c) => {
+  if (!c) return 0;
+  if (c.contactReadOk === true) return (laneOf(c).call === true && !c.exportedAt) ? 3 : 2;
+  return queueRowAnswered(c) ? 1 : 0;
+};
+const capQueue = (list, max) => {
+  const arr = Array.isArray(list) ? list : [];
+  const n = Math.max(0, Number(max) || 0);
+  if (!n || arr.length <= n) return arr.slice();
+  return arr
+    .map((c, i) => ({ c, i, r: queueKeepRank(c) }))
+    .sort((a, b) => (b.r - a.r) || (a.i - b.i))
+    .slice(0, n)
+    .sort((a, b) => a.i - b.i)
+    .map(x => x.c);
+};
 const sizeCell = (c) => !c.contactReadOk ? '' : (c.contactSize || 'not measured');
 // Round 118 (Vin: "a company with a bad or poor website"). The one signal on
 // the sheet that says whether they NEED us rather than whether they can pay.
@@ -6708,10 +6778,21 @@ function FindView({
   // 'run' shows only the leads the last press read; 'queue' shows everything
   // that has ever been read. Both are real questions and the panel could only
   // ever answer the second one.
-  const [contactScope, setContactScope] = React.useState(_fv.contactScope);
+  // ══ AND SINCE ROUND 122 THE RUN IS THE VIEW, AND IT IS NOT STICKY ════════
+  // Vin, 2026-09-04: "when I do a run it needs to be easy to export the ones I
+  // just did... I don't really care to go back to ones I already read, I have a
+  // sheet to do that. I just run a bunch then dump them into excel, rinse and
+  // repeat."
+  // contactScope DEFAULTED to 'queue' and was PERSISTED, so the button saying
+  // how many rows a download holds could silently mean "all 380 read leads"
+  // with nothing on screen saying which - exactly how rows already in his
+  // spreadsheet get dumped into it a second time. The run is the default now,
+  // it is not saved between sessions, and the only other view is the one that
+  // recovers a run he forgot to export.
+  const [contactView, setContactView] = React.useState('run');
   // Every state that decides what is visible or readable, written on change.
-  React.useEffect(() => saveFindView({ activeTab, verifiedOnly, winFilter, contactPlacesOnly, contactSort, contactScope, contactTab, pullFilters }),
-    [activeTab, verifiedOnly, winFilter, contactPlacesOnly, contactSort, contactScope, contactTab, pullFilters]);
+  React.useEffect(() => saveFindView({ activeTab, verifiedOnly, winFilter, contactPlacesOnly, contactSort, contactTab, pullFilters }),
+    [activeTab, verifiedOnly, winFilter, contactPlacesOnly, contactSort, contactTab, pullFilters]);
   // ══ THE LEADS YOU JUST PAID TO READ MUST BE THE ONES THAT MOVE ══════
   // "i have no way to move them to the research phase yet after we do a run so
   // no i cant audit". The button existed and it took the top-50 of whatever the
@@ -6885,15 +6966,47 @@ function FindView({
     // queue push below is the durable copy and still runs.
     try { localStorage.setItem(DB_KEY, JSON.stringify(arr)); }
     catch (e) { console.warn('Queue cache write failed (' + e.message + ') — queue lives in memory and Supabase this session'); }
-    // Fire-and-forget to Supabase — upsert the whole queue
+    _pushQueueSoon(arr);
+  };
+
+  // ══ ONE DURABLE WRITE PER BATCH, AND NEVER AN EMPTY WINDOW ═══════════════
+  // This used to be a DELETE of the WHOLE table followed by a POST of all ~650
+  // rows, fire-and-forget, run straight from saveDiscovered — which one() calls
+  // ONCE PER LEAD, from a pool of six. A 25-lead press therefore fired 25
+  // interleaved full-table rewrites with no ordering between them: a late
+  // DELETE landing after an earlier POST erased rows that had already been
+  // written, and between every DELETE and its POST the durable queue was
+  // momentarily EMPTY — so a closed tab or a dropped connection in that window
+  // took the whole queue with it.
+  // Two changes, both required. The DELETE is gone: the POST is already an
+  // upsert on the id, so re-posting the queue updates every row in place and
+  // there is no moment when the table is short. And the push is debounced, so
+  // a 25-lead batch produces ONE write after it settles instead of 25 racing
+  // ones. Rows are ranked by capQueue, not sliced by position, so the durable
+  // copy drops the same leads the screen would.
+  const _pushTimer = React.useRef(null);
+  const _pushNext = React.useRef(null);
+  const _pushQueueSoon = (arr) => {
+    _pushNext.current = arr;
+    if (_pushTimer.current) return;
+    _pushTimer.current = setTimeout(() => {
+      _pushTimer.current = null;
+      const pending = _pushNext.current;
+      _pushNext.current = null;
+      if (pending) _pushQueueNow(pending);
+    }, 1500);
+  };
+  const _pushQueueFlush = () => {
+    if (_pushTimer.current) { clearTimeout(_pushTimer.current); _pushTimer.current = null; }
+    const pending = _pushNext.current;
+    _pushNext.current = null;
+    if (pending) _pushQueueNow(pending);
+  };
+  const _pushQueueNow = arr => {
     try {
-      // Clear existing queue rows then re-insert current state
-      fetch(SB_URL + '/rest/v1/discovered_queue?id=neq.PLACEHOLDER', {
-        method: 'DELETE',
-        headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY }
-      }).then(() => {
+      {
         if (!arr.length) return;
-        const rows = arr.slice(0, FIND_QUEUE_MAX).map(c => ({
+        const rows = capQueue(arr, FIND_QUEUE_MAX).map(c => ({
           id: c.id || (c.name || '').toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,40) + '_' + (c.source || 'find'),
           name: c.name || '',
           website: c.website || '',
@@ -6921,7 +7034,7 @@ function FindView({
           },
           body: JSON.stringify(rows)
         }).catch(() => {});
-      }).catch(() => {});
+      }
     } catch(e) {}
   };
 
@@ -6965,11 +7078,18 @@ function FindView({
           const _byName = new Map();
           for (const c of local) { const k = _key(c); if (k) _byName.set(k, c); }
           let _fresh = 0;
-          for (const c of restored) { const k = _key(c); if (!k) continue; if (!_byName.has(k)) _fresh++; _byName.set(k, c); }
-          const merged = Array.from(_byName.values())
-            .sort((a, b) => (b.icpScore || 0) - (a.icpScore || 0))
-            .slice(0, FIND_QUEUE_MAX);
-          if (merged.length === local.length && _fresh === 0) return;   // nothing new to show
+          // mergeQueueRow, not a bare overwrite: a lead this browser has READ
+          // stays read, and its export stamp survives, whatever the cloud copy
+          // says. See the comment on mergeQueueRow.
+          for (const c of restored) { const k = _key(c); if (!k) continue; if (!_byName.has(k)) _fresh++; _byName.set(k, mergeQueueRow(_byName.get(k), c)); }
+          const merged = capQueue(Array.from(_byName.values())
+            .sort((a, b) => (b.icpScore || 0) - (a.icpScore || 0)), FIND_QUEUE_MAX);
+          // The "nothing new to show" early return lived here and compared only
+          // NAMES: merged.length === local.length && _fresh === 0. Whenever the
+          // cloud held the same businesses with DIFFERENT fields - the whole
+          // point of restoring it - it returned before applying them, so the
+          // durable copy was unreachable exactly when it mattered. The merge
+          // above is monotonic now, so applying it unconditionally is safe.
           // Cache after render, wrapped — a quota throw here was eaten by the
           // .catch below WITH setDiscovered unreached, so a successfully
           // restored queue rendered as empty.
@@ -7230,7 +7350,10 @@ function FindView({
       const existing = loadDiscovered();
       const existingNames = new Set([...existing.map(c => (c.name || '').toLowerCase()), ...existingLeads.map(l => (l.name || '').toLowerCase())]);
       const newOnes = scored.filter(c => !existingNames.has((c.name || '').toLowerCase()));
-      const merged = [...newOnes, ...existing].slice(0, FIND_QUEUE_MAX);
+      // capQueue, not .slice: the slice kept the HEAD, and a Find press
+      // prepends, so the rows it dropped were the oldest - the ones we had
+      // already paid to read. See capQueue.
+      const merged = capQueue([...newOnes, ...existing], FIND_QUEUE_MAX);
       saveDiscovered(merged);
       setDiscovered(merged);
       const now = new Date().toISOString();
@@ -7308,7 +7431,7 @@ function FindView({
     const runId = 'run_' + started.toString(36);
     // total is what the operator ASKED FOR. Refusals are counted separately so
     // the bar cannot read as "5 of 5 done" on a run that returned two leads.
-    setContactRun({ runId, total: want, done: 0, withEmail: 0, withOwner: 0, running: [], fc: 0, usd: 0, startedAt: started, failed: 0, refused: 0, names: [] });
+    setContactRun({ runId, total: want, done: 0, withEmail: 0, readyToCall: 0, running: [], fc: 0, usd: 0, startedAt: started, failed: 0, refused: 0, names: [] });
     let next = 0;
     let kept = 0;
     // Claimed but not yet answered. Without it the guard below is checked by
@@ -7419,7 +7542,23 @@ function FindView({
         // and im not sure where they are now." This is that set.
         names: (s.names || []).concat([co.name]),
         withEmail: s.withEmail + (fields.contactEmail ? 1 : 0),
-        withOwner: s.withOwner + (fields.contactOwner ? 1 : 0),
+        // ══ THE NUMBER YOU WATCH IS THE NUMBER YOU EXPORT ═══════════════
+        // Vin, 2026-09-04: "when it was laoding it said 17 owners found then
+        // the csv shows 15." Both were right and that was the problem. This
+        // counter was withOwner - it counted `fields.contactOwner`, i.e. "the
+        // ladder found a NAME" - while the file is exportableContact: read,
+        // AND in the call lane, AND something to dial or write to. An owner in
+        // the email lane, under the floor, at a product company or on a
+        // TheirStack lead is a name we cannot put on the call sheet, so the
+        // run appeared to produce more than it did and the number dropped at
+        // the end.
+        // ONE predicate now, so the count during the run, the count when it
+        // finishes, the number on the download button and the row count in the
+        // file are the same number and cannot disagree.
+        // exportableContact reads contactTabOf, which refuses a row with no
+        // NAME - and `fields` is the server's answer, which carries none. Ask
+        // it about the named row or this counter sits at zero all run.
+        readyToCall: (s.readyToCall || 0) + (exportableContact(Object.assign({ name: co.name }, fields)) ? 1 : 0),
         failed: s.failed + (fields.contactReadOk === true || _refused ? 0 : 1),
         fc: s.fc + (fields.contactSpendFc || 0),
         usd: s.usd + (fields.contactSpendUsd || 0),
@@ -7446,6 +7585,10 @@ function FindView({
       }
     };
     await Promise.all(Array.from({ length: Math.min(CONTACT_POOL, want) }, worker));
+    // The durable push is debounced, so the last lead of the batch would
+    // otherwise sit in the timer. Settle it now: the run is over and this is
+    // the moment the queue is worth the most.
+    _pushQueueFlush();
     setContactRun(s => s ? { ...s, running: [], finishedAt: Date.now() } : s);
   };
 
@@ -8210,8 +8353,14 @@ function FindView({
       // refresh, which is what makes "the 10 you just read" recoverable.
       const _runId = (contactRun && contactRun.runId) || latestRunIdOf(_cShown);
       const _cRunSet = _runId ? _cShown.filter(c => c && c.contactRunId === _runId) : _cShown.filter(c => c && _runNames.has(c.name));
-      const _scoped = (contactScope === 'run' && _cRunSet.length) ? _cRunSet : _cShown;
-      const _scopeWord = _scoped === _cRunSet ? 'in this run' : 'in the queue';
+      // THE RUN IS THE VIEW. No toggle decides this any more: the last press is
+      // what the screen is about, and the one other view exists only to recover
+      // a run that was read and never exported.
+      const _cNeverExported = _cShown.filter(c => exportableContact(c) && !c.exportedAt);
+      const _scoped = (contactView === 'unexported') ? _cNeverExported
+        : (_cRunSet.length ? _cRunSet : _cShown);
+      const _scopeWord = contactView === 'unexported' ? 'never exported'
+        : (_cRunSet.length ? 'in this run' : 'in the queue');
       // THE LIST IS THE TAB. Counting alone would leave "a read lead leaves the
       // pool" true of the numbers and false of the screen, which is the whole
       // complaint.
@@ -8720,13 +8869,56 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       // sentence blamed "no owner, no address and no number" for rows the lane
       // rule kept off the sheet on purpose.
       const _cLane = Object.fromEntries(LANE_TABS.map(([k]) => [k, _cRead.filter(c => laneHas(c, k))]));
-      // Round 120, Vin: "need it to shwo total amount of email ones we have too,
-      // it just shows per run." Both numbers, on the same button: what this press
-      // produced and what the queue holds. Counted over every read lead the
-      // filters show, never over the scope, because the whole point of it is to
-      // answer a question the scope cannot.
+      // Round 120 put a second number on every lane button - "Call list (15 of
+      // 336)" - so that a run-scoped count could still say what the queue held.
+      // Vin, 2026-09-04: "theres a million diffrent numebrs in this contact
+      // section." It also read as a FRACTION, 15 out of 336, when it meant "15
+      // this run, 336 in the queue". The queue total survives as ONE number in
+      // the footer, where it is inventory rather than a second opinion about
+      // the run.
       const _cReadAll = _cShown.filter(c => contactTabOf(c) === 'read');
-      const _cLaneAll = Object.fromEntries(LANE_TABS.map(([k]) => [k, _cReadAll.filter(c => laneHas(c, k))]));
+      // ══ WHAT IS ALREADY IN THE SPREADSHEET ═════════════════════════════
+      // stampExportedRows has recorded the date and destination on every
+      // exported row since Vin said "i have no clue which ones ive already
+      // exported and which i dont" - and then the panel showed it in one cell
+      // of a 44-column file. He exports per run and pastes into Excel, so the
+      // one thing he needs before pressing Download is whether these rows are
+      // already in there.
+      const _cExportNew = _cExportable.filter(c => !c.exportedAt);
+      const _cExportAgain = _cExportable.length - _cExportNew.length;
+      // ══ ONE ACTION, TWO PLACES ON THE SCREEN ═══════════════════════════
+      // The run block and the Export band both hand out the same rows. Two
+      // copies of an export handler is the "two hand-kept copies of one rule"
+      // class this repo records most, so there is one of each and both places
+      // call it.
+      const _exportCsv = () => {
+        const n = downloadFindContacts(_cExportable, csvFull);
+        if (!n) { setContactErr('Nothing to export yet.'); return; }
+        _stamp(_cExportable, 'csv');
+      };
+      const _exportSheet = async () => {
+        const url = String((settings && settings.sheetWebhookUrl) || '').trim();
+        if (!url) { setSheetHelp(true); setSheetNote(''); return; }
+        setSheetBusy(true); setSheetNote(''); setContactErr('');
+        try {
+          const payload = findSheetPayload(_cExportable, csvFull);
+          const r = await fetch(BACKEND + '/api/export-sheet', {
+            method:'POST', headers:{ 'Content-Type':'application/json' },
+            body: JSON.stringify(Object.assign({ url }, payload)),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) { setSheetNote(''); setContactErr(d.error || ('The sheet export answered ' + r.status + '.')); if (d.setupNeeded) setSheetHelp(true); }
+          else {
+            setSheetNote(d.written + ' row' + (d.written === 1 ? '' : 's') + ' added to the sheet'
+              + (d.skipped ? ', ' + d.skipped + ' already there' : '') + '.');
+            // Stamped as SENT: the script answers only with counts, never which
+            // rows, so a row the sheet deduped is still marked as handed out.
+            _stamp(_cExportable, 'sheet');
+          }
+        } catch (e) {
+          setContactErr('Could not reach the server to send the sheet (' + ((e && e.message) || 'no response') + ').');
+        } finally { setSheetBusy(false); }
+      };
       const _cEmailOnly = _cLane.email;
       const _cCallNoContact = _cLane.call.filter(c => !hasContactData(c));
       const _cEmailMovable = _cLane.email.filter(c => c && c.name && !alreadyAdded(c.name));
@@ -8773,20 +8965,98 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
         style: { border:'1px solid var(--b)', borderRadius:14, padding:'15px 18px 4px', marginBottom:14,
                  background:'var(--s2)' },
       },
-        // ── WHAT THIS IS, AND WHERE THE LEADS ARE ────────────────────────
-        React.createElement('div', { style:{ display:'flex', alignItems:'flex-start', gap:16, flexWrap:'wrap', paddingBottom:12 } },
-          React.createElement('div', { style:{ flex:'1 1 240px', minWidth:220 } },
-            React.createElement('div', { style:{ fontFamily:'Syne', fontWeight:700, fontSize:15, letterSpacing:'-.01em' } }, 'Contact list'),
-            React.createElement('div', { style:{ fontSize:12.5, color:'var(--m2)', marginTop:4, lineHeight:1.5 } },
+        // ══ THE RUN YOU JUST DID, AND THE BUTTON THAT EXPORTS IT ═══════════
+        // Vin, 2026-09-04: "when I do a run it needs to be easy to export the
+        // ones I just did... I just run a bunch then dump them into excel,
+        // rinse and repeat", and "this section needs to be so simple a 5 year
+        // old can understand and naviaget it".
+        // The panel used to open with the word "Contact list", a sentence about
+        // what a read does, and a count of leads with an email - none of which
+        // is the question he opens it to ask. It opens with the answer now:
+        // how many of the ones you just ran can be called, whether they are
+        // already in your spreadsheet, and the two buttons that hand them over.
+        // ONE number, and it is the number the file will contain.
+        React.createElement('div', { style:{ paddingBottom:12 } },
+          React.createElement('div', {
+            style:{ fontSize:11, letterSpacing:'.08em', textTransform:'uppercase', color:'var(--m2)', fontWeight:700,
+                    display:'flex', gap:10, flexWrap:'wrap', alignItems:'baseline' } },
+            React.createElement('span', null,
+              _running ? 'Reading…' : contactView === 'unexported' ? 'Read but never exported' : 'Your last run'),
+            React.createElement('span', { style:{ letterSpacing:0, textTransform:'none', fontWeight:500, color:'var(--m2)' } },
               _running
-                ? 'Reading their site for the decision-maker, an address and the fit signals. Nothing is being audited.'
-                : 'The decision-maker, an email and a phone number, plus a fit score out of 100.'),
-            // The run scope lives beside the TALLY it re-points, in the Read
-            // tab, because that is the only place it means anything. Two
-            // toggles above three tabs was the confusion, not the fix.
-            null),
-          _cWithEmail ? React.createElement('div', { style:{ display:'flex', gap:22, alignItems:'flex-start' } },
-            _stat(_cWithEmail, 'with an email', 'var(--g)')) : null),
+                ? (contactRun.done + ' of ' + contactRun.total + ' done'
+                   + (_eta !== null ? ' · about ' + Math.max(1, Math.round(_eta / 60)) + ' min left' : ''))
+                : (_cRead.length ? ('read ' + _cRead.length + (_cRunSet.length && contactView !== 'unexported' ? ' of ' + _cRunSet.length : '')) : ''))),
+          React.createElement('div', { style:{ display:'flex', alignItems:'baseline', gap:12, marginTop:8, flexWrap:'wrap' } },
+            React.createElement('div', { style:{ fontFamily:'Syne', fontWeight:800, fontSize:38, lineHeight:1, color:'var(--g)' } },
+              String(_running ? (contactRun.readyToCall || 0) : _cExportable.length)),
+            React.createElement('div', { style:{ fontSize:14, color:'var(--t)', fontWeight:600 } },
+              'ready to call' + (_running ? ' so far' : ''))),
+          // Whether these rows are already in the spreadsheet. He pastes into
+          // Excel by hand, so exporting the same run twice is his cost, not
+          // ours, and nothing on the old panel warned him.
+          (!_running && _cExportable.length) ? React.createElement('div', {
+            style:{ fontSize:12.5, color: _cExportAgain ? 'var(--m2)' : 'var(--g)', marginTop:6 } },
+            _cExportAgain === 0 ? ('all ' + _cExportable.length + ' are new — you have not exported these')
+              : _cExportNew.length === 0 ? 'you have already exported every one of these'
+              : (_cExportNew.length + ' new, ' + _cExportAgain + ' you already downloaded')) : null,
+          // The two buttons, naming their own cargo. "Download CSV (15)" could
+          // mean the run or the whole queue depending on a sticky toggle three
+          // bands lower; "Download these 15" cannot mean anything else.
+          (!_running && _cExportable.length) ? React.createElement('div', {
+            style:{ display:'flex', gap:8, flexWrap:'wrap', marginTop:10 } },
+            React.createElement('button', { className:'btn btn-g', onClick: _exportCsv },
+              'Download these ' + _cExportable.length),
+            React.createElement('button', { className:'btn btn-g', disabled: sheetBusy, onClick: _exportSheet },
+              sheetBusy ? 'Sending to the sheet…' : ('Send these ' + _cExportable.length + ' to the Sheet'))) : null,
+          // The rest of the run, in one line, only when there is a rest. A zero
+          // is never drawn - "No lane (0 of 7)" took up space to say nothing.
+          (!_running && _cRead.length) ? (() => {
+            const bits = [];
+            if (_cLane.email.length) bits.push(_cLane.email.length + ' email only');
+            if (_cLane.noname.length) bits.push(_cLane.noname.length + ' with no name yet');
+            if (_cLane.bench.length) bits.push(_cLane.bench.length + ' in no lane');
+            if (_cCallNoContact.length) bits.push(_cCallNoContact.length + ' with nothing to dial');
+            return bits.length ? React.createElement('div', { style:{ fontSize:12.5, color:'var(--m2)', marginTop:8 } },
+              'also from this run: ' + bits.join(' · ')) : null;
+          })() : null,
+          // The thirty-number sentence is not deleted. It is one click away,
+          // where somebody asking "how did that run go" will find it, instead
+          // of being the first thing on the screen.
+          (!_running && _cRead.length) ? React.createElement('details', { style:{ marginTop:8 } },
+            React.createElement('summary', { style:{ fontSize:12.5, color:'var(--m2)', cursor:'pointer' } }, 'what happened in this run'),
+            React.createElement('div', { style:{ fontSize:12.5, color:'var(--t)', marginTop:6, lineHeight:1.6 } },
+              findTallyLine(findRunTally(_scoped))),
+            _cReadNoContact > 0 ? React.createElement('div', { style:{ fontSize:12.5, color:'var(--m2)', marginTop:6, lineHeight:1.6 } },
+              'Not in the file: ' + [
+                _cEmailOnly.length ? _cEmailOnly.length + ' in the email lane (Research, not the rep)' : '',
+                _cLane.noname.length ? _cLane.noname.length + ' with no name yet' : '',
+                _cLane.bench.length ? _cLane.bench.length + ' in no lane (under the floor, or nobody to reach)' : '',
+                _cCallNoContact.length ? _cCallNoContact.length + ' with nothing to dial or write to' : '',
+              ].filter(Boolean).join(', ') + ' - of the ' + _cRead.length + ' read.') : null) : null,
+          // ── THE QUEUE, AS INVENTORY RATHER THAN A BACKLOG ───────────────
+          // "the queue at the top of the UI doesnt update with the ones we
+          // read it still says alot in the queue." It was honest - 253 leads
+          // really had never been read - but it was the HEADLINE, and a Find
+          // press adds ~120 unread leads while a read press clears 25, so it
+          // could only ever grow. One footer line now, next to the button that
+          // consumes it, where it reads as runway.
+          React.createElement('div', {
+            style:{ display:'flex', gap:10, flexWrap:'wrap', alignItems:'center', marginTop:14, paddingTop:10,
+                    borderTop:'1px solid var(--b)', fontSize:12.5, color:'var(--m2)' } },
+            React.createElement('span', null, _cUnread.length + ' waiting to be read'),
+            _cReadAll.length ? React.createElement('span', null, '· ' + _cReadAll.length + ' read in total') : null,
+            // The one reason to leave the run view: a run that was read and
+            // never handed over. Without it, a second press before an export
+            // buries the first one for good.
+            (_cNeverExported.length && contactView !== 'unexported') ? React.createElement('button', {
+              className:'btn btn-sm', style:{ background:'transparent', border:'1px solid var(--b)', color:'var(--m2)' },
+              onClick: () => { setContactView('unexported'); setContactTab('read'); setContactLane('call'); },
+            }, _cNeverExported.length + ' never exported') : null,
+            contactView === 'unexported' ? React.createElement('button', {
+              className:'btn btn-sm', style:{ background:'transparent', border:'1px solid var(--b)', color:'var(--m2)' },
+              onClick: () => setContactView('run'),
+            }, 'back to the last run') : null)),
 
         // ── THREE TABS, AND A READ LEAD LEAVES THE POOL ──────────────────
         // The counts ARE the header now: 13 / 67 / 6 says where every lead is,
@@ -8795,7 +9065,10 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
         // tab too, which is what makes "it wont get read again" visible.
         React.createElement('div', {
           style:{ display:'flex', gap:2, borderBottom:'1px solid var(--b)', margin:'0 -18px', padding:'0 18px' },
-        }, ...CONTACT_TABS.map(([k, lab]) => React.createElement('button', {
+          // A ZERO IS NOT DRAWN. "Nothing to read 0" sat on this row taking up
+          // space to say nothing; the tab comes back the moment a lead lands in
+          // it, and the tab you are standing on never disappears under you.
+        }, ...CONTACT_TABS.filter(([k]) => _tabCount[k] > 0 || contactTab === k).map(([k, lab]) => React.createElement('button', {
           key: k,
           onClick: () => setContactTab(k),
           style:{ appearance:'none', background:'none', border:0, cursor:'pointer',
@@ -8949,19 +9222,12 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
             // The scope, on the row it decides. Every number below - the lane
             // counts, the list, the export, the move button and the Result
             // sentence - is this population and nothing else.
-            _cRunSet.length ? React.createElement('div', { style:{ display:'flex', gap:6, flexWrap:'wrap' } },
-              ...[['run', 'This run (' + _cRunSet.length + ')'], ['queue', 'Everything read so far (' + _cShown.filter(c => contactTabOf(c) === 'read').length + ')']].map(([k, lab]) =>
-                React.createElement('button', { key:k,
-                  className:'btn btn-sm',
-                  style:{ background: contactScope === k ? 'var(--a)' : 'transparent',
-                          color: contactScope === k ? '#0b0d10' : 'var(--m2)',
-                          border:'1px solid ' + (contactScope === k ? 'var(--a)' : 'var(--b)') },
-                  onClick: () => setContactScope(k) }, lab))) : null,
-            (_cRunSet.length && contactScope === 'run')
-              ? _cap('Showing this press only. The email lane keeps every lead from every press - press "Everything read so far" to see and move them all.')
-              : null,
+            null,
+            null,
             React.createElement('div', { style:{ display:'flex', gap:6, flexWrap:'wrap' } },
-              ...LANE_TABS.map(([k, lab]) => React.createElement('button', { key:k,
+              // Same rule as the tabs: an empty lane is not a button. "No lane
+              // (0 of 7)" was one of the numbers Vin was counting.
+              ...LANE_TABS.filter(([k]) => _cLane[k].length > 0 || contactLane === k).map(([k, lab]) => React.createElement('button', { key:k,
                 className:'btn', onClick: () => setContactLane(k),
                 title: k === 'call' ? 'Owner within reach and named: what the CSV and the Google Sheet carry'
                      : k === 'email' ? 'Layered businesses, TheirStack leads and anyone in both lanes: the Research lane'
@@ -8970,9 +9236,7 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
                 style:{ background: contactLane === k ? 'var(--a)' : 'transparent',
                         color: contactLane === k ? '#0b0d10' : 'var(--m2)',
                         border:'1px solid ' + (contactLane === k ? 'var(--a)' : 'var(--b)') } },
-                lab + ' (' + _cLane[k].length
-                  + ((contactScope === 'run' && _cRunSet.length && _cLaneAll[k].length !== _cLane[k].length)
-                      ? ' of ' + _cLaneAll[k].length : '') + ')'))),
+                lab + ' (' + _cLane[k].length + ')'))),
             contactLane === 'email' ? _cap('Email is the lane for these: the rep does not call them. Move them to Research when you are ready to audit and write.') : null,
             contactLane === 'email' && _cEmailMovable.length ? React.createElement('button', {
               className:'btn', style:{ background:'var(--a)', color:'#0b0d10' },
@@ -8988,35 +9252,13 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
               title: csvFull
                 ? 'All ' + FIND_CSV_COLUMNS.length + ' columns.'
                 : 'The ' + FIND_CSV_ESSENTIAL.length + ' columns you dial and send from. Tick "every column" for the rest.',
-              onClick: () => { const n = downloadFindContacts(_cExportable, csvFull); if (!n) setContactErr('Nothing to export yet.'); if (n) _stamp(_cExportable, 'csv'); },
+              onClick: _exportCsv,
             }, 'Download CSV (' + _cExportable.length + ')') : null,
             _cExportable.length ? React.createElement('button', {
               className:'btn btn-g btn-sm',
               disabled: sheetBusy,
               title: 'Appends these rows to the Google Sheet set up in Settings. A business already in the sheet is not added twice.',
-              onClick: async () => {
-                const url = String((settings && settings.sheetWebhookUrl) || '').trim();
-                if (!url) { setSheetHelp(true); setSheetNote(''); return; }
-                setSheetBusy(true); setSheetNote(''); setContactErr('');
-                try {
-                  const payload = findSheetPayload(_cExportable, csvFull);
-                  const r = await fetch(BACKEND + '/api/export-sheet', {
-                    method:'POST', headers:{ 'Content-Type':'application/json' },
-                    body: JSON.stringify(Object.assign({ url }, payload)),
-                  });
-                  const d = await r.json().catch(() => ({}));
-                  if (!r.ok) { setSheetNote(''); setContactErr(d.error || ('The sheet export answered ' + r.status + '.')); if (d.setupNeeded) setSheetHelp(true); }
-                  else {
-                    setSheetNote(d.written + ' row' + (d.written === 1 ? '' : 's') + ' added to the sheet'
-                      + (d.skipped ? ', ' + d.skipped + ' already there' : '') + '.');
-                    // Stamped as SENT: the script answers only with counts, never which
-                    // rows, so a row the sheet deduped is still marked as handed out.
-                    _stamp(_cExportable, 'sheet');
-                  }
-                } catch (e) {
-                  setContactErr('Could not reach the server to send the sheet (' + ((e && e.message) || 'no response') + ').');
-                } finally { setSheetBusy(false); }
-              },
+              onClick: _exportSheet,
             }, sheetBusy ? 'Sending to the sheet...' : 'Send to Google Sheet') : null,
             // ══ THE COLUMNS, BESIDE THE BUTTONS THAT WRITE THEM ════════════
             // He was deleting most of twenty-one columns by hand after every
@@ -9059,22 +9301,14 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
             sheetNote ? _cap(sheetNote, 'var(--g)') : null) : null,
 
           // ── WHAT CAME BACK ────────────────────────────────────────────
-          // The tally is the only thing on this panel that still has two
-          // honest populations - this run, and the queue so far - so the scope
-          // toggle lives here, next to the sentence it re-points, instead of
-          // above three tabs that answer a different question.
-          (contactTab === 'read' && _cRead.length) ? _band('Result',
-            // The scope switch moved UP to the Lane band on 2026-09-04, onto
-            // the row of numbers it decides. Two switches for one population is
-            // how the counts and the list came to disagree in the first place.
-            _cap((_scopeWord === 'in this run' ? 'This run: ' : 'This queue so far: ')
-              + findTallyLine(findRunTally(_scoped)), 'var(--t)'),
-            _cReadNoContact > 0 ? _cap('Not in the file: ' + [
-                _cEmailOnly.length ? _cEmailOnly.length + ' in the email lane (Research, not the rep)' : '',
-                _cLane.noname.length ? _cLane.noname.length + ' with no name yet' : '',
-                _cLane.bench.length ? _cLane.bench.length + ' in no lane (under the floor, or nobody to reach)' : '',
-                _cCallNoContact.length ? _cCallNoContact.length + ' with nothing to dial or write to' : '',
-              ].filter(Boolean).join(', ') + ' - of the ' + _cRead.length + ' read.') : null) : null,
+          // The Result band stood here and opened with a sentence carrying
+          // about thirty numbers - "25 read of 27 · ready to work 7 (28%), 11
+          // more worth a call on an unconfirmed name · owner 18 (72%), 17 with
+          // a title · email 19 (76%)..." - which is why Vin could not find the
+          // one line under it that answered his actual question, "why does the
+          // csv say 15 when it said 17". Both moved, unchanged, into "what
+          // happened in this run" at the top of the panel, where the number
+          // they explain is on screen beside them.
 
           // ══ A DECISION IS NOT A FAILURE ══════════════════════════════════
           // A lead the server ruled out was rendered in the same red box as a

@@ -133,3 +133,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 119 | 2026-09-04 | The grading was off: a broken website lifts a lead, and the quiet ones stop being punished — 2026-09-04 | Find / Client | [round-119.md](round-119.md) |
 | 120 | 2026-09-04 | The email lane repeated the call list, the website cell was a sentence, and four terms is not a fit score — 2026-09-04 | Find / Client | [round-120.md](round-120.md) |
 | 121 | 2026-09-04 | The resolver was working; half the press was not callable, and four things were lying about it — 2026-09-04 | Find | [round-121.md](round-121.md) |
+| 122 | 2026-09-04 | The screen becomes the run you just did, and stops binning what we paid for — 2026-09-04 | Client / Find | [round-122.md](round-122.md) |
