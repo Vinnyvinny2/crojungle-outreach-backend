@@ -1321,7 +1321,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261003;
+const CLIENT_CONTRACT = 20261004;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5721,6 +5721,12 @@ const sizeCell = (c) => !c.contactReadOk ? '' : (c.contactSize || 'not measured'
 const siteCell = (c) => !c.contactReadOk ? ''
   : c.contactSiteMeasured !== true ? 'not read'
   : shortCell(c.contactSiteShort || c.contactSiteWord || 'not read');
+// Round 119: the same read as one number, sitting beside the address it is
+// about. 10 is a build with nothing we sell missing from it, 1 is the worst we
+// can measure. A site we could not read gets no grade at all - a 1 there would
+// be the absence claim this whole read exists to refuse.
+const siteGradeCell = (c) => (!c.contactReadOk || c.contactSiteMeasured !== true
+  || typeof c.contactSiteGrade !== 'number') ? '' : String(c.contactSiteGrade);
 // Round 117: a name and one flag of three words, nothing else. The title is
 // already its own lean column (marketingLeadTitle / ownerTitle), the owner is
 // already the owner column, and the provenance moved to the website cell - so
@@ -5868,6 +5874,11 @@ const contactFieldsFrom = (data) => {
     contactSiteWhy: (d.site && d.site.why) || '',
     contactSiteMeasured: !!(d.site && d.site.measured === true),
     contactSitePlatform: (d.site && d.site.platform) || '',
+    // Round 119 (Vin: "can we just get a grade on the website 1-10, lower being
+    // worse"). Computed on the server so this cell, the log line and the sheet
+    // are one number. Null on a site we could not read - never a 1, because a 1
+    // would be a claim about a site nobody looked at.
+    contactSiteGrade: (d.site && typeof d.site.grade === 'number') ? d.site.grade : null,
     contactLayers: (d.layers && d.layers.verdict) || '',
     contactTarget: d.target || '',
     contactTargetWhy: d.targetWhy || '',
@@ -6044,6 +6055,9 @@ const FIND_CSV_COLUMNS = [
   // opening this pipeline can produce, and it never left the server.
   ['hiringPosted', 'When that role was posted'],
   ['website', 'Website'],
+  // Vin, 2026-09-04: "a grade on the website 1-10, lower being worse, in a
+  // column to the right of the website name". Here, literally.
+  ['siteGrade', 'Website grade (10 best, 1 worst)'],
   ['location', 'Location'],
   ['reviews', 'Google reviews'],
   ['rating', 'Google rating'],
@@ -6081,7 +6095,7 @@ const FIND_CSV_COLUMNS = [
 // more" - the grade letters leave the export (the card and the send gate
 // still use them); the rep gets size, who to go to, and the marketing
 // decision-maker beside the owner.
-const FIND_CSV_ESSENTIAL = ['icp', 'company', 'website', 'size', 'sizeConfidence', 'site', 'target', 'owner', 'ownerTitle',
+const FIND_CSV_ESSENTIAL = ['icp', 'company', 'website', 'siteGrade', 'size', 'sizeConfidence', 'site', 'target', 'owner', 'ownerTitle',
   'marketingLead', 'marketingLeadTitle', 'email', 'marketingLeadEmail', 'phone', 'bestTime', 'payingForAds', 'hiringMarketing',
   // exported is lean because it answers the one question the file could not:
   // has this row already been handed out.
@@ -6401,6 +6415,7 @@ const findContactRows = (companies) => {
     // A resolved domain says so in the cell. A rep reading a bare URL cannot
     // tell one we found from one they published, and only one of them is proof.
     website: websiteCell(c),
+    siteGrade: siteGradeCell(c),
     exported: exportedDateCell(c),
     _last: laneOf(c).last === true,   // Round 115: the hedge's rows sort last; not a column
     exportedTo: (c.exportedTo || []).join(' and '),
@@ -8159,10 +8174,30 @@ function FindView({
       const _cHidden = contactPlacesOnly ? (filtered.length - _cShown.length) : 0;
       const _tabCount = { unread: 0, read: 0, out: 0, noread: 0 };
       for (const c of _cShown) { const t = contactTabOf(c); if (t) _tabCount[t]++; }
+      // ══ THE COUNT AND THE LIST MUST BE THE SAME POPULATION ═════════════
+      // Vin, 2026-09-04: "im not sure if the email leads are rolling over, i
+      // think def not, ive had multiple runs, theres only 18 in there??" They
+      // were rolling over. The lane BUTTONS counted _scoped - this run, because
+      // the scope toggle was three bands lower on the panel and sticky across
+      // sessions - while the LIST under them rendered the whole queue. So the
+      // screen said 18 and showed hundreds, and the "move the N in the email
+      // lane to Research" button moved only the newest press.
+      //
+      // One population now, decided here, above everything that reads it: the
+      // counts, the list, the export and the move button cannot disagree again,
+      // and the toggle that chooses it sits on the same row as the numbers it
+      // re-points instead of below the fold.
+      const _runNames = new Set((contactRun && contactRun.names) || []);
+      // The live run while it runs; the newest run id in the DATA after a
+      // refresh, which is what makes "the 10 you just read" recoverable.
+      const _runId = (contactRun && contactRun.runId) || latestRunIdOf(_cShown);
+      const _cRunSet = _runId ? _cShown.filter(c => c && c.contactRunId === _runId) : _cShown.filter(c => c && _runNames.has(c.name));
+      const _scoped = (contactScope === 'run' && _cRunSet.length) ? _cRunSet : _cShown;
+      const _scopeWord = _scoped === _cRunSet ? 'in this run' : 'in the queue';
       // THE LIST IS THE TAB. Counting alone would leave "a read lead leaves the
       // pool" true of the numbers and false of the screen, which is the whole
       // complaint.
-      const _tabbed = _cShown.filter(c => contactTabOf(c) === contactTab).filter(c => contactTab !== 'read' || laneHas(c, contactLane));
+      const _tabbed = _scoped.filter(c => contactTabOf(c) === contactTab).filter(c => contactTab !== 'read' || laneHas(c, contactLane));
       const _shown = contactSort
         ? _tabbed.slice().sort((a, b) => {
             // Round 115: the hedge's rows sit at the bottom whatever their fit.
@@ -8624,13 +8659,6 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
       // filtered queue, cumulatively, across every press this browser has ever
       // made. There was no view of a RUN anywhere in the app, and contactAt was
       // stamped on every read and consumed by nothing.
-      const _runNames = new Set((contactRun && contactRun.names) || []);
-      // The live run while it runs; the newest run id in the DATA after a
-      // refresh, which is what makes "the 10 you just read" recoverable.
-      const _runId = (contactRun && contactRun.runId) || latestRunIdOf(_cShown);
-      const _cRunSet = _runId ? _cShown.filter(c => c && c.contactRunId === _runId) : _cShown.filter(c => c && _runNames.has(c.name));
-      const _scoped = (contactScope === 'run' && _cRunSet.length) ? _cRunSet : _cShown;
-      const _scopeWord = _scoped === _cRunSet ? 'in this run' : 'in the queue';
       // contactTabOf, matching the export and the tab row. The raw flag is true
       // on a lead the server RULED OUT - a chain drop is read and answered - so
       // counting it here made the tally and the file describe different sets.
@@ -8893,6 +8921,20 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
               },
             }, 'Put ' + _cNoRead.length + ' back in Not read')) : null,
           (contactTab === 'read' && _cRead.length) ? _band('Lane',
+            // The scope, on the row it decides. Every number below - the lane
+            // counts, the list, the export, the move button and the Result
+            // sentence - is this population and nothing else.
+            _cRunSet.length ? React.createElement('div', { style:{ display:'flex', gap:6, flexWrap:'wrap' } },
+              ...[['run', 'This run (' + _cRunSet.length + ')'], ['queue', 'Everything read so far (' + _cShown.filter(c => contactTabOf(c) === 'read').length + ')']].map(([k, lab]) =>
+                React.createElement('button', { key:k,
+                  className:'btn btn-sm',
+                  style:{ background: contactScope === k ? 'var(--a)' : 'transparent',
+                          color: contactScope === k ? '#0b0d10' : 'var(--m2)',
+                          border:'1px solid ' + (contactScope === k ? 'var(--a)' : 'var(--b)') },
+                  onClick: () => setContactScope(k) }, lab))) : null,
+            (_cRunSet.length && contactScope === 'run')
+              ? _cap('Showing this press only. The email lane keeps every lead from every press - press "Everything read so far" to see and move them all.')
+              : null,
             React.createElement('div', { style:{ display:'flex', gap:6, flexWrap:'wrap' } },
               ...LANE_TABS.map(([k, lab]) => React.createElement('button', { key:k,
                 className:'btn', onClick: () => setContactLane(k),
@@ -8995,14 +9037,9 @@ React.createElement('div', { style:{ display:'flex', gap:8, alignItems:'center',
           // toggle lives here, next to the sentence it re-points, instead of
           // above three tabs that answer a different question.
           (contactTab === 'read' && _cRead.length) ? _band('Result',
-            _cRunSet.length ? React.createElement('div', { style:{ display:'flex', gap:6, flexWrap:'wrap' } },
-              ...[['run', 'This run (' + _cRunSet.length + ')'], ['queue', 'The whole queue (' + _cShown.length + ')']].map(([k, lab]) =>
-                React.createElement('button', { key:k,
-                  className:'btn btn-sm',
-                  style:{ background: contactScope === k ? 'var(--a)' : 'transparent',
-                          color: contactScope === k ? '#0b0d10' : 'var(--m2)',
-                          border:'1px solid ' + (contactScope === k ? 'var(--a)' : 'var(--b)') },
-                  onClick: () => setContactScope(k) }, lab))) : null,
+            // The scope switch moved UP to the Lane band on 2026-09-04, onto
+            // the row of numbers it decides. Two switches for one population is
+            // how the counts and the list came to disagree in the first place.
             _cap((_scopeWord === 'in this run' ? 'This run: ' : 'This queue so far: ')
               + findTallyLine(findRunTally(_scoped)), 'var(--t)'),
             _cReadNoContact > 0 ? _cap('Not in the file: ' + [

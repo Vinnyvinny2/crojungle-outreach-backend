@@ -601,7 +601,21 @@ const runLead = async (b, over, capMs) => {
     ok(HS.hiringMarketing === true, `the dated Marketing Manager posting did not read as hiring for marketing (${JSON.stringify(HS.hiringTitles)})`);
     // THE SCORE, delivered and complete.
     ok(HJ.icp && typeof HJ.icp.score === 'number', `no ICP score arrived: ${JSON.stringify(HJ.icp)}`);
-    ok(HJ.icp && HJ.icp.of >= 7 && HJ.icp.measured === HJ.icp.of, `the score was measured on ${HJ.icp && HJ.icp.measured} of ${HJ.icp && HJ.icp.of} signals on a lead carrying every one`);
+    // Round 119 changed what "every one" means. Two terms - hiring and invests
+    // - now LEAVE the score when the answer is an absence, because Vin ruled
+    // the quiet ones stop being punished and the ads term already pays for the
+    // same silence. So the bar is: nearly every term measured, and any term
+    // that sat out says WHY in its own words rather than printing "not
+    // measured" about a page we actually read.
+    {
+      const _un = ((HJ.icp && HJ.icp.terms) || []).filter(t => !t.measured);
+      ok(HJ.icp && HJ.icp.of >= 7 && HJ.icp.measured >= HJ.icp.of - 2,
+        `the score was measured on ${HJ.icp && HJ.icp.measured} of ${HJ.icp && HJ.icp.of} signals on a lead carrying every one`);
+      ok(_un.every(t => t.say && t.say !== 'not measured'),
+        `a term sat out of the score and reported "not measured" about work we did do: ${_un.map(t => t.id).join(', ')}`);
+      ok(_un.every(t => t.id === 'hiring' || t.id === 'invests'),
+        `a term other than the two Round 119 lets sit out left the score: ${_un.map(t => t.id + ' (' + t.say + ')').join('; ')}`);
+    }
     // THE TWO TERMS THAT ONLY EXIST AFTER THE LOOKUPS RUN. This is the whole of
     // section 98's score fix and no boot fixture can see it: findIcpScore used
     // to be called ~370 lines ABOVE the owner and address lookups, so a lead
@@ -610,18 +624,20 @@ const runLead = async (b, over, capMs) => {
       'the reach term is not measured on a lead that produced a named owner and a published address, so the score is being computed before the lookups again');
     ok(HJ.icp && (HJ.icp.terms || []).some(t => t.id === 'afford' && t.measured),
       'the affordability band is not reaching the contact score, so the Find card, the CSV and contactRankFor are back to three verdicts about one business');
-    // Round 118 moved this from 80 to 75, and the reason is arithmetic rather
-    // than a slipped standard: the eleventh term (sitegap, max 25) measures on
-    // this lead and scores 14, so the denominator grows by 25 while the points
-    // grow by 14 and the same business lands at 78 instead of 81. That is the
-    // term working - this fixture's site has no schema, no form and a default
-    // title, which is a mediocre website and therefore a mediocre website
-    // prospect. A lead with a GOOD site scores 0 of those 25 by design.
-    ok(HJ.icp && HJ.icp.score >= 75, `a business with ad spend, a crew, a marketing hire, 180 reviews and 4.6 stars scored ${HJ.icp && HJ.icp.score}/100`);
+    // Round 118 moved this from 80 to 75 because the website was a TERM and a
+    // mediocre site dragged the ratio. Round 119 took it back out of the ratio
+    // - a broken site is a LIFT on top of the score now, for the arithmetic in
+    // siteLift - so the bar is back at 80 and this fixture, whose site has no
+    // schema, no form and a default title, clears it comfortably.
+    ok(HJ.icp && HJ.icp.score >= 80, `a business with ad spend, a crew, a marketing hire, 180 reviews and 4.6 stars scored ${HJ.icp && HJ.icp.score}/100`);
     // THE WEBSITE READ, end to end over HTTP. No boot fixture can see this:
     // readSiteBuild runs inside the route, on pages the route fetched itself.
-    ok(HJ.icp && (HJ.icp.terms || []).some(t => t.id === 'sitegap' && t.measured),
-      'the website term is not measured on a lead whose site we read, so the one signal that says whether they NEED us never reaches the score');
+    ok(HJ.icp && typeof HJ.icp.lift === 'number' && HJ.icp.lift > 0,
+      `the website gap did not lift a lead whose site we read and found faults on: lift ${HJ.icp && HJ.icp.lift}`);
+    ok(HJ.icp && !(HJ.icp.terms || []).some(t => t.id === 'sitegap'),
+      'the website gap is back inside the scoring table, where a good site costs a lead the ratio');
+    ok(HJ.site && typeof HJ.site.grade === 'number' && HJ.site.grade >= 1 && HJ.site.grade <= 10,
+      `the website grade out of 10 did not arrive on the contact response: ${JSON.stringify(HJ.site && HJ.site.grade)}`);
     ok(HJ.site && HJ.site.measured === true && typeof HJ.site.gap === 'number',
       `the website read did not arrive on the contact response: ${JSON.stringify(HJ.site && [HJ.site.measured, HJ.site.gap])}`);
     ok(HJ.site && /no business schema/.test(String(HJ.site.why || '')),
