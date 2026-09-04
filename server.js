@@ -9382,7 +9382,12 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
 // Google block Render's IPs at the network edge — but Firecrawl runs its own
 // scraping infrastructure and is NOT blocked. It searches the web AND returns
 // full page content, not just snippets.
-const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) => {
+// Round 118: `tag` names WHICH search this is (license_trade, owner_name,
+// size_revenue...). fcKindLabel buckets every search as 'search' and a boot
+// check pins that, so the per-source count rides the request ledger instead -
+// it is the only way to answer "which of these five earns its keep" without
+// grepping a batch by hand.
+const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true, tag = '') => {
   if (!fcKey || !query) return [];
   if (fcCreditsBlocked()) return [];   // fail fast — no point firing doomed calls
   try {
@@ -9410,6 +9415,7 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) =>
     // per 10 results, and each page read on top is a further credit. Without this the
     // meter reported 2 for a call that actually cost 5.
     fcNote(true, `search x${limit}${scrapeContent ? '+scrape' : ''}`, query);
+    if (tag) { const _l = FC_LEDGER.getStore(); if (_l) { _l.searches = _l.searches || {}; _l.searches[tag] = (_l.searches[tag] || 0) + 1; } }
     const results = d.data || d.results || [];
     return results.map(x => ({
       url: x.url || '',
@@ -13339,11 +13345,17 @@ const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey, locati
     const queries = [
       `"${clean}" ${domain ? domain + ' ' : ''}${loc ? loc + ' ' : ''}(bbb.org OR manta.com OR buzzfile.com OR dnb.com) owner principal`,
     ];
+    // Round 118: the tag rides a PARALLEL array rather than an index, because
+    // the list shifts when the lead has no city and an index would then name
+    // the wrong search in the tally.
+    const _tags = ['owner_directory'];
     if (loc) queries.unshift(`"${clean}" ${loc} owner OR founder OR "chief executive" OR president name`);
+    if (loc) _tags.unshift('owner_name');
     // Round 112: the last query, bought only when the two above named nobody.
     // LinkedIn result titles read "Name - Owner - Company", and the same
     // name-must-appear-in-the-results rule applies.
     queries.push(`"${clean}" ${loc ? loc + ' ' : ''}owner OR founder OR president site:linkedin.com/in`);
+    _tags.push('owner_linkedin');
     if (!loc) console.log(`DM/websearch [${companyName}]: no city, so the undisambiguated name search is skipped — only the domain-scoped directory search runs.`);
 
     // One query at a time, and the second is bought only when the first did
@@ -13388,7 +13400,7 @@ ${corpus}` }]
     let corpus = '';
     let parsed = {};
     for (let _qi = 0; _qi < queries.length; _qi++) {
-      const _batch = await firecrawlSearch(fcKey, queries[_qi], 2, false).catch(() => []); // snippet-only: owner names live in BBB/Manta snippets
+      const _batch = await firecrawlSearch(fcKey, queries[_qi], 2, false, _tags[_qi] || 'owner_search').catch(() => []); // snippet-only: owner names live in BBB/Manta snippets
       const _new = Array.isArray(_batch) ? _batch : [];
       if (!_new.length) continue;
       hits = hits.concat(_new).slice(0, 4);
@@ -13706,7 +13718,7 @@ ${corpus}` }]
       if (!(Number(parsed.employees) > 0) && !parsed.revenue) return null;
       return parsed;
     };
-    let results = await firecrawlSearch(fcKey, q, 4, false); // snippet-only
+    let results = await firecrawlSearch(fcKey, q, 4, false, 'size_revenue'); // snippet-only
     let secondQuery = false;
     let parsed = results.length ? await _extractSize(results) : null;
     // Round 112 bought one more snippet-only query over LinkedIn company pages
@@ -13719,7 +13731,7 @@ ${corpus}` }]
     // only when the first parse found nothing.
     if (!parsed && !secondQuery && secondWorth) {
       const q2 = `"${companyName}" ${loc ? loc + ' ' : ''}employees (site:linkedin.com/company OR site:bbb.org)`;
-      const r2s = await firecrawlSearch(fcKey, q2, 4, false);
+      const r2s = await firecrawlSearch(fcKey, q2, 4, false, 'size_headcount');
       if (r2s.length) { results = results.concat(r2s); secondQuery = true; parsed = await _extractSize(results); }
     }
     // Round 116: the BBB profile, fetched FREE off a URL the results already
@@ -32946,8 +32958,11 @@ const findOwnerViaLicense = async (companyName, industry, location, fcKey, apiKe
     q.push(`"${clean}" ${loc} "principal broker" OR "broker of record"`);
   else
     q.push(`"${clean}" ${loc} owner OR proprietor OR "founded by"`);
-  // Chamber / local directory listings name owners for almost every local business.
-  q.push(`"${clean}" ${loc} (chamber of commerce OR chamberofcommerce.com) owner OR president`);
+  // Chamber / local directory listings name owners for almost every local
+  // business - except that, measured, they do not: 11 buys, 0 names, 2026-09-04.
+  // See DM_CHAMBER above. Not built at all when the knob is off, so nothing
+  // downstream can buy it by accident.
+  if (DM_CHAMBER) q.push(`"${clean}" ${loc} (chamber of commerce OR chamberofcommerce.com) owner OR president`);
 
   // EARLY EXIT INSTEAD OF SHALLOWER SEARCH. Both queries used to run every time,
   // 4 credits each. The trade-specific licence query is the stronger of the two and
@@ -33025,21 +33040,33 @@ ${corpus}` }]
 
   try {
     const hits = [];
-    const r0 = await firecrawlSearch(fcKey, q[0], 4, false);
+    const r0 = await firecrawlSearch(fcKey, q[0], 4, false, 'license_trade');
     if (Array.isArray(r0)) hits.push(...r0);
     if (hits.length) {
       const early = await evaluate(hits);
       if (early) {
         if (q.length > 1) console.log(`DM/license [${clean}]: resolved on the trade query \u2014 skipped the chamber search (~4 Firecrawl credits saved)`);
-        return early;
+        // Round 118: which of the two queries earned the name. DM_SOURCE_WEIGHT
+        // has ONE key for both, so nothing downstream could tell them apart and
+        // the question "is the chamber query worth its credits" needed a log grep.
+        return Object.assign({}, early, { licenseQuery: 'trade' });
       }
     }
+    // ══ THE SAME CORPUS IS NOT A SECOND ANSWER ═══════════════════════════════
+    // Round 118: this loop used to be followed by an unconditional evaluate over
+    // `hits`. With one query in q - which is now the default - the loop adds
+    // nothing, `hits` is byte-identical to what evaluate already read above, and
+    // the trailing call re-ran the identical Haiku prompt on the identical
+    // corpus for the identical null. A model call is only worth making on
+    // evidence that changed.
+    const _before = hits.length;
     for (let i = 1; i < q.length; i++) {
-      const r = await firecrawlSearch(fcKey, q[i], 4, false);
+      const r = await firecrawlSearch(fcKey, q[i], 4, false, 'license_chamber');
       if (Array.isArray(r)) hits.push(...r);
     }
-    if (!hits.length) return null;
-    return await evaluate(hits);
+    if (!hits.length || hits.length === _before) return null;
+    const _late = await evaluate(hits);
+    return _late ? Object.assign({}, _late, { licenseQuery: 'chamber' }) : null;
   } catch(e) { console.log('findOwnerViaLicense failed:', e.message); return null; }
 };
 
@@ -33467,6 +33494,20 @@ ${content}` }]
 // sameName itself is deliberately untouched: a false yes there sends an email
 // addressed to the owner by name into a stranger's mailbox.
 const DM_REGISTRY = /^(?:1|true|on|yes)$/i.test(String(process.env.DM_REGISTRY || ''));
+// ══ THE CHAMBER QUERY IS OFF, AND HERE IS THE EVIDENCE ═════════════════════
+// Round 118, measured on the 2026-09-04 run: a Firecrawl search costs exactly
+// 2 credits, and 168 of that run's 195 credits (86%) went on searching for
+// owners rather than on reading the businesses. The chamber-of-commerce query
+// is the last one in the licence executor, so it is bought ONLY on leads where
+// the trade query has already failed to name anyone. It ran 11 times and
+// produced zero names.
+//
+// Off by default, exactly like DM_REGISTRY above and for the same reason. The
+// evidence is a single run of 25, so this is a SWITCH and not a deletion:
+// DM_CHAMBER=1 on Render puts it back, and the OWNER WAVE line now carries a
+// per-search tally so the next batch says which of the remaining searches earn
+// their keep instead of anyone grepping a log for it.
+const DM_CHAMBER = /^(?:1|true|on|yes)$/i.test(String(process.env.DM_CHAMBER || ''));
 const DM_SIGNATURE_PROMOTE_AT = 3;   // signatures of the same first name before it outranks a weak site title
 const foldFirstNameClusters = (clusters) => {
   for (let i = clusters.length - 1; i >= 0; i--) {
@@ -58266,13 +58307,19 @@ app.listen(PORT, () => {
       {
         const _s4 = selfSourceNoCommentsLF();
         const _n4 = (a, b) => a + b;
-        const _f0 = _s4.indexOf(_n4('const firecrawlSearch = async (fcKey, query,', ' limit = 5, scrapeContent = true) => {'));
+        const _f0 = _s4.indexOf(_n4('const firecrawlSearch = async (fcKey, query,', " limit = 5, scrapeContent = true, tag = '') => {"));
         const _f1 = _f0 < 0 ? -1 : _s4.indexOf(_n4('const results = d.data ||', ' d.results || [];'), _f0);
         if (_f0 < 0 || _f1 < 0) _fails.push('firecrawlSearch could not be found, so where it notes its spend is not being checked');
         else {
           const _body = _s4.slice(_f0, _f1);
           const _note = _body.indexOf(_n4('fcNote(true, `search x', '${limit}'));
           const _err = _body.indexOf(_n4('isCreditError(d,', ' r.status)'));
+          // Round 118: the per-source tally sits AFTER fcNote for the same
+          // reason fcNote sits after the response - a search counted at
+          // dispatch counts one that a 402 never billed.
+          const _tag = _body.indexOf(_n4('_l.searches[tag] = (_l.searches[tag]', ' || 0) + 1;'));
+          if (_tag < 0) _fails.push('the paid search door no longer counts what it bought by source, so which of the five owner searches earns its keep cannot be read off a batch');
+          else if (_tag < _note) _fails.push('the per-source search tally counts at DISPATCH, so a search a 402 refused is counted as bought');
           if (_note < 0) _fails.push('firecrawlSearch no longer notes its spend at all, so the meter under-reports every search');
           else if (_err < 0) _fails.push('firecrawlSearch no longer checks for a credit error');
           else if (_note < _err) _fails.push('firecrawlSearch notes its spend at DISPATCH again - on an empty account the one probe prints FC PAID, counts a credit and clears the latch for every door before the 402 comes back');
@@ -60750,6 +60797,34 @@ app.listen(PORT, () => {
       }
 
       // ══ NO CITY, NO WORTHLESS PAID QUERY ═══════════════════════════════
+      // ══ ROUND 118: THE CHAMBER QUERY IS OFF, AND THE CONDITION IS PINNED ══
+      // Measured 2026-09-04: 11 buys, 0 names, on leads where the trade query
+      // had already failed. Off behind DM_CHAMBER, not deleted.
+      //
+      // The needle is on the CONDITION, never on the log sentence. §113
+      // recorded a needle aimed at a message that stayed green on an
+      // `if (false)` build - a check that cannot fail is not a check.
+      if (!_src.includes(_n('if (DM_CHAMBER) q.push(`"${clean}" ${loc} (chamber of commerce', ' OR chamberofcommerce.com) owner OR president`);'))) {
+        _fails.push('the chamber-of-commerce query is bought without the DM_CHAMBER knob in front of it - 11 buys and 0 names on 2026-09-04, and it only ever fires on leads the trade query already failed');
+      }
+      if (typeof DM_CHAMBER !== 'boolean') _fails.push('DM_CHAMBER is not a boolean, so an unset env var could read as truthy and buy the query anyway');
+      // The same corpus is not a second answer: with one query in q the loop
+      // adds nothing, and the trailing evaluate used to re-run the identical
+      // Haiku prompt on the identical hits for the identical null.
+      if (!_src.includes(_n('if (!hits.length || hits.length === _before)', ' return null;'))) {
+        _fails.push('the licence executor evaluates the same corpus twice again - with the chamber query off the loop adds no hits and the second model call is bought on evidence that did not change');
+      }
+      // Which of the two queries earned the name. One source weight covers both,
+      // so without this nothing downstream can tell them apart.
+      for (const _lq of [_n("return Object.assign({}, early, { licenseQuery:", " 'trade' });"),
+                         _n("_late ? Object.assign({}, _late, { licenseQuery:", " 'chamber' }) : null;")]) {
+        if (!_src.includes(_lq)) _fails.push('the licence result no longer records WHICH query produced it, so the chamber query cannot be judged on its own evidence');
+      }
+      // The tag rides a parallel array: the query list shifts when a lead has
+      // no city, and an index would then name the wrong search in the tally.
+      if (!_src.includes(_n("const _tags = ['owner_directory'];", "\n    if (loc) queries.unshift("))) {
+        _fails.push('the owner web search tags its queries by index again, so a city-less lead reports the wrong search in the per-source tally');
+      }
       // Four Peaks Roofing bought a licence search with a double space where
       // the jurisdiction belongs. A licence board is a STATE thing.
       for (const _need of [
@@ -79109,6 +79184,17 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     firecrawl: Math.round((led.spent || 0) * 100) / 100,
     anthropicUsd: Math.round((led.anthropicUsd || 0) * 10000) / 10000,
   };
+  // Round 118: WHICH paid searches this lead bought, at 2 credits each. The
+  // OWNER WAVE line already says whether the wave fired and what it produced;
+  // this says what it was made of, so "which of these searches earns its keep"
+  // is answerable from a batch instead of from a hand-grep of the query text.
+  out.searches = Object.assign({}, led.searches || {});
+  const _searchMix = () => {
+    const _e = Object.entries(out.searches).filter(([, n]) => n > 0).sort((x, y) => y[1] - x[1]);
+    if (!_e.length) return '';
+    const _n = _e.reduce((t, [, n]) => t + n, 0);
+    return ` | searches: ${_e.map(([k, n]) => `${k}×${n}`).join(', ')} (${_n * 2} of the ${out.spend.firecrawl} credits)`;
+  };
   out.tookMs = Date.now() - t0;
   if (out.notIcp) {
     const _dropAs = ({ nonprofit: 'as a nonprofit', owned: 'as a business somebody else owns', franchise: 'as a franchisee', national: 'as a national operator' })[out.icpReason] || 'as a branch of a larger operation';
@@ -79154,7 +79240,8 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       + ` \u2014 outcome: ${_got ? 'a buyer we can name' : (out.owner && out.owner.name) ? 'a name BELOW the buying floor' : 'nobody at all'}`
       + `${_src.length ? `, from ${_src.join('+')}${_free ? ' (all free sources)' : ''}` : ''}`
       + `${out.ownerStagesRun === null ? ' (the resolver did not run on this lead)' : ''}, ${out.spend.firecrawl} credit(s) on the lead.`
-      + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan.'));
+      + _searchMix()
+      + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan. The searches: line names WHICH paid search ran, so the next round cuts on evidence rather than on a hunch.'));
     _ownerWaveLectured = true;
   }
   console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerHeadOffice === true ? 'FREE STAGE ONLY (a branch of a bigger operation - the signer is at head office)' : out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
