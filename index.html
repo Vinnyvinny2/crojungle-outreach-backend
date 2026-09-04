@@ -1321,7 +1321,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261001;
+const CLIENT_CONTRACT = 20261002;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5614,6 +5614,28 @@ const stampExportedRows = (list, names, dest, nowIso) => (Array.isArray(list) ? 
 });
 const exportedCell = (c) => (c && c.exportedAt)
   ? (String(c.exportedAt).slice(0, 10) + ' to ' + ((c.exportedTo || []).join(' and ') || 'a file')) : '';
+// ══ SHORT STUFF IN THE ROWS ══════════════════════════════════════════════
+// Vin, 2026-09-04, reading the live sheet: "we need to have short stuff in the
+// rows so we can fit everyhting in as u see for some of them." The SECOND time
+// he has said it - 2026-09-02 was "long sentences dont work use ratings
+// instead" - because Rounds 110, 113 and 115 each appended one more clause to
+// the one cell that had room, until "Who to go to" read:
+//   Owner: Joe Novogratz (layered business, no marketing head found - expect
+//   the owner not to answer) - ranked last, ask for the marketing head
+// A cap a CHECK can read is the only thing that stops a fourth round doing it
+// again; an instruction in a comment is not a guard (PART 3). Nothing is lost:
+// the sentence moves to targetWhy in the full 41-column file, one tick away.
+const SHORT_CELL_MAX = 44;
+const shortCell = (s) => {
+  const t = String(s === null || s === undefined ? '' : s).replace(/\s+/g, ' ').trim();
+  return t.length <= SHORT_CELL_MAX ? t : (t.slice(0, SHORT_CELL_MAX - 1).replace(/[\s,;:.-]+$/, '') + '\u2026');
+};
+// A person's NAME is never the thing that gets cut. The flag is dropped first,
+// so a long name arrives whole and unflagged rather than truncated mid-word.
+const nameWithFlag = (head, name, flag) => {
+  const base = String(head || '') + String(name || '');
+  return (flag && (base + flag).length <= SHORT_CELL_MAX) ? (base + flag) : base;
+};
 // Provenance for a domain WE found, in the two "how sure" cells that are in the
 // lean CSV - `website` is not, so without this a rep downloads an owner and an
 // address with no way to tell the domain was ours to begin with.
@@ -5692,21 +5714,32 @@ const laneKey = (c) => { const l = laneOf(c); return l.call ? 'call' : l.email ?
 // Sheet and the count on the button all read this one rule.
 const exportableContact = (c) => contactTabOf(c) === 'read' && hasContactData(c) && laneOf(c).call === true;
 const sizeCell = (c) => !c.contactReadOk ? '' : (c.contactSize || 'not measured');
+// Round 117: a name and one flag of three words, nothing else. The title is
+// already its own lean column (marketingLeadTitle / ownerTitle), the owner is
+// already the owner column, and the provenance moved to the website cell - so
+// every clause this used to carry was a second copy of a column beside it.
+// Round 115's rule stands: a name the server HELD BACK is never "Owner:".
 const targetCell = (c) => !c.contactReadOk ? ''
   : targetOf(c) === 'marketing'
-    ? ('Marketing decision-maker: ' + (c.contactMarketingLead || '')
-       + (c.contactMarketingLeadTitle ? ' (' + c.contactMarketingLeadTitle + ')' : '')
-       + (c.contactOwner ? '; owner ' + c.contactOwner + ' for the second call' : ''))
-  // Round 115: a name the server HELD BACK (below the buying floor) is not
-  // "Owner:" on the rep's sheet - the grade letters left the file in Round
-  // 109, so the cell has to say it (ClearChoice's prosthodontist, 2026-09-03).
-  : targetOf(c) === 'owner' ? ((c.contactOwnerGrade === 'unconfirmed' ? 'Held back: ' : 'Owner: ') + (c.contactOwner || '')
-       + (c.contactOwnerGrade === 'unconfirmed' ? ' (cannot sign - ask who owns the marketing)' : '')
-       + (c.contactLayers === 'layered' ? ' (layered business, no marketing head found - expect the owner not to answer)' : '')
-       + (laneOf(c).last ? ' - ranked last, ask for the marketing head' : '')
-       // The lean file has to say when the owner was read off a domain WE found.
-       + websiteProvenanceCell(c))
-  : (c.contactTargetWhy || 'nobody reachable found');
+    ? shortCell(nameWithFlag('Marketing: ', c.contactMarketingLead || '', ''))
+  : targetOf(c) === 'owner'
+    ? shortCell(nameWithFlag(
+        c.contactOwnerGrade === 'unconfirmed' ? 'Held back: ' : 'Owner: ',
+        c.contactOwner || '',
+        c.contactOwnerGrade === 'unconfirmed' ? ' - cannot sign'
+          : (c.contactLayers === 'layered' || laneOf(c).last) ? ' - ask marketing head' : ''))
+  : 'Nobody named';
+// The sentence the short cell replaced, kept whole for the full file: why that
+// person, whether the row is ranked last, and whether we found the domain.
+const targetWhyCell = (c) => !c.contactReadOk ? ''
+  : ((c.contactTargetWhy || 'nobody reachable was found')
+     + (laneOf(c).last ? ' - ranked last on the sheet, ask for the marketing head' : '')
+     + websiteProvenanceCell(c));
+// The lean website cell says where the domain came from in three words; the
+// full sentence stays on ownerHowSure, which is not in the lean file.
+const websiteCell = (c) => (c && c.contactWebsiteResolved === true)
+  ? ((c.contactWebsite || '') + (c.contactWebsiteConfirmed === true ? ' (found by us)' : ' (found by us, unconfirmed)'))
+  : ((c && c.website) || '');
 const ownerGradeCell = (c) => {
   const prov = (c && c.contactWebsiteResolved === true)
     ? (c.contactWebsiteConfirmed === true ? '(site found by us)' : '(site found by us, unconfirmed)') : '';
@@ -5963,6 +5996,8 @@ const FIND_CSV_COLUMNS = [
   ['size', 'Size (low / medium / high)'],
   ['sizeConfidence', 'How sure we are of the size'],
   ['target', 'Who to go to'],
+  // Round 117: the sentence the short cell replaced. Full file only.
+  ['targetWhy', 'Why that person, in full'],
   ['owner', 'Decision-maker'],
   ['ownerTitle', 'Their title'],
   ['ownerHowSure', 'How sure we are it is him, and what to ask'],
@@ -6079,7 +6114,13 @@ const findRunTally = (companies) => {
     phone: 0, verifierOff: 0,
     // Round 116: the score the proof runs are measured on - how many sizes
     // were measured (sure / likely) against guessed or not measured at all.
-    sizeSure: 0, sizeLikely: 0, sizeGuess: 0, sizeUnknown: 0 };
+    sizeSure: 0, sizeLikely: 0, sizeGuess: 0, sizeUnknown: 0,
+    // Round 117: the owner score needs an honest denominator. A branch of a
+    // national brand has no local owner to find - its buyer sits at head
+    // office - so counting it as an owner MISS reads as a broken resolver
+    // when it is the filter working. Three brand outlets in the 2026-09-04
+    // run took the score from 82% to 72% on their own.
+    ownerRun: 0, ownerRunNamed: 0 };
   for (const c of read) {
     const _phone = !!String(c.contactPhone || c.phone || '').replace(/\D/g, '');
     const _kept = c.contactNotFit !== true;
@@ -6104,6 +6145,7 @@ const findRunTally = (companies) => {
       if (c.contactEmailSendable === true) t.sendable++;
     }
     if (_phone) t.phone++;
+    if (_kept && c.contactLayers === 'owner') { t.ownerRun++; if (c.contactOwner) t.ownerRunNamed++; }
     if (_kept) {
       const _sc = String(c.contactSizeConfidence || '');
       if (_sc === 'sure') t.sizeSure++; else if (_sc === 'likely') t.sizeLikely++; else if (_sc === 'guess') t.sizeGuess++; else t.sizeUnknown++;
@@ -6122,6 +6164,7 @@ const findRunTally = (companies) => {
   // call-outcome report, and for the same reason: a thin number believed is
   // worse than no number.
   t.readable = t.read >= 12;
+  t.ownerRunPct = t.ownerRun ? Math.round((t.ownerRunNamed / t.ownerRun) * 100) : null;
   return t;
 };
 const findTallyLine = (t) => {
@@ -6157,6 +6200,7 @@ const findTallyLine = (t) => {
     const _m = t.sizeSure + t.sizeLikely;
     s += ' Sizes: ' + _m + ' measured' + (t.readable ? ' (' + Math.round((_m / t.read) * 100) + '%)' : '') + ' - ' + t.sizeSure + ' sure, ' + t.sizeLikely + ' likely; ' + t.sizeGuess + ' a guess, ' + t.sizeUnknown + ' not measured.';
   }
+  if (t.ownerRun) s += ' Of the ' + t.ownerRun + ' owner-run leads, ' + t.ownerRunNamed + ' named' + (t.readable ? ' (' + t.ownerRunPct + '%)' : '') + '.';
   if (t.verifierOff) s += ' ' + t.verifierOff + ' lead(s) were read while the email verifier was not answering, so those addresses are pattern-built at best - a fact about us, not about them.';
   if (!t.readable) s += ' Under 12 reads, so these are counts and not rates.';
   return s;
@@ -6214,10 +6258,11 @@ const findContactRows = (companies) => {
     size: sizeCell(c),
     sizeConfidence: c.contactReadOk ? (c.contactSizeConfidence || 'unknown') : '',
     target: targetCell(c),
+    targetWhy: targetWhyCell(c),
     marketingLead: c.contactMarketingLead || '',
     marketingLeadTitle: c.contactMarketingLeadTitle || '',
     marketingLeadEmail: !c.contactMarketingLeadEmail ? ''
-      : (c.contactMarketingLeadEmail + (c.contactMarketingLeadEmailSendable ? '' : ' (do not send - unconfirmed)')),
+      : (c.contactMarketingLeadEmail + (c.contactMarketingLeadEmailSendable ? '' : ' (do not send)')),
     owner: c.contactOwner || '',
     ownerTitle: c.contactOwnerTitle || (c.contactOwner ? 'no title found' : ''),
     ownerCanBuy: c.contactOwner ? (c.contactOwnerCanBuy ? 'yes' : 'not established') : '',
@@ -6234,7 +6279,7 @@ const findContactRows = (companies) => {
       : 'source not recorded'),
     // Round 110: Safe-to-send left the export, so the address itself says when
     // it must not be used - a rep reading one column cannot mail a guess.
-    email: !c.contactEmail ? '' : (c.contactEmail + (c.contactEmailSendable ? '' : ' (do not send - unconfirmed)')),
+    email: !c.contactEmail ? '' : (c.contactEmail + (c.contactEmailSendable ? '' : ' (do not send)')),
     // The tier IS the confidence. Deriving it by regex over a human-readable
     // label is how four materially different states collapse into one sentence.
     // The SERVER decides this now, at the one wrapper every result passes
@@ -6335,10 +6380,7 @@ const findContactRows = (companies) => {
       : ((c.contactHiringRoles || []).length ? 'posted, but the listing carried no usable date' : ''),
     // A resolved domain says so in the cell. A rep reading a bare URL cannot
     // tell one we found from one they published, and only one of them is proof.
-    website: c.contactWebsiteResolved === true
-      ? ((c.contactWebsite || '') + ' (found by us from the name, not published by them'
-         + (c.contactWebsiteConfirmed === true ? '; their pages name the business)' : '; NOT confirmed)'))
-      : (c.website || ''),
+    website: websiteCell(c),
     exported: exportedDateCell(c),
     _last: laneOf(c).last === true,   // Round 115: the hedge's rows sort last; not a column
     exportedTo: (c.exportedTo || []).join(' and '),

@@ -2358,7 +2358,7 @@ let contactTally = null;
                  // resolver's source ids are said the way a rep would say them.
                  'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN',
                  // Round 110: size and target cells.
-                 'targetOf', 'sizeCell', 'targetCell', 'lastRowsLast',
+                 'targetOf', 'SHORT_CELL_MAX', 'shortCell', 'nameWithFlag', 'sizeCell', 'targetCell', 'targetWhyCell', 'websiteCell', 'lastRowsLast',
                  // Round 111: the lane helpers the rep's sheet is filtered through.
                  'laneOf', 'laneChip', 'exportableContact', 'LANE_TABS', 'laneHas', 'laneKey'];
   const got2 = {};
@@ -2377,7 +2377,7 @@ let contactTally = null;
         + '\nreturn { tabOf: contactTabOf, tabs: CONTACT_TABS, cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
         + ' mergeView: mergeFindView, latestRun: latestRunIdOf, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
-        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, targetCell, laneOf, laneChip, exportableContact, laneHas, laneKey, laneTabs: LANE_TABS, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
+        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, targetCell, targetWhyCell, shortCell, SHORT_CELL_MAX, laneOf, laneChip, exportableContact, laneHas, laneKey, laneTabs: LANE_TABS, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
         + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
         + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT,'
         + ' generic: isGenericMailbox };')();
@@ -2520,10 +2520,25 @@ let contactTally = null;
             const _order = M.rows([_lastRow, _firstRow]).map(r => r.company);
             if (_order[0] !== 'Darrel Two' || _order[1] !== 'Chain Branch Co') fails.push(`a row the hedge kept on the sheet is not last in the file (got ${JSON.stringify(_order)})`);
             if (M.laneOf(_lastRow).last !== true || M.laneOf(_firstRow).last !== false || M.laneOf(_old).last !== false) fails.push('laneOf does not read the last flag');
-            if (!/ranked last/.test(M.targetCell(_lastRow))) fails.push('the target cell does not say the row is ranked last');
+            if (!/ - ask marketing head$/.test(M.targetCell(_lastRow))) fails.push('the target cell does not flag a row the hedge ranked last');
+            if (!/ranked last/.test(M.targetWhyCell(_lastRow))) fails.push('the full file lost the sentence saying the row is ranked last');
             const _held = { name: 'Held Co', contactReadOk: true, contactOwner: 'Ronald Crume Jr.', contactOwnerTitle: 'Lead Prosthodontist', contactOwnerGrade: 'unconfirmed', contactPhone: '5550007777', contactLanes: { call: true, email: true, noname: false, last: true } };
             if (!/^Held back: Ronald Crume Jr\./.test(M.targetCell(_held)) || /^Owner:/.test(M.targetCell(_held))) fails.push('a held-back name is printed as "Owner:" on the rep sheet (ClearChoice, 2026-09-03)');
             if (!/^Owner: Darrel Jones/.test(M.targetCell(_darrel))) fails.push('an ordinary owner cell no longer starts with "Owner:"');
+            // Round 117 (Vin: "short stuff in the rows"): no lean cell may run
+            // past the cap. A fixture that measures the LONGEST shapes we can
+            // build, because a comment saying "keep it short" is not a guard.
+            const _longest = [_lastRow, _held, _darrel,
+              { name: 'Prov Co', contactReadOk: true, contactOwner: 'Bartholomew Vandermolen', contactOwnerGrade: 'unconfirmed', contactPhone: '5550001111', contactWebsite: 'bartholomewvandermolenroofing.com', contactWebsiteResolved: true, contactWebsiteConfirmed: false, contactLayers: 'layered', contactLanes: { call: true, email: true, noname: false, last: true } }];
+            for (const _r of M.rows(_longest)) {
+              for (const _k of M.lean) {
+                const _v = String(_r[_k] === null || _r[_k] === undefined ? '' : _r[_k]);
+                if (_k !== 'company' && _k !== 'website' && _v.length > M.SHORT_CELL_MAX) fails.push(`the lean cell "${_k}" is ${_v.length} characters ("${_v.slice(0, 60)}") - Vin asked twice for short rows and the cap is ${M.SHORT_CELL_MAX}`);
+              }
+            }
+            if (M.shortCell('x'.repeat(90)).length !== M.SHORT_CELL_MAX) fails.push('shortCell does not cap a long cell at the declared maximum');
+            if (M.targetCell({ contactReadOk: true, contactOwner: 'Bartholomew Vandermolen', contactOwnerGrade: 'unconfirmed', contactLanes: { call: true, email: true, last: true } }) !== 'Held back: Bartholomew Vandermolen') fails.push('a long name is truncated instead of the flag being dropped');
+            if (M.targetCell({ contactReadOk: true }) !== 'Nobody named') fails.push('a read lead with nobody named does not say so in two words');
             if (M.laneChip({ contactReadOk: true, contactOwner: 'P Q', contactLanes: { call: false, email: false, noname: false } }) !== 'NO LANE') fails.push('a lead in no lane with an unmeasured size is chipped "TOO SMALL"');
             if (!M.laneTabs.some(t => t[0] === 'bench' && t[1] === 'No lane')) fails.push('the fourth bucket is still called "Too small"');
             if (M.laneKey(_layered) !== 'email' || M.laneKey(_noname) !== 'noname') fails.push('laneKey does not name the bucket');
@@ -2676,7 +2691,11 @@ let contactTally = null;
         // Round 111: a layered business is email only, so it is NOT a row on the rep sheet; the cells are read directly.
         if (M.rows([_layLead]).length) fails.push('a layered business reached the rep sheet - it is email only');
         const _lay = { target: M.targetCell(_layLead), marketingLeadEmail: _layLead.contactMarketingLeadEmail };
-        if (!_lay || !/Marketing decision-maker: Jane Smith \(Director of Marketing\); owner Pat Roe/.test(String(_lay.target)) || _lay.marketingLeadEmail !== 'jane@layer.co') fails.push(`a layered business does not export the marketing decision-maker as the target (got ${JSON.stringify(_lay && [_lay.target, _lay.marketingLeadEmail])})`);
+        // Round 117: the title and the owner are their own columns, so the
+        // cell is the name; the full sentence is targetWhy.
+        if (!_lay || String(_lay.target) !== 'Marketing: Jane Smith' || _lay.marketingLeadEmail !== 'jane@layer.co') fails.push(`a layered business does not export the marketing decision-maker as the target (got ${JSON.stringify(_lay && [_lay.target, _lay.marketingLeadEmail])})`);
+        if (M.cols.every(c => c[0] !== 'targetWhy')) fails.push('the sentence the short target cell replaced has no column in the full file');
+        if (M.lean.indexOf('targetWhy') >= 0) fails.push('the long target sentence is back in the lean file');
         if (M.rows([{ name: 'Never Read Co', contactPhone: '5550100' }]).length !== 0) fails.push('a lead that was never read is exported at all');
         if (M.sizeCell({ name: 'Never Read Co' }) !== '' || M.targetCell({ name: 'Never Read Co', contactOwner: 'A B' }) !== '') fails.push('a lead that was never read gets a size or a target cell');
         const _nm = M.rows([{ contactReadOk: true, name: 'Thin Co', contactOwner: 'Al Bo' }])[0];
@@ -2769,6 +2788,19 @@ let contactTally = null;
         ]);
         if (_ts.sizeSure !== 1 || _ts.sizeLikely !== 2 || _ts.sizeGuess !== 1 || _ts.sizeUnknown !== 1) fails.push(`the size score reads ${_ts.sizeSure}/${_ts.sizeLikely}/${_ts.sizeGuess}/${_ts.sizeUnknown} against a fixture of 1/2/1/1 (a ruled-out lead never counted)`);
         if (!/Sizes: 3 measured/.test(M.tallyLine(_ts))) fails.push('the tally line does not print the size score the proof runs are measured on');
+        // Round 117: the owner score needs a denominator that excludes the
+        // leads whose buyer sits at head office. Three brand outlets took the
+        // 2026-09-04 run from 82% to 72% while nothing was wrong with the
+        // resolver.
+        const _to = M.tally([
+          { ..._ready, name: 'O1', contactLayers: 'owner', contactOwner: 'A B' },
+          { ..._ready, name: 'O2', contactLayers: 'owner', contactOwner: 'C D' },
+          { ..._ready, name: 'O3', contactLayers: 'owner', contactOwner: '' },
+          { ..._ready, name: 'O4', contactLayers: 'layered', contactOwner: '' },
+          { ..._ready, name: 'O5', contactLayers: 'owner', contactOwner: 'E F', contactNotFit: true },
+        ]);
+        if (_to.ownerRun !== 3 || _to.ownerRunNamed !== 2) fails.push(`the owner-run score reads ${_to.ownerRunNamed}/${_to.ownerRun} against a fixture of 2/3 (a branch of a brand and a ruled-out lead are never in the denominator)`);
+        if (!/Of the 3 owner-run leads, 2 named/.test(M.tallyLine(_to))) fails.push('the tally line does not print the owner score against the leads that can have an owner');
       }
 
       // ══ THE WRONG-COMPANY STOP HAS A HOME ON THE SCREEN ═══════════════
