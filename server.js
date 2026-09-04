@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261001;
+const CONTRACT_VERSION = 20261002;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -11274,7 +11274,22 @@ const parseBbbProfile = (html) => {
 };
 const fetchBbbProfile = async (url) => {
   try {
-    const r = await fetchT(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', 'Accept': 'text/html' }, redirect: 'follow' }, 10000);
+    // Round 117: 2 of 2 attempts came back 403 on 2026-09-04. The old header
+    // set was a two-part Chrome version with an Accept of "text/html" and
+    // nothing else - a fingerprint no browser has ever sent. This is the
+    // full set a real Chrome sends. It is a fingerprint fight, not a bug:
+    // unproven until a live run parses a profile, and if the next batch is
+    // still 403 on every attempt the rung is retired rather than kept as a
+    // line of log noise.
+    const r = await fetchT(url, { headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.207 Safari/537.36',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Upgrade-Insecure-Requests': '1',
+      'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Site': 'none', 'Sec-Fetch-User': '?1',
+      'Sec-CH-UA': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+      'Sec-CH-UA-Mobile': '?0', 'Sec-CH-UA-Platform': '"Windows"',
+    }, redirect: 'follow' }, 10000);
     if (!r || !r.ok) return { ok: false, why: 'HTTP ' + (r && r.status) };
     return Object.assign({ ok: true }, parseBbbProfile(await r.text()));
   } catch (e) { return { ok: false, why: (e && e.message) || 'fetch failed' }; }
@@ -33515,11 +33530,17 @@ const NAV_WORD_RE = /^(?:who|we|are|what|why|how|meet|about|our|your|the|team|st
 // "Colliers International (General Manager)" as people. A token no person
 // carries as a name is an organisation.
 const ORG_TOKEN_RE = /^(?:journal|constitution|international|corporation|corp|company|co|group|holdings|partners|associates|llc|inc|bank|university|hospital|magazine|times|news|tribune|gazette|herald|chronicle|post|county|city|state|department|district|authority|commission|council|chamber|family|families|team|crew|staff|brothers|bros|sons)$/i;
+// Round 117: a blog headline is a name-shaped run followed by a real title.
+// Rad Law Firm's roster read "Busting Myths (Motor Vehicle Accident Attorney)"
+// on 2026-09-04; the eponymous rule happened to win that row, and nothing in
+// the door would have stopped it.
+const HEADLINE_WORD_RE = /^(?:busting|breaking|choosing|finding|avoiding|understanding|proving|winning|fighting|protecting|hiring|selling|buying|saving|preventing|introducing|announcing|myth|myths|tip|tips|reason|reasons|way|ways|step|steps|thing|things|question|questions|mistake|mistakes|sign|signs)$/i;
 const ownerNameDoor = (name, companyName = '') => {
   const s = String(name || '').trim();
   if (!s) return 'empty';
   const toks = s.split(/[\s\/\-]+/).filter(Boolean);
   if (toks.some(t => NAV_WORD_RE.test(t))) return 'not-a-name';
+  if (toks.some(t => HEADLINE_WORD_RE.test(t.replace(/[.,:]$/, '')))) return 'not-a-name';
   if (toks.some(t => ORG_TOKEN_RE.test(t.replace(/[.,]$/, '')))) return 'not-a-name';
   if (toks.every(t => OWNER_WORD_RE.test(t) || ROLE_WORDS.has(t.toLowerCase()))) return 'title';
   if (allRoleWords(s)) return 'title';
@@ -59418,6 +59439,43 @@ app.listen(PORT, () => {
     if (!_two.some(r => r.name === 'Dusty Hannah' && r.isOwner)) _fails.push('an ordinary two-word roster entry stopped resolving, so the mononym pass has broken the main pass');
     if (_two.some(r => r.mononym)) _fails.push('a two-word name is being marked as a mononym');
 
+    // ── 4b. ROUND 117: A BRANCH POINTS AT ONE PAGE INSIDE A BIGGER SITE ─
+    // The four live shapes from the 2026-09-04 run that the three older tells
+    // each missed for a different reason, and the shapes that must NOT fire:
+    // a listing pointing at its own home page, and a business named after the
+    // town whose page it points at.
+    const _ot = (n, u, c) => readOutletTell({ name: n, homeUrl: u, city: c });
+    for (const [n, u, c] of [
+      ['Champion Replacement Windows of Raleigh', 'https://www.championwindow.com/Raleigh', 'Durham, NC'],
+      ['Pella Windows and Doors Showroom of Raleigh, NC', 'https://www.pella.com/locations/nc/durham', 'Durham, NC'],
+      ['Sono Bello Kansas City', 'https://www.sonobello.com/locations/kansas-city', 'Overland Park, KS'],
+      ['UrgentVet - Carytown', 'https://urgentvet.com/location/carytown-richmond-va/', 'Richmond, VA'],
+    ]) if (!_ot(n, u, c).isOutlet) _fails.push(`"${n}" is not read as a branch on a brand's own site - that shape cost ten credits each and named nobody, three times out of three, on 2026-09-04`);
+    for (const [n, u, c] of [
+      ['Arlington Concrete', 'https://arlingtonconcreteco.com/', 'Columbus, OH'],
+      ['Arlington Concrete', 'https://arlingtonconcreteco.com/arlington', 'Arlington, OH'],
+      ['Vessels Plumbing & Services Inc', 'https://vesselsplumbing.com/', 'Louisville, KY'],
+      ['Joe Plumbing - Raleigh', 'https://joeplumbing.com/', 'Raleigh, NC'],
+      ['Some Roofer', 'https://someroofer.com/home', 'Dallas, TX'],
+      ['Independent Dental', 'https://independentdental.com/locations', 'Tulsa, OK'],
+    ]) if (_ot(n, u, c).isOutlet) _fails.push(`"${n}" at ${u} is read as somebody else's branch - either a listing pointing at its own home page or a business named after its own town`);
+    if (_ot('Nothing Read Co', '', 'Tulsa, OK').measured !== false) _fails.push('a lead whose site we never opened claims to have been measured for the branch tell');
+    if (_ot('Sono Bello Kansas City', 'https://www.sonobello.com/locations/kansas-city', 'Overland Park, KS').brand !== 'Sono Bello') _fails.push('the brand behind a branch is not the listing name minus the city, so the size lookup searches one outlet');
+
+    // ── 4c. ROUND 117: A 501(c)(3) MENTION IS NOT A NONPROFIT ───────────
+    // Howell Construction - a general contractor with 300 employees on its own
+    // pages - was dropped on 2026-09-04 because the token appears somewhere in
+    // the six pages we read.
+    const _np = (text, url, html) => readNonprofitEvidence({ pages: [{ url: url || 'https://x.com/', text, html: html || ('<p>' + text + '</p>') }] });
+    if (_np('We build for 501(c)3 organizations across the state. Our crews have delivered 40 schools.').isNonprofit) _fails.push('a contractor who BUILDS for a 501(c)3 is dropped as a nonprofit (Howell Construction, 2026-09-04)');
+    if (_np('Howell is a proud sponsor of the Boys and Girls Club, a 501(c)(3).').isNonprofit) _fails.push('a sponsor of a charity is dropped as a charity');
+    if (_np('We are a 501(c)(3) and every gift matters.').isNonprofit) _fails.push('a bare 501(c)(3) with nothing else drops a lead - the token is not evidence, and a wrong drop deletes a real business');
+    if (!_np('We are a registered 501(c)(3). Your donation is put to work in the community. Make a donation today.').isNonprofit) _fails.push('a real charity that says "make a donation" on its own page is kept');
+    if (!_np('Make a Donation to the foundation.', 'https://atriumhealth.org/give', '<a href="https://www.atriumhealthfoundation.org/get-involved/donate/">Give</a><p>Make a Donation to the foundation.</p>').isNonprofit) _fails.push('a hospital foundation that says "Make a Donation" in its own words is kept (Atrium Health, 2026-09-04)');
+    if (_np('Support our partners.', 'https://roofco.com/', '<a href="https://www.somecharity.org/donate">Donate to our charity partner</a><p>Support our partners.</p>').isNonprofit) _fails.push('a link to SOMEBODY ELSE\'S donation page drops the lead - the host is not checked (readChainEvidence has checked it since it was written)');
+    if (!_np('Give now to our mission.', 'https://hopehouse.org/', '<a href="/donate">Donate</a><p>Our donors keep the lights on.</p>').isNonprofit) _fails.push('a charity carrying its OWN donation page is kept');
+    if (_np('We are not a nonprofit. 501(c)(3) groups get a discount. Make a donation to them, not to us.').isNonprofit) _fails.push('the denial no longer stands the whole read down');
+
     // ── 5. THE CALL SITES ──────────────────────────────────────────────
     // A fixture supplies its own arguments and therefore cannot see a caller.
     const _src = selfSourceNoCommentsLF();
@@ -59429,6 +59487,9 @@ app.listen(PORT, () => {
       [_nd('if (out.chain.isChain && out.chain.kind', " === 'franchise') {"), 'a branch network is dropped as a franchise again, or a franchise is kept (Round 114: only franchise evidence drops)'],
       [_nd('signals.branchNetwork', ' = true;'), 'a branch network is read and never marked, so the lane cannot route it to email'],
       [_nd('if (apiKey && name &&', ' !out.notIcp) {'), 'a chain outlet still buys the paid owner wave'],
+      [_nd('out.outlet = readOutletTell({ name, homeUrl:', ' ((pages || []).find(p'), 'the contact read no longer asks where their own Google listing points, so a branch on a brand site is read as an independent'],
+      [_nd('const _headOffice = signals.branchNetwork', ' === true;'), 'the head-office rule no longer reads the branch mark'],
+      [_nd('const paidOwner = opts.paidOwnerLookup !== false', ' && !_headOffice;'), 'a branch of a national brand buys the paid owner wave again - ten credits and three minutes for a signer who sits at head office'],
       [_nd('if (website &&', ' !out.notIcp) {'), 'a chain outlet still buys the address lookup'],
       [_nd('out.nonprofit = readNonprofitEvidence({ pages,', ' links });'), 'the contact read no longer looks for nonprofit evidence at all'],
       [_nd('if (!out.notIcp && out.nonprofit', '.isNonprofit) {'), 'a nonprofit is read and then bought anyway - the verdict does not reach notIcp'],
@@ -59682,6 +59743,19 @@ app.listen(PORT, () => {
       if (_ln({ tier: null, affordBand: 'premium', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call + email') _fails.push('an unmeasured lead the Find press judged premium is not taken as core');
       if (_ln({ tier: null, affordBand: null, layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('an unmeasured lead with nothing else is not taken as entry (call only) - "we did not look" read as "cannot pay"');
       if (_ln({ tier: null, affordBand: 'below_floor', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('an unmeasured lead the Find press judged below the floor is benched on a guess (Round 114: headroom on the floor)');
+      // Round 117: a FLOOR raises the band or it is not a floor. Champion
+      // Replacement Windows, 2026-09-04: "employs 5" on their own pages beat
+      // their own team page's 23 names, in BOTH rulers, and the sheet said low.
+      const _champ = { staffProse: 5, staffProseSay: 'employs 5', teamCount: 23 };
+      const _cb = sizeBand(_champ), _cs = estimateScaleBand(_champ) || {};
+      if (_cb.band !== 'medium') _fails.push(`23 people on their own team page lose to "employs 5" on the rep's sheet (got ${_cb.band})`);
+      if (!/team page/.test(_cb.why) || !/employs 5/.test(_cb.why)) _fails.push('the size sentence does not name both the floor that decided and the smaller number their own words gave');
+      if (_cs.band !== 'core') _fails.push(`the tier ladder still returns before it reaches the team-page floor (got ${_cs.band})`);
+      if (!/their own words say fewer/.test(String(_cs.say || ''))) _fails.push('the tier says nothing about the smaller number it overrode');
+      if ((estimateScaleBand({ staffProse: 60, staffProseSay: '60 staff', teamCount: 8 }) || {}).band !== 'upper') _fails.push('a floor BELOW what their own words say drags the band down - a floor only ever raises');
+      if ((sizeBand({ staffProse: 60, staffProseSay: '60 staff', teamCount: 8 }) || {}).band !== 'high') _fails.push('a floor below the leading fact lowers the rep\'s size word');
+      if ((estimateScaleBand({ verifiedEmployees: 4, teamCount: 40 }) || {}).band !== 'entry') _fails.push('the team-page floor overrides a VERIFIED headcount - the floor lifts a band off what a business publishes, it does not argue with a filing');
+      if ((sizeBand({ verifiedEmployees: 4, teamCount: 40 }) || {}).band !== 'low') _fails.push('the team-page floor overrides a verified headcount on the rep\'s sheet');
     }
     // The call sites and the one floor.
     const _src = selfSourceNoCommentsLF();
@@ -59719,6 +59793,9 @@ app.listen(PORT, () => {
       [_n('authorityScore(decisionMaker.title) >=', ' DM_AUTHORITY_FLOOR);'), 'the cache path is back on a literal 75'],
       [_n('department=marketing&seniority=', 'executive,senior'), "Hunter is asked without its marketing filter, so it returns the same VPs and HR the owner ladder refuses"],
       [_n("signals.marketingLeadFound = out.target ===", " 'marketing';"), 'the demotion cannot tell that the reachable decision-maker was found'],
+      [_n("out.target === 'marketing' && out.marketingLead ?", " ' ' + out.marketingLead.name"), 'the TARGET line prints the marketing head\'s name straight after the word "owner" again (Carpet Giant, 2026-09-04)'],
+      [_n('out.owner && out.owner.name && out.owner.canBuy === true &&', ' signals.readable === true'), 'a name the ladder HELD BACK is read as "the owner is named on their own pages" again (Southern Oak Dental, 2026-09-04)'],
+      [_n('const fl = _scaleLadder({ teamCount: d.teamCount,', ' tradeLabel: d.tradeLabel });'), 'the team-page floor is back inside the return-ladder, where it can only fire when nothing above it did'],
     ];
     for (const [needle, msg] of _sites) if (!_src.includes(needle)) _fails.push(msg);
     if (_src.includes(_n('/\\$\\s*\\d|employees/i.test(', 'String(r.description'))) _fails.push('the second size query trigger reads the snippet wording again');
@@ -59780,6 +59857,14 @@ app.listen(PORT, () => {
     if (!BBB_PROFILE_RE.test('https://www.bbb.org/us/nc/raleigh/profile/bathroom-remodel/gid-renovation-inc-0593-90314457')) _fails.push('the live BBB profile URL shape is not recognised');
     if (BBB_PROFILE_RE.test('https://www.bbb.org/search?find_text=roofing')) _fails.push('a BBB search page is taken for a profile');
     if (!/fetchT\(/.test(String(fetchBbbProfile)) || /fcCall|firecrawl/i.test(String(fetchBbbProfile))) _fails.push('the BBB profile is fetched through Firecrawl - it must be a plain fetch, never a credit');
+    // Round 117: 2 of 2 attempts came back 403 on 2026-09-04 against a
+    // two-part Chrome version and an Accept of "text/html" - a fingerprint no
+    // browser sends. This asserts the header SET, not that BBB answers: that
+    // is a live question the next batch settles.
+    for (const _h of ['Accept-Language', 'Sec-Fetch-Mode', 'Sec-CH-UA', 'Upgrade-Insecure-Requests', 'image/avif']) {
+      if (!String(fetchBbbProfile).includes(_h)) _fails.push(`the BBB fetch does not send ${_h}, so it reads as a script rather than a browser and comes back 403`);
+    }
+    if (/Chrome\/\d+\.\d+ Safari/.test(String(fetchBbbProfile))) _fails.push('the BBB fetch is back on a two-part Chrome version, which no browser has ever sent');
     if (!(DM_SOURCE_WEIGHT.bbb_profile > 0)) _fails.push('the BBB manager has no source weight, so the ranker scores it as nothing');
     // 5. The call sites.
     const _src = selfSourceNoCommentsLF();
@@ -74462,6 +74547,11 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       ['Larsen Family', 'Larsen Masonry', 'not-a-name', 'a family signature on their own page is accepted as a person (Larsen Masonry, 2026-09-03)'],
       ['Smith Brothers', 'Smith Brothers Roofing', 'not-a-name', 'a "brothers" signature is accepted as a person'],
       ['Ray Diyanni', 'Diyanni Homes', null, 'the eponymous owner is refused by the family tokens'],
+      // Round 117: "Busting Myths (Motor Vehicle Accident Attorney)" came off
+      // Rad Law Firm's own page on 2026-09-04 as a name/title pair.
+      ['Busting Myths', 'Rad Law Firm', 'not-a-name', 'a blog headline followed by a real title is accepted as a person (Rad Law Firm, 2026-09-04)'],
+      ['5 Signs', 'Rad Law Firm', 'not-a-name', 'a listicle heading is accepted as a person'],
+      ['Irving Berlin', 'Berlin Roofing', null, 'a real first name that happens to end in -ing is refused'],
     ];
     for (const [_nm, _co, _want, _msg] of _doorCases) {
       if (ownerNameDoor(_nm, _co) !== _want) _fails.push(_msg);
@@ -76964,7 +77054,22 @@ const CHAIN_STATE_ONLY_MIN = 4;   // Round 110: an independent may trade in thre
 // own page: a donate link, "501(c)(3)", "tax-deductible", a board of
 // directors. Same shape as readChainEvidence: pure, measured:false when we
 // read nothing, a denial guard, and the caller drops before it spends.
-const NONPROFIT_TEXT_RE = /\b(?:501\s*\(?\s*c\s*\)?\s*\(?\s*3\s*\)?|(?:donations?|gifts?|contributions?) (?:is|are) (?:fully )?tax[- ]deductible|tax[- ]deductible (?:donations?|gifts?|contributions?)|make a donation|donate (?:now|today|online)|your donation|our donors|non-?profit organi[sz]ation|charitable organi[sz]ation|registered charity|ein[:# ]+\d{2}-\d{7})\b/i;
+// Round 117: the 501(c)(3) token moved OUT of the strong list. Howell
+// Construction - a general contractor with 300 employees on its own pages -
+// was dropped as a nonprofit on 2026-09-04 because the word appears somewhere
+// in the six pages we read, and the drop line then said "their own page says
+// 501(c)3" as though the company had claimed it. The token is now WEAK: it
+// drops only alongside a second tell, and never at all inside a sentence about
+// who they build FOR. Round 107 narrowed "tax-deductible" the same way and for
+// the same reason.
+const NONPROFIT_TEXT_RE = /\b(?:(?:donations?|gifts?|contributions?) (?:is|are) (?:fully )?tax[- ]deductible|tax[- ]deductible (?:donations?|gifts?|contributions?)|make a donation|donate (?:now|today|online)|your donation|our donors|non-?profit organi[sz]ation|charitable organi[sz]ation|registered charity)\b/i;
+// A first draft of this round carried a "weak tell" counter and a sentence
+// window beside it. It was written as `strong || (weak && strong)`, which is
+// just `strong`: the counter could not change any outcome, and neither could
+// the window. A mechanism no fixture can reach rots, so both were removed
+// rather than kept as decoration. The fix that does the work is the line
+// above - the token is not in the list at all - and a revert of THAT turns
+// three fixtures red.
 const NONPROFIT_LINK_RE = /\/(?:donate|donations|donate-now|give-now|make-a-gift|ways-to-give)(?:[\/?#]|$)/i;
 const NONPROFIT_DENIAL_RE = /\b(?:not a (?:non-?profit|charity)|for-profit (?:business|company|organi[sz]ation)|privately owned and operated)\b/i;
 const readNonprofitEvidence = ({ pages, links } = {}) => {
@@ -76977,7 +77082,13 @@ const readNonprofitEvidence = ({ pages, links } = {}) => {
   if (!denied) {
     const _t = text.match(NONPROFIT_TEXT_RE);
     if (_t) why.push(`their own page says "${_t[0].trim().slice(0, 40)}"`);
-    const _l = urls.find(u => NONPROFIT_LINK_RE.test(u)) || (html.match(/href="([^"]*\/(?:donate|donations|donate-now|give-now|make-a-gift|ways-to-give)(?:[\/?#"]|$))/i) || [])[1] || '';
+    // Round 117: the donation page has to be THEIRS. Atrium Health's link
+    // pointed at atriumhealthfoundation.org, a different host, and nothing
+    // checked - readChainEvidence has stripped the host since it was written.
+    const _hosts = new Set(read.map(p => ((String(p.url || '').match(/^https?:\/\/([^\/]+)/) || ['', ''])[1]).toLowerCase().replace(/^www\./, '')).filter(Boolean));
+    const _sameHost = (u) => { const h = ((String(u).match(/^https?:\/\/([^\/]+)/) || ['', ''])[1]).toLowerCase().replace(/^www\./, ''); return !h || _hosts.has(h); };
+    const _href = (html.match(/href="([^"]*\/(?:donate|donations|donate-now|give-now|make-a-gift|ways-to-give)(?:[\/?#"]|$))/i) || [])[1] || '';
+    const _l = urls.find(u => NONPROFIT_LINK_RE.test(u) && _sameHost(u)) || (_href && _sameHost(_href) ? _href : '');
     if (_l) why.push(`their own site carries a donation page (${String(_l).slice(0, 60)})`);
   }
   return { measured: read.length > 0, isNonprofit: why.length > 0, why: why.join('; '), denied };
@@ -77015,6 +77126,7 @@ const SIZE_TERMS = [
   { id: 'teamCount',          cut: (c) => ({ high: c.upper + 1, medium: c.core }), floor: true, say: (n) => `at least ${n} people on their own team page` },
 ];
 const SIZE_ORDER = { low: 0, medium: 1, high: 2 };
+const SIZE_RANK = { low: 0, medium: 1, high: 2 };
 const sizeBand = (s) => {
   const d = s || {};
   const facts = [];
@@ -77035,7 +77147,7 @@ const sizeBand = (s) => {
       const bandOf = (v) => v >= k.high ? 'high' : v >= k.medium ? 'medium' : 'low';
       return bandOf(Number(m[1])) !== bandOf(Number(m[2]));
     })();
-    facts.push({ band: n >= k.high ? 'high' : n >= k.medium ? 'medium' : 'low', say: t.say(n, d) + (_straddles ? ' (a range across tiers)' : ''), directory: t.id === 'directoryEmployees', straddles: _straddles });
+    facts.push({ id: t.id, band: n >= k.high ? 'high' : n >= k.medium ? 'medium' : 'low', say: t.say(n, d) + (_straddles ? ' (a range across tiers)' : ''), directory: t.id === 'directoryEmployees', straddles: _straddles, floor: t.floor === true });
   }
   // A revenue a directory states reads onto the ladder after a verified
   // headcount, ahead of what their own pages say - but it is a DIRECTORY's
@@ -77063,6 +77175,20 @@ const sizeBand = (s) => {
       const steps = ['guess', 'likely', 'sure'];
       const solo = (facts[0].revenue || facts[0].straddles) ? 0 : 1;
       confidence = steps[Math.min(2, solo + others)];
+    }
+    // Round 117: a FLOOR raises the band or it is not a floor. Champion
+    // Replacement Windows, 2026-09-04: "employs 5" on their own pages read LOW
+    // while their own team page named 23 people, and the line even printed
+    // "(reads medium)" beside the count it was ignoring. `floor` was read in
+    // exactly one place - a gate that DROPS a small floor - and nowhere as the
+    // thing the comment beside it says it is.
+    const _flr = facts[0].id === 'verifiedEmployees' ? null : facts.find(f => f.floor && SIZE_RANK[f.band] > SIZE_RANK[band]);
+    if (_flr) {
+      band = _flr.band;
+      facts.splice(facts.indexOf(_flr), 1);
+      facts.unshift(_flr);
+      // The fact that led is now the one that disagrees, so nothing is "sure".
+      if (confidence === 'sure') confidence = 'likely';
     }
     const why = [facts[0].say].concat(facts.slice(1).map(f => f.say + (f.band === band ? '' : ` (reads ${f.band})`)));
     // Sophistication nudges one step up, never past "likely", never to high on its own.
@@ -77140,6 +77266,61 @@ const findMarketingLeadViaHunter = async (website, hunterKey, companyName) => {
   console.log(`HUNTER MARKETING [${companyName}]: \u2713 ${name} (${hit.position}) via Hunter's marketing filter, confidence ${hit.confidence || '?'}.`);
   return { name, title: String(hit.position || '').trim(), email: hit.value || '', confidence: hit.confidence || null, source: 'hunter' };
 };
+// == A BRANCH POINTS AT ONE PAGE INSIDE SOMEBODY ELSE'S SITE ==============
+// Round 117. Three national brands were read at full price on 2026-09-04 and
+// named nobody: Champion Replacement Windows of Raleigh (championwindow.com,
+// its listing pointing at /Raleigh), Pella Windows and Doors Showroom of
+// Raleigh, NC (pella.com, /locations/nc/durham) and Sono Bello Kansas City
+// (sonobello.com, /locations/kansas-city). Ten Firecrawl credits and three and
+// a half minutes each, and between them they took that run's "owner named"
+// score from 82% to 72% - a resolver that was working, marked down for looking
+// for owners who are not there.
+//
+// Each missed a DIFFERENT existing tell, and every one of those tells demands
+// one exact idiom: Round 113's suffix wants " - City", Round 115's territory
+// wants " of City" with no comma in it, chainLocationPath wants a STATE
+// segment. The shape all three share needs no brand list and no punctuation at
+// all: an independent business's Google listing points at its HOME PAGE, and a
+// branch's points at one page inside a bigger site. In that same 25-lead run
+// twenty-one listings pointed at "/", and every one of the four that did not
+// was a branch.
+//
+// It MARKS, it never drops (Vin's 114 ruling: a big company is an email lead,
+// never deleted), so a false positive costs one owner search not bought -
+// which is why the city-in-the-path arm also refuses to fire when the business
+// is NAMED after the town (arlingtonconcreteco.com/arlington is Arlington
+// Concrete's own site, not a branch of anything).
+const OUTLET_PATH_RE = /^\/(?:locations?|stores?|showrooms?|branch(?:es)?|offices?|dealers?|centers?|centres?)(?:\/|$)/i;
+const placeSlug = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+const readOutletTell = ({ name, homeUrl, city } = {}) => {
+  const u = String(homeUrl || '');
+  if (!u) return { measured: false, isOutlet: false, why: '', brand: '', path: '' };
+  const host = ((u.match(/^https?:\/\/([^\/]+)/) || ['', ''])[1]).toLowerCase().replace(/^www\./, '').replace(/\..*$/, '').replace(/[^a-z0-9]/g, '');
+  const path = u.replace(/^https?:\/\/[^\/]+/, '').replace(/[?#].*$/, '').replace(/\/+$/, '').toLowerCase();
+  if (!path || path === '/') return { measured: true, isOutlet: false, why: '', brand: '', path: '/' };
+  const segs = path.split('/').filter(Boolean).map(placeSlug);
+  // Every trailing run of the listing name that could be a place: "Raleigh",
+  // "Kansas City", "... of Raleigh, NC". Longest first, so "Sono Bello Kansas
+  // City" gives up "Kansas City" and keeps "Sono Bello" as the brand rather
+  // than keeping "Sono" - the brand is what the size lookup searches on.
+  const tails = [];
+  const _w = String(name || '').replace(/,\s*[A-Z]{2}\.?$/, '').trim().split(/\s+/);
+  for (let k = Math.min(3, _w.length - 1); k >= 1; k--) {
+    const run = _w.slice(_w.length - k).join(' ');
+    if (!/^[A-Z]/.test(run)) continue;
+    tails.push({ slug: placeSlug(run), brand: _w.slice(0, _w.length - k).join(' ').replace(/\s+(?:of|at|in|[-–—])$/i, '').trim() });
+  }
+  const _cityTail = { slug: placeSlug(String(city || '').split(',')[0]), brand: '' };
+  // A business named after its own town publishes /arlington on its OWN site,
+  // so the town has to be absent from the domain for the path to prove anything.
+  const ours = (slug) => host.length >= 4 && slug && host.includes(slug.replace(/-/g, ''));
+  const match = tails.concat([_cityTail]).find(t => t.slug && t.slug.length >= 4 && segs.includes(t.slug) && !ours(t.slug));
+  if (OUTLET_PATH_RE.test(path) && segs.length >= 2) {
+    return { measured: true, isOutlet: true, why: `their Google listing points at one location's page inside a bigger site (${path})`, brand: (match && match.brand) || '', path };
+  }
+  if (match) return { measured: true, isOutlet: true, why: `their Google listing points at /${match.slug} inside ${host}'s own site rather than at a home page of their own`, brand: match.brand || '', path };
+  return { measured: true, isOutlet: false, why: '', brand: '', path };
+};
 const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
   const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
   const titles = (Array.isArray(rosterTitles) ? rosterTitles : []).map(t => String(t || ''));
@@ -77170,6 +77351,10 @@ const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
   // system - the naming Overhead Door, Archadeck, ServPro and Molly Maid all
   // use. The name alone is not enough ("Roofers of Tampa" is a trade name);
   // the brand domain plus the city path is.
+  // Round 117 left the ", NC" shape out of this tell on purpose: the only thing
+  // widening it adds is a FRANCHISE DROP for a brand outlet, and Vin ruled on
+  // 2026-09-04 that a brand outlet is kept as an email lead. readOutletTell
+  // marks that shape; this one still only fires on the Archadeck naming.
   const _ofCity = String(name || '').match(/^(.{3,60}?) of ([A-Z][A-Za-z.'\s]{2,30})$/);
   const _brandSlug = _ofCity ? _ofCity[1].toLowerCase().replace(/[^a-z0-9]+/g, '') : '';
   const _citySlug = _ofCity ? _ofCity[2].trim().toLowerCase().replace(/[^a-z0-9]+/g, '-') : '';
@@ -77179,6 +77364,11 @@ const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
     const path = u.replace(/^https?:\/\/[^\/]+/, '').toLowerCase().replace(/[?#].*$/, '').replace(/\/+$/, '');
     // Either direction: 'overheaddoor' is inside 'overheaddoorcompany' and 'archadeck' is 'archadeck'.
     const core = _brandSlug.replace(/(company|corporation|corp|inc|llc|co)$/, '');
+    // Round 117 left this at truncation-only on purpose. Widening it to the
+    // brand's first word would match "Champion Replacement Windows of Raleigh"
+    // on championwindow.com and DROP it as a franchise territory, and Vin ruled
+    // on 2026-09-04 that a brand outlet is kept as an email lead with the paid
+    // owner search stood down. readOutletTell marks that shape instead.
     const hostMatch = host.length >= 4 && core.length >= 4 && (host.includes(core) || core.includes(host));
     return hostMatch && (path === '/' + _citySlug || path.startsWith('/' + _citySlug + '/'));
   }) : null;
@@ -77473,7 +77663,13 @@ const readFindProse = (text, now = Date.now()) => {
 // Round 111: the bands are the ICP ladder's tiers (ICP_REVENUE_BAND), the
 // cuts derived per trade (revenuePerEmployeeFor) and per truck. A directory's
 // stated revenue reads first, then the strongest headcount, then the rest.
-const estimateScaleBand = (s) => {
+// Round 117: a return-ladder cannot express a floor. `teamCount` sat two rungs
+// BELOW staffProse with a comment above it saying "It raises the band, never
+// lowers it", and on Champion Replacement Windows (2026-09-04) control never
+// reached it: "employs 5" returned entry and their own team page's 23 names
+// were never consulted. The ladder is unchanged; the floor is applied to its
+// answer, by running the ladder a second time with nothing but the team count.
+const _scaleLadder = (s) => {
   const d = s || {};
   const per = revenuePerEmployeeFor(d.tradeLabel);
   const cuts = scaleCuts(per);
@@ -77486,7 +77682,7 @@ const estimateScaleBand = (s) => {
   // A verified count first; a directory's figure next, flagged as a directory's
   // (and as a bound when it was "<$5M" or a range); then what they publish.
   const ver = Number(d.verifiedEmployees);
-  if (Number.isFinite(ver) && ver > 0) return mk(tierFromCount(ver, cuts), `${ver} verified employees`, ver * per);
+  if (Number.isFinite(ver) && ver > 0) return Object.assign(mk(tierFromCount(ver, cuts), `${ver} verified employees`, ver * per), { verified: true });
   const rb = parseStatedRevenueBound(d.revenueStated);
   if (rb) return Object.assign(mk(tierFromRevenue(rb.usd), `a directory's revenue figure (${d.revenueStatedSource || 'web'}${rb.bound === 'below' ? ', stated as under ' + _usdShort(rb.hi) : rb.bound === 'range' ? ', a range' : ''})`, rb.usd), { directory: true, bound: rb.bound });
   const dir = Number(d.directoryEmployees);
@@ -77507,6 +77703,19 @@ const estimateScaleBand = (s) => {
   const yrs = Number(d.yearsInBusiness), rv = Number(d.reviewCount);
   if (Number.isFinite(yrs) && yrs >= 15 && Number.isFinite(rv) && rv >= 40) return Object.assign(mk('entry', `${yrs} years in business at ${rv} reviews - a guess`), { guess: true });
   return null;
+};
+const estimateScaleBand = (s) => {
+  const d = s || {};
+  const r = _scaleLadder(d);
+  const fl = _scaleLadder({ teamCount: d.teamCount, tradeLabel: d.tradeLabel });
+  if (!fl || fl.floor !== true) return r;
+  if (!r || r.guess === true) return fl;
+  // A verified count is the one term the floor never overrides: it is the
+  // strongest row in SIZE_TERMS, and the floor was written in Round 112 to
+  // lift a band off what a business PUBLISHES, not to argue with a filing.
+  if (r.verified === true) return r;
+  if (SCALE_TIERS.indexOf(fl.band) <= SCALE_TIERS.indexOf(r.band)) return r;
+  return Object.assign({}, fl, { say: `${fl.say} (their own words say fewer: ${r.say})` });
 };
 
 // ══ WHAT THEIR OWN PAGE SAYS ABOUT WHO OWNS THEM ═══════════════════════════
@@ -78447,6 +78656,18 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     // blindness is the guard-too-tight failure. It says what is unknown.
     notes.push('we could not read enough of their site to tell an independent business from a branch of a bigger one \u2014 that is a gap in what we read, not a finding about them');
   }
+  // Round 117: and the cheapest tell of all - where their own Google listing
+  // points. Read off the URL we already resolved, so it costs nothing at all.
+  out.outlet = readOutletTell({ name, homeUrl: ((pages || []).find(p => p && p.intent === 'home') || {}).url || website, city: leadLocation });
+  if (!out.notIcp && out.outlet.isOutlet && signals.branchNetwork !== true) {
+    signals.branchNetwork = true;
+    out.chain = Object.assign({}, out.chain || {}, {
+      measured: true, isChain: true, kind: 'network',
+      brand: (out.chain && out.chain.brand) || out.outlet.brand || '',
+      why: [(out.chain && out.chain.why) || '', out.outlet.why].filter(Boolean).join('; '),
+    });
+    notes.push(`a branch of a bigger operation — ${out.outlet.why}. Kept as an email lead: the local number reaches a branch, and the marketing decision-maker at head office is the target.`);
+  }
   // Same seat as the chain read, same reason: everything after this line
   // costs credits, and a nonprofit has no owner to sell to.
   out.nonprofit = readNonprofitEvidence({ pages, links });
@@ -78544,8 +78765,18 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // then read this tab's careers page - fetched on purpose, for the hiring
   // signal - as a list of the company's owners.
   const interior = pages.slice(1).map(p => ({ url: p.url, text: p.text, intent: p.intent }));
-  const paidOwner = opts.paidOwnerLookup !== false;
+  // Round 117 (Vin, 2026-09-04): a branch has no local owner to buy. Champion,
+  // Pella and Sono Bello each bought the whole paid wave on 2026-09-04 and
+  // named nobody, three times out of three, because the person who signs at a
+  // branch sits at head office. The lead is KEPT - 114 stands, it is an email
+  // lead - and the FREE stage still runs on their own pages; only the paid
+  // searches are stood down, and the marketing head Hunter looks for is the
+  // target on a branch anyway.
+  const _headOffice = signals.branchNetwork === true;
+  const paidOwner = opts.paidOwnerLookup !== false && !_headOffice;
   out.paidOwnerLookup = paidOwner;
+  out.paidOwnerHeadOffice = _headOffice;
+  if (_headOffice) console.log(`DM [${name}]: a branch of a bigger operation - the signer is at head office, so the paid owner search was not bought (~10 Firecrawl credits saved)`);
   // null means the resolver never ran on this lead, which is a different thing
   // from "it ran and bought nothing". Undefined would read as the second.
   out.ownerStagesRun = null;
@@ -78753,7 +78984,13 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // Round 108: is the owner we named visibly running the place? Named on
   // their own pages (both name parts in text we read), or signing the review
   // replies. Unknown with nobody named, never "no".
-  if (out.owner && out.owner.name && signals.readable === true) {
+  // Round 117: and it has to be a name we STAND BEHIND. Southern Oak Dental's
+  // only named person on 2026-09-04 was an Office Manager the ladder held back
+  // at authority 30, and the layers read still called the business owner-run
+  // with "the owner is named on their own pages" - an absence dressed as a
+  // measurement. A held-back name leaves this null; the other reach tells
+  // (a founder phrase, a personal mailbox, signing the reviews) still speak.
+  if (out.owner && out.owner.name && out.owner.canBuy === true && signals.readable === true) {
     const _nm = String(out.owner.name).toLowerCase().split(/\s+/).filter(t => t.length >= 2);
     const _txt = pages.map(p => String(p.text || '')).join(' ').toLowerCase();
     signals.ownerNamedOnSite = _nm.length >= 2 ? _nm.every(t => _txt.includes(t)) : null;
@@ -78864,7 +79101,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   out.lanes = _lanes;
   // Round 114: a layered or owned-elsewhere lead on the call sheet ranks LAST.
   signals.laneLast = _lanes.last === true;
-  console.log(`\u{1F3AF} TARGET [${name}]: size ${_size.band || 'not measured'} (${_size.confidence}: ${_size.why}) | tier ${_lanes.tier}${_lanes.measured && _scale ? ' (' + _scale.say + ')' : ' (taken as ' + _lanes.tier + ' - not measured)'} | layers ${_layers.verdict}${_layers.why ? ' (' + _layers.why + ')' : ''}${signals.productCompany ? ' | product company (' + out.product.why + ')' : ''}${signals.branchNetwork ? ' | branch network (' + out.chain.why + ')' : ''}${signals.peOwned ? ' | PE-owned (' + out.tells.why + ')' : ''}${signals.nationalOperator ? ' | national (' + out.tells.why + ')' : ''} | target ${out.target}${out.marketingLead ? ' ' + out.marketingLead.name + ', ' + out.marketingLead.title : ''} \u2014 ${_target.why} | lane ${laneWord(_lanes)}${_lanes.why ? ' (' + _lanes.why + ')' : ''}`);
+  console.log(`\u{1F3AF} TARGET [${name}]: size ${_size.band || 'not measured'} (${_size.confidence}: ${_size.why}) | tier ${_lanes.tier}${_lanes.measured && _scale ? ' (' + _scale.say + ')' : ' (taken as ' + _lanes.tier + ' - not measured)'} | layers ${_layers.verdict}${_layers.why ? ' (' + _layers.why + ')' : ''}${signals.productCompany ? ' | product company (' + out.product.why + ')' : ''}${signals.branchNetwork ? ' | branch network (' + out.chain.why + ')' : ''}${signals.peOwned ? ' | PE-owned (' + out.tells.why + ')' : ''}${signals.nationalOperator ? ' | national (' + out.tells.why + ')' : ''} | target ${out.target}${out.target === 'marketing' && out.marketingLead ? ' ' + out.marketingLead.name + ', ' + out.marketingLead.title : ''} \u2014 ${_target.why}${out.target !== 'marketing' && out.marketingLead ? ` (marketing head also named: ${out.marketingLead.name}, ${out.marketingLead.title})` : ''} | lane ${laneWord(_lanes)}${_lanes.why ? ' (' + _lanes.why + ')' : ''}`);
   out.icp = findIcpScore(signals);
 
   const led = FC_LEDGER.getStore() || {};
@@ -78920,7 +79157,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan.'));
     _ownerWaveLectured = true;
   }
-  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
+  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerHeadOffice === true ? 'FREE STAGE ONLY (a branch of a bigger operation - the signer is at head office)' : out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
   return out;
 };
 
