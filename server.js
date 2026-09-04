@@ -5177,7 +5177,7 @@ const LANE_TIERS = { call: ['entry', 'core', 'upper'], email: ['core', 'upper', 
 // And the call lane means a NAMED owner within reach: a read lead with a
 // phone and nobody named is the "no name yet" bucket, off the rep's sheet.
 const SIZE_WORD_TIER = { low: 'entry', medium: 'core', high: 'upper' };
-const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national } = {}) => {
+const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national, siteless, phone } = {}) => {
   const why = [];
   let t = SCALE_TIERS.includes(tier) ? tier : null;
   let measured = !!t;
@@ -5211,13 +5211,30 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
   // the rep asks for the marketing head. Only a TheirStack lead (no phone) and
   // a product company (a sales line) are never on it.
   const inCall = (LANE_TIERS.call.includes(t) || reach) && !ts && !prod;
-  const call = inCall && named;
-  const noname = inCall && !named;
+  // ══ ROUND 121: A BUSINESS WITH NO WEBSITE IS THE CLEAREST LEAD WE FIND ══
+  // Vin, 2026-09-04, ruling on two leads from that press: Delta Solar Power
+  // (232 reviews) and American Dream Solar (305), both with a phone and no
+  // working website, both sitting in No-name-yet where the rep never saw them.
+  //
+  // They can NEVER be named: with no pages, the roster, the model read and the
+  // regex backstop all refuse on their first line and the paid wave is
+  // unreachable behind the dead-site return. So "wait until a name is found"
+  // means "never", and Round 112's rule - the call lane means a named owner -
+  // was quietly swallowing the shape the finder deliberately keeps. The
+  // discovery path says so in its own words: "a plumber with two hundred
+  // reviews and no website is the most obvious problem in the entire pipeline
+  // - no audit needed, no ambiguity, and it is exactly what a rebuild is for."
+  //
+  // Ranked LAST, like the §114 hedge, and only with a number to dial: a call
+  // lead nobody can phone is not a call lead.
+  const _sitelessCall = siteless === true && !!phone && inCall && !named;
+  const call = inCall && (named || _sitelessCall);
+  const noname = inCall && !named && !_sitelessCall;
   // Round 115: a product company is an email lead whatever the tier GUESS - a
   // manufacturer's reviews do not measure it (Mission Solar, 37 reviews, was
   // "entry" and got no lane at all). A measured below-floor still benches.
   const email = named && (LANE_TIERS.email.includes(t) || (prod && t !== 'below_floor'));
-  const last = call && (layered || !!big);
+  const last = call && (layered || !!big || _sitelessCall);
   if (t === 'below_floor') why.push('under the floor - benched');
   if (t === 'over_ceiling') why.push(reach ? `over the call cap but owner-run and measured under ${_usdShort(ICP_CALL_REACH_CEILING)} - still a call` : `over the call cap (${SCALE_BAND_SAY.over_ceiling}) - email, the marketing decision-maker`);
   if (layered && inCall) why.push('layered business - on the call sheet last, ask for the marketing head');
@@ -5225,6 +5242,7 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
   if (big && !inCall && LANE_TIERS.email.includes(t)) why.push(`${big} - email, the marketing decision-maker at head office`);
   if (ts && LANE_TIERS.call.includes(t)) why.push('a TheirStack lead - email only');
   if (prod && LANE_TIERS.call.includes(t)) why.push(LANE_TIERS.email.includes(t) ? 'a product company - email only' : 'a product company - email whatever the size guess, its reviews do not measure a manufacturer');
+  if (_sitelessCall) why.push('no working website, so nobody can be named from their own pages - on the call sheet last, with the number to ask who runs it');
   if (noname) why.push('nobody named yet - off the call sheet until a name is found');
   if (LANE_TIERS.email.includes(t) && !email && !noname) why.push('nobody named to write to');
   if (call && email && !last) why.push('owner within reach and can afford premium - call first, email if no connect');
@@ -31323,10 +31341,41 @@ const buildReviewCorpus = (reviews, opts) => {
   let clip = wanted;
   let out = build(clip);
   if (out.len > budget && list.length) {
-    // The per-review share of the budget, minus the fixed prefix each row
-    // carries. Floored: a clip under REVIEW_CLIP_FLOOR cannot hold a complaint,
-    // and a corpus of truncated fragments would produce patterns nobody wrote.
-    clip = Math.max(REVIEW_CLIP_FLOOR, Math.floor(budget / list.length) - 18);
+    // ══ THE CLIP MUST BUDGET FOR THE ROW IT ACTUALLY BUILDS ══════════════
+    // Round 121. This was `floor(budget / list.length) - 18`, and the 18 pays
+    // for the star prefix and the row separator and nothing else. But
+    // formatReviewForMining APPENDS, on every review that has one,
+    // "\nResponse from the owner: " plus half the clip again - 26 + clip/2,
+    // which at clip 382 is another 217 characters, more than half a row.
+    //
+    // So on any lead whose owner answers their reviews the corpus overshot and
+    // the tail was dropped: 15 of 90 on System Pavers (replies on 74 of 75) and
+    // 9 of 90 on A2Z (68 of 81) on 2026-09-04. Reviews we PAID Apify for and
+    // never showed the model - and the log told the operator to go and change a
+    // Render setting, which would have bought a bigger budget for the same
+    // arithmetic error.
+    //
+    // Solve it against the real row instead. With r = the share of reviews that
+    // carry a reply, a row costs  10 (prefix) + 2 (separator) + clip
+    //                           + r * (26 + clip/2)
+    // so the clip the budget can actually afford is
+    //     (budget/n - 12 - 26r) / (1 + r/2)
+    // Floored exactly as before: a clip under REVIEW_CLIP_FLOOR cannot hold a
+    // complaint, and a corpus of truncated fragments would produce patterns
+    // nobody wrote. The drop below stays as the last resort.
+    // The constants are the row MEASURED, not estimated:
+    //   "[no rating] "                        12  the widest star prefix
+    //   _clip's own " …" on a truncated text   2
+    //   the "+ 2" the reduce adds per row      2
+    //   "\nResponse from the owner: "         26  only when there is a reply
+    //   _clip's " …" on that reply             2  only when there is a reply
+    // plus one character of headroom, so a rounding step cannot put the sum a
+    // single character over and cost a whole review.
+    const REVIEW_ROW_FIXED = 17;        // 12 + 2 + 2, + 1 headroom
+    const REVIEW_REPLY_FIXED = 28;      // 26 + 2
+    const _replyShare = list.reduce((n, r) => n + (r && r.ownerReply ? 1 : 0), 0) / list.length;
+    const _afford = ((budget / list.length) - REVIEW_ROW_FIXED - (REVIEW_REPLY_FIXED * _replyShare)) / (1 + (_replyShare / 2));
+    clip = Math.max(REVIEW_CLIP_FLOOR, Math.floor(_afford));
     out = build(clip);
   }
   let used = list;
@@ -59697,6 +59746,34 @@ app.listen(PORT, () => {
     if (_tg({ name: 'Darrel Jones' }, { name: 'Jane Smith', title: 'Director of Marketing' }, 'layered') !== 'marketing') _fails.push('a layered business with both found does not target the marketing head');
     if (_tg({ name: 'Darrel Jones' }, null, 'layered') !== 'owner') _fails.push('a layered business with no marketing head loses the owner it did find');
     if (_tg(null, null, 'layered') !== 'none') _fails.push('a layered business with nobody found claims a target');
+    // ══ ROUND 121: A WAY IN IS NOT NOTHING ═════════════════════════════════
+    // A2Z Construction, 2026-09-04: owner-run by its own pages, eight credits
+    // of paid searches, nobody named - and the row said "nobody reachable was
+    // found" for a shape where a director-level marketing person is exactly
+    // what we should be holding.
+    if (_tg(null, { name: 'Jane Smith', title: 'Director of Marketing' }, 'owner') !== 'marketing') {
+      _fails.push('an owner-run business whose pages name nobody throws away a director-level marketing person and reports nobody reachable - the row says we have nothing while we are holding a name and a title');
+    }
+    if (_tg(null, null, 'owner') !== 'none') _fails.push('an owner-run business with nobody found at all claims a target');
+    {
+      // ...and it must NOT read as a buyer. PART 3: at an owner-run business
+      // the OWNER is the buyer; this person is the way in, nothing more.
+      const _w = targetFor({ owner: null, marketingLead: { name: 'Jane Smith', title: 'Director of Marketing' }, layers: 'owner' }).why;
+      if (!/cannot sign|who can sign|way in/.test(_w)) _fails.push(`the row does not say this person cannot sign: "${_w}"`);
+      if (/decision-maker|reachable decision/.test(_w)) _fails.push('an owner-run business calls a marketing director the decision-maker, which is the PART 3 rule inverted');
+    }
+    // And the call site: the one route left after the owner ladder fails must
+    // be asked BECAUSE the ladder failed, not because the business is layered.
+    {
+      // Assembled at runtime so the needle cannot find itself in this check's
+      // own source. `_n` belongs to a later check in this same block, so this
+      // one carries its own.
+      const _n121 = (a, b) => a + b;
+      const _src121 = selfSourceNoCommentsLF();
+      const _hg = _n121('if (!_ml && hunterKey && website && (_layers.verdict ===', " 'layered' || _nobodyNamed)) {");
+      if (!_src121.includes(_hg)) _fails.push('the marketing lookup is gated on the business being layered again, so the one free-ish route left after the owner ladder fails is switched off on exactly the leads where it failed');
+      if (!_src121.includes(_n121('const _nobodyNamed = !(out.owner', ' && out.owner.name);'))) _fails.push('nothing measures whether the lead ended with nobody named, so the lookup cannot be aimed at that case');
+    }
     // The demotions: lifted when the reachable decision-maker was found, and high ranks below medium.
     if (demotionPenalty({ aboveSizeCeiling: true, marketingLeadFound: true }).points !== 0) _fails.push('the review-ceiling mark stays on a lead whose reachable marketing head was found');
     // ══ ROUND 112: MEASURE, DO NOT GUESS - AND ONE RULER FOR THE SHEET AND THE LANE ══
@@ -59799,6 +59876,23 @@ app.listen(PORT, () => {
       const _lu = lanesFor({ tier: 'upper', layers: 'layered', source: 'google_places', target: 'owner' });
       if (laneWord(_lu) !== 'call + email' || _lu.last !== true) _fails.push('a layered upper business whose only name is the owner is off the call sheet');
       if (lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'owner' }).last !== false) _fails.push('an owner-run core business is ranked last');
+      // ══ ROUND 121: NO WEBSITE, A PHONE, AND HUNDREDS OF REVIEWS ══════════
+      // Vin's ruling, 2026-09-04, on Delta Solar Power and American Dream
+      // Solar. They can never be named - with no pages the roster, the model
+      // read and the backstop all refuse on their first line and the paid wave
+      // sits behind the dead-site return - so "wait for a name" meant "never".
+      {
+        const _sl = lanesFor({ tier: 'core', layers: 'unmeasured', source: 'google_places', target: 'none', siteless: true, phone: '+1 210-687-7675' });
+        if (_sl.call !== true) _fails.push('a business with a phone, real volume and NO working website is still off the call sheet - it can never be named from pages that do not exist, so this is not "waiting for a name", it is never');
+        if (_sl.noname !== false) _fails.push('a website-less lead is on the call sheet AND in the no-name bucket, so the rep sees it twice');
+        if (_sl.last !== true) _fails.push('a website-less lead is not ranked last, so a row with nobody named outranks a row with an owner and an address');
+        if (!/no working website/.test(_sl.why)) _fails.push('the row does not say WHY nobody is named on a website-less lead, so the rep cannot tell it from a resolver failure');
+        // The two ways it must NOT fire.
+        const _noPhone = lanesFor({ tier: 'core', layers: 'unmeasured', source: 'google_places', target: 'none', siteless: true, phone: '' });
+        if (_noPhone.call !== false || _noPhone.noname !== true) _fails.push('a website-less lead with NO number to dial is put on the call sheet - a call lead nobody can phone is not a call lead');
+        const _readable = lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'none', siteless: false, phone: '+1 555-000-1111' });
+        if (_readable.call !== false || _readable.noname !== true) _fails.push('a lead whose pages we READ and could not name anybody on is treated as website-less, which would put every resolver failure on the sheet');
+      }
       if (demotionPenalty({ laneLast: true }).points !== -8 || demotionPenalty({ laneLast: false }).points !== 0) _fails.push('the layered-last demotion does not rank a layered lead below the owner-run ones');
       if (_ln({ tier: 'core', layers: 'owner', source: 'theirstack', target: 'owner' }) !== 'email') _fails.push('a TheirStack lead reached the call sheet');
       if (_ln({ tier: 'entry', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('an entry owner-run business is not call only');
@@ -59866,7 +59960,10 @@ app.listen(PORT, () => {
       [_n('const _negKey = loc ? ', '`${domain}|${loc}` : domain;'), 'the web-search negative memo is keyed on the domain alone, so a city-less miss blocks the search for 14 days after the city is fixed'],
       [_n('out.product = readProductCompanyTells({', ' pages, links });'), 'the contact read no longer looks for a product company'],
       [_n('product: signals.product', 'Company, usd: signals.scaleUsd,'), 'the product verdict or the measured dollars never reach the lane'],
-      [_n('network: signals.branchNetwork === true, peOwned: signals.peOwned === true,', ' national: signals.nationalOperator === true });'), 'the branch-network, PE-owned and national marks never reach the lane'],
+      [_n('network: signals.branchNetwork === true, peOwned: signals.peOwned === true,', ' national: signals.nationalOperator === true,'), 'the branch-network, PE-owned and national marks never reach the lane'],
+      // Round 121: the two facts that put a website-less business in front of
+      // the rep. Both are already measured; the lane could not see either.
+      [_n('siteless: signals.readable !== true,', ' phone: !!out.phone });'), 'the lane cannot tell a lead whose pages we could not read from one we simply have not named, so Vin\'s ruling that a business with a phone and no website belongs on the call sheet is dead at the call site'],
       [_n('signals.scaleUsd = (_scale && !_scale.guess', ' && Number(_scale.usd) > 0) ? Number(_scale.usd) : null;'), 'the measured dollars never reach the signals, or a tenure guess supplies them'],
       [_n('signals.laneLast = _lanes.last', ' === true;'), 'the lane says "last" and the score never hears it, so a layered lead is not ranked last'],
       [_n('c.verifiedEmployees > ', 'ICP_EMPLOYEE_BLOCK) {'), 'the discovery employee gate is back on a literal'],
@@ -71868,6 +71965,31 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (_long.chars > REVIEW_CORPUS_CHARS) _fails.push(`the long corpus is ${_long.chars} characters against a budget of ${REVIEW_CORPUS_CHARS}`);
     if (_long.clipChars < REVIEW_CLIP_FLOOR) _fails.push(`the clip fell to ${_long.clipChars} characters, below the floor a complaint needs to survive`);
 
+    // ══ 2b. ROUND 121: THE SHAPE EVERY FIXTURE ABOVE COULD NOT REACH ══════
+    // Every review built above carries ownerReply: '', and the row an owner
+    // reply produces is HALF AS LONG AGAIN - "\nResponse from the owner: " plus
+    // half the clip. The clip formula paid for the star prefix and the
+    // separator and nothing else, so on a lead whose owner answers their
+    // reviews the corpus overshot and the tail was binned: 15 of 90 on System
+    // Pavers (replies on 74 of 75) and 9 of 90 on A2Z (68 of 81), 2026-09-04.
+    //
+    // Case 2 above is that lead exactly except for the replies, and it was
+    // green throughout. A fixture that cannot reach the mechanism is not a
+    // check - it is the trap check-writing-traps names, and this is the second
+    // time this round it has been found live.
+    const _replied = (n, len, replyLen) => _rev(n, len).map((r) => Object.assign({}, r, {
+      ownerReply: 'Thank you for the feedback, we appreciate it. ' + 'r'.repeat(Math.max(0, replyLen - 46)),
+    }));
+    const _rep90 = buildReviewCorpus(_replied(90, 2000, 800), { budget: REVIEW_CORPUS_CHARS, clip: REVIEW_CLIP_CHARS });
+    if (_rep90.dropped !== 0) _fails.push(`${_rep90.dropped} of ninety reviews were bought from Apify and never shown to the model, because the clip does not budget for the owner reply it appends - the live defect of 2026-09-04`);
+    if (_rep90.mined !== 90) _fails.push(`only ${_rep90.mined} of ninety replied-to reviews reached the model`);
+    if (_rep90.chars > REVIEW_CORPUS_CHARS) _fails.push(`the replied-to corpus is ${_rep90.chars} characters against a budget of ${REVIEW_CORPUS_CHARS} - the arithmetic still does not describe the row it builds`);
+    if (_rep90.clipChars < REVIEW_CLIP_FLOOR) _fails.push(`the clip fell to ${_rep90.clipChars} on a replied-to corpus, below the floor a complaint needs to survive`);
+    // Half replied: the share must be MEASURED, not assumed one way or other.
+    const _half = buildReviewCorpus(_rev(90, 2000).map((r, i) => (i % 2 ? r : Object.assign({}, r, { ownerReply: 'Thanks for the note. ' + 'r'.repeat(600) }))), { budget: REVIEW_CORPUS_CHARS, clip: REVIEW_CLIP_CHARS });
+    if (_half.dropped !== 0) _fails.push(`${_half.dropped} dropped when half the reviews carry a reply - the clip is being sized on an assumed share rather than the one in front of it`);
+    if (!(_half.clipChars > _rep90.clipChars)) _fails.push('a corpus where half the reviews carry a reply is clipped no harder than one where all of them do, so the reply share is not reaching the arithmetic at all');
+
     // 3. The extreme, where dropping is the only honest answer left. It must
     //    still be REPORTED rather than silent, and mined must match the text.
     const _huge = buildReviewCorpus(_rev(600, 900), { budget: REVIEW_CORPUS_CHARS, clip: REVIEW_CLIP_CHARS });
@@ -77559,6 +77681,19 @@ const targetFor = ({ owner, marketingLead, layers } = {}) => {
   }
   if (hasOwner) return { target: 'owner', why: layers === 'layered' ? 'layered business, but no marketing decision-maker was found - expect the owner not to answer' : 'the owner is within reach' };
   if (layers === 'layered') return { target: 'none', why: 'layered business and no marketing decision-maker found' };
+  // ══ ROUND 121: A WAY IN IS NOT A BUYER, AND IT IS NOT NOTHING ═══════════
+  // An owner-run business whose pages name nobody used to return "none" even
+  // when a director-level marketing person had been found, because the branch
+  // above it tests `layered`. The row then said nobody was reachable while we
+  // were holding a name and a title.
+  //
+  // PART 3 is untouched: at an owner-run business the OWNER is the buyer, so
+  // this person cannot sign and marketingLead.canBuy stays false. What the
+  // sentence says is what is true - here is a real human at director level, and
+  // the rep asks them who owns it.
+  if (marketingLead && marketingLead.name) {
+    return { target: 'marketing', why: `nobody who can sign was found on their pages - ${marketingLead.name} (${marketingLead.title}) is the way in; ask them who owns the business` };
+  }
   return { target: 'none', why: 'nobody reachable was found' };
 };
 // Hunter's own department and seniority filters - LinkedIn-biased toward VPs
@@ -79722,7 +79857,20 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   }
   out.layers = { verdict: _layers.verdict, why: _layers.why };
   let _ml = pickMarketingLead(signals.teamNames, signals.teamTitles);
-  if (!_ml && _layers.verdict === 'layered' && hunterKey && website) {
+  // ══ ROUND 121: ASK WHEN WE HAVE NOBODY, NOT ONLY WHEN THEY HAVE AN ORG ══
+  // This read `_layers.verdict === 'layered'` and nothing else, so the one
+  // route left after the owner ladder has failed was switched OFF on exactly
+  // the leads that had failed. A2Z Construction, 2026-09-04: "layers owner
+  // (family-owned on their site)", eight Firecrawl credits of paid searches,
+  // NO decision-maker found in any source - and Hunter, which costs one Hunter
+  // credit and no Firecrawl at all, was never asked, because the business did
+  // not happen to have an org chart.
+  //
+  // The gate was asking whether THEY are layered. The question that decides
+  // whether to spend is whether WE have anybody. A guard in the wrong function,
+  // the class `bug-classes` records.
+  const _nobodyNamed = !(out.owner && out.owner.name);
+  if (!_ml && hunterKey && website && (_layers.verdict === 'layered' || _nobodyNamed)) {
     try { _ml = await findMarketingLeadViaHunter(website, hunterKey, name); } catch (e) { notes.push(`the marketing decision-maker lookup failed (${e && e.message})`); }
   }
   out.marketingLead = _ml ? { name: _ml.name, title: _ml.title, canBuy: _layers.verdict === 'layered', sources: [_ml.source], email: _ml.email || '', emailTier: null, emailGrade: '', sendable: false } : null;
@@ -79752,7 +79900,10 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   }
   signals.marketingLeadFound = out.target === 'marketing';
   // ══ WHICH LANE (Round 111) ═══════════════════════════════════════════
-  const _lanes = lanesFor({ tier: signals.scaleBand, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true });
+  // siteless: their pages could not be read AT ALL - no website on the listing,
+  // or a site that returned nothing. readable is the same flag readLayers uses
+  // to refuse a layers verdict, so the two cannot disagree about what we saw.
+  const _lanes = lanesFor({ tier: signals.scaleBand, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true, siteless: signals.readable !== true, phone: !!out.phone });
   out.lanes = _lanes;
   // Round 114: a layered or owned-elsewhere lead on the call sheet ranks LAST.
   signals.laneLast = _lanes.last === true;
