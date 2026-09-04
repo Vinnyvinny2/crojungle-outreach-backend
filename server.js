@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261002;
+const CONTRACT_VERSION = 20261003;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -9382,7 +9382,12 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
 // Google block Render's IPs at the network edge — but Firecrawl runs its own
 // scraping infrastructure and is NOT blocked. It searches the web AND returns
 // full page content, not just snippets.
-const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) => {
+// Round 118: `tag` names WHICH search this is (license_trade, owner_name,
+// size_revenue...). fcKindLabel buckets every search as 'search' and a boot
+// check pins that, so the per-source count rides the request ledger instead -
+// it is the only way to answer "which of these five earns its keep" without
+// grepping a batch by hand.
+const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true, tag = '') => {
   if (!fcKey || !query) return [];
   if (fcCreditsBlocked()) return [];   // fail fast — no point firing doomed calls
   try {
@@ -9410,6 +9415,7 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true) =>
     // per 10 results, and each page read on top is a further credit. Without this the
     // meter reported 2 for a call that actually cost 5.
     fcNote(true, `search x${limit}${scrapeContent ? '+scrape' : ''}`, query);
+    if (tag) { const _l = FC_LEDGER.getStore(); if (_l) { _l.searches = _l.searches || {}; _l.searches[tag] = (_l.searches[tag] || 0) + 1; } }
     const results = d.data || d.results || [];
     return results.map(x => ({
       url: x.url || '',
@@ -13339,11 +13345,17 @@ const findOwnerViaWebSearch = async (companyName, website, fcKey, apiKey, locati
     const queries = [
       `"${clean}" ${domain ? domain + ' ' : ''}${loc ? loc + ' ' : ''}(bbb.org OR manta.com OR buzzfile.com OR dnb.com) owner principal`,
     ];
+    // Round 118: the tag rides a PARALLEL array rather than an index, because
+    // the list shifts when the lead has no city and an index would then name
+    // the wrong search in the tally.
+    const _tags = ['owner_directory'];
     if (loc) queries.unshift(`"${clean}" ${loc} owner OR founder OR "chief executive" OR president name`);
+    if (loc) _tags.unshift('owner_name');
     // Round 112: the last query, bought only when the two above named nobody.
     // LinkedIn result titles read "Name - Owner - Company", and the same
     // name-must-appear-in-the-results rule applies.
     queries.push(`"${clean}" ${loc ? loc + ' ' : ''}owner OR founder OR president site:linkedin.com/in`);
+    _tags.push('owner_linkedin');
     if (!loc) console.log(`DM/websearch [${companyName}]: no city, so the undisambiguated name search is skipped — only the domain-scoped directory search runs.`);
 
     // One query at a time, and the second is bought only when the first did
@@ -13388,7 +13400,7 @@ ${corpus}` }]
     let corpus = '';
     let parsed = {};
     for (let _qi = 0; _qi < queries.length; _qi++) {
-      const _batch = await firecrawlSearch(fcKey, queries[_qi], 2, false).catch(() => []); // snippet-only: owner names live in BBB/Manta snippets
+      const _batch = await firecrawlSearch(fcKey, queries[_qi], 2, false, _tags[_qi] || 'owner_search').catch(() => []); // snippet-only: owner names live in BBB/Manta snippets
       const _new = Array.isArray(_batch) ? _batch : [];
       if (!_new.length) continue;
       hits = hits.concat(_new).slice(0, 4);
@@ -13706,7 +13718,7 @@ ${corpus}` }]
       if (!(Number(parsed.employees) > 0) && !parsed.revenue) return null;
       return parsed;
     };
-    let results = await firecrawlSearch(fcKey, q, 4, false); // snippet-only
+    let results = await firecrawlSearch(fcKey, q, 4, false, 'size_revenue'); // snippet-only
     let secondQuery = false;
     let parsed = results.length ? await _extractSize(results) : null;
     // Round 112 bought one more snippet-only query over LinkedIn company pages
@@ -13719,7 +13731,7 @@ ${corpus}` }]
     // only when the first parse found nothing.
     if (!parsed && !secondQuery && secondWorth) {
       const q2 = `"${companyName}" ${loc ? loc + ' ' : ''}employees (site:linkedin.com/company OR site:bbb.org)`;
-      const r2s = await firecrawlSearch(fcKey, q2, 4, false);
+      const r2s = await firecrawlSearch(fcKey, q2, 4, false, 'size_headcount');
       if (r2s.length) { results = results.concat(r2s); secondQuery = true; parsed = await _extractSize(results); }
     }
     // Round 116: the BBB profile, fetched FREE off a URL the results already
@@ -17590,6 +17602,15 @@ const HARM_LADDER = [
 ];
 
 // Runs against measurements, not prose. Returns everything true, worst first.
+// Round 118: declared once, read by measureAbandonment on the audit path and by
+// readSiteBuild on the Find path. It was inline in one of them, and the Find
+// read needs exactly the same rule - two hand-kept copies of one regex is the
+// failure this file records most.
+const COPYRIGHT_YEAR_RE = /(?:©|&copy;|&#0?169;|\(c\)|copyright)[^\n]{0,90}?((?:19|20)\d{2})(?:\s*[-–—]\s*((?:19|20)\d{2}))?/gi;
+const copyrightYearFrom = (text) => {
+  const ys = [...String(text || '').matchAll(COPYRIGHT_YEAR_RE)].flatMap(m => [Number(m[1]), Number(m[2])].filter(Boolean));
+  return ys.length ? Math.max(...ys) : null;
+};
 // Three cheap reads over text we already scraped. No fetch, no credit.
 const measureAbandonment = (text) => {
   const t = String(text || '');
@@ -17609,7 +17630,7 @@ const measureAbandonment = (text) => {
   //
   // A decade-old copyright is one of the strongest website-rebuild signals we can
   // find, and it is free \u2014 missing it costs a whole product fit.
-  const years = [...t.matchAll(/(?:\u00a9|&copy;|&#0?169;|\(c\)|copyright)[^\n]{0,90}?((?:19|20)\d{2})(?:\s*[-\u2013\u2014]\s*((?:19|20)\d{2}))?/gi)]
+  const years = [...t.matchAll(COPYRIGHT_YEAR_RE)]
     .flatMap(m => [Number(m[1]), Number(m[2])].filter(Boolean));
   const copyrightYear = years.length ? Math.max(...years) : null;
   // If a plausible year sits in the text but no copyright context matched, say
@@ -32946,8 +32967,11 @@ const findOwnerViaLicense = async (companyName, industry, location, fcKey, apiKe
     q.push(`"${clean}" ${loc} "principal broker" OR "broker of record"`);
   else
     q.push(`"${clean}" ${loc} owner OR proprietor OR "founded by"`);
-  // Chamber / local directory listings name owners for almost every local business.
-  q.push(`"${clean}" ${loc} (chamber of commerce OR chamberofcommerce.com) owner OR president`);
+  // Chamber / local directory listings name owners for almost every local
+  // business - except that, measured, they do not: 11 buys, 0 names, 2026-09-04.
+  // See DM_CHAMBER above. Not built at all when the knob is off, so nothing
+  // downstream can buy it by accident.
+  if (DM_CHAMBER) q.push(`"${clean}" ${loc} (chamber of commerce OR chamberofcommerce.com) owner OR president`);
 
   // EARLY EXIT INSTEAD OF SHALLOWER SEARCH. Both queries used to run every time,
   // 4 credits each. The trade-specific licence query is the stronger of the two and
@@ -33025,21 +33049,33 @@ ${corpus}` }]
 
   try {
     const hits = [];
-    const r0 = await firecrawlSearch(fcKey, q[0], 4, false);
+    const r0 = await firecrawlSearch(fcKey, q[0], 4, false, 'license_trade');
     if (Array.isArray(r0)) hits.push(...r0);
     if (hits.length) {
       const early = await evaluate(hits);
       if (early) {
         if (q.length > 1) console.log(`DM/license [${clean}]: resolved on the trade query \u2014 skipped the chamber search (~4 Firecrawl credits saved)`);
-        return early;
+        // Round 118: which of the two queries earned the name. DM_SOURCE_WEIGHT
+        // has ONE key for both, so nothing downstream could tell them apart and
+        // the question "is the chamber query worth its credits" needed a log grep.
+        return Object.assign({}, early, { licenseQuery: 'trade' });
       }
     }
+    // ══ THE SAME CORPUS IS NOT A SECOND ANSWER ═══════════════════════════════
+    // Round 118: this loop used to be followed by an unconditional evaluate over
+    // `hits`. With one query in q - which is now the default - the loop adds
+    // nothing, `hits` is byte-identical to what evaluate already read above, and
+    // the trailing call re-ran the identical Haiku prompt on the identical
+    // corpus for the identical null. A model call is only worth making on
+    // evidence that changed.
+    const _before = hits.length;
     for (let i = 1; i < q.length; i++) {
-      const r = await firecrawlSearch(fcKey, q[i], 4, false);
+      const r = await firecrawlSearch(fcKey, q[i], 4, false, 'license_chamber');
       if (Array.isArray(r)) hits.push(...r);
     }
-    if (!hits.length) return null;
-    return await evaluate(hits);
+    if (!hits.length || hits.length === _before) return null;
+    const _late = await evaluate(hits);
+    return _late ? Object.assign({}, _late, { licenseQuery: 'chamber' }) : null;
   } catch(e) { console.log('findOwnerViaLicense failed:', e.message); return null; }
 };
 
@@ -33467,6 +33503,20 @@ ${content}` }]
 // sameName itself is deliberately untouched: a false yes there sends an email
 // addressed to the owner by name into a stranger's mailbox.
 const DM_REGISTRY = /^(?:1|true|on|yes)$/i.test(String(process.env.DM_REGISTRY || ''));
+// ══ THE CHAMBER QUERY IS OFF, AND HERE IS THE EVIDENCE ═════════════════════
+// Round 118, measured on the 2026-09-04 run: a Firecrawl search costs exactly
+// 2 credits, and 168 of that run's 195 credits (86%) went on searching for
+// owners rather than on reading the businesses. The chamber-of-commerce query
+// is the last one in the licence executor, so it is bought ONLY on leads where
+// the trade query has already failed to name anyone. It ran 11 times and
+// produced zero names.
+//
+// Off by default, exactly like DM_REGISTRY above and for the same reason. The
+// evidence is a single run of 25, so this is a SWITCH and not a deletion:
+// DM_CHAMBER=1 on Render puts it back, and the OWNER WAVE line now carries a
+// per-search tally so the next batch says which of the remaining searches earn
+// their keep instead of anyone grepping a log for it.
+const DM_CHAMBER = /^(?:1|true|on|yes)$/i.test(String(process.env.DM_CHAMBER || ''));
 const DM_SIGNATURE_PROMOTE_AT = 3;   // signatures of the same first name before it outranks a weak site title
 const foldFirstNameClusters = (clusters) => {
   for (let i = clusters.length - 1; i >= 0; i--) {
@@ -58266,13 +58316,19 @@ app.listen(PORT, () => {
       {
         const _s4 = selfSourceNoCommentsLF();
         const _n4 = (a, b) => a + b;
-        const _f0 = _s4.indexOf(_n4('const firecrawlSearch = async (fcKey, query,', ' limit = 5, scrapeContent = true) => {'));
+        const _f0 = _s4.indexOf(_n4('const firecrawlSearch = async (fcKey, query,', " limit = 5, scrapeContent = true, tag = '') => {"));
         const _f1 = _f0 < 0 ? -1 : _s4.indexOf(_n4('const results = d.data ||', ' d.results || [];'), _f0);
         if (_f0 < 0 || _f1 < 0) _fails.push('firecrawlSearch could not be found, so where it notes its spend is not being checked');
         else {
           const _body = _s4.slice(_f0, _f1);
           const _note = _body.indexOf(_n4('fcNote(true, `search x', '${limit}'));
           const _err = _body.indexOf(_n4('isCreditError(d,', ' r.status)'));
+          // Round 118: the per-source tally sits AFTER fcNote for the same
+          // reason fcNote sits after the response - a search counted at
+          // dispatch counts one that a 402 never billed.
+          const _tag = _body.indexOf(_n4('_l.searches[tag] = (_l.searches[tag]', ' || 0) + 1;'));
+          if (_tag < 0) _fails.push('the paid search door no longer counts what it bought by source, so which of the five owner searches earns its keep cannot be read off a batch');
+          else if (_tag < _note) _fails.push('the per-source search tally counts at DISPATCH, so a search a 402 refused is counted as bought');
           if (_note < 0) _fails.push('firecrawlSearch no longer notes its spend at all, so the meter under-reports every search');
           else if (_err < 0) _fails.push('firecrawlSearch no longer checks for a credit error');
           else if (_note < _err) _fails.push('firecrawlSearch notes its spend at DISPATCH again - on an empty account the one probe prints FC PAID, counts a credit and clears the latch for every door before the 402 comes back');
@@ -59887,6 +59943,121 @@ app.listen(PORT, () => {
     console.log(`\u26d4 RETIRED AND FREE SIZE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ---- ROUND 118: IS THE THING WE SELL BROKEN? ---------------------------
+  // Vin, 2026-09-04: "a company with a bad or poor website ... is it set up to
+  // rank for GEO (AI), is it set up for SEO in general - this stuff is vital."
+  // Executed on real page shapes, both directions, because the failure mode
+  // that matters is not missing a fault - it is INVENTING one on a site we
+  // could not read.
+  try {
+    const _fails = [];
+    const _body = 'We install and repair roofs across the metro area. Call for a free estimate today. '.repeat(20);
+    const _good = { url: 'https://good.com/', intent: 'home', text: _body,
+      html: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width"><title>Roof Repair in Dallas | Good Roofing</title>`
+        + `<script type="application/ld+json">{"@type":"RoofingContractor","name":"Good Roofing","telephone":"214-555-0100","address":{"@type":"PostalAddress","addressLocality":"Dallas"}}</script></head>`
+        + `<body><a href="tel:2145550100">Call</a><a href="/about">About</a><a href="/contact">Contact</a>`
+        + `<form action="/enquire"><input name="e"></form><img src="a.jpg" alt="a new roof"><img src="b.jpg" alt="a crew"><img src="c.jpg" alt="shingles"><img src="d.jpg" alt="a finished job">`
+        + `<p>${_body}</p><p>&copy; ${new Date().getFullYear()} Good Roofing</p></body></html>` };
+    const _goodContact = { url: 'https://good.com/contact', intent: 'contact', text: _body, html: '<html><body>' + _body + '<form><input></form></body></html>' };
+    const _old = { url: 'http://old.com/', intent: 'home', text: _body + ' © 2016 Old Roofing',
+      html: `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Home</title><meta name="keywords" content="roof">`
+        + `<script src="//static.parastorage.com/services/wix-thunderbolt/dist/main.js"></script>`
+        + `<script src="/js/jquery-1.11.3.min.js"></script></head><body><font size="3">Welcome</font><center>Roofing</center>`
+        + `<table width="600" border="1"><tr><td>x</td></tr></table><table width="600" cellpadding="2"><tr><td>y</td></tr></table>`
+        + `<a href="/a">A</a><a href="/b">B</a><a href="/c">C</a><img src="a.jpg"><img src="b.jpg"><img src="c.jpg"><img src="d.jpg">`
+        + `<p>${_body}</p><p>&copy; 2016 Old Roofing</p></body></html>` };
+    const _oldContact = { url: 'http://old.com/contact', intent: 'contact', text: _body, html: '<html><body>' + _body + '</body></html>' };
+    // The Floor Gurus shape: 500 raw bytes of <script> and 258 characters of text.
+    const _thin = { url: 'https://thin.com/', intent: 'home', text: 'Floor Gurus. '.repeat(20),
+      html: '<html><head><title>x</title><script>' + 'var a=1;'.repeat(80) + '</script></head><body><p>' + 'Floor Gurus. '.repeat(20) + '</p></body></html>' };
+    // A JavaScript-painted shell: plenty of markup, no readable text at all.
+    const _spa = { url: 'https://spa.com/', intent: 'home', text: '',
+      html: '<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width"><title>App</title></head><body><div id="root"></div><script>'
+        + 'var x=1;'.repeat(3000) + '</script><a href="/a">a</a><a href="/b">b</a><a href="/c">c</a></body></html>' };
+    const _sb = (pages, extra) => readSiteBuild(Object.assign({ pages, website: pages[0] && pages[0].url, companyName: 'Co', city: 'Dallas, TX', trade: 'Roofing' }, extra || {}));
+
+    // 1. A good site: measured, no faults, and it scores NOTHING rather than
+    //    being marked down (Vin's ruling, 2026-09-04).
+    const _g = _sb([_good, _goodContact], { robots: 'User-agent: *\nAllow: /' });
+    if (_g.measured !== true || _g.gap !== 0 || _g.faults.length) _fails.push(`a modern site with schema, a form and a tappable phone reads as gap ${_g.gap} (${_g.faults.map(f => f.id).join(',')})`);
+    if (_g.word !== 'strong') _fails.push(`a clean site is called "${_g.word}"`);
+    if ((FIND_ICP_TERMS.find(t => t.id === 'sitegap').score({ siteMeasured: true, siteGap: 0 }) || {}).points !== 0) _fails.push('a good website does not score zero on the gap term');
+
+    // 2. A 2016 template: every group fires, and the sentence names the work.
+    const _o = _sb([_old, _oldContact], { robots: 'User-agent: GPTBot\nDisallow: /\n\nUser-agent: *\nAllow: /' });
+    const _ids = _o.faults.map(f => f.id);
+    for (const _want of ['noSchema', 'datedBuild', 'noForm', 'noClickToCall', 'weakTitle', 'blocksAi']) {
+      if (!_ids.includes(_want)) _fails.push(`a 2016 template with no schema, no form and robots.txt blocking GPTBot does not report ${_want} (got ${_ids.join(',') || 'nothing'})`);
+    }
+    if (_o.gap !== SITE_GAP_MAX) _fails.push(`the worst site we can build scores ${_o.gap} of ${SITE_GAP_MAX}, so the term cannot reach its maximum`);
+    if (_o.word !== 'poor') _fails.push(`a 2016 template is called "${_o.word}"`);
+    if (_o.platform !== 'Wix' || _o.isDiy !== true) _fails.push(`the DIY-builder fingerprint detectPlatform already carries is not reaching the website read (got ${_o.platform || 'nothing'})`);
+    if (!_o.agedSay.length) _fails.push('the dated-build markers readSiteAge already writes sentences for are not reaching the row');
+    if (!_o.families.includes('dated_site') || !_o.families.includes('conversion_leak')) _fails.push('the faults do not name the product family the work belongs to, so the row cannot say what the job IS');
+    if (!/DIY|dated|schema|form/.test(_o.short) || _o.short.length > 44) _fails.push(`the rep's website cell is "${_o.short}" (${_o.short.length} chars) - it must name the worst faults inside the 44-character cap`);
+
+    // 3. THE ONE THAT MATTERS. A site we could not read claims NOTHING.
+    const _t = _sb([_thin], { robots: '' });
+    if (_t.measured !== false) _fails.push('a 258-character page is judged on its website - the Floor Gurus failure, aimed this time at the number a rep sorts by');
+    if (_t.faults.length) _fails.push(`an unreadable page reports ${_t.faults.length} website fault(s)`);
+    if (/nothing wrong/.test(_t.why)) _fails.push('an unreadable site is described as having nothing wrong with it, which is a claim we cannot make');
+    if (FIND_ICP_TERMS.find(t => t.id === 'sitegap').score({ siteMeasured: false, siteGap: 0 }) !== null) _fails.push('the website term scores a lead whose site we could not read, so our blindness is charged to them');
+    if (_sb([]).measured !== false) _fails.push('a lead with no pages at all is judged on its website');
+
+    // 4. A POSITIVE is a positive on any page; an ABSENCE needs readable text.
+    //    A JavaScript shell has no readable text by definition, so without the
+    //    split it suppressed the one fault that describes it.
+    const _s = _sb([_spa], { robots: '' });
+    if (!_s.faults.some(f => f.id === 'jsOnly')) _fails.push('a JavaScript-painted shell does not report that a crawler sees nothing - the fault the page IS');
+    if (_s.termsMeasured < 1) _fails.push('a JavaScript shell measures nothing at all, so the positive/absence split is doing no work');
+    // The shape where the form guard is REACHABLE: a JS-painted home page beside
+    // a readable contact page. The text floor is met by the contact page, so the
+    // absence terms are live, while the home page a crawler reads is still empty.
+    // A first cut asserted this on the shell alone, where the guard could never
+    // fire either way - a mechanism no fixture can reach rots.
+    const _spaMix = _sb([_spa, { url: 'https://spa.com/contact', intent: 'contact', text: _body, html: '<html><body>' + _body + '</body></html>' }], { robots: '' });
+    if (!_spaMix.faults.some(f => f.id === 'jsOnly')) _fails.push('a JS-painted home page beside a readable contact page loses the JavaScript fault');
+    if (_spaMix.faults.some(f => f.id === 'noForm' || f.id === 'noClickToCall')) _fails.push('a JavaScript-painted page is charged with having no form - the form may be drawn by the script we did not run, so that is a false sentence about a real business');
+
+    // 5. The robots.txt parser, per agent, because "Disallow: /" under one
+    //    agent says nothing about another.
+    const _rb = (t) => robotsBlocksAi(t);
+    if (!_rb('User-agent: GPTBot\nDisallow: /').blocked.includes('gptbot')) _fails.push('a robots.txt blocking GPTBot is not read as blocking it');
+    if (_rb('User-agent: GPTBot\nDisallow: /admin/').blocked.length) _fails.push('a robots.txt blocking one FOLDER is read as blocking the crawler');
+    if (_rb('User-agent: CCBot\nUser-agent: ClaudeBot\nDisallow: /').blocked.length !== 2) _fails.push('two agents sharing one rule group are not both read');
+    if (_rb('User-agent: *\nDisallow: /').all !== true) _fails.push('a robots.txt blocking everything is not read as blocking everything');
+    if (_rb('').checked !== false) _fails.push('a missing robots.txt is read as a measurement');
+    if (_rb('User-agent: GPTBot\nDisallow: /\nAllow: /').blocked.length) _fails.push('an Allow that overrides the Disallow is ignored');
+
+    // 6. No credit and no model call may ever be spent in here.
+    if (/fcCall|firecrawlSearch|anthropicFetch|fcNote/.test(String(readSiteBuild))) _fails.push('the website read buys something - it must be pure over markup we already hold');
+    if (/fcCall|firecrawl/i.test(String(fetchSiteFile))) _fails.push('robots.txt or llms.txt is fetched through Firecrawl - both are plain fetches or nothing');
+    // The declared table is what the check reads, so a term added without a
+    // fixture cannot hide: every one carries its points, its precondition and
+    // the family it points at.
+    for (const t of SITE_GAP_TERMS) {
+      if (!(t.points > 0) || !t.say || !t.short || !t.family || !['markup', 'home', 'contact', 'robots'].includes(t.need)) _fails.push(`the website term "${t.id}" is declared without its points, its sentence, its short label, its product family or a valid precondition`);
+      if (t.short.length > 16) _fails.push(`the short label for "${t.id}" is too long for the rep's cell`);
+    }
+    if (SITE_GAP_TERMS.reduce((n, t) => n + t.points, 0) <= SITE_GAP_MAX) _fails.push('the website faults cannot together exceed the cap, so the term can never reach its maximum on a real site');
+    // The call site: a measurement that never reaches the score is the class
+    // this file produces more than any other.
+    const _s118 = selfSourceNoCommentsLF();
+    const _n118 = (a, b) => a + b;
+    for (const [_needle, _msg] of [
+      [_n118('out.site = readSiteBuild({ pages, links, website,', ' companyName: name, city: leadLocation,'), 'the contact read no longer performs the website read at all'],
+      [_n118('signals.siteGap = (out.site && typeof out.site.gap === ', "'number') ? out.site.gap : null;"), 'the website gap never reaches the signals, so the score cannot see it'],
+      [_n118('signals.siteMeasured = !!(out.site &&', ' out.site.measured === true);'), 'the score cannot tell a site we judged from one we could not read'],
+      [_n118('fetchSiteFile(website, ', "'/robots.txt')"), 'robots.txt is no longer read, so nothing knows whether the AI crawlers are shut out'],
+      [_n118("if (typeof s.siteGap !== 'number' ||", ' !Number.isFinite(s.siteGap)'), 'the website term is back on Number(), so a stray boolean scores a point off nothing'],
+    ]) if (!_s118.includes(_needle)) _fails.push(_msg);
+
+    if (_fails.length) console.log(`\u26d4 WEBSITE BUILD CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
+    else console.log(`✓ WEBSITE BUILD CHECK: the first signal in this system that asks whether the thing we SELL is broken, rather than whether they can pay for it. Read free from markup the owner hunt already downloaded - no Firecrawl credit and no model call - over four groups: does the site ask for the job (a form, a tappable phone), is the build current (${SITE_GAP_TERMS.filter(t => t.group === 'build').length} markers plus the DIY-builder fingerprint), can AI search read it (business schema classified so Wix boilerplate does not count, a JavaScript-only shell, robots.txt per crawler) and is it set up for search at all (noindex, the title, alt text). A modern site scores 0 of ${SITE_GAP_MAX} and is never marked down for it; the worst site reaches ${SITE_GAP_MAX}; and a page we could not read claims NOTHING in either direction - a positive is a positive on any page, an absence needs readable text, and the difference is why a JavaScript shell reports the one fault that describes it instead of being charged with having no contact form.`);
+  } catch (e) {
+    console.log(`\u26d4 WEBSITE BUILD CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ---- THE SHEET EXPORT TAKES ITS DESTINATION FROM THE REQUEST ----------
   // Which makes it the one endpoint here that would post a rep's contact list
   // to whatever address somebody names. On a public server an unbounded URL
@@ -60065,7 +60236,11 @@ app.listen(PORT, () => {
       // Round 108: the founder, scale and invests terms at their maximum.
       readable: true, execTitles: [], ownerNamedOnSite: true, founderPhrase: 'family-owned', ownerAnswersReviews: true,
       staffProse: 14, staffProseSay: 'a team of 14 technicians',
-      liveChat: true, scheduler: false, callTracking: false, analytics: false, tagManager: false };
+      liveChat: true, scheduler: false, callTracking: false, analytics: false, tagManager: false,
+      // Round 118: the PERFECT PROSPECT has the worst website. That is not a
+      // contradiction - it is the point of the term: money, a reachable owner,
+      // and the thing we sell visibly broken.
+      siteMeasured: true, siteGap: SITE_GAP_MAX, siteWord: 'poor', siteWhy: 'a DIY template with no schema and no enquiry form' };
     const _full = findIcpScore(_perfect);
     if (_full.score !== 100) _fails.push(`a business scoring the maximum on every signal scored ${_full.score}, not 100`);
     // == ROUND 108: THE THREE NEW TERMS, BOTH DIRECTIONS ====================
@@ -60423,8 +60598,8 @@ app.listen(PORT, () => {
     // Null laundering, the trap this file records most: Number(null) is 0 and
     // Number.isFinite(0) is true, so every one of these must refuse to score.
     for (const bad of [null, undefined, '', [], {}, true, NaN, '4.6']) {
-      const r = findIcpScore({ teamCount: bad, rating: bad, reviewCount: bad });
-      if (r.terms.some(t => (t.id === 'size' || t.id === 'rating' || t.id === 'demand') && t.measured)) {
+      const r = findIcpScore({ teamCount: bad, rating: bad, reviewCount: bad, siteGap: bad, siteMeasured: bad });
+      if (r.terms.some(t => (t.id === 'size' || t.id === 'rating' || t.id === 'demand' || t.id === 'sitegap') && t.measured)) {
         _fails.push(`findIcpScore treats ${JSON.stringify(bad)} as a measurement`);
         break;
       }
@@ -60750,6 +60925,34 @@ app.listen(PORT, () => {
       }
 
       // ══ NO CITY, NO WORTHLESS PAID QUERY ═══════════════════════════════
+      // ══ ROUND 118: THE CHAMBER QUERY IS OFF, AND THE CONDITION IS PINNED ══
+      // Measured 2026-09-04: 11 buys, 0 names, on leads where the trade query
+      // had already failed. Off behind DM_CHAMBER, not deleted.
+      //
+      // The needle is on the CONDITION, never on the log sentence. §113
+      // recorded a needle aimed at a message that stayed green on an
+      // `if (false)` build - a check that cannot fail is not a check.
+      if (!_src.includes(_n('if (DM_CHAMBER) q.push(`"${clean}" ${loc} (chamber of commerce', ' OR chamberofcommerce.com) owner OR president`);'))) {
+        _fails.push('the chamber-of-commerce query is bought without the DM_CHAMBER knob in front of it - 11 buys and 0 names on 2026-09-04, and it only ever fires on leads the trade query already failed');
+      }
+      if (typeof DM_CHAMBER !== 'boolean') _fails.push('DM_CHAMBER is not a boolean, so an unset env var could read as truthy and buy the query anyway');
+      // The same corpus is not a second answer: with one query in q the loop
+      // adds nothing, and the trailing evaluate used to re-run the identical
+      // Haiku prompt on the identical hits for the identical null.
+      if (!_src.includes(_n('if (!hits.length || hits.length === _before)', ' return null;'))) {
+        _fails.push('the licence executor evaluates the same corpus twice again - with the chamber query off the loop adds no hits and the second model call is bought on evidence that did not change');
+      }
+      // Which of the two queries earned the name. One source weight covers both,
+      // so without this nothing downstream can tell them apart.
+      for (const _lq of [_n("return Object.assign({}, early, { licenseQuery:", " 'trade' });"),
+                         _n("_late ? Object.assign({}, _late, { licenseQuery:", " 'chamber' }) : null;")]) {
+        if (!_src.includes(_lq)) _fails.push('the licence result no longer records WHICH query produced it, so the chamber query cannot be judged on its own evidence');
+      }
+      // The tag rides a parallel array: the query list shifts when a lead has
+      // no city, and an index would then name the wrong search in the tally.
+      if (!_src.includes(_n("const _tags = ['owner_directory'];", "\n    if (loc) queries.unshift("))) {
+        _fails.push('the owner web search tags its queries by index again, so a city-less lead reports the wrong search in the per-source tally');
+      }
       // Four Peaks Roofing bought a licence search with a double space where
       // the jurisdiction belongs. A licence board is a STATE thing.
       for (const _need of [
@@ -77321,6 +77524,193 @@ const readOutletTell = ({ name, homeUrl, city } = {}) => {
   if (match) return { measured: true, isOutlet: true, why: `their Google listing points at /${match.slug} inside ${host}'s own site rather than at a home page of their own`, brand: match.brand || '', path };
   return { measured: true, isOutlet: false, why: '', brand: '', path };
 };
+// ══ IS THE WEBSITE THE THING WE SELL? ═════════════════════════════════════
+// Round 118. Vin, 2026-09-04: *"a high quality prospect is a bunch of things -
+// a company with a bad or poor website ... how clean is the code on the back
+// end ... is it set up to rank for GEO (AI), is it set up for SEO in general -
+// this stuff is vital."* Ten scoring terms and 195 points, and not one of them
+// asked whether the thing CROJungle sells is broken. We measured whether a
+// business SPENDS on marketing and never whether its website works.
+//
+// It costs nothing. Every page here was already downloaded for the owner hunt,
+// and on the 2026-09-04 run those page reads were 27 of 195 credits while the
+// owner searches were 168. There is no model call in this function at all:
+// code assembles the facts (PART 3).
+//
+// NOTHING HERE IS A SECOND IMPLEMENTATION. readSeoSignals already classifies
+// schema properly - including the trap that Wix and Squarespace auto-inject
+// WebSite/Organization boilerplate so bare ld+json proves nothing - readSiteAge
+// already carries the dated-build markers with their sentences written, and
+// detectPlatform already fingerprints the DIY builders. All three were audit-
+// path only and Find had never called them.
+//
+// THE LIMIT, and it is in the sentences this produces: we measure whether a
+// site is BUILT to convert. We cannot see whether it DOES convert - that needs
+// their analytics. Every fault below is a fact about their markup.
+const AI_CRAWLER_AGENTS = ['gptbot', 'chatgpt-user', 'oai-searchbot', 'claudebot', 'anthropic-ai', 'perplexitybot', 'ccbot', 'google-extended', 'applebot-extended', 'bytespider', 'meta-externalagent'];
+// A real robots.txt parser, because the question is per-agent: consecutive
+// User-agent lines share the rules that follow them, and "Disallow: /" under
+// one agent says nothing about another.
+const robotsBlocksAi = (txt) => {
+  const t = String(txt || '');
+  if (!t.trim() || t.length > 200000) return { checked: false, blocked: [], all: false };
+  const groups = []; let cur = null;
+  for (const raw of t.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, '').trim();
+    if (!line) continue;
+    const ua = line.match(/^user-agent\s*:\s*(.+)$/i);
+    if (ua) {
+      if (!cur || cur.rules.length) { cur = { agents: [], rules: [] }; groups.push(cur); }
+      cur.agents.push(ua[1].trim().toLowerCase());
+      continue;
+    }
+    const rule = line.match(/^(disallow|allow)\s*:\s*(.*)$/i);
+    if (rule && cur) cur.rules.push({ allow: /^allow$/i.test(rule[1]), path: rule[2].trim() });
+  }
+  const blocksRoot = (g) => g.rules.some(r => !r.allow && r.path === '/') && !g.rules.some(r => r.allow && r.path === '/');
+  const blocked = [];
+  for (const g of groups) {
+    if (!blocksRoot(g)) continue;
+    for (const a of g.agents) if (AI_CRAWLER_AGENTS.includes(a)) blocked.push(a);
+  }
+  const all = groups.some(g => g.agents.includes('*') && blocksRoot(g));
+  return { checked: true, blocked: [...new Set(blocked)], all };
+};
+// What a crawler that does not run JavaScript actually sees.
+const rawReadableChars = (html) => String(html || '')
+  .replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<!--[\s\S]*?-->/gi, ' ')
+  .replace(/<[^>]+>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ').replace(/\s+/g, ' ').trim().length;
+const FORM_BUILDER_RE = /(?:js|embed|static)\.(?:hsforms|typeform|jotform)\.|forms\.gle\/|wufoo\.com\/|formstack\.com\/|gravityforms|ninjaforms|wpcf7|contact-form-7|formidable/i;
+// Each fault names the product family the gap points at, so the row can say
+// what the work IS and not only that something is wrong. `need` is the
+// readable precondition: without it the fault is NOT MEASURED, never "false".
+const SITE_GAP_TERMS = [
+  // `need` is the readable precondition, and it is split the way
+  // readFindIcpSignals states the rule at its own head: A POSITIVE IS A
+  // POSITIVE ON ANY PAGE; AN ABSENCE NEEDS READABLE TEXT. 'markup' is 500 raw
+  // bytes and is enough to say a tag IS there; 'home' additionally needs
+  // FIND_ABSENCE_TEXT_FLOOR of real text before we may say a tag is NOT.
+  // Without the split, a JavaScript-painted shell - which has no readable text
+  // by definition - suppressed the one fault that describes it.
+  { id: 'noindex',     group: 'seo',      points: 5, need: 'markup',  family: 'search_absence', short: 'set to noindex', say: 'their own code tells search engines not to index the page' },
+  { id: 'noSchema',    group: 'geo',      points: 5, need: 'home',    family: 'search_absence', short: 'no schema', say: 'no business schema in their code, so AI search has nothing structured to read' },
+  { id: 'jsOnly',      group: 'geo',      points: 4, need: 'markup',  family: 'search_absence', short: 'JS-only', say: 'the page is painted by JavaScript, so a crawler that does not run it sees almost nothing' },
+  { id: 'blocksAi',    group: 'geo',      points: 2, need: 'robots',  family: 'search_absence', short: 'blocks AI', say: 'their robots.txt tells the AI crawlers to stay out' },
+  { id: 'datedBuild',  group: 'build',    points: 5, need: 'markup',  family: 'dated_site',     short: 'dated build', say: 'the build is years out of date' },
+  { id: 'diyBuilder',  group: 'build',    points: 3, need: 'markup',  family: 'dated_site',     short: 'DIY build', say: 'it is a DIY website-builder template' },
+  { id: 'noForm',      group: 'converts', points: 4, need: 'contact', family: 'conversion_leak', short: 'no form', say: 'there is no enquiry form anywhere we read' },
+  { id: 'noClickToCall', group: 'converts', points: 3, need: 'contact', family: 'conversion_leak', short: 'no tap-to-call', say: 'the phone number is not tappable on a phone' },
+  { id: 'weakTitle',   group: 'seo',      points: 2, need: 'home',    family: 'search_absence', short: 'weak title', say: 'the page title is a default, so search results show nothing about what they do' },
+  { id: 'thinAlt',     group: 'seo',      points: 1, need: 'home',    family: 'search_absence', short: 'no alt text', say: 'most images carry no alt text' },
+];
+const SITE_GAP_MAX = 25;
+const SITE_GAP_WORD = (n) => n >= 16 ? 'poor' : n >= 10 ? 'weak' : n >= 4 ? 'fair' : 'strong';
+const readSiteBuild = ({ pages, links, website, companyName, city, trade, robots, llms } = {}) => {
+  const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
+  const home = read.find(p => p && p.intent === 'home') || read[0] || null;
+  const homeHtml = String((home && home.html) || '');
+  // TWO floors, both of them the ones already declared: 500 raw bytes of markup
+  // (checkBuiltWith, detectPlatform and findPlainFetch all use that number) AND
+  // FIND_ABSENCE_TEXT_FLOOR of readable text. The first alone is not enough -
+  // the Floor Gurus page cleared 500 bytes on its <script> tag and 258
+  // characters of text, and the first cut of this function asserted "no
+  // schema" off it. An absence needs a page we actually read.
+  const _readable = (p) => {
+    const t = String((p && p.text) || '');
+    if (t.length >= 200) return t.length;
+    return String((p && p.html) || '').replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().length;
+  };
+  const textChars = read.reduce((n, p) => n + _readable(p), 0);
+  const markupRead = homeHtml.length >= 500;
+  const homeRead = markupRead && textChars >= FIND_ABSENCE_TEXT_FLOOR;
+  const contactRead = read.some(p => p && p.intent === 'contact' && (String(p.html || '').length >= 500 || String(p.text || '').length >= 200));
+  const navRead = homeRead && (homeHtml.match(/<a\s/gi) || []).length >= 3;
+  const allHtml = read.map(p => String(p.html || '')).join('\n');
+  const seo = markupRead ? readSeoSignals(homeHtml, { companyName, city, trade }) : { checked: false };
+  const age = markupRead ? readSiteAge({
+    rawHtml: homeHtml,
+    hasViewport: /<meta[^>]+name=["']viewport["'][^>]*>/i.test(homeHtml),
+    isHttps: /^https:/i.test(String((home && home.url) || website || '')),
+    copyrightYear: copyrightYearFrom(String((home && home.text) || '') || homeHtml),
+  }) : { checked: false, markers: [] };
+  const platform = markupRead ? detectPlatform(homeHtml) : { platform: '', confidence: 'unreadable', isDiy: null, builder: '' };
+  const rb = robotsBlocksAi(robots);
+  // A crawler that does not run JavaScript reads the RAW html. If Firecrawl
+  // rendered the page for us the text is present and this cannot fire, which
+  // is the safe direction: it under-claims rather than inventing a fault.
+  const jsOnly = markupRead && homeHtml.length >= 12000 && rawReadableChars(homeHtml) < 500;
+  const hasForm = /<form\b/i.test(allHtml) || FORM_BUILDER_RE.test(allHtml);
+  const hasTel = /href=["']\s*tel:/i.test(allHtml);
+  const hits = {
+    noindex: seo.checked ? seo.noindex === true : null,   // the tag IS there: a positive
+    noSchema: seo.checked ? (seo.businessSchema !== true) : null,
+    jsOnly: markupRead ? jsOnly : null,
+    blocksAi: rb.checked ? (rb.blocked.length > 0 || rb.all) : null,
+    datedBuild: age.checked ? age.dated === true : null,
+    diyBuilder: platform.confidence === 'unreadable' ? null : platform.isDiy === true,
+    // NOT measured on a JS-painted page: the form and the tel: link may be
+    // drawn by the JavaScript we did not run, and "there is no enquiry form"
+    // would then be a false sentence about a real business. The GEO faults
+    // above still stand - a crawler that does not run JS sees none of it either.
+    noForm: (!jsOnly && (contactRead || navRead)) ? !hasForm : null,
+    noClickToCall: (!jsOnly && navRead) ? !hasTel : null,
+    weakTitle: seo.checked ? (!seo.title || seo.titleIsDefault === true) : null,
+    thinAlt: (seo.checked && seo.imgCount >= 4) ? (seo.imgAltCount / seo.imgCount) < 0.5 : null,
+  };
+  const need = { markup: markupRead, home: homeRead, contact: homeRead && (contactRead || navRead), robots: rb.checked };
+  const faults = [], clean = [];
+  let gap = 0, measured = 0;
+  for (const t of SITE_GAP_TERMS) {
+    if (need[t.need] !== true || hits[t.id] === null || hits[t.id] === undefined) continue;
+    measured++;
+    if (hits[t.id] === true) { gap += t.points; faults.push({ id: t.id, group: t.group, family: t.family, points: t.points, short: t.short, say: t.say }); }
+    else clean.push(t.id);
+  }
+  // The markers readSiteAge already wrote sentences for, so the row can name
+  // the fault a person can see rather than repeating "the build is dated".
+  const agedSay = (age.markers || []).filter(m => m && m.visible).slice(0, 2).map(m => m.say);
+  // A fault that FIRED is evidence whatever else we could read. Nothing firing
+  // is only evidence when we could read enough text to have seen an absence -
+  // otherwise "no faults" means "we could not look", and scoring that as a
+  // clean site would mark the lead down for our blindness.
+  const judged = homeRead || faults.length > 0;
+  return {
+    measured: judged,
+    termsMeasured: measured,
+    gap: Math.min(SITE_GAP_MAX, gap),
+    rawGap: gap,
+    word: judged ? SITE_GAP_WORD(Math.min(SITE_GAP_MAX, gap)) : '',
+    faults, clean,
+    // The rep's cell, decided HERE. Faults are pushed in table order and the
+    // table is ordered by weight, so the first two are the two worst.
+    short: judged ? (SITE_GAP_WORD(Math.min(SITE_GAP_MAX, gap)) + (faults.length ? ` (${faults.slice(0, 2).map(f => f.short).join(', ')})` : '')) : '',
+    platform: platform.platform || '', builder: platform.builder || '', isDiy: platform.isDiy,
+    schema: seo.checked ? (seo.businessSchema === true ? 'business' : seo.boilerplateOnly ? 'boilerplate only' : (seo.schemaTypes || []).length ? 'other' : 'none') : '',
+    robotsChecked: rb.checked, aiBlocked: rb.blocked, robotsBlocksAll: rb.all,
+    llmsTxt: llms === null || llms === undefined ? null : String(llms).trim().length > 0,
+    agedSay,
+    // The families the gaps point at, deduped - what the work IS.
+    families: [...new Set(faults.map(f => f.family))],
+    why: faults.length ? faults.map(f => f.say).join('; ')
+      : homeRead ? 'nothing wrong with their site that we can see from its code'
+      : 'we could not read enough of their site to judge the build',
+  };
+};
+// /robots.txt and /llms.txt: two plain fetches, no Firecrawl, no model. A
+// refusal is one returned null and nothing else - the Round 116 BBB rule. Both
+// files are tiny by convention; anything over 200KB is not one of them.
+const fetchSiteFile = async (website, path) => {
+  try {
+    const origin = new URL(String(website).startsWith('http') ? website : 'https://' + website).origin;
+    const r = await fetchT(origin + path, { headers: { 'User-Agent': FIND_UA, 'Accept': 'text/plain,*/*' } }, 8000);
+    if (!r || !r.ok) return null;
+    const t = String(await r.text()).slice(0, 200000);
+    // A site that serves its 404 page as HTML for every path has not got one.
+    if (/^\s*<(?:!doctype|html)/i.test(t)) return null;
+    return t;
+  } catch (e) { void e; return null; }
+};
 const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
   const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
   const titles = (Array.isArray(rosterTitles) ? rosterTitles : []).map(t => String(t || ''));
@@ -77776,10 +78166,12 @@ const readOwnershipTells = ({ pages } = {}) => {
 };
 
 // ── THE SCORE ───────────────────────────────────────────────────────────────
-// Five terms, each declared with its own maximum and its own scorer, and a
+// ELEVEN terms, each declared with its own maximum and its own scorer, and a
 // scorer returns null when the signal was never measured. The score is then a
 // percentage of what we COULD measure, so it is genuinely out of 100 and the
-// row still says how many of the five stood behind it.
+// row still says how many of the eleven stood behind it. (This comment said
+// "five" from the round that wrote it until Round 118; the count lives in
+// FIND_ICP_TERMS.length, which every sentence that prints it reads.)
 //
 // HONEST SHAPE, stated where it is computed rather than in a report: the ICP is
 // defined as $800k-$15M of revenue and NOTHING here measures revenue. Revenue
@@ -77965,6 +78357,39 @@ const FIND_ICP_TERMS = [
       if (b === 'lower') return { points: 12, say: `${s.affordWhy || 'their trade and their job count put them at the lower tier'}` };
       if (b === 'below_floor') return { points: 3, say: `${s.affordWhy || 'their trade and their job count put them below the floor we sell at'}` };
       return null;
+    },
+  },
+  // ══ IS THE THING WE SELL BROKEN? ═══════════════════════════════════════
+  // Round 118 (Vin, 2026-09-04). Every term above asks whether they CAN pay.
+  // This is the first one that asks whether they NEED us, and it is the only
+  // signal in the table aimed at the product itself: a business with money and
+  // a good website is a wasted call; a business with money and a 2016 template
+  // that AI search cannot read is the whole premium line.
+  //
+  // Points rise with the SIZE OF THE GAP. A good site scores 0 and is never
+  // demoted - Vin's ruling, 2026-09-04: it still buys a retainer or the AI
+  // brain, and the research behind §111 is that most businesses are already
+  // paying for marketing they know is not working. Falling behind the leads
+  // with real gaps is the whole effect, and it needs no penalty to happen.
+  //
+  // Built from facts NO other term consumes: schema, the build's vintage, the
+  // title, alt text, the form, the tel: link. `invests` and `ads` already own
+  // chat, booking, call tracking, analytics and the tag container, and the
+  // table's own rule is that one fact must not sit in two terms of one
+  // denominator - which is why `scale` sits out when the team floor scores.
+  {
+    id: 'sitegap', max: 25, label: 'how much of the website work we sell is missing',
+    score: (s) => {
+      // Unmeasured means we could not read enough of their site to see an
+      // absence. Scoring that 0 would mark a lead down for our own blindness.
+      if (s.siteMeasured !== true) return null;
+      // strictNum, never Number: Number(true) is 1 and 1 is finite, so a stray
+      // boolean scored a point off nothing. The same rule demand and rating
+      // carry, and the same null-laundering class §60 records.
+      if (typeof s.siteGap !== 'number' || !Number.isFinite(s.siteGap) || s.siteGap < 0) return null;
+      const n = s.siteGap;
+      if (n <= 0) return { points: 0, say: 'their website is in good shape - nothing we sell is obviously missing from it' };
+      return { points: Math.min(25, n), say: s.siteWhy || `${n} points of website work missing` };
     },
   },
   {
@@ -78668,6 +79093,30 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     });
     notes.push(`a branch of a bigger operation — ${out.outlet.why}. Kept as an email lead: the local number reaches a branch, and the marketing decision-maker at head office is the target.`);
   }
+  // ── AND IS THE WEBSITE THE THING WE SELL? ──────────────────────────────
+  // Round 118 (Vin, 2026-09-04: "a company with a bad or poor website ... is it
+  // set up to rank for GEO (AI), is it set up for SEO in general"). Ten scoring
+  // terms and not one of them asked whether what we sell is broken.
+  //
+  // Free, twice over: the pages were downloaded for the owner hunt, and the two
+  // fetches below are plain HTTP with no Firecrawl credit and no model call.
+  // They run in parallel with each other and only on a lead with a website.
+  const [_robots, _llms] = website
+    ? await Promise.all([fetchSiteFile(website, '/robots.txt'), fetchSiteFile(website, '/llms.txt')])
+    : [null, null];
+  out.site = readSiteBuild({ pages, links, website, companyName: name, city: leadLocation,
+    trade: String((company && company.industry) || ''), robots: _robots, llms: _llms });
+  if (out.site.measured) {
+    console.log(`\u{1F5A5} SITE [${name}]: ${out.site.word} (gap ${out.site.gap}/${SITE_GAP_MAX} on ${out.site.termsMeasured} check(s))`
+      + `${out.site.platform ? ` | ${out.site.platform}${out.site.builder ? '/' + out.site.builder : ''}${out.site.isDiy ? ' (DIY builder)' : ''}` : ''}`
+      + ` | schema ${out.site.schema || 'not read'}`
+      + `${out.site.robotsChecked ? (out.site.aiBlocked.length ? ` | robots.txt blocks ${out.site.aiBlocked.join(', ')}` : out.site.robotsBlocksAll ? ' | robots.txt blocks everything' : ' | robots.txt lets the AI crawlers in') : ' | no robots.txt'}`
+      + `${out.site.llmsTxt === true ? ' | has llms.txt' : ''}`
+      + ` — ${out.site.why}`
+      + `${out.site.families.length ? ` | the work: ${out.site.families.join(', ')}` : ''}`);
+  } else if (website) {
+    console.log(`\u{1F5A5} SITE [${name}]: not judged — ${out.site.why}. Nothing about their build is claimed either way.`);
+  }
   // Same seat as the chain read, same reason: everything after this line
   // costs credits, and a nonprofit has no owner to sell to.
   out.nonprofit = readNonprofitEvidence({ pages, links });
@@ -79102,12 +79551,31 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // Round 114: a layered or owned-elsewhere lead on the call sheet ranks LAST.
   signals.laneLast = _lanes.last === true;
   console.log(`\u{1F3AF} TARGET [${name}]: size ${_size.band || 'not measured'} (${_size.confidence}: ${_size.why}) | tier ${_lanes.tier}${_lanes.measured && _scale ? ' (' + _scale.say + ')' : ' (taken as ' + _lanes.tier + ' - not measured)'} | layers ${_layers.verdict}${_layers.why ? ' (' + _layers.why + ')' : ''}${signals.productCompany ? ' | product company (' + out.product.why + ')' : ''}${signals.branchNetwork ? ' | branch network (' + out.chain.why + ')' : ''}${signals.peOwned ? ' | PE-owned (' + out.tells.why + ')' : ''}${signals.nationalOperator ? ' | national (' + out.tells.why + ')' : ''} | target ${out.target}${out.target === 'marketing' && out.marketingLead ? ' ' + out.marketingLead.name + ', ' + out.marketingLead.title : ''} \u2014 ${_target.why}${out.target !== 'marketing' && out.marketingLead ? ` (marketing head also named: ${out.marketingLead.name}, ${out.marketingLead.title})` : ''} | lane ${laneWord(_lanes)}${_lanes.why ? ' (' + _lanes.why + ')' : ''}`);
+  // Round 118: the website read reaches the score. Computed at the free read
+  // near the top of this function and carried here - a measurement that never
+  // reaches the number is the computed-but-not-passed class this file produces
+  // more than any other.
+  signals.siteMeasured = !!(out.site && out.site.measured === true);
+  signals.siteGap = (out.site && typeof out.site.gap === 'number') ? out.site.gap : null;
+  signals.siteWord = (out.site && out.site.word) || '';
+  signals.siteWhy = (out.site && out.site.why) || '';
   out.icp = findIcpScore(signals);
 
   const led = FC_LEDGER.getStore() || {};
   out.spend = {
     firecrawl: Math.round((led.spent || 0) * 100) / 100,
     anthropicUsd: Math.round((led.anthropicUsd || 0) * 10000) / 10000,
+  };
+  // Round 118: WHICH paid searches this lead bought, at 2 credits each. The
+  // OWNER WAVE line already says whether the wave fired and what it produced;
+  // this says what it was made of, so "which of these searches earns its keep"
+  // is answerable from a batch instead of from a hand-grep of the query text.
+  out.searches = Object.assign({}, led.searches || {});
+  const _searchMix = () => {
+    const _e = Object.entries(out.searches).filter(([, n]) => n > 0).sort((x, y) => y[1] - x[1]);
+    if (!_e.length) return '';
+    const _n = _e.reduce((t, [, n]) => t + n, 0);
+    return ` | searches: ${_e.map(([k, n]) => `${k}×${n}`).join(', ')} (${_n * 2} of the ${out.spend.firecrawl} credits)`;
   };
   out.tookMs = Date.now() - t0;
   if (out.notIcp) {
@@ -79154,7 +79622,8 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       + ` \u2014 outcome: ${_got ? 'a buyer we can name' : (out.owner && out.owner.name) ? 'a name BELOW the buying floor' : 'nobody at all'}`
       + `${_src.length ? `, from ${_src.join('+')}${_free ? ' (all free sources)' : ''}` : ''}`
       + `${out.ownerStagesRun === null ? ' (the resolver did not run on this lead)' : ''}, ${out.spend.firecrawl} credit(s) on the lead.`
-      + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan.'));
+      + _searchMix()
+      + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan. The searches: line names WHICH paid search ran, so the next round cuts on evidence rather than on a hunch.'));
     _ownerWaveLectured = true;
   }
   console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerHeadOffice === true ? 'FREE STAGE ONLY (a branch of a bigger operation - the signer is at head office)' : out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);

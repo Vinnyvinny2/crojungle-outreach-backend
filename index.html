@@ -1321,7 +1321,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261002;
+const CLIENT_CONTRACT = 20261003;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5714,6 +5714,13 @@ const laneKey = (c) => { const l = laneOf(c); return l.call ? 'call' : l.email ?
 // Sheet and the count on the button all read this one rule.
 const exportableContact = (c) => contactTabOf(c) === 'read' && hasContactData(c) && laneOf(c).call === true;
 const sizeCell = (c) => !c.contactReadOk ? '' : (c.contactSize || 'not measured');
+// Round 118 (Vin: "a company with a bad or poor website"). The one signal on
+// the sheet that says whether they NEED us rather than whether they can pay.
+// FACTS ONLY: "poor (DIY build, no schema)" - never "converts badly", which is
+// a claim about their business we cannot measure from their markup.
+const siteCell = (c) => !c.contactReadOk ? ''
+  : c.contactSiteMeasured !== true ? 'not read'
+  : shortCell(c.contactSiteShort || c.contactSiteWord || 'not read');
 // Round 117: a name and one flag of three words, nothing else. The title is
 // already its own lean column (marketingLeadTitle / ownerTitle), the owner is
 // already the owner column, and the provenance moved to the website cell - so
@@ -5853,6 +5860,14 @@ const contactFieldsFrom = (data) => {
     contactSize: (d.size && d.size.band) || '',
     contactSizeConfidence: (d.size && d.size.confidence) || '',
     contactSizeWhy: (d.size && d.size.why) || '',
+    // Round 118: the website read. The SHORT label is built on the server so
+    // the card, the sheet and the log cannot describe one row three ways.
+    contactSiteWord: (d.site && d.site.word) || '',
+    contactSiteShort: (d.site && d.site.short) || '',
+    contactSiteGap: (d.site && typeof d.site.gap === 'number') ? d.site.gap : null,
+    contactSiteWhy: (d.site && d.site.why) || '',
+    contactSiteMeasured: !!(d.site && d.site.measured === true),
+    contactSitePlatform: (d.site && d.site.platform) || '',
     contactLayers: (d.layers && d.layers.verdict) || '',
     contactTarget: d.target || '',
     contactTargetWhy: d.targetWhy || '',
@@ -5995,6 +6010,9 @@ const FIND_CSV_COLUMNS = [
   // Round 110: what the rep asked for - how big, and who to go to.
   ['size', 'Size (low / medium / high)'],
   ['sizeConfidence', 'How sure we are of the size'],
+  // Round 118: how much of the website work we sell is missing.
+  ['site', 'Their website (strong / fair / weak / poor)'],
+  ['siteWhy', 'What is missing from their website, in full'],
   ['target', 'Who to go to'],
   // Round 117: the sentence the short cell replaced. Full file only.
   ['targetWhy', 'Why that person, in full'],
@@ -6063,7 +6081,7 @@ const FIND_CSV_COLUMNS = [
 // more" - the grade letters leave the export (the card and the send gate
 // still use them); the rep gets size, who to go to, and the marketing
 // decision-maker beside the owner.
-const FIND_CSV_ESSENTIAL = ['icp', 'company', 'website', 'size', 'sizeConfidence', 'target', 'owner', 'ownerTitle',
+const FIND_CSV_ESSENTIAL = ['icp', 'company', 'website', 'size', 'sizeConfidence', 'site', 'target', 'owner', 'ownerTitle',
   'marketingLead', 'marketingLeadTitle', 'email', 'marketingLeadEmail', 'phone', 'bestTime', 'payingForAds', 'hiringMarketing',
   // exported is lean because it answers the one question the file could not:
   // has this row already been handed out.
@@ -6257,6 +6275,8 @@ const findContactRows = (companies) => {
     company: c.name || '',
     size: sizeCell(c),
     sizeConfidence: c.contactReadOk ? (c.contactSizeConfidence || 'unknown') : '',
+    site: siteCell(c),
+    siteWhy: !c.contactReadOk ? '' : (c.contactSiteWhy || ''),
     target: targetCell(c),
     targetWhy: targetWhyCell(c),
     marketingLead: c.contactMarketingLead || '',
