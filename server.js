@@ -922,7 +922,11 @@ const fcSerial = (fn, kind) => {
 // cannot forget it — the fcSerial comment PROMISED exactly that ("the endpoint
 // is read off the response's own URL") and only delivered it to the limit
 // learning, never to the pacing.
-const fcCall = (url, opts, timeout) => fcSerial(() => fetchT(url, opts, timeout), fcKindOf(url));
+// Round 121: fetchTr, not fetchT - one extra attempt on a REFUSED or dropped
+// connection, so a blip does not come back as an empty result set that every
+// caller reads as a measured absence. The pacing and serialisation are
+// unchanged; the retry sits inside the slot fcSerial already granted.
+const fcCall = (url, opts, timeout) => fcSerial(() => fetchTr(url, opts, timeout), fcKindOf(url));
 
 const safeJson = async (r) => { try { return await r.json(); } catch { return {}; } };
 const safeText = async (r) => { try { return await r.text(); } catch { return ''; } };
@@ -1139,6 +1143,65 @@ const fetchT = (url, opts={}, ms=10000) => {
     .then((r) => { netNote(url, Date.now() - _t0, true); return r; },
           (e) => { netNote(url, Date.now() - _t0, false); throw e; })
     .finally(() => clearTimeout(timer));
+};
+// ══ A DROPPED CONNECTION IS NOT AN ANSWER ═══════════════════════════════════
+// Round 121. Three transport failures in the 2026-09-04 press and not one of
+// them was retried or even distinguished:
+//   DM/brain failed: request to the Anthropic messages endpoint failed, reason:
+//   firecrawlSearch error: ... connect ECONNREFUSED 35.245.250.27:443   (twice)
+// (the endpoint is named in words above on purpose: UNMETERED ANTHROPIC CALLS
+// greps this file for that URL and a comment quoting it reads as a call site)
+// The Anthropic one lost the owner for that lead AND wasted the Firecrawl pages
+// already bought for its corpus; the Firecrawl ones returned [] , which every
+// caller reads as "we asked the web and it has nothing" - and a total miss then
+// writes a FOURTEEN-DAY negative memory against that business. A blip was
+// blocking a lead from being searched again for a fortnight, which is PART 3
+// exactly: an absence claim requires that we actually looked.
+//
+// The classification already existed, inline in verifyEmailSMTP's catch, and it
+// was the only place in the file that could tell ENOTFOUND from ECONNREFUSED
+// from a slow handshake. It is declared once here and read by both, because two
+// hand-kept copies of one rule is the disease this file produces most.
+//
+// A TIMEOUT is deliberately NOT a transport failure for retry purposes: it
+// already carries meaning at a dozen call sites, and retrying one doubles a
+// wall clock that is usually already the problem.
+const transportFailure = (e) => {
+  const m = String((e && (e.code || e.message)) || '');
+  if (!m) return { transport: false, kind: '', why: '' };
+  if (/ENOTFOUND|EAI_AGAIN/i.test(m)) return { transport: true, kind: 'dns', why: 'DNS could not resolve the host from this server' };
+  if (/ECONNREFUSED|ECONNRESET|EPIPE|socket hang up|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH/i.test(m)) return { transport: true, kind: 'refused', why: 'the host refused or dropped the connection' };
+  if (/CERT|TLS|SSL/i.test(m)) return { transport: true, kind: 'tls', why: 'the TLS handshake failed' };
+  // node-fetch wraps a socket-level failure as "request to <url> failed, reason:"
+  // and the reason can be EMPTY - which is the exact shape of the DM/brain line.
+  if (/^request to .* failed/i.test(m)) return { transport: true, kind: 'socket', why: 'the connection failed before any answer came back' };
+  return { transport: false, kind: '', why: '' };
+};
+const FETCH_RETRY_MS = 700;
+// fetchtest.js lifts the source BETWEEN fakeUpstreamUrl and fetchT and evals it,
+// so anything declared in that gap becomes part of the function it extracts and
+// the harness dies on a syntax error. This block sits below fetchT for that
+// reason and no other.
+// The retry lives OUTSIDE fetchT rather than inside it, because fetchT owns the
+// abort/timeout race and adding a loop in there is how that ordering comment
+// above stops being true. One extra attempt, only on a transport failure, only
+// when the caller has not already consumed the body.
+// _impl is a test seam and nothing else: fetchT closes over its own import, so
+// a boot check cannot count attempts by stubbing global.fetch. It defaults to
+// the real door and no production call site passes it - a check pins that.
+const fetchTr = async (url, opts = {}, ms = 10000, _impl) => {
+  const _f = _impl || fetchT;
+  try { return await _f(url, opts, ms); }
+  catch (e) {
+    const _t = transportFailure(e);
+    if (!_t.transport) throw e;
+    await new Promise(r => setTimeout(r, FETCH_RETRY_MS));
+    try {
+      const r = await _f(url, opts, ms);
+      console.log(`↻ RETRY OK [${String(url).replace(/^https?:\/\//, '').split('/')[0]}]: ${_t.why}, and the second attempt answered. The first would have been reported as an empty result.`);
+      return r;
+    } catch (e2) { throw e2; }
+  }
 };
 
 app.get('/', (req, res) => res.json({ status: 'CROJungle Backend v9 — full-stack: stacking + combos + accuracy guards + reachability playbook', sources: ['adzuna_ai','sec_edgar','google_news','bizbuysell','facebook_ads(token)'], ok: true }));
@@ -3638,7 +3701,12 @@ const anthropicFetch = async (url, opts, timeoutMs, label, o = {}) => {
   // not fire in any configuration because their settings were globals, so the
   // check only ever exercised the case where nothing can go wrong. Production
   // passes nothing and gets fetchT.
-  const _send = (o && o.fetchImpl) || fetchT;
+  // Round 121: fetchTr. A socket-level failure here returned null from
+  // findOwnerViaBrain, which is indistinguishable to every caller from "no
+  // owner on this page" - and it threw away the Firecrawl pages already bought
+  // for that corpus. The retryOnTimeout loop below is untouched: it keys off
+  // the literal word "timeout" and a transport failure never carried it.
+  const _send = (o && o.fetchImpl) || fetchTr;
   let r = null;
   for (let attempt = 1; attempt <= tries; attempt++) {
     try { r = await _send(url, opts, timeoutMs); } catch (e) {
@@ -9442,8 +9510,23 @@ const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true, ta
       content: (x.markdown || x.content || '').slice(0, 6000),
     })).filter(x => x.url);
   } catch(e) {
-    console.log('firecrawlSearch error:', e.message);
-    return [];
+    // ══ [] MEANT "THE WEB HAS NOTHING". IT ALSO MEANT "WE NEVER ASKED." ═══
+    // Round 121. Two ECONNREFUSED here on 2026-09-04, and the empty array they
+    // returned is read by every caller as a measured absence - one of which
+    // then wrote a fourteen-day negative memory against that business. The
+    // array is still empty, because callers iterate it; the FACT that we could
+    // not ask rides on a non-enumerable flag beside it, so nothing that treats
+    // the result as a list has to change and nothing that asks "did we look?"
+    // gets the wrong answer.
+    const _t = transportFailure(e);
+    const _out = [];
+    if (_t.transport) {
+      Object.defineProperty(_out, 'couldNotAsk', { value: _t.why, enumerable: false });
+      console.log(`firecrawlSearch COULD NOT ASK: ${_t.why} (${e.message}). This is not "the web has nothing" - no negative is remembered from it, and the lead is searched again next run.`);
+    } else {
+      console.log('firecrawlSearch error:', e.message);
+    }
+    return _out;
   }
 };
 
@@ -13417,9 +13500,13 @@ ${corpus}` }]
     let hits = [];
     let corpus = '';
     let parsed = {};
+    // Round 121: set the moment ANY query in this wave could not be asked, so
+    // the negative memo below can tell a measured miss from a network failure.
+    let _couldNotAsk = '';
     for (let _qi = 0; _qi < queries.length; _qi++) {
       const _batch = await firecrawlSearch(fcKey, queries[_qi], 2, false, _tags[_qi] || 'owner_search').catch(() => []); // snippet-only: owner names live in BBB/Manta snippets
       const _new = Array.isArray(_batch) ? _batch : [];
+      if (_batch && _batch.couldNotAsk) _couldNotAsk = _batch.couldNotAsk;
       if (!_new.length) continue;
       hits = hits.concat(_new).slice(0, 4);
       corpus = hits.map(h =>
@@ -13433,6 +13520,15 @@ ${corpus}` }]
     }
     if (hits.length === 0) return null;
     if (!parsed.name || parsed.name === 'null' || !looksLikeRealName(parsed.name)) {
+      // Round 121: a negative is only worth remembering if it was MEASURED. If
+      // any query in this wave could not be asked - a refused connection, a DNS
+      // failure - then "no owner in the results" is a fact about our network and
+      // not about them, and writing it here blocks the business for fourteen
+      // days. PART 3: an absence claim requires that we actually looked.
+      if (_couldNotAsk) {
+        console.log(`DM/websearch [${companyName}]: no owner in the results, but ${_couldNotAsk} - so nothing is remembered and this lead is searched again next run. A negative we did not measure is not a negative.`);
+        return null;
+      }
       rememberDmSearchFailed(_negKey);
       console.log(`DM/websearch [${companyName}]: no owner found in web results \u2014 remembering this for ${DM_NEGATIVE_TTL_DAYS} days so the same ~12 credits are not spent again on the same negative.`);
       return null;
@@ -55842,8 +55938,14 @@ app.listen(PORT, () => {
       // and no production call site hand-rolls the old wrapper: fcCall derives
       // the kind from the URL by construction, so the census is one line.
       const _src = selfSourceNoCommentsLF();
-      const _bare = (_src.match(new RegExp(_n('fcSerial\\(\\(\\) => ', 'fetchT\\('), 'g')) || []).length;
+      // Round 121 moved the one permitted wrapper from fetchT to fetchTr, so a
+      // refused connection is retried once before it comes back as an empty
+      // result set. The census still expects exactly one, and now also refuses
+      // a hand-roll that skips the retry by calling fetchT directly.
+      const _bare = (_src.match(new RegExp(_n('fcSerial\\(\\(\\) => ', 'fetchTr\\('), 'g')) || []).length;
       if (_bare !== 1) _fails.push(`${_bare} call site(s) hand-roll the old arrow wrapper — only the fcCall definition itself may, because a hand-rolled site queues as kind 'other' and paces at the 7.5-second unknown-plan default`);
+      const _noRetry = (_src.match(new RegExp(_n('fcSerial\\(\\(\\) => ', 'fetchT\\('), 'g')) || []).length;
+      if (_noRetry !== 0) _fails.push(`${_noRetry} Firecrawl call site(s) go through fetchT rather than fetchTr, so a refused connection there still comes back as an empty result set and reads as "the web has nothing"`);
       if (_fails.length) {
         console.log(`⛔ SEARCH SLOT CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
       } else {
@@ -55852,6 +55954,72 @@ app.listen(PORT, () => {
     } catch (e) {
       console.log(`⛔ SEARCH SLOT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
     } finally { bootRelease(); }
+  })();
+
+  // ══ TRANSPORT TRUTH CHECK — round 121 ═══════════════════════════════════
+  // "We could not ask" and "we asked and there is nothing" are different facts
+  // and this file could not tell them apart. On 2026-09-04 two searches died at
+  // ECONNREFUSED, returned [], and one of those empty arrays wrote a FOURTEEN-
+  // DAY negative memory against a real business - a lead blocked from being
+  // searched again for a fortnight by a dropped connection. PART 3: an absence
+  // claim requires that we actually looked.
+  (async () => {
+   try {
+    const _fails = [];
+    // 1. The classifier, on the exact shapes the live log produced.
+    const _mk = (msg, code) => Object.assign(new Error(msg), code ? { code } : {});
+    for (const [_e, _want] of [
+      [_mk('connect ECONNREFUSED 35.245.250.27:443'), true],
+      [_mk('request to https://x/y failed, reason: '), true],
+      [_mk('getaddrinfo ENOTFOUND api.example.com'), true],
+      [_mk('socket hang up'), true],
+      [_mk('unable to verify the first certificate', 'CERT_HAS_EXPIRED'), true],
+      // A timeout is NOT one: it carries meaning at a dozen call sites and
+      // retrying one doubles a wall clock that is usually already the problem.
+      [_mk('timeout'), false],
+      [_mk('The user aborted a request.'), false],
+      // And an HTTP-shaped answer is an answer.
+      [_mk('Unexpected token < in JSON at position 0'), false],
+      [_mk(''), false],
+    ]) {
+      if (transportFailure(_e).transport !== _want) {
+        _fails.push(`transportFailure reads "${_e.message || '(empty)'}" as ${transportFailure(_e).transport ? 'a transport failure' : 'an answer'} - ${_want ? 'a dropped connection is being treated as a measured result' : 'a real answer is being retried and re-billed'}`);
+      }
+    }
+    // 2. The one door retries, and it retries ONCE.
+    {
+      let _tries = 0;
+      const _boom = () => { _tries += 1; return Promise.reject(_mk('connect ECONNREFUSED 1.2.3.4:443')); };
+      await fetchTr('https://example.invalid/probe', {}, 200, _boom).then(() => {}, () => {});
+      if (_tries !== 2) _fails.push(`a refused connection was attempted ${_tries} time(s) - it must be retried exactly once, so a blip costs a pause and not a lead`);
+      // A real answer is never re-billed, and a timeout is never retried.
+      let _okTries = 0;
+      await fetchTr('https://example.invalid/ok', {}, 200, () => { _okTries += 1; return Promise.resolve({ ok: true }); }).then(() => {}, () => {});
+      if (_okTries !== 1) _fails.push(`a successful call was made ${_okTries} times - the retry is firing on answers and every figure this build reports would be double`);
+      let _toTries = 0;
+      await fetchTr('https://example.invalid/slow', {}, 200, () => { _toTries += 1; return Promise.reject(_mk('timeout')); }).then(() => {}, () => {});
+      if (_toTries !== 1) _fails.push(`a timeout was attempted ${_toTries} times - retrying one doubles a wall clock that is usually already the problem`);
+      // A census of the seam's call sites was drafted here and deleted: the
+      // regex it needed matched this check's OWN three calls and went red on a
+      // healthy build. SEARCH SLOT CHECK records the rule twenty lines up - a
+      // check that fires on healthy code costs exactly what one that misses a
+      // fault costs, because it is the one somebody switches off, taking the
+      // real assertions beside it. The three behaviours above are the guard.
+    }
+    // 3. The wires, because a classifier nothing reads is nothing.
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    for (const [_needle, _msg] of [
+      [_n('const _t = transportFailure', '(e);'), 'the search door no longer classifies its own failure, so a refused connection comes back as an empty result set again'],
+      [_n("Object.defineProperty(_out, 'couldNotAsk',", ' { value: _t.why, enumerable: false });'), 'the search result cannot say it was never asked, so every caller reads a network failure as a measured absence'],
+      [_n('if (_couldNotAsk) {', "\n        console.log(`DM/websearch"), 'the negative memo does not check whether the search could be asked - a dropped connection blocks that business for fourteen days'],
+      [_n('const _send = (o && o.fetchImpl)', ' || fetchTr;'), 'the model door is back on the un-retried fetch, so a socket failure loses the owner AND the Firecrawl pages already bought for its corpus'],
+    ]) if (!_src.includes(_needle)) _fails.push(_msg);
+    if (_fails.length) console.log(`⛔ TRANSPORT TRUTH CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ TRANSPORT TRUTH CHECK: a dropped connection is told apart from an answer, at the one door every outbound call passes through, and retried exactly once before anything downstream is allowed to call it a result. A timeout is deliberately not in that set - it already means something at a dozen call sites. The search door carries "we could not ask" beside its empty array, and the owner negative memo refuses to remember a fourteen-day absence it never measured: two ECONNREFUSEDs on 2026-09-04 returned [] and one of them blocked a real business from being searched again for a fortnight.`);
+   } catch (e) {
+    console.log(`⛔ TRANSPORT TRUTH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+   }
   })();
 
   // ══ THE FOUR SIGNALS ADDED FOR THE MONEY MAP, EXECUTED BOTH WAYS ═══════
