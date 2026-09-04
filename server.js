@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20260930;
+const CONTRACT_VERSION = 20261001;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -11195,6 +11195,91 @@ const rankRosterOwners = (roster) => (Array.isArray(roster) ? roster : [])
                || (String(a.title).length - String(b.title).length));
 const pickRosterOwner = (roster) => rankRosterOwners(roster)[0] || null;
 
+// ══ A RETIRED PERSON IS NOT THE DECISION-MAKER (Round 116) ═════════════════
+// Live 2026-09-03: a founder shipped on the rep's sheet with "(retired)" under
+// his name on the site. The word near the name is the evidence; the guard is
+// mechanical and runs on every source. A retired FIREFIGHTER who now owns the
+// business is not retired from the business, so a service word beside the
+// word "retired" stands the guard down.
+const RETIRED_RE = /(?:\b(?:retired|emeritus|in memoriam|the late|passed away|rest in peace)\b|\(ret\.?\)|\bformer(?:ly)? (?:owner|president|ceo|founder)\b|\bsold the (?:business|company|practice)\b)/i;
+const RETIRED_OTHER_RE = /\bretired\b[^.]{0,30}\b(?:military|navy|army|marines?|marine corps|air force|coast guard|police|fire(?:fighter|fighters|man| department| chief)?|teacher|nurse|veteran|officer|law enforcement|service member|corps|nypd|lapd|sheriff|paramedic)\b|\b(?:military|navy|army|marine|air force|police|firefighter|veteran|officer)\b[^.]{0,30}\bretired\b/i;
+// The window is the SENTENCE the name sits in (bounded by . ; ! ? | or a
+// newline, and capped at `span` characters each side), keyed on the FULL
+// name: "Bob Smith retired in 2020. His son Mike Smith runs it" retires Bob
+// and not Mike, and a shared surname elsewhere on the page proves nothing.
+const retiredNear = (text, name, span = 160) => {
+  const t = String(text || ''), n = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!t || !n) return false;
+  const toks = n.split(' ');
+  const keys = toks.length >= 2 ? [n.toLowerCase(), (toks[0] + ' ' + toks[toks.length - 1]).toLowerCase()] : [n.toLowerCase()];
+  const lower = t.toLowerCase();
+  for (const key of [...new Set(keys)]) {
+    let idx = 0;
+    while ((idx = lower.indexOf(key, idx)) >= 0) {
+      const lo = Math.max(0, idx - span), hi = Math.min(t.length, idx + key.length + span);
+      let a = lo, b = hi;
+      const _bStart = t.slice(lo, idx).search(/[.;!?|\n](?=[^.;!?|\n]*$)/);
+      if (_bStart >= 0) a = lo + _bStart + 1;
+      const _bEnd = t.slice(idx + key.length, hi).search(/[.;!?|\n]/);
+      if (_bEnd >= 0) b = idx + key.length + _bEnd;
+      const win = t.slice(a, b);
+      if (RETIRED_RE.test(win) && !RETIRED_OTHER_RE.test(win)) return true;
+      idx += key.length;
+    }
+  }
+  return false;
+};
+// ══ THE TEAM PAGE, COUNTED WITHOUT TITLES (Round 116) ══════════════════════
+// Most team pages this pipeline reads yield zero name/title pairs - the layout
+// does not parse - and the size then falls to the review count. The NAMES
+// still parse. Counted as a FLOOR (SIZE_TERMS.teamCount.floor), never a total;
+// a name followed by a quote or "says" is a testimonial and is not counted.
+const HEADING_WORD_RE = /^(?:get|started|read|learn|more|view|all|see|find|call|meet|contact|schedule|request|free|quote|estimate|book|now|today|click|here|why|choose|services?|privacy|policy|terms|blog|news|gallery|reviews?|faq|home|welcome|hours|locations?|areas?|serving|financing|specials?|coupons?|careers?|jobs?|testimonials?|projects?|portfolio|pricing|apply)$/i;
+const countTeamNames = (html) => {
+  if (!html) return 0;
+  const runs = String(html).replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .split(/<[^>]+>|\r?\n|\||[\u2022\u00b7]|\s{4,}/)
+    .map(t => t.replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').replace(/&#\d+;/g, ' ').replace(/^[#>*_\-\s]+|[*_\s]+$/g, '').trim())
+    .filter(Boolean);
+  const seen = new Set();
+  for (let i = 0; i < runs.length; i++) {
+    const r = runs[i];
+    if (r.length > 40 || !ROSTER_NAME_RE.test(r) || !looksLikeRealName(r) || allRoleWords(r) || FIND_ROLE_NOUN.test(r)) continue;
+    if (r.split(/\s+/).some(t => NAV_WORD_RE.test(t) || HEADING_WORD_RE.test(t) || ORG_TOKEN_RE.test(t.replace(/[.,]$/, '')))) continue;
+    const after = runs.slice(i + 1, i + 3).join(' '), before = runs[i - 1] || '';
+    if (/["\u201c\u201d]|\u2605|\b(?:says|said|wrote|writes|reviews?|stars?|rating)\b/i.test(after) || /["\u201c\u201d]|\u2605/.test(before)) continue;
+    seen.add(r.toLowerCase());
+  }
+  return seen.size;
+};
+// ══ THE BBB PROFILE, FETCHED FREE (Round 116) ══════════════════════════════
+// BBB publishes "Number of Employees", "Business Started" and "Business
+// Management: Mr. First Last, Owner" for a great many small shops that no
+// revenue directory indexes. The URL comes from search results already in
+// hand; the page is fetched with a plain fetch and NEVER a Firecrawl credit -
+// a refusal is one log line and nothing else.
+const BBB_PROFILE_RE = /https?:\/\/(?:www\.)?bbb\.org\/us\/[a-z]{2}\/[^\/\s"']+\/profile\/[^\s"'?#]+/i;
+const parseBbbProfile = (html) => {
+  const text = String(html || '').replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ').replace(/<[^>]+>/g, ' ').replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ');
+  const emp = text.match(/Number of Employees:?\s*(\d{1,5})\b/i);
+  const started = text.match(/Business Started:?\s*(?:\d{1,2}\/\d{1,2}\/)?((?:18|19|20)\d{2})\b/i);
+  const management = [];
+  const mm = text.match(/Business Management:?\s*(.{0,300}?)(?=\s(?:Contact Information|Customer Contact|Additional Contact|Fax Numbers|Serving Area|Number of Employees|Business Started|Type of Entity)\b|$)/i);
+  if (mm) {
+    const re = /(?:Mr\.|Ms\.|Mrs\.|Dr\.)?\s*([A-Z][a-z'\u2019-]+(?: [A-Z]\.)?(?: [A-Z][a-z'\u2019-]+){1,2}),\s*([A-Za-z][A-Za-z &\/-]{2,40}?)(?=\s+(?:Mr\.|Ms\.|Mrs\.|Dr\.)\s|\s*$|[,.;])/g;
+    let m;
+    while ((m = re.exec(mm[1]))) management.push({ name: m[1].trim(), title: m[2].trim() });
+  }
+  return { measured: text.length > 200, employees: emp ? Number(emp[1]) : null, started: started ? Number(started[1]) : null, management };
+};
+const fetchBbbProfile = async (url) => {
+  try {
+    const r = await fetchT(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36', 'Accept': 'text/html' }, redirect: 'follow' }, 10000);
+    if (!r || !r.ok) return { ok: false, why: 'HTTP ' + (r && r.status) };
+    return Object.assign({ ok: true }, parseBbbProfile(await r.text()));
+  } catch (e) { return { ok: false, why: (e && e.message) || 'fetch failed' }; }
+};
+
 // Generic inboxes: at a 15-person company info@ often IS the owner's desk, so
 // it beats reaching a junior employee. At a 200-person company it's a black hole.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -11228,6 +11313,7 @@ const DM_SOURCE_WEIGHT = {
   registry:          30,   // legal public record — but often lists a filing agent, not the owner
   opencorporates:    36,   // an OFFICER on the filed company record, agents refused by position (Round 112)
   license_or_chamber: 38,  // licence holder / chamber listing — a REAL named person, not an agent
+  bbb_profile:       38,   // "Business Management: Mr. X, Owner" on the BBB profile, fetched free (Round 116)
   google_review_replies: 35, // whoever answers the reviews at an owner-run shop is the owner
   news:              30,   // press quotes them as owner — strong independent corroboration
   business_name:     34,   // the business is named after them AND their site confirms it
@@ -11940,6 +12026,8 @@ const _ownerFromCorpus = async (corpus, companyName, website, apiKey, rosterCorp
       // uses, so one rule decides who outranks whom everywhere. The tiebreak is
       // the SHORTER title, because a real title is "Founder & CEO" and prose
       // that happens to carry an ownership word is always longer.
+      const _retired = _roster.filter(r => r.retired);
+      if (_retired.length) console.log(`\u{1F464} ROSTER [${companyName}]: ${_retired.map(r => r.name).join(', ')} skipped - retired per their own page, not the decision-maker`);
       const _owners = rankRosterOwners(_roster);
       if (_owners.length) {
         const _pick = _owners[0];
@@ -12124,7 +12212,7 @@ ${corpus}` }]
       // there is nothing to tie the sentence to - refuse rather than guess.
       const _coTok = companyDistinctiveTokens(companyName);
       const _ours = ownerSentenceIsOurs(_m, _shapeA, corpus, _coTok);
-      if (_fallbackName && _ours && looksLikeRealName(_fallbackName) && String(corpus).includes(_fallbackName.split(/\s+/)[0])) {
+      if (_fallbackName && _ours && looksLikeRealName(_fallbackName) && String(corpus).includes(_fallbackName.split(/\s+/)[0]) && !retiredNear(corpus, _fallbackName)) {
         const _title = _fallbackRole
           ? _fallbackRole.charAt(0).toUpperCase() + _fallbackRole.slice(1).toLowerCase()
           : 'Owner';
@@ -12170,6 +12258,10 @@ ${corpus}` }]
     const _titleSeen = parsed.title && corpusHasTitle(parsed.title, corpus);
     if (parsed.title && !_titleSeen) {
       console.log(`DM/brain [${companyName}]: "${parsed.title}" does not appear anywhere in the pages we read, so it is DROPPED and ${parsed.name} is kept with no title. A title we cannot point at is what the buying floor is applied to, and an invented one clears it.`);
+    }
+    if (retiredNear(corpus, parsed.name)) {
+      console.log(`DM/brain [${companyName}]: ${parsed.name} is retired per their own page - not the decision-maker`);
+      return null;
     }
     console.log(`DM/brain [${companyName}]: ✓ ${parsed.name} (${(_titleSeen && parsed.title) || 'no title we could point at'}) [${parsed.confidence}]`);
     return {
@@ -13119,6 +13211,10 @@ const parseTeamRoster = (html, companyName = '') => {
   // to the model. Keeping the rejects would be the guard-too-tight failure
   // pointed the other way.
   out = out.filter(r => looksLikeJobTitle(r.title));
+  // Round 116: a retired person is on the page as history, not as the owner.
+  // The title says it ("Founder (retired)") or the text beside the name does.
+  const _flatRuns = runs.join(' | ');
+  out = out.map(r => (RETIRED_RE.test(String(r.title || '')) || retiredNear(_flatRuns, r.name, 120)) ? Object.assign({}, r, { retired: true, isOwner: false }) : r);
 
   // ══ TWO PEOPLE IN ONE ROW MEANS WE CANNOT SAY WHICH ONE OWNS IT ══════════
   // JR & Co, live 2026-09-01: name "Iron Sharpens Iron", title "President &
@@ -13256,6 +13352,7 @@ CRITICAL WARNINGS:
 - Search results often mix up DIFFERENT companies with similar names.${loc ? ' THIS company is located in ' + loc + ' — if a result is about a same-named business in a different city or state, IGNORE it completely.' : ''} Only report a person if the source clearly ties them to THIS company${domain ? ' (' + domain + ')' : ''}. If the source is about a different business, ignore it.
 - Do NOT report a journalist, an author of an article, a customer leaving a review, or an employee of a directory site.
 - Do NOT report someone below owner level (HR director, VP of maintenance, office manager cannot buy).
+- If the results say a person is retired, deceased or a former owner, do NOT report them: name the CURRENT owner if the results state one, else return null.
 - If you cannot confidently name the owner of THIS company, return null. Null is the correct answer when the evidence isn't there.
 
 Return ONLY valid JSON, no markdown:
@@ -13300,6 +13397,10 @@ ${corpus}` }]
     const np = String(parsed.name).toLowerCase().split(/\s+/).filter(Boolean);
     if (!(np.length >= 2 && flat.includes(np[0]) && flat.includes(np[np.length - 1]))) {
       console.log(`DM/websearch [${companyName}]: "${parsed.name}" not in results — REJECTED`);
+      return null;
+    }
+    if (retiredNear(corpus, parsed.name)) {
+      console.log(`DM/websearch [${companyName}]: ${parsed.name} is retired per the results - REJECTED`);
       return null;
     }
     console.log(`DM/websearch [${companyName}]: ✓ ${parsed.name} (${parsed.title || '?'}) via ${parsed.sourceUrl || '?'}`);
@@ -13606,7 +13707,20 @@ ${corpus}` }]
       const r2s = await firecrawlSearch(fcKey, q2, 4, false);
       if (r2s.length) { results = results.concat(r2s); secondQuery = true; parsed = await _extractSize(results); }
     }
-    if (!parsed) return null;
+    // Round 116: the BBB profile, fetched FREE off a URL the results already
+    // hold. Never a Firecrawl credit: a refusal is one line and nothing else.
+    const _dt = companyDistinctiveTokens(companyName);
+    const bbbUrl = results.map(r => String((r && r.url) || '')).find(u => BBB_PROFILE_RE.test(u) && (!_dt.length || _dt.some(tok => u.toLowerCase().includes(tok))));
+    if (bbbUrl) {
+      const bbb = await fetchBbbProfile(bbbUrl);
+      if (!bbb.ok) console.log(`SIZE [${companyName}]: BBB profile refused a plain fetch (${bbb.why}) - not bought`);
+      else {
+        parsed = parsed || {};
+        if (!(Number(parsed.employees) > 0) && Number(bbb.employees) > 0) { parsed.employees = Number(bbb.employees); parsed.employeesFromRange = ''; parsed.source = 'BBB profile'; }
+        parsed.bbb = { url: bbbUrl, employees: bbb.employees, started: bbb.started, management: bbb.management };
+      }
+    }
+    if (!parsed || (!(Number(parsed.employees) > 0) && !parsed.revenue && !(parsed.bbb && parsed.bbb.management.length))) return null;
     parsed.secondQuery = secondQuery;
     console.log(`SIZE [${companyName}]: emp=${parsed.employees || '?'}${parsed.employeesFromRange ? ' (from the range ' + parsed.employeesFromRange + ')' : ''} rev=${parsed.revenue || '?'} (${parsed.source || '?'}${secondQuery ? '; LinkedIn/BBB query bought' : ''})`);
     return parsed;
@@ -33420,6 +33534,8 @@ const rankOwnerCandidates = (found, companyName = '') => {
   const clusters = [];
   for (const f of found) {
     if (!f || !f.name) continue;
+    // Round 116: a retired title is refused whatever the source said.
+    if (f.title && RETIRED_RE.test(String(f.title))) { console.log(`DM/door [${companyName || '?'}]: "${f.name}" (${f.title}) is retired - refused before ranking`); continue; }
     const _door = ownerNameDoor(f.name, companyName);
     if (_door) {
       const _k = f.source + '|' + f.name;
@@ -59619,6 +59735,73 @@ app.listen(PORT, () => {
     console.log(`⛔ SIZE AND LAYERS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ---- ROUND 116: A RETIRED PERSON IS NOT THE DECISION-MAKER, AND THREE FREE SIZE SOURCES ----
+  // Vin, 2026-09-04: "get it to 8 tonight". A founder shipped with "(retired)"
+  // under his name; 19 of 25 sizes were guesses. The guard and the three free
+  // sources are executed here on the shapes from the live pages.
+  try {
+    const _fails = [];
+    // 1. The retired guard, both ways.
+    if (!retiredNear('Bob Smith founded the company in 1985 and retired in 2020. His son Mike Smith runs the business today.', 'Bob Smith')) _fails.push('a founder the page says retired is not read as retired');
+    if (retiredNear('Bob Smith founded the company in 1985 and retired in 2020. His son Mike Smith runs the business today.', 'Mike Smith', 60)) _fails.push('the son who runs the business is read as retired off his father\'s sentence');
+    if (!retiredNear('John Doe (retired) started us; Jane Doe, Owner', 'John Doe')) _fails.push('"(retired)" beside a name is not read');
+    if (retiredNear('Bob Smith, Owner, is a retired firefighter who started the company in 2010 and runs it today.', 'Bob Smith')) _fails.push('a retired FIREFIGHTER who owns the business is read as retired from it - the guard-too-tight failure');
+    if (!retiredNear('Bob Smith, Owner, is a retired man who started the company in 2010 and sold the business in 2024.', 'Bob Smith')) _fails.push('a plain retired owner in one sentence is not read');
+    if (retiredNear('Bob Smith, Owner. We retired our old logo in 2020 and kept the trucks.', 'Bob Smith', 20)) _fails.push('the span is not honoured');
+    const _rr = parseTeamRoster('<h4>John Doe</h4><p>Founder (retired)</p><h4>Jane Doe</h4><p>Owner</p>', 'Doe Plumbing');
+    const _jr = _rr.find(r => r.name === 'John Doe'), _pk = pickRosterOwner(_rr);
+    if (!_jr || _jr.retired !== true) _fails.push('a roster row titled "Founder (retired)" is not marked retired');
+    if (!_pk || _pk.name !== 'Jane Doe') _fails.push(`the roster picks ${_pk && _pk.name} over Jane Doe, Owner - a retired founder outranks the owner`);
+    if (rankOwnerCandidates([{ name: 'Bob Smith', title: 'Founder (retired)', source: 'web_search' }], 'X Co') !== null) _fails.push('the door lets a retired title through to the sheet');
+    if (!rankOwnerCandidates([{ name: 'Bob Smith', title: 'Owner', source: 'web_search' }], 'X Co')) _fails.push('the door refuses an ordinary owner');
+    // 2. The team page counted without titles - a floor, and never a testimonial.
+    if (countTeamNames('<h4>Justin Bride</h4><h4>Whitney Bride</h4><h4>Carlos Vega</h4><h4>Dana Whitfield</h4><h4>Omar Reyes</h4><h4>Priya Natarajan</h4>') !== 6) _fails.push('six names on a team page with no titles do not count as six');
+    if (countTeamNames('<h4>Mary Jones</h4><p>"Great work, on time." \u2605\u2605\u2605\u2605\u2605</p><h4>Tom Reed</h4><p>Tom says: best crew in town</p><h4>Ana Lima</h4><p>Ana wrote a 5 star review</p>') !== 0) _fails.push('testimonial names are counted as staff');
+    if (countTeamNames('<h2>About Us</h2><h2>Our Team</h2><h2>Get Started</h2>') !== 0) _fails.push('page headings are counted as people');
+    if (countTeamNames('<h4>Office Manager</h4><h4>General Manager</h4>') !== 0) _fails.push('job titles are counted as people');
+    // 3. Their own words, read wider - and the words that must stay silent.
+    const _ps = (t) => readFindProse(t).staffProse, _pf = (t) => readFindProse(t).fleetProse;
+    for (const [t, want] of [['a team of 12 technicians', 12], ['our 15-person team', 15], ['we employ over 40', 40], ['employing more than twenty people', 20], ['a three-man crew', 3], ['four crews on the road every day', 12], ['our 8 licensed plumbers', 8], ['staff of nine', 9]]) {
+      if (_ps(t) !== want) _fails.push(`"${t}" reads as ${_ps(t)} staff, not ${want}`);
+    }
+    for (const t of ['5-star service since 1998', 'open 24 hours', '10 years in business', '3 generations of roofers', '100% satisfaction', '2 locations to serve you', 'over 500 happy customers', '20 minutes from downtown']) {
+      if (_ps(t) !== null) _fails.push(`"${t}" reads as ${_ps(t)} staff - a number that is not a headcount is counted`);
+    }
+    for (const [t, want] of [['a fleet of 8', 8], ['our 12-truck fleet', 12], ['6 vehicles on the road', 6], ['fleet of over twenty trucks', 20]]) {
+      if (_pf(t) !== want) _fails.push(`"${t}" reads as ${_pf(t)} trucks, not ${want}`);
+    }
+    if (_pf('serving 5 counties') !== null) _fails.push('"5 counties" reads as a fleet');
+    // 4. The BBB profile parser, and the free fetch that never spends a credit.
+    const _bb = parseBbbProfile('<html><body><div>Business Management</div><div>Mr. John Smith, Owner</div><div>Ms. Jane Smith, President</div><div>Contact Information</div><div>Number of Employees: 12</div><div>Business Started: 3/15/2005</div></body></html>');
+    if (_bb.employees !== 12 || _bb.started !== 2005) _fails.push(`the BBB profile reads ${_bb.employees} employees since ${_bb.started}, not 12 since 2005`);
+    if (_bb.management.length !== 2 || _bb.management[0].name !== 'John Smith' || !/owner/i.test(_bb.management[0].title) || _bb.management[1].name !== 'Jane Smith') _fails.push(`the BBB management line reads ${JSON.stringify(_bb.management)}`);
+    const _bn = parseBbbProfile('<html><body><p>Welcome to our roofing site. Call us today for a free estimate.</p></body></html>');
+    if (_bn.employees !== null || _bn.started !== null || _bn.management.length) _fails.push('an ordinary page yields BBB fields');
+    if (!BBB_PROFILE_RE.test('https://www.bbb.org/us/nc/raleigh/profile/bathroom-remodel/gid-renovation-inc-0593-90314457')) _fails.push('the live BBB profile URL shape is not recognised');
+    if (BBB_PROFILE_RE.test('https://www.bbb.org/search?find_text=roofing')) _fails.push('a BBB search page is taken for a profile');
+    if (!/fetchT\(/.test(String(fetchBbbProfile)) || /fcCall|firecrawl/i.test(String(fetchBbbProfile))) _fails.push('the BBB profile is fetched through Firecrawl - it must be a plain fetch, never a credit');
+    if (!(DM_SOURCE_WEIGHT.bbb_profile > 0)) _fails.push('the BBB manager has no source weight, so the ranker scores it as nothing');
+    // 5. The call sites.
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    for (const [needle, msg] of [
+      [_n('is retired per their own page - not the', ' decision-maker'), 'the brain no longer refuses a retired name'],
+      [_n('is retired per the results', ' - REJECTED'), 'the web search no longer refuses a retired name'],
+      [_n('is retired - refused', ' before ranking'), 'the door no longer refuses a retired title'],
+      [_n('retiredNear(_flatRuns, r.name', ', 120)'), 'the roster no longer marks a retired row'],
+      [_n('&& !retiredNear(corpus, ', '_fallbackName)) {'), 'the regex backstop ships a retired name'],
+      [_n('retired, deceased or a former owner', ', do NOT report them'), 'the web-search prompt no longer warns about retired people'],
+      [_n('const n = countTeamNames(p.html', ' || p.text);'), 'the team page is no longer counted without titles'],
+      [_n('const bbb = await fetchBbbProfile(', 'bbbUrl);'), 'the size lookup no longer fetches the BBB profile'],
+      [_n("source: 'bbb_profile'", ', evidence:'), 'the BBB manager never reaches the owner ladder when nobody else named anyone'],
+      [_n('if (crews.n !== null) staff = { n: crews.n * 3,', " say: crews.say + ' (about 3 a crew)' };"), 'crews are no longer read as a labelled headcount'],
+    ]) if (!_src.includes(needle)) _fails.push(msg);
+    if (_fails.length) console.log(`\u26d4 RETIRED AND FREE SIZE CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
+    else console.log('✓ RETIRED AND FREE SIZE CHECK: a person the page, the roster, the results or a title says is retired never reaches the sheet as the decision-maker (a retired firefighter who owns the shop still does); a team page with names and no titles counts as a floor and a testimonial never counts; "a team of 12", "15-person team", "employs over 40", "three crews" and "fleet of 8" are read and "5-star", "24 hours", "10 years", "3 generations" and "100%" stay silent; the BBB profile is parsed for its headcount, its founding year and its named management, fetched with a plain fetch and never a credit, and the manager it names reaches the ladder when nobody else named anyone.');
+  } catch (e) {
+    console.log(`\u26d4 RETIRED AND FREE SIZE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ---- THE SHEET EXPORT TAKES ITS DESTINATION FROM THE REQUEST ----------
   // Which makes it the one endpoint here that would post a rep's contact list
   // to whatever address somebody names. On a public server an unbounded URL
@@ -77159,6 +77342,18 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
     }
   }
 
+  // Round 116: the team page counted WITHOUT titles. Zero name/title pairs
+  // on a team page we read is the common case (the layout does not parse),
+  // and the size then fell to the review count. The names still parse; the
+  // count is a FLOOR and says so, and it needs three people to speak.
+  if (teamCount === null) {
+    for (const p of read) {
+      if (p.intent !== 'team') continue;
+      const n = countTeamNames(p.html || p.text);
+      if (n >= 3) { teamCount = n; teamPageUrl = p.url; break; }
+    }
+  }
+
   // HIRING. Structured data first - a datePosted the owner published himself,
   // machine-readable, no prose parsing. A careers page with no structured data
   // falls back to literal role titles, which is positive evidence only.
@@ -77217,8 +77412,14 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
 const FOUNDER_PHRASE_RE = /\b(family[- ]owned|family[- ]run|owner[- ]operated|founded by|started by|second[- ]generation|third[- ]generation|locally owned and operated|veteran[- ]owned|woman[- ]owned|women[- ]owned)\b/i;
 const FIND_FINANCING_RE = /\b(financing available|0% financing|financing options?|payment plans? available|flexible financing|apply for financing|easy financing)\b/i;
 const FIND_COMMERCIAL_RE = /\b(commercial (?:services|clients|customers|accounts|properties|projects|work|division)|residential (?:and|&) commercial|commercial (?:and|&) residential)\b/i;
-const STAFF_PROSE_RE = /\b(?:team of|staff of|crew of|over|more than|nearly)?\s*(\d{1,3})\+?\s*(?:employees|team members|staff members|technicians|techs|plumbers|electricians|roofers|installers|crew members|licensed (?:plumbers|electricians|technicians)|people on (?:our|the) team|dedicated professionals|skilled professionals)\b/gi;
-const FLEET_PROSE_RE = /\b(?:(\d{1,3})\+?\s*(?:trucks|vans|service vehicles|service trucks|fleet vehicles)|fleet of (\d{1,3}))\b/gi;
+// Round 116: read wider - number words, "N-person team", "employs N", the
+// trades' own nouns, crews (about three people each, and the row says so).
+// Never years, stars, hours, generations or percentages: the noun decides.
+const PROSE_NUM = '\\d{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty';
+const PROSE_NUM_WORDS = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50 };
+const STAFF_PROSE_RE = new RegExp('\\b(?:(?:team|staff|crew|workforce) of (?:over |more than |nearly |about |around )?(' + PROSE_NUM + ')\\+?|(' + PROSE_NUM + ')[- ]person (?:team|crew|staff|company|shop|office)|(' + PROSE_NUM + ')[- ]man (?:crew|team|shop|operation)|employs? (?:over |more than |nearly |about |around )?(' + PROSE_NUM + ')\\+?|employing (?:over |more than |nearly |about |around )?(' + PROSE_NUM + ')\\+?|(?:over|more than|nearly|about|around|our|with)?\\s*(' + PROSE_NUM + ')\\+?\\s*(?:full[- ]time )?(?:employees|team members|staff members|technicians|techs|plumbers|electricians|roofers|installers|crew members|painters|landscapers|arborists|estimators|designers|hygienists|attorneys|lawyers|agents|stylists|caregivers|therapists|doctors|dentists|service pros|pros|professionals|specialists|licensed (?:plumbers|electricians|technicians|contractors|professionals)|certified (?:technicians|installers|arborists|professionals)|people on (?:our|the) team|dedicated professionals|skilled professionals))\\b', 'gi');
+const CREW_PROSE_RE = new RegExp('\\b(' + PROSE_NUM + ')\\+?\\s*(?:crews|service crews|install(?:ation)? crews|field crews)\\b', 'gi');
+const FLEET_PROSE_RE = new RegExp('\\b(?:(' + PROSE_NUM + ')\\+?\\s*(?:trucks|vans|service vehicles|service trucks|service vans|fleet vehicles|vehicles|rigs|bucket trucks|box trucks)|fleet of (?:over |more than )?(' + PROSE_NUM + ')|(' + PROSE_NUM + ')[- ]truck fleet)\\b', 'gi');
 const LOCATIONS_PROSE_RE = /\b(\d{1,2})\s*(?:locations|offices|showrooms|branches|convenient locations)\b/gi;
 const FIND_FOUNDED_RE = /\b(?:since|established|est\.?|founded|in business since|serving [a-z ,'-]{3,40} since|family[- ]owned since)\s*(?:in\s*)?((?:18|19|20)\d{2})\b/gi;
 const _maxCapture = (text, re, cap, min = 1) => {
@@ -77226,7 +77427,8 @@ const _maxCapture = (text, re, cap, min = 1) => {
   re.lastIndex = 0;
   let m;
   while ((m = re.exec(text))) {
-    const n = Number(m[1] || m[2]);
+    const raw = m.slice(1).find(x => x !== undefined && x !== '');
+    const n = PROSE_NUM_WORDS[String(raw || '').toLowerCase()] !== undefined ? PROSE_NUM_WORDS[String(raw).toLowerCase()] : Number(raw);
     if (!Number.isFinite(n) || n < min || n > cap) continue;
     if (best === null || n > best) { best = n; say = String(m[0]).replace(/\s+/g, ' ').trim().slice(0, 50); }
   }
@@ -77235,7 +77437,12 @@ const _maxCapture = (text, re, cap, min = 1) => {
 const readFindProse = (text, now = Date.now()) => {
   const t = String(text || '');
   const fp = t.match(FOUNDER_PHRASE_RE);
-  const staff = _maxCapture(t, STAFF_PROSE_RE, 999);
+  let staff = _maxCapture(t, STAFF_PROSE_RE, 999);
+  // Round 116: crews, at about three people each - an estimate, and the row says so.
+  if (staff.n === null) {
+    const crews = _maxCapture(t, CREW_PROSE_RE, 50);
+    if (crews.n !== null) staff = { n: crews.n * 3, say: crews.say + ' (about 3 a crew)' };
+  }
   const fleet = _maxCapture(t, FLEET_PROSE_RE, 500);
   const locs = _maxCapture(t, LOCATIONS_PROSE_RE, 99, 2);
   let yearsInBusiness = null;
@@ -78585,6 +78792,22 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         if (_dir && Number(_dir.employees) > 0) { signals.directoryEmployees = Math.round(Number(_dir.employees)); signals.directoryEmployeesSource = String(_dir.source || 'a directory'); signals.directoryEmployeesRange = String(_dir.employeesFromRange || ''); }
         if (_dir && _dir.revenue) { signals.revenueStated = String(_dir.revenue); signals.revenueStatedSource = String(_dir.source || 'a directory'); }
         if (_dir && (Number(_dir.employees) > 0 || _dir.revenue)) out.sizeLookup.source = `a directory snippet (${_dir.source || 'web'})`;
+        // Round 116: what the BBB profile said, free - the founding year, and
+        // the manager it names when nobody else named anyone.
+        if (_dir && _dir.bbb) {
+          const _b = _dir.bbb;
+          if (Number(_b.started) > 1800 && !(Number(signals.yearsInBusiness) > 0)) signals.yearsInBusiness = new Date().getFullYear() - Number(_b.started);
+          console.log(`\u{1F4CF} SIZE LOOKUP [${name}]: BBB profile (${_b.url}) - ${_b.employees ? _b.employees + ' employees' : 'no headcount'}${_b.started ? ', started ' + _b.started : ''}${_b.management.length ? ', management: ' + _b.management.map(m => m.name + ' (' + m.title + ')').join(', ') : ''}`);
+          if (!out.owner && Array.isArray(_b.management) && _b.management.length) {
+            const _pick = rankOwnerCandidates(_b.management.map(m => ({ name: m.name, title: m.title, source: 'bbb_profile', evidence: `BBB profile: ${m.name}, ${m.title}` })), name);
+            if (_pick) {
+              const _auth = authorityScore(_pick.title);
+              out.owner = { name: _pick.name, title: _pick.title || '', confidence: 'medium', sources: ['bbb_profile'], authority: _auth, canBuy: _auth >= DM_AUTHORITY_FLOOR, blockReason: _auth >= DM_AUTHORITY_FLOOR ? '' : 'below the buying floor', grade: 'inferred', gradeWhy: 'named under Business Management on the BBB profile - one source, not corroborated', askAs: `ask for ${_pick.name}`, settledBy: 'bbb_profile' };
+              notes.push(`the BBB profile names ${_pick.name} (${_pick.title}) under Business Management - one source, so the name ships as likely, not confirmed`);
+              console.log(`DM/bbb [${name}]: ✓ ${_pick.name} (${_pick.title}) from the BBB profile, free - nobody else named this business's owner`);
+            }
+          }
+        }
       }
     } catch (e) { notes.push(`the size lookup failed (${e && e.message})`); }
     console.log(`\u{1F4CF} SIZE LOOKUP [${name}]: ${out.sizeLookup.source ? `bought - ${signals.directoryEmployees ? signals.directoryEmployees + ' employees' : ''}${signals.directoryEmployees && signals.revenueStated ? ', ' : ''}${signals.revenueStated ? 'revenue ' + signals.revenueStated : ''} from ${out.sizeLookup.source}` : 'bought and found nothing - the band stays a guess'}`);

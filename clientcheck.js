@@ -2761,6 +2761,14 @@ let contactTally = null;
         }
         if (!/confirmed/.test(_line)) fails.push('the tally line does not report how many owners we actually stand behind');
         if (M.tally([]).repReady !== 0) fails.push('an empty run reports rep-ready rows');
+        // Round 116: the size score on the panel.
+        const _ts = M.tally([
+          { ..._ready, name: 'S1', contactSizeConfidence: 'sure' }, { ..._ready, name: 'S2', contactSizeConfidence: 'likely' },
+          { ..._ready, name: 'S3', contactSizeConfidence: 'likely' }, { ..._ready, name: 'S4', contactSizeConfidence: 'guess' },
+          { ..._ready, name: 'S5' }, { ..._ready, name: 'S6', contactSizeConfidence: 'guess', contactNotFit: true },
+        ]);
+        if (_ts.sizeSure !== 1 || _ts.sizeLikely !== 2 || _ts.sizeGuess !== 1 || _ts.sizeUnknown !== 1) fails.push(`the size score reads ${_ts.sizeSure}/${_ts.sizeLikely}/${_ts.sizeGuess}/${_ts.sizeUnknown} against a fixture of 1/2/1/1 (a ruled-out lead never counted)`);
+        if (!/Sizes: 3 measured/.test(M.tallyLine(_ts))) fails.push('the tally line does not print the size score the proof runs are measured on');
       }
 
       // ══ THE WRONG-COMPANY STOP HAS A HOME ON THE SCREEN ═══════════════

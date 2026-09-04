@@ -127,3 +127,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 113 | 2026-09-03 | The 35-lead run: the redeploy that cut it in half, the guesses that were the rule, and a product company is an email lead — 2026-09-03 | Find | [round-113.md](round-113.md) |
 | 114 | 2026-09-03 | Rose Paving: the ceiling is a reachability rule, big companies go to email, and the call sheet is hedged — 2026-09-03 | Find | [round-114.md](round-114.md) |
 | 115 | 2026-09-03 | The first Round 114 run: the lanes reconciled, a franchise and a chain on the sheet, and the website column back — 2026-09-03 | Find / Client | [round-115.md](round-115.md) |
+| 116 | 2026-09-04 | To an 8: no retired name on the sheet, three free size sources, and the score the proof runs are measured on — 2026-09-04 | Find / Client | [round-116.md](round-116.md) |
