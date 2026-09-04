@@ -8743,6 +8743,40 @@ const LEADERSHIP_URL_HINTS = /(about|team|leadership|management|our-?story|who-?
 // AsyncLocalStorage gives each request its own ledger that survives every await.
 const { AsyncLocalStorage } = require('node:async_hooks');
 const FC_LEDGER = new AsyncLocalStorage();
+// ══ A PER-LEAD CEILING, SHAPED LIKE THE DAY CEILING BESIDE IT ══════════════
+// Round 121 (Vin, 2026-09-04, ruling on American Driveway of Charlotte: 14
+// Firecrawl credits, six paid searches, four page buys, and NOBODY NAMED).
+// Until now the only ceiling between the account and a lead like that was the
+// whole-DAY one, checked once at route entry - grep this file for a comparison
+// on a spent field before this line and there is not one.
+//
+// It stops the NEXT purchase, never the one already made, which is the rule
+// budgetRefusal states twenty lines from here: "a lead already running finishes
+// whatever it costs, because a half-lead is pure waste." The difference is that
+// a lead can now finish EARLY, and the row says so, and the log names what was
+// not bought - so the next batch answers whether the cap ever cost us a name
+// instead of leaving it to be argued about.
+const FIND_LEAD_CREDIT_CAP = Math.max(0, Number(process.env.FIND_LEAD_CREDIT_CAP || 10) || 0);
+const leadCreditsSpent = () => { const l = FC_LEDGER.getStore(); return (l && Number(l.spent)) || 0; };
+const leadCapHit = () => FIND_LEAD_CREDIT_CAP > 0 && leadCreditsSpent() >= FIND_LEAD_CREDIT_CAP;
+// Named so the row and the log can say WHAT was skipped rather than that
+// something was. Records the first refusal only: after that the lead is done
+// buying and a list of everything it would have wanted is noise.
+const leadCapRefuse = (what) => {
+  const l = FC_LEDGER.getStore();
+  // No "if (!l) return false" here on purpose: it was written, and reverting it
+  // left the check GREEN because leadCapHit already covers the case -
+  // leadCreditsSpent reads the same store and answers 0 without one, so the cap
+  // can never be hit outside a lead. A guard whose removal changes nothing is
+  // deleted rather than kept, which is this repo's falsification rule.
+  if (!leadCapHit()) return false;
+  if (!l.capped) {
+    l.capped = { at: leadCreditsSpent(), first: what, skipped: [] };
+    console.log(`\u{1F6D1} LEAD CAP: this lead has spent ${l.capped.at} Firecrawl credits, which is the per-lead ceiling (${FIND_LEAD_CREDIT_CAP}). The ${what} is NOT bought, and neither is anything after it. Everything already measured is kept. Grep this line across a batch: if the leads that hit it were going to be named, the cap is too low and FIND_LEAD_CREDIT_CAP is the one number to move.`);
+  }
+  if (l.capped.skipped.length < 8 && !l.capped.skipped.includes(what)) l.capped.skipped.push(what);
+  return true;
+};
 
 // Screenshots are the one rate the public sources disagree on: Firecrawl's own blog
 // lists surcharges for JSON extraction, enhanced proxy and audio but NOT screenshots,
@@ -9476,6 +9510,10 @@ const firecrawlMap = async (fcKey, url, search = '', limit = 500) => {
 const firecrawlSearch = async (fcKey, query, limit = 5, scrapeContent = true, tag = '') => {
   if (!fcKey || !query) return [];
   if (fcCreditsBlocked()) return [];   // fail fast — no point firing doomed calls
+  // Round 121: the per-lead ceiling. A search is the most expensive single
+  // purchase on the route at 2 credits, and it is what ran American Driveway to
+  // 14 for nobody named.
+  if (leadCapRefuse(tag ? `${tag} search` : 'search')) return [];
   try {
     const r = await fcCall('https://api.firecrawl.dev/v1/search', {
       method: 'POST',
@@ -10037,6 +10075,14 @@ const fcHostNotAnswering = (url) => {
 // opts.capture receives the raw markup. Requesting rawHtml and dropping it is
 // how seven pages were bought and one page's markup was read (round 100), so a
 // caller that needs it can take it here rather than fetching the page twice.
+// Round 121: the per-lead ceiling applies to page buys too - four of American
+// Driveway's fourteen credits were interior pages on a site that refused a
+// plain fetch. Declared as a wrapper rather than edited into the body so the
+// retry, rate-limit and empty-markdown loops below are untouched.
+const firecrawlScrapeCapped = async (fcKey, url, ...rest) => {
+  if (leadCapRefuse('page read')) return '';
+  return firecrawlScrape(fcKey, url, ...rest);
+};
 const firecrawlScrape = async (fcKey, url, timeout = 45000, maxAge = FC_CACHE_MS, opts = null) => {
   const _shot = !(opts && opts.shot === false);
   const _capture = (opts && typeof opts.capture === 'function') ? opts.capture : null;
@@ -11390,7 +11436,36 @@ const parseBbbProfile = (html) => {
   }
   return { measured: text.length > 200, employees: emp ? Number(emp[1]) : null, started: started ? Number(started[1]) : null, management };
 };
+// ══ RETIRED ON ITS OWN CONDITION — round 121 ══════════════════════════════
+// Round 116 added this as a FREE size and owner source. Round 117 found it
+// 403ing 2 of 2, replaced the header set with a full Chrome fingerprint, and
+// wrote the retirement rule into the comment below in as many words: "if the
+// next batch is still 403 on every attempt the rung is retired rather than
+// kept as a line of log noise."
+//
+// The next batch was 2026-09-04. FOUR attempts, FOUR HTTP 403s - Golden
+// Plumbing, Anytime Garage Door, Schiff & Associates, Windows Doors & More,
+// and four more the run before. The condition is met, and it is met on the
+// build that already carries the better headers, so this is not a fingerprint
+// worth another round: BBB is refusing Render's address, not our User-Agent.
+//
+// Switched OFF rather than deleted, and the parser is untouched: the profile
+// URL is still in hand from the size search, so buying it through Firecrawl for
+// one credit is the obvious successor - but that is a spend INCREASE in the
+// round that just capped per-lead spend, so it waits for a measurement rather
+// than being guessed at now. BBB_PROFILE=1 turns it back on for that test.
+const BBB_PROFILE_ON = /^(?:1|true|on|yes)$/i.test(String(process.env.BBB_PROFILE || ''));
+let _bbbRetiredSaid = false;
 const fetchBbbProfile = async (url) => {
+  if (!BBB_PROFILE_ON) {
+    if (!_bbbRetiredSaid) {
+      _bbbRetiredSaid = true;
+      // No mention of the paid reader by name in here: a boot check asserts
+      // this function's own source never names it, which is how it stays free.
+      console.log('SIZE: the BBB profile read is OFF - it answered HTTP 403 on every attempt across two batches (8 of 8), which is the retirement condition its own comment set in Round 117. Said once per process, not once per lead, instead of a line on every lead that reads like a fault. Set BBB_PROFILE=1 to try it again; the parser and the URL-finder are untouched.');
+    }
+    return { ok: false, why: 'retired - 403 on every attempt across two batches' };
+  }
   try {
     // Round 117: 2 of 2 attempts came back 403 on 2026-09-04. The old header
     // set was a two-part Chrome version with an Accept of "text/html" and
@@ -55990,6 +56065,64 @@ app.listen(PORT, () => {
     } finally { bootRelease(); }
   })();
 
+  // ══ LEAD CEILING CHECK — round 121 ══════════════════════════════════════
+  // Vin, 2026-09-04, on American Driveway of Charlotte: fourteen Firecrawl
+  // credits, six paid searches, four page buys, nobody named. Until this round
+  // the ONLY ceiling between the account and a lead like that was the whole-day
+  // one, checked once at route entry - there was no comparison on the ledger's
+  // spend anywhere in the file.
+  //
+  // EXECUTED inside a real ledger scope, because the whole mechanism is an
+  // AsyncLocalStorage read and a fixture that stubs it proves nothing.
+  try {
+    const _fails = [];
+    if (!(FIND_LEAD_CREDIT_CAP > 0)) _fails.push('the per-lead credit ceiling is switched off, so one lead can spend the whole day budget on its own');
+    FC_LEDGER.run({ spent: 0, saved: 0, ops: 0 }, () => {
+      const _l = FC_LEDGER.getStore();
+      if (leadCapHit()) _fails.push('a lead that has spent nothing is already capped');
+      if (leadCapRefuse('owner_name search') !== false) _fails.push('a lead that has spent nothing is refused its first purchase');
+      _l.spent = FIND_LEAD_CREDIT_CAP - 1;
+      if (leadCapRefuse('owner_name search') !== false) _fails.push(`a lead one credit under the ceiling is refused - the ceiling must stop the NEXT purchase, not the one that reaches it`);
+      _l.spent = FIND_LEAD_CREDIT_CAP;
+      if (leadCapRefuse('owner_directory search') !== true) _fails.push('a lead AT the ceiling is allowed to keep buying, so the ceiling is a report and not a gate - which is exactly what the ledger was before this round');
+      if (!_l.capped) _fails.push('the lead was capped and the row cannot say so');
+      else {
+        if (_l.capped.at !== FIND_LEAD_CREDIT_CAP) _fails.push('the row records the wrong spend at the moment the ceiling bit');
+        if (_l.capped.first !== 'owner_directory search') _fails.push('the row does not name WHICH purchase was refused first');
+        if (!_l.capped.skipped.includes('owner_directory search')) _fails.push('the row does not list what was skipped, so a batch cannot answer whether the ceiling ever cost a name');
+      }
+      // And it keeps recording what else it turned away, bounded. Guarded:
+      // the first draft read _l.capped.skipped here unconditionally, so a build
+      // with the ceiling switched off crashed the check instead of failing it -
+      // "COULD NOT RUN" names the check, not the defect, and falsification is
+      // where that showed up.
+      for (let k = 0; k < 20; k++) leadCapRefuse('page read ' + k);
+      if (_l.capped && _l.capped.skipped.length > 8) _fails.push('the skipped list is unbounded, so one capped lead can fill the log');
+      // Work already bought is never thrown away: the ceiling refuses, it does
+      // not unwind. spent is untouched by a refusal.
+      if (_l.spent !== FIND_LEAD_CREDIT_CAP) _fails.push('a refusal changed what the lead had already spent - the ceiling must stop the next purchase, never undo one');
+    });
+    // Outside a ledger scope nothing is capped: the audit path and the boot
+    // itself must not inherit a Find-route ceiling.
+    if (leadCapRefuse('search') !== false) _fails.push('a call with no lead ledger at all is capped, so every other route in this file inherits the Find ceiling - the ceiling must read the PER-LEAD ledger and answer no when there is not one');
+    // The wires.
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    for (const [_needle, _msg] of [
+      [_n("if (leadCapRefuse(tag ? `${tag} search` :", " 'search')) return [];"), 'the paid search door does not consult the ceiling, so the most expensive purchase on the route is uncapped'],
+      [_n("if (leadCapRefuse('page read'))", " return '';"), 'the page-buy door does not consult the ceiling - four of American Driveway\'s fourteen credits were interior pages'],
+      // Round 121: the early stop applied ONLY where pages were free. The
+      // saving is worth nothing there and a credit a page where the site
+      // refused a plain fetch, so the guard that switched it off is gone.
+      [_n('if (i + _wave < picks.length) {', "\n        const _soFar = pages.filter(rosterEligiblePage)"), 'the "their own pages already name an owner, stop reading" rule is gated on the pages being FREE again - which is backwards: it saves nothing where pages are free and a credit a page where they are not'],
+      [_n('out.capped = led.capped', '\n    ? {'), 'the ceiling never reaches the row, so the rep cannot tell a lead that ran out of budget from one that had nothing to find'],
+    ]) if (!_src.includes(_needle)) _fails.push(_msg);
+    if (_fails.length) console.log(`⛔ LEAD CEILING CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ LEAD CEILING CHECK: one lead can no longer spend the day's budget on its own. The ceiling is ${FIND_LEAD_CREDIT_CAP} Firecrawl credits and it is shaped like the day ceiling beside it - it stops the NEXT purchase and never unwinds one already made, so a lead finishes early instead of half-finished. Executed inside a real ledger scope in both directions: under the ceiling nothing is refused, at it every further search and page read is, the row names what was skipped, the list is bounded, and a call outside any lead scope is never capped so no other route inherits it.`);
+  } catch (e) {
+    console.log(`⛔ LEAD CEILING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ ADDRESS ROUTE CHECK — round 121 ═════════════════════════════════════
   // Premier Home Pros, 2026-09-04: a real owner, a real domain, and the address
   // shipped as a BLOCKED guess. The catch-all probe's second sample timed out,
@@ -60201,7 +60334,8 @@ app.listen(PORT, () => {
       [_n('findSizeViaSearch(sizeName, website, fcKey,', ' apiKey, leadLocation, { reviewCount: signals.reviewCount });'), 'the size lookup is never bought, is bought on the outlet name instead of the brand, or cannot see the review count that decides the second query'],
       [_n("const sizeName = (out.chain && out.chain.kind === 'network'", ' && out.chain.brand) ? out.chain.brand : name;'), 'a branch network is measured as one outlet again (ClearChoice, 2026-09-03)'],
       [_n('if ((signals.branchNetwork === true || signals.peOwned === true || signals.nationalOperator === true)', " && _layers.verdict === 'owner') {"), 'a branch network, PE-owned or national lead reads as owner-run off its own page again, so a held-back name reaches the sheet as the owner'],
-      [_n('if (!sizeMeasured(', 'signals) && website) {'), 'the size lookup is bought on a lead that measured its size, or skipped on one that only guessed it'],
+      [_n('if (!sizeMeasured(signals) && website', ' && !_ownerWaveFoundNobody) {'), 'the size lookup is bought on a lead that measured its size, on one with no website, or on one the owner wave already came back empty on - a size decides the tier and the tier decides the lane, and a lead with no name has no call lane to be sorted into'],
+      [_n('const _ownerWaveFoundNobody = _ownerAttempted === true', ' && !(out.owner && out.owner.name);'), 'nothing measures whether the owner wave ran and found nobody, so the size wave cannot be aimed away from those leads'],
       [_n('sizeWord: _size.band, sizeConfidence: _size.confidence,', ' affordBand: signals.affordBand ||'), 'the lane does not read the sheet\'s own guess, so the two can disagree'],
       [_n("signals.scaleBand = (_scale && !_scale.guess) ?", ' _scale.band : null;'), 'a tenure guess decides the tier the lanes read'],
       [_n('site:linkedin.com/company OR ', 'site:bbb.org'), 'the size lookup has no second query, so a miss on the revenue directories stays a miss'],
@@ -60293,7 +60427,20 @@ app.listen(PORT, () => {
     if (_bn.employees !== null || _bn.started !== null || _bn.management.length) _fails.push('an ordinary page yields BBB fields');
     if (!BBB_PROFILE_RE.test('https://www.bbb.org/us/nc/raleigh/profile/bathroom-remodel/gid-renovation-inc-0593-90314457')) _fails.push('the live BBB profile URL shape is not recognised');
     if (BBB_PROFILE_RE.test('https://www.bbb.org/search?find_text=roofing')) _fails.push('a BBB search page is taken for a profile');
-    if (!/fetchT\(/.test(String(fetchBbbProfile)) || /fcCall|firecrawl/i.test(String(fetchBbbProfile))) _fails.push('the BBB profile is fetched through Firecrawl - it must be a plain fetch, never a credit');
+    if (!/fetchT\(/.test(String(fetchBbbProfile)) || /fcCall|firecrawl/i.test(String(fetchBbbProfile))) _fails.push('the BBB profile is fetched through the paid page reader - it must be a plain fetch, never a credit');
+    // ══ ROUND 121: RETIRED ON THE CONDITION ITS OWN COMMENT SET ═══════════
+    // Round 117 wrote the rule: "if the next batch is still 403 on every
+    // attempt the rung is retired rather than kept as a line of log noise."
+    // The next batch was four attempts and four 403s. It is off behind a knob,
+    // not deleted - the parser above is still asserted in full, so the day
+    // somebody buys the page through the paid reader it has a reader waiting.
+    if (typeof BBB_PROFILE_ON !== 'boolean') _fails.push('the BBB retirement is not a boolean knob, so an unset env var could read as truthy and re-open a rung that has never once answered');
+    if (BBB_PROFILE_ON !== false) _fails.push('the BBB profile fetch is ON by default again - eight of eight attempts across two batches came back 403, which is the retirement condition Round 117 wrote into its own comment');
+    // This check is synchronous, so the retired return is asserted on the
+    // function's own source rather than by awaiting it - the early exit is one
+    // literal and it either sits above the fetch or it does not.
+    if (!/retired - 403 on every attempt/.test(String(fetchBbbProfile))) _fails.push('a retired BBB read does not report ITSELF as retired, so the caller cannot tell "we did not ask" from "they refused us"');
+    if (String(fetchBbbProfile).indexOf('BBB_PROFILE_ON') > String(fetchBbbProfile).indexOf('fetchT(')) _fails.push('the retirement is checked AFTER the fetch, so the request goes out anyway and the knob is decoration');
     // Round 117: 2 of 2 attempts came back 403 on 2026-09-04 against a
     // two-part Chrome version and an Accept of "text/html" - a fingerprint no
     // browser sends. This asserts the header SET, not that BBB answers: that
@@ -61106,7 +61253,7 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('scrapeEmailsFromSite(website, fcKey, homepageContent, siteConfirmed, siteIsDown,', ' freePages)'))) {
       _fails.push('the email engine is no longer handed the pages we already hold, so a contact page in memory is bought again from Firecrawl');
     }
-    if (!_src.includes(_n('const md = await firecrawlScrape(fcKey, website, 40000, FC_CACHE_MS, { shot: false,', ' capture: (h) => { _html = h || \'\'; } });'))) {
+    if (!_src.includes(_n('const md = await firecrawlScrapeCapped(fcKey, website, 40000, FC_CACHE_MS, { shot: false,', ' capture: (h) => { _html = h || \'\'; } });'))) {
       _fails.push('the Find fallback scrape is asking for a full-page render again — the most expensive thing on the menu, on a read that never looks at a picture');
     }
     if (!_src.includes(_n('fcKey: allowBuy ? fcKey :', " '',"))) {
@@ -79404,7 +79551,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       // the markup and never the picture - the render is the most expensive
       // thing on the menu and nothing in a contact list looks at it.
       let _html = '';
-      const md = await firecrawlScrape(fcKey, website, 40000, FC_CACHE_MS, { shot: false, capture: (h) => { _html = h || ''; } });
+      const md = await firecrawlScrapeCapped(fcKey, website, 40000, FC_CACHE_MS, { shot: false, capture: (h) => { _html = h || ''; } });
       if (md || _html) {
         out.readVia = 'Firecrawl (their site refused a plain fetch)';
         pages.push({ url: website, intent: 'home', html: _html, text: _html ? plainTextFromHtml(_html) : String(md) });
@@ -79472,7 +79619,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         if (r.ok) return { pick, html: r.html, text: r.text };
         if (viaFirecrawl && fcKey && !fcCreditsBlocked()) {
           let _h = '';
-          const md = await firecrawlScrape(fcKey, pick.url, 30000, FC_CACHE_MS, { shot: false, capture: (h) => { _h = h || ''; } });
+          const md = await firecrawlScrapeCapped(fcKey, pick.url, 30000, FC_CACHE_MS, { shot: false, capture: (h) => { _h = h || ''; } });
           if (md || _h) return { pick, html: _h, text: _h ? plainTextFromHtml(_h) : String(md) };
         }
         return null;
@@ -79480,7 +79627,14 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       for (const g of got) if (g) _keep(g.pick.url, g.pick.intent, g.html, g.text);
       // Free, pure, no model call: if their own pages already name an owner we
       // can stop reading and the paid wave is never bought.
-      if (!viaFirecrawl && i + _wave < picks.length) {
+      //
+      // ══ ROUND 121: AND IT WAS SWITCHED OFF WHERE PAGES COST MONEY ═══════
+      // This read `!viaFirecrawl`, so the one rule that stops reading once the
+      // owner is named applied ONLY on the leads where the remaining pages were
+      // free - and never on the leads where each one costs a credit. Backwards:
+      // the saving is worth nothing when the pages are free and a credit a page
+      // when they are not. The roster parse is free and pure either way.
+      if (i + _wave < picks.length) {
         const _soFar = pages.filter(rosterEligiblePage).map(p => String(p.text || '')).join('\n');
         if (parseTeamRoster(_soFar, name).some(r => r.isOwner)) {
           console.log(`\u{1F50E} FIND READ [${name}]: their own pages name an owner after ${pages.length} page(s), so the remaining ${picks.length - i - _wave} were not read and no paid lookup is needed.`);
@@ -80056,7 +80210,20 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   out.sizeLookup = { bought: false, source: '', why: 'a size was published, nothing bought' };
   // Never on a lead with no website: that lead spends nothing, by the rule the
   // free read already keeps (a name alone matches the wrong company anyway).
-  if (!sizeMeasured(signals) && website) {
+  // ══ ROUND 121: A SIZE ON A LEAD NOBODY CAN CALL IS WORTH NOTHING ══════
+  // This tested only whether a size was missing and a website existed, so the
+  // revenue and headcount searches were bought even when the owner wave had
+  // already come back with nobody at all - four of American Driveway's fourteen
+  // credits, on a lead that was going nowhere. The size decides the TIER and
+  // the tier decides the LANE, and a lead with no name has no call lane to be
+  // sorted into. It still runs whenever a name was found, and whenever the
+  // owner ladder never ran at all (a branch, or the paid search switched off),
+  // because there the size is what the email lane is sorted by.
+  const _ownerWaveFoundNobody = _ownerAttempted === true && !(out.owner && out.owner.name);
+  if (_ownerWaveFoundNobody) {
+    console.log(`\u{1F4CF} SIZE LOOKUP [${name}]: not bought - the owner wave already came back with nobody, and a size on a lead we cannot call decides a lane it will never be in. ~4 Firecrawl credits saved.`);
+  }
+  if (!sizeMeasured(signals) && website && !_ownerWaveFoundNobody) {
     out.sizeLookup = { bought: true, source: '', why: 'nothing measured about their size' };
     try {
       const _capi = (companiesApiKey && website) ? await enrichViaCompaniesAPI(website, companiesApiKey) : null;
@@ -80175,6 +80342,13 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     firecrawl: Math.round((led.spent || 0) * 100) / 100,
     anthropicUsd: Math.round((led.anthropicUsd || 0) * 10000) / 10000,
   };
+  // Round 121 (Vin: "cap it, and say so on the row"). A lead that stopped
+  // buying says so, and names what it did not buy - so a batch answers whether
+  // the ceiling ever cost a name, rather than leaving it to be argued about.
+  out.capped = led.capped
+    ? { at: led.capped.at, cap: FIND_LEAD_CREDIT_CAP, first: led.capped.first, skipped: led.capped.skipped.slice(),
+        why: `stopped buying at ${led.capped.at} of ${FIND_LEAD_CREDIT_CAP} Firecrawl credits; not bought: ${led.capped.skipped.join(', ')}` }
+    : null;
   // Round 118: WHICH paid searches this lead bought, at 2 credits each. The
   // OWNER WAVE line already says whether the wave fired and what it produced;
   // this says what it was made of, so "which of these searches earns its keep"
@@ -80232,6 +80406,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       + `${_src.length ? `, from ${_src.join('+')}${_free ? ' (all free sources)' : ''}` : ''}`
       + `${out.ownerStagesRun === null ? ' (the resolver did not run on this lead)' : ''}, ${out.spend.firecrawl} credit(s) on the lead.`
       + _searchMix()
+      + (out.capped ? ` | CAPPED: ${out.capped.why}` : '')
       + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan. The searches: line names WHICH paid search ran, so the next round cuts on evidence rather than on a hunch.'));
     _ownerWaveLectured = true;
   }
