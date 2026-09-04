@@ -19,6 +19,7 @@ Copied from CLAUDE.md (commit b01d952) lines 10624 to 10646 (PART 8, the knobs t
 | `ANTHROPIC_DAILY_BUDGET_USD` | 20 | model dollars per UTC day |
 | `APIFY_DAILY_BUDGET` | 150 | review pulls per UTC day |
 | `DM_REGISTRY` | unset (off) | the paid state-registry owner search (stage 3); 0 for 11 on 2026-09-02, so off unless set to 1 ([§109](../../../docs/history/round-109.md)) |
+| `DM_CHAMBER` | unset (off) | the chamber-of-commerce owner search, appended to the trade-licence query. It only ever fired on leads the trade query had already failed; 0 names for 11 buys on 2026-09-04, so off unless set to 1. Off, the query is not built at all ([§118](../../../docs/history/round-118.md)) |
 | `FAKE_UPSTREAM` | unset | servercheck's test seam — NEVER set in production; fetchtest proves it inert when absent |
 | `RENDER_ENV` | unset | shown by /healthz so staging and production cannot be confused |
 | `DATAFORSEO_LOGIN` / `DATAFORSEO_PASSWORD` | unset | the REAL Google local pack. Without both, no lead gets a search position at all — see §52. About $0.60-2.40 per 1,000 against Places at $35 per 1,000 |

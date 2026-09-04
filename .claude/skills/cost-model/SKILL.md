@@ -34,6 +34,9 @@ Three separate sessions proposed cuts to a bill nobody had measured, and each ca
 - **A Find press:** 60 Places queries = **$2.10**; four presses a month sit inside Google's free 1,000-call allowance, so Find is effectively free per month.
 - **A contact read:** **6.33 Firecrawl credits and $0.0076 of model**, averaged over nine leads. At 50 a day, 22 days a month, that is ~6,970 credits — the Standard Firecrawl plan, and **Firecrawl is ~75% of the contact bill.**
 - **Newest live measurement (round-106, twenty leads):** owner settled on the free read on 5 of 10 Places leads and 4 of 10 other-lane leads; the paid wave was bought on the rest (35 and 46 credits); **3.5 credits per Places lead, 4.6 per other-lane lead** — well under the 6.33 of the nine-lead run above, because the R102–R104 roster fixes had landed (docs/history/round-106.md).
+- **The unit prices, settled 2026-09-04 ([§118](../../../docs/history/round-118.md)):** a Firecrawl **search costs 2 credits**, a **page read costs 1**. That is why the owner hunt is the whole bill and the website read is free-ish: on the 25-lead run of 2026-09-04, 195 credits split **~168 on owner searches (84 searches, 86%)** and **~27 on reading the businesses' own websites (14%)**. The paid wave returned nothing usable on **9 of 25 leads (108 credits)**. Any credit cut that is not aimed at the owner searches is aimed at 14% of the bill.
+- **Which search is being bought is now printed**, so the next cut is made on data rather than on a log grep: the `💸 OWNER WAVE` line carries a `searches: owner_directory×3, license_trade×1 (8 of the 11 credits)` clause, tallied per source in the Firecrawl ledger.
+- **The website build read costs nothing** — no model call, no Firecrawl. It is regex over markup the contact read had already downloaded, plus `/robots.txt` and `/llms.txt` over plain HTTP ([§118](../../../docs/history/round-118.md)).
 - **The one number that moves it is the free-settle rate:** the share of leads whose owner is found on their own pages without the ~10-credit paid search wave. At 22% the month is ~6,970 credits; at 60% it is ~3,520 (the $16 plan). Owner-parser fixes are therefore cost fixes (round-099, round-100). The Firecrawl free tier is 1,000 credits ONE TIME, about 150 contact reads, ever.
 
 ## DO NOT CUT — round-081's quality map, kept so no cost round re-derives it
@@ -45,6 +48,12 @@ Each of these feeds a finding that has a real reply behind it or gates an absenc
 ## SAFE to reduce (same map)
 
 `SITUATION_EFFORT` (it writes prose, sets no measured flag, gates no absence claim, produces no figure) · the decision-maker web search · the three service-page rank searches · the Labs pair (already opt-in).
+
+## Cuts already made, with the evidence
+
+- **`DM_REGISTRY` off** since 2026-09-02: 0 names for 11 buys ([§109](../../../docs/history/round-109.md)).
+- **`DM_CHAMBER` off** since 2026-09-04: 0 names for 11 buys, and it only ever fired on leads the trade query had already failed ([§118](../../../docs/history/round-118.md)).
+- **No paid owner search on a branch outlet** since 2026-09-04: three national brand outlets cost 10 credits and 3.5 minutes each and named nobody ([§117](../../../docs/history/round-117.md)).
 
 ## Known and deliberately not done
 

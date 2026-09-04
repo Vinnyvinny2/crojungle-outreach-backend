@@ -129,3 +129,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 115 | 2026-09-03 | The first Round 114 run: the lanes reconciled, a franchise and a chain on the sheet, and the website column back — 2026-09-03 | Find / Client | [round-115.md](round-115.md) |
 | 116 | 2026-09-04 | To an 8: no retired name on the sheet, three free size sources, and the score the proof runs are measured on — 2026-09-04 | Find / Client | [round-116.md](round-116.md) |
 | 117 | 2026-09-04 | Short rows for the rep, and the three national brands that were eating the run — 2026-09-04 | Find / Client | [round-117.md](round-117.md) |
+| 118 | 2026-09-04 | Stop paying for the search that never worked, and score the website we already downloaded — 2026-09-04 | Find / Client | [round-118.md](round-118.md) |
