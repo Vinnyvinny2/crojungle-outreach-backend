@@ -136,3 +136,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 122 | 2026-09-08 | A place is not a person, a menu is not a charity, and a dropped lead buys nothing — 2026-09-08 | Find / Cost | [round-122.md](round-122.md) |
 | 123 | 2026-09-08 | The queue: the trades re-tiered on sourced job values, and the metros wait on the pool the memory already holds — 2026-09-08 | Find / Cost | [round-123.md](round-123.md) |
 | 124 | 2026-09-08 | The Find stage rebuilt: the queue and the reads move to the server, and a closed tab is no longer a dead batch — 2026-09-08 | Find / Client / Cost | [round-124.md](round-124.md) |
+| 125 | 2026-09-08 | A guess is asked about twice before it is called a guess, and the tag that says so stops hiding — 2026-09-08 | Find / Client | [round-125.md](round-125.md) |

@@ -1321,7 +1321,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261006;
+const CLIENT_CONTRACT = 20261007;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -6753,7 +6753,9 @@ function FindView({
       const emailCell = st === 'failed' ? h('span', { style: { color: T.amber } }, 'failed to read')
         : es === 'none' ? h('span', { style: { color: T.text3 } }, '— none found')
         : es === 'verified' ? h('span', { style: { color: T.text2 } }, l.contactEmail)
-        : h('span', { style: { color: T.text3 } }, l.contactEmail, h('span', { style: { color: T.amberBorder } }, ' unverif'));
+        // The tag goes FIRST: the cell truncates, and on a long address the tag
+        // at the end was the part that vanished, so a guess read as a good address.
+        : h('span', { style: { color: T.text3 } }, h('span', { style: { color: T.amberBorder } }, 'unverif '), l.contactEmail);
       const action = st === 'moved' ? h('span', { style: { fontSize: 10, color: T.text3 } }, 'in Rsch')
         : es === 'verified' && st === 'read'
           ? h('button', { onClick: () => moveIds([l.id]), style: { fontFamily: 'Inter,sans-serif', fontSize: 10, borderRadius: 4, padding: '3px 6px', background: 'none', color: T.text2, border: '1px solid ' + T.border, cursor: 'pointer', whiteSpace: 'nowrap' } }, '→ Rsch')
