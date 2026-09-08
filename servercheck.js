@@ -43,6 +43,13 @@
 //      does a credit move
 //   H3 no website at all — every site-derived signal is null, never false
 //   H4 the contact route refuses before it spends
+//   R0 (round 124) the Find press writes the server-owned queue
+//   R1 a read run claims, reads, stamps and finishes with no browser
+//      attached; the four hand actions are stamps, never deletes
+//   R2 Cancel stops the draw and releases what was never reached
+//   R3 a run that breaks ends failed with a reason, never stays running
+//   R4 (third boot) a live run resumes after a restart, a stalled one is
+//      failed and its unread leads go back to the queue
 // ═══════════════════════════════════════════════════════════════════════════
 'use strict';
 const http = require('http');
@@ -54,6 +61,8 @@ let fails = [];
 let passed = 0;
 const ok = (cond, what) => { if (cond) { passed++; } else { fails.push(what); console.log('  ✗ ' + what); } };
 const info = (s) => console.log('  · ' + s);
+// Round 124: the build number a server-side read stamps on the row.
+const CONTRACT = Number((require('fs').readFileSync('server.js', 'utf8').match(/const CONTRACT_VERSION = (\d+)/) || [])[1]);
 
 // ── THE BUSINESS ────────────────────────────────────────────────────────────
 const biz = (n) => ({
@@ -61,6 +70,10 @@ const biz = (n) => ({
   host: `scenario${n.toLowerCase()}roofing.example`,
   placeId: `ChIJ_scenario_${n}`,
 });
+// Round 124: a read run reads several businesses at once, so a registered
+// host is served ITS OWN pages rather than state.biz's.
+const BIZ_BY_HOST = {};
+const bizReg = (n) => { const b = biz(n); BIZ_BY_HOST[b.host] = b; return b; };
 
 const OWNER_LINE = () => (state.mode === 'nosettle' ? '' : ' Pete Barnes, Owner.');
 const HOMEPAGE_MD = (b) => `# ${b.company}\n\nRoof repair and replacement for Dallas homeowners.${OWNER_LINE()}\n\nWe answer the phone ourselves and we stand behind our work.\n\nBook online any time from our booking page, or call us.\n\nOur crews photograph every stage of the job so you can see what we saw.\n\nContact: info@${b.host}\n`;
@@ -232,16 +245,162 @@ const FIND_CAREERS_HTML = (b) => `<!doctype html><html><body><h1>Careers</h1><p>
   + `<p>${'Join a crew that turns up on time and finishes what it starts. '.repeat(12)}</p>`
   + `</body></html>`;
 
+// ── THE FAKE POSTGREST (round 124) ──────────────────────────────────────────
+// The server owns the Find queue now, and a run that survives a closed tab is
+// two tables. So the fixture network grows a Supabase: an in-memory table
+// store behind the slice of PostgREST's grammar this repo's helpers send
+// (eq / neq / is / in / gt / gte / lt / lte / like, order, limit, offset, the
+// Range header, Prefer return=representation and resolution=ignore- or
+// merge-duplicates, ->> projection with aliases). The two tables this round
+// created carry the migration's column list and REFUSE an unknown column the
+// way PostgREST does (PGRST204, the whole row), so a column the code writes
+// and the SQL never added goes red here instead of on Render. Tables this
+// round did not create accept anything. An unknown operator matches every
+// row rather than none, so a helper this fake has not met reads the whole
+// table and the assertion on the ROW says what went wrong.
+const SB_COLUMNS = {
+  discovered_queue: ['id', 'name', 'website', 'icp_score', 'source', 'signals', 'job_title', 'location', 'manual_role_count', 'stacked', 'reachability', 'size_verified', 'size_unverified', 'verified_employees', 'extra', 'batch_id', 'read_at', 'read_failed', 'fail_reason', 'moved_to_research_at', 'ruled_out_at', 'ruled_out_why', 'from_trigger_source', 'reach_predict', 'exported_at', 'exported_to'],
+  read_runs: ['id', 'started_at', 'finished_at', 'progress_at', 'status', 'requested_count', 'read_count', 'failed_count', 'ruled_out_count', 'credits_estimated', 'credits_used', 'scope', 'error'],
+  user_settings: ['id', 'data'],
+};
+state.sb = {};        // table -> rows
+state.sbFail = null;  // { table, method, code, times }: answer that status for the next N matching calls
+state.sbLog = [];     // every hit: { method, table, query, prefer }
+state.slowMs = 0;     // a pause on every page of a business's own site
+const sbTable = (t) => (state.sb[t] = state.sb[t] || []);
+const sbUnknownColumn = (table, keys) => { const cols = SB_COLUMNS[table]; return cols ? (keys.find(k => !cols.includes(k)) || '') : ''; };
+const sbRefuse = (res, table, col) => send(res, 400, { code: 'PGRST204', message: `Could not find the '${col}' column of '${table}' in the schema cache` });
+const sbText = (v) => (v === null || v === undefined) ? null : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+const sbInList = (val) => String(val).replace(/^\(|\)$/g, '').split(',').map(x => x.trim().replace(/^"|"$/g, ''));
+const sbMatch = (row, col, op, val) => {
+  if (op === 'not') { const m = String(val).match(/^([a-z]+)\.([\s\S]*)$/); return m ? !sbMatch(row, col, m[1], m[2]) : true; }
+  const v = row[col];
+  const s = sbText(v);
+  const num = (x) => (x === null || x === '' || isNaN(Number(x))) ? null : Number(x);
+  const cmp = (f) => s !== null && ((num(v) !== null && num(val) !== null) ? f(num(v), num(val)) : f(s, val));
+  switch (op) {
+    case 'eq': return s === val;
+    case 'neq': return s !== val;
+    case 'is': return val === 'null' ? s === null : val === 'true' ? v === true : val === 'false' ? v === false : true;
+    case 'in': return sbInList(val).includes(s);
+    case 'gt': return cmp((a, b) => a > b);
+    case 'gte': return cmp((a, b) => a >= b);
+    case 'lt': return cmp((a, b) => a < b);
+    case 'lte': return cmp((a, b) => a <= b);
+    case 'like': case 'ilike': {
+      const re = new RegExp('^' + val.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/[%*]/g, '.*') + '$', op === 'ilike' ? 'i' : '');
+      return s !== null && re.test(s);
+    }
+    default: return true;
+  }
+};
+// select=a,alias:b,c->>k  — a jsonb path on a jsonb STRING is null, as in Postgres.
+const sbProject = (row, select) => {
+  if (!select || select === '*') return row;
+  const out = {};
+  for (const item of select.split(',')) {
+    const m = item.trim().match(/^(?:([A-Za-z0-9_]+):)?([A-Za-z0-9_*]+)((?:->>?[A-Za-z0-9_]+)*)$/);
+    if (!m) continue;
+    const [, alias, col, pathStr] = m;
+    if (col === '*') { Object.assign(out, row); continue; }
+    let v = row[col];
+    let text = false;
+    for (const p of (pathStr.match(/->>?[A-Za-z0-9_]+/g) || [])) {
+      const key = p.replace(/^->>?/, ''); text = p.startsWith('->>');
+      v = (v && typeof v === 'object') ? v[key] : undefined;
+    }
+    if (text) v = sbText(v); else if (v === undefined) v = null;
+    const parts = pathStr.match(/[A-Za-z0-9_]+/g) || [];
+    out[alias || (parts.length ? parts[parts.length - 1] : col)] = v;
+  }
+  return out;
+};
+const sbFake = async (req, res, table, qs) => {
+  const body = await readBody(req);
+  const q = new URLSearchParams(qs);
+  const prefer = String(req.headers.prefer || '');
+  const method = req.method;
+  state.sbLog.push({ method, table, query: qs, prefer });
+  const f = state.sbFail;
+  if (f && f.times > 0 && f.table === table && f.method === method) { f.times -= 1; return send(res, f.code, { message: 'servercheck: forced failure on ' + table }); }
+  const filters = [];
+  for (const [k, v] of q.entries()) {
+    if (['select', 'order', 'limit', 'offset', 'on_conflict'].includes(k)) continue;
+    const m = String(v).match(/^([a-z]+)\.([\s\S]*)$/);
+    if (!m) continue;
+    if (SB_COLUMNS[table] && !SB_COLUMNS[table].includes(k)) return send(res, 400, { code: '42703', message: `column ${table}.${k} does not exist` });
+    filters.push([k, m[1], m[2]]);
+  }
+  const rows = sbTable(table);
+  const hits = rows.filter(r => filters.every(([c, o, v]) => sbMatch(r, c, o, v)));
+  const rep = /return=representation/.test(prefer);
+  if (method === 'GET') {
+    const select = q.get('select') || '*';
+    for (const item of select.split(',')) {
+      const col = item.trim().replace(/^[A-Za-z0-9_]+:/, '').split('->')[0];
+      if (col !== '*' && SB_COLUMNS[table] && !SB_COLUMNS[table].includes(col)) return send(res, 400, { code: '42703', message: `column ${table}.${col} does not exist` });
+    }
+    let out = hits.slice();
+    const order = q.get('order');
+    if (order) {
+      const [col, dir] = order.split('.');
+      out.sort((a, b) => { const x = a[col], y = b[col]; const c = x === y ? 0 : (x === null || x === undefined) ? 1 : (y === null || y === undefined) ? -1 : (x < y ? -1 : 1); return dir === 'desc' ? -c : c; });
+    }
+    const off = Number(q.get('offset') || 0); if (off) out = out.slice(off);
+    const lim = q.get('limit'); if (lim !== null) out = out.slice(0, Number(lim));
+    const rm = String(req.headers.range || '').match(/^(\d+)-(\d+)$/); if (rm) out = out.slice(Number(rm[1]), Number(rm[2]) + 1);
+    return send(res, 200, out.map(r => sbProject(r, select)));
+  }
+  if (method === 'POST') {
+    let inc; try { inc = JSON.parse(body); } catch (e) { return send(res, 400, { message: 'servercheck: the body is not JSON' }); }
+    const list = Array.isArray(inc) ? inc : [inc];
+    const key = q.get('on_conflict') || 'id';
+    for (const r of list) { const bad = sbUnknownColumn(table, Object.keys(r || {})); if (bad) return sbRefuse(res, table, bad); }
+    const ignore = /resolution=ignore-duplicates/.test(prefer), merge = /resolution=merge-duplicates/.test(prefer);
+    const written = [];
+    for (const r of list) {
+      const ex = rows.find(x => x[key] !== undefined && r[key] !== undefined && String(x[key]) === String(r[key]));
+      if (ex) {
+        if (ignore) continue;
+        if (merge) { Object.assign(ex, r); written.push(ex); continue; }
+        return send(res, 409, { code: '23505', message: `duplicate key value violates unique constraint "${table}_pkey"` });
+      }
+      const row = Object.assign({}, r); rows.push(row); written.push(row);
+    }
+    if (rep) return send(res, 201, written);
+    res.writeHead(201); return res.end();
+  }
+  if (method === 'PATCH') {
+    let patch; try { patch = JSON.parse(body); } catch (e) { return send(res, 400, { message: 'servercheck: the body is not JSON' }); }
+    const bad = sbUnknownColumn(table, Object.keys(patch || {})); if (bad) return sbRefuse(res, table, bad);
+    for (const r of hits) Object.assign(r, patch);
+    if (rep) return send(res, 200, hits);
+    res.writeHead(204); return res.end();
+  }
+  if (method === 'DELETE') {
+    state.sb[table] = rows.filter(r => !hits.includes(r));
+    if (rep) return send(res, 200, hits);
+    res.writeHead(204); return res.end();
+  }
+  return send(res, 405, { message: 'servercheck: ' + method + ' is not a PostgREST verb this fake answers' });
+};
+
 const fake = http.createServer(async (req, res) => {
   const seg = req.url.split('/').filter(Boolean);
   const host = seg[0] || '';
   const path = '/' + seg.slice(1).join('/');
+  // Round 124: Supabase is a table, not a page. Kept OFF the request log so a
+  // "zero network calls" assertion measures the lead and not the bookkeeping.
+  if (host === 'supabase.example') {
+    if (seg[1] !== 'rest' || seg[2] !== 'v1' || !seg[3]) return send(res, 404, { message: 'servercheck: not a PostgREST path: ' + req.url });
+    return sbFake(req, res, seg[3].split('?')[0], req.url.split('?').slice(1).join('?'));
+  }
   state.requests.push({ host, path: path.split('?')[0] });
   const body = await readBody(req);
   // Round 112: the search query rides the record, so a scenario can tell the
   // size lookup's searches from a page bought instead of read for free.
-  try { const _j = JSON.parse(String(body || '')); state.requests[state.requests.length - 1].query = String((_j && _j.query) || ''); } catch (e) { state.requests[state.requests.length - 1].query = ''; }
-  const b = state.biz || biz('A');
+  try { const _j = JSON.parse(String(body || '')); state.requests[state.requests.length - 1].query = String((_j && _j.query) || ''); state.requests[state.requests.length - 1].url = String((_j && _j.url) || ''); } catch (e) { state.requests[state.requests.length - 1].query = ''; state.requests[state.requests.length - 1].url = ''; }
+  const b = BIZ_BY_HOST[host] || state.biz || biz('A');
 
   if (host === 'api.anthropic.com') return send(res, 200, anthropicAnswer(body, b));
 
@@ -295,6 +454,7 @@ const fake = http.createServer(async (req, res) => {
   }
 
   if (host === b.host || /\.example$/.test(host)) {
+    if (state.slowMs) await sleep(state.slowMs);
     // findblocked: the site refuses a plain fetch outright, which is the ONLY
     // case in which the contact read is allowed to spend a Firecrawl credit.
     if (state.mode === 'findblocked') return send(res, 403, '<html><body>Access Denied. You have been blocked.</body></html>');
@@ -322,6 +482,10 @@ const bootServer = (extraEnv) => new Promise((resolve, reject) => {
       GOOGLE_PLACES_KEY: 'gp_servercheck',
       // The one free name-to-domain source with a real match standard.
       COMPANIES_API_KEY: 'capi_servercheck',
+      // Round 124: the fake PostgREST. sbRest reads SUPABASE_URL raw, so the
+      // fixture host rides the path the same way FAKE_UPSTREAM's hosts do.
+      SUPABASE_URL: `http://127.0.0.1:${FAKE_PORT}/supabase.example`,
+      SUPABASE_KEY: 'sb_servercheck',
       // The pace is deliberately NOT overridden: the first attempt set
       // FC_GAP_UNKNOWN_MS=40 and FIRECRAWL PACING CHECK went red on it -
       // "1500 requests a minute against a free tier that allows 10" - which is
@@ -406,6 +570,9 @@ const runLead = async (b, over, capMs) => {
   try {
     // healthz must gate: hit it before boot settles (bootServer loops on it,
     // and the loop itself observed 503-while-checking on the way to 200).
+    // Round 124: the keys a background read takes from Settings, seeded before
+    // the first boot so the schema probe finds user_settings.data.
+    state.sb.user_settings = [{ id: 'singleton', data: { apiKey: 'k-test', firecrawlKey: 'fc-test', verifierKey: '' } }];
     srv = await bootServer({});
     console.log('servercheck: server green on :' + SRV_PORT + ' (healthz held 503 until the verdict settled, then answered 200)');
     passed += 1;
@@ -828,6 +995,7 @@ const runLead = async (b, over, capMs) => {
       state.mode = '';
     }
 
+    let _findResult = null;
     console.log('── scenario I: the Find run outlives the request that started it');
     {
       const _t0 = Date.now();
@@ -868,6 +1036,7 @@ const runLead = async (b, over, capMs) => {
           `the Find job never reported done: ${JSON.stringify(done && { s: done.status, e: done.error }).slice(0, 200)}`);
         ok(done && done.result && Array.isArray(done.result.companies),
           'the finished Find job carries no companies array, so the answer the run paid for is not being handed back');
+        _findResult = done && done.result;
       }
 
       // An id this server has never heard of is a real ending, said plainly,
@@ -884,6 +1053,184 @@ const runLead = async (b, over, capMs) => {
         ok(_x.code === 404, 'a research job can be polled through the Find door, so one tab can be handed the other tab\'s payload');
       }
     }
+    // ── R: THE FIND QUEUE ON THE SERVER, AND A READ RUN THAT OUTLIVES THE TAB
+    // Round 124. The browser used to hold the queue in localStorage, write the
+    // whole table on every action and run the contact reads itself, so a
+    // closed tab was a dead batch. Now the Find press writes the queue, a run
+    // is a row in read_runs, and the driver claims, reads, stamps and ends
+    // with no browser open. No boot fixture can see any of that: every
+    // assertion below is a seam between a route, the driver and a table.
+    console.log('── scenario R0: the Find press wrote the queue');
+    {
+      const _q = sbTable('discovered_queue');
+      const _n = (_findResult && Array.isArray(_findResult.companies)) ? _findResult.companies.length : 0;
+      if (!_n) info('the Find press in scenario I returned no companies, so the queue write has nothing to be measured on here');
+      else {
+        ok(_findResult.queued === _n, `the Find payload says ${_findResult.queued} queued of ${_n} found - the queue write failed or is not reported`);
+        ok(_q.length >= _n, `the Find press found ${_n} and discovered_queue holds ${_q.length} - the server-owned queue is not wired to runDiscovery`);
+        ok(_q.every(r => r.extra && typeof r.extra === 'object'), 'a queue row the server wrote carries extra as something other than an object - the old page\'s JSON-string shape is back');
+        ok(_q.every(r => typeof r.from_trigger_source === 'boolean' && typeof r.reach_predict === 'number'), 'a queue row the server wrote is missing from_trigger_source or reach_predict, so the summary and the draw order have nothing to read');
+        ok(_q.some(r => r.source === 'google_places' && r.from_trigger_source === false), 'a Google listing row reads as a trigger-lane lead');
+      }
+    }
+
+    console.log('── scenario R1: a read run claims, reads, stamps and finishes - with no browser attached');
+    const qRow = (b, over) => Object.assign({
+      id: b.host.replace(/\W/g, '') + '_google_places', name: b.company, website: `https://${b.host}`, icp_score: 70, source: 'google_places', signals: {},
+      job_title: '', location: 'Dallas, TX', manual_role_count: 0, stacked: false, reachability: 0, size_verified: false, size_unverified: false, verified_employees: null,
+      extra: { name: b.company, website: `https://${b.host}`, phone: '(214) 555-0188', location: 'Dallas, TX', industry: 'roofer', reviewCount: 180, rating: 4.6, source: 'google_places', placeId: b.placeId, icpScore: 70 },
+      from_trigger_source: false, reach_predict: 60, batch_id: null, read_at: null, read_failed: null, fail_reason: null, moved_to_research_at: null, ruled_out_at: null, ruled_out_why: null, exported_at: null, exported_to: null,
+    }, over || {});
+    const qRowOf = (id) => sbTable('discovered_queue').find(r => r.id === id);
+    const waitRun = async (id, capMs) => {
+      const t0 = Date.now();
+      for (;;) {
+        const r = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/read-runs?limit=5`);
+        const run = Array.isArray(r.json) ? r.json.find(x => x.id === id) : null;
+        if (run && run.status !== 'running') return run;
+        if (Date.now() - t0 > (capMs || 150000)) return run || null;
+        await sleep(700);
+      }
+    };
+    state.mode = 'findrich';
+    state.sb.discovered_queue = [];
+    const R1a = bizReg('R1a'), R1b = bizReg('R1b'), R1c = bizReg('R1c'), R1d = bizReg('R1d');
+    sbTable('discovered_queue').push(qRow(R1a), qRow(R1b), qRow(R1c),
+      // Nothing to read on this one and the best numbers in the table: the draw
+      // must still leave it, because a lead with a site sorts above any score.
+      qRow(R1d, { website: '', reach_predict: 99, icp_score: 99, extra: Object.assign({}, qRow(R1d).extra, { website: '', placeId: '' }) }));
+    const Q0 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/find/summary`);
+    ok(Q0.code === 200 && Q0.json && Q0.json.unread === 4 && Q0.json.running === null, `the summary before the run reads ${JSON.stringify(Q0.json).slice(0, 160)} - expected 4 unread and nothing running`);
+    ok(Q0.json && Q0.json.creditsPerReadEst >= 4, `the summary estimates ${Q0.json && Q0.json.creditsPerReadEst} credit(s) a read; the measured cost is 4 to 8`);
+    const r1fc = fcCalls();
+    const r1Req0 = state.requests.length;
+    const r1Log0 = srv.log().length;
+    const _r1t0 = Date.now();
+    const R1 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/read-run`, { count: 3 });
+    const _r1ms = Date.now() - _r1t0;
+    ok(R1.code === 200 && R1.json && R1.json.runId, `starting a read run answered ${R1.code}: ${JSON.stringify(R1.json).slice(0, 160)}`);
+    ok(_r1ms < 5000, `the start answered in ${_r1ms}ms - it is holding the request open for the reads, which is the closed-tab defect in a new coat`);
+    const r1id = R1.json && R1.json.runId;
+    const R1busy = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/read-run`, { count: 1 });
+    ok(R1busy.code === 409 && R1busy.json && R1busy.json.busy === true, `a second start while one runs answered ${R1busy.code} instead of a plain busy`);
+    const Q1 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/find/summary`);
+    ok(Q1.json && Q1.json.running === r1id, `the summary does not name the running run (${JSON.stringify(Q1.json && Q1.json.running)})`);
+    const R1done = await waitRun(r1id);
+    ok(R1done && R1done.status === 'done', `the run ended ${JSON.stringify(R1done && { status: R1done.status, error: R1done.error, read: R1done.read_count, failed: R1done.failed_count })} - expected done`);
+    ok(R1done && R1done.read_count === 3 && R1done.failed_count === 0 && R1done.ruled_out_count === 0, `the run counted ${JSON.stringify(R1done && [R1done.read_count, R1done.failed_count, R1done.ruled_out_count])} read/failed/ruled out on three readable leads`);
+    ok(R1done && R1done.credits_estimated === 15, `the estimate on the run row is ${R1done && R1done.credits_estimated}, not 3 x 5`);
+    // The free-read invariant, on a read nobody was watching: the size lookup
+    // is the only Firecrawl spend on a site that answers a plain fetch (H's
+    // rule), and the run's meter is that spend and nothing else.
+    // Scoped to THESE businesses: scenario I leaves a research job running in
+    // the background (the Find-door test submits one and never waits), and
+    // its scrapes landed in this window on the first run of this scenario.
+    const _r1Mine = (q) => /scenario ?r1[abcd]/i.test(String(q.query || '') + ' ' + String(q.url || ''));
+    const r1Free = state.requests.slice(r1Req0).filter(q => q.host === 'api.firecrawl.dev' && _r1Mine(q) && !_isSizeQ(q.query));
+    const r1Size = state.requests.slice(r1Req0).filter(q => q.host === 'api.firecrawl.dev' && _r1Mine(q) && _isSizeQ(q.query)).length;
+    ok(r1Free.length === 0, `the background read made ${r1Free.length} Firecrawl call(s) beyond the size lookup on sites that answer a plain fetch: ${[...new Set(r1Free.map(q => q.path + (q.query ? ' "' + q.query.slice(0, 60) + '"' : '')))].slice(0, 6).join(' | ')} - FC PAID lines: ${(srv.log().slice(r1Log0).match(/FC PAID[^\n]{0,120}/g) || []).slice(0, 6).join(' || ')}`);
+    ok(R1done && typeof R1done.credits_used === 'number' && R1done.credits_used > 0 && R1done.credits_used === r1Size * 2, `credits_used is ${R1done && R1done.credits_used} against ${r1Size} size search(es) at 2 each - the run's meter and the ledger disagree`);
+    ok(R1done && R1done.withEmail === 3 && R1done.live === false && R1done.finished_at, `the run card reads ${JSON.stringify(R1done && [R1done.withEmail, R1done.live, !!R1done.finished_at])} for with-email/live/finished on three leads whose contact page publishes the owner's address`);
+    const L1 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/read-runs/${r1id}/leads`);
+    const L1r = (L1.json && L1.json.leads) || [];
+    ok(L1.code === 200 && L1r.length === 3, `the batch answered ${L1.code} with ${L1r.length} lead(s)`);
+    ok(L1r.length === 3 && L1r.every(l => l.readAt && !l.readFailed && l.batchId === r1id), `a lead in a finished batch is not stamped read: ${JSON.stringify(L1r.map(l => [l.name, l.readAt, l.readFailed]))}`);
+    ok(L1r.length === 3 && L1r.every(l => /Pete Barnes/.test(String(l.contactOwner || ''))), `the owner off their own team page did not reach the queue row: ${JSON.stringify(L1r.map(l => l.contactOwner))}`);
+    ok(L1r.length === 3 && L1r.every(l => /^pete@/.test(String(l.contactEmail || '')) && l.contactEmailGrade === 'published_personal'), `the published address did not reach the queue row with its grade: ${JSON.stringify(L1r.map(l => [l.contactEmail, l.contactEmailGrade]))}`);
+    ok(L1r.length === 3 && L1r.every(l => l.contactReadBuild === CONTRACT), `a row read by the server carries build ${JSON.stringify(L1r.map(l => l.contactReadBuild))}, not the server's own ${CONTRACT}`);
+    // THE WIPE GUARD: what the Find press knew survives the read.
+    ok(L1r.length === 3 && L1r.every(l => l.reviewCount === 180 && l.source === 'google_places' && l.placeId), `the read replaced the company object instead of merging into it: ${JSON.stringify(L1r.map(l => [l.reviewCount, l.source, l.placeId]))}`);
+    ok(L1r.length === 3 && L1r.every(l => typeof l.contactIcp === 'number' && l.contactIcp >= 80), `the score did not reach the row: ${JSON.stringify(L1r.map(l => l.contactIcp))}`);
+    // THE DRAW: the unreadable lead with the best numbers stayed in the queue.
+    const _d = qRowOf(qRow(R1d).id);
+    ok(_d && _d.batch_id === null && !_d.read_at, `the lead with nothing to read was drawn ahead of three with a website: ${JSON.stringify(_d && [_d.batch_id, _d.read_at])}`);
+    ok(sbTable('discovered_queue').filter(r => r.batch_id === r1id).every(r => r.extra && typeof r.extra === 'object'), 'a row the server wrote back holds extra as a string');
+    const Q2 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/find/summary`);
+    ok(Q2.json && Q2.json.unread === 1 && Q2.json.read === 3 && Q2.json.running === null, `the summary after the run reads ${JSON.stringify(Q2.json).slice(0, 160)} - expected 1 unread, 3 read, nothing running`);
+    // THE HAND ACTIONS, each a stamp and never a delete.
+    const M1 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/leads/move-to-research`, { ids: [qRow(R1a).id] });
+    ok(M1.code === 200 && M1.json && M1.json.moved === 1 && M1.json.leads && /Pete Barnes/.test(String((M1.json.leads[0] || {}).contactOwner || '')), `move to Research answered ${M1.code}: ${JSON.stringify(M1.json).slice(0, 160)} - the browser builds the pipeline row from these and must get the read back`);
+    const M1again = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/leads/move-to-research`, { ids: [qRow(R1a).id] });
+    ok(M1again.json && M1again.json.moved === 0, 'moving a lead already in Research moved it again, so a double click makes a duplicate pipeline row');
+    const X1 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/leads/exported`, { ids: [qRow(R1a).id, qRow(R1b).id], dest: 'csv' });
+    ok(X1.code === 200 && qRowOf(qRow(R1b).id).exported_to === 'csv' && !!qRowOf(qRow(R1b).id).exported_at, 'the export stamp did not land on the row ("i have no clue which ones ive already exported")');
+    const O1 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/leads/rule-out`, { ids: [qRow(R1b).id], why: 'a chain after all' });
+    ok(O1.code === 200 && !!qRowOf(qRow(R1b).id).ruled_out_at && qRowOf(qRow(R1b).id).ruled_out_why === 'a chain after all', 'ruling a lead out by hand did not stamp the row');
+    const Q3 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/find/summary`);
+    ok(Q3.json && Q3.json.ruledOut === 1 && Q3.json.moved === 1 && Q3.json.read === 1, `after one move and one rule-out the summary reads ${JSON.stringify(Q3.json).slice(0, 160)}`);
+    const AR1 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/find/archive`);
+    ok(AR1.code === 200 && AR1.json && (AR1.json.leads || []).some(l => l.id === qRow(R1b).id && /chain/.test(String(l.ruledOutWhy || ''))), `the archive does not list the lead just ruled out with its reason: ${AR1.code} ${JSON.stringify(AR1.json).slice(0, 160)}`);
+    const B1 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/leads/restore`, { ids: [qRow(R1b).id] });
+    const AR2 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/find/archive`);
+    ok(AR2.json && !(AR2.json.leads || []).some(l => l.id === qRow(R1b).id), 'a restored lead is still in the archive');
+    const _b = qRowOf(qRow(R1b).id);
+    ok(B1.code === 200 && _b && !_b.ruled_out_at && _b.batch_id === r1id && !!_b.read_at && _b.extra.contactNotFit === false, `restoring a ruled-out lead left the row as ${JSON.stringify(_b && [_b.ruled_out_at, _b.batch_id, !!_b.read_at])} - it should be back in its batch with its read`);
+    const RL = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/read-runs?limit=5`);
+    const _card = (Array.isArray(RL.json) && RL.json.find(r => r.id === r1id)) || {};
+    ok(_card.inResearch === 1 && _card.ruledOut === 0 && _card.withEmail === 3, `the batch card reads ${JSON.stringify([_card.inResearch, _card.ruledOut, _card.withEmail])} for in-Research/ruled-out/with-email after one move and a restore`);
+    // MOVE UNREAD: no read, no spend. The lead the draw left is the only one.
+    const _mu0 = fcCalls();
+    const MU = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/leads/move-unread-to-research`, { count: 5 });
+    const _dd = qRowOf(qRow(R1d).id);
+    ok(MU.code === 200 && MU.json && MU.json.moved === 1 && !!_dd.moved_to_research_at && !_dd.read_at && fcCalls() === _mu0, `moving unread leads straight to Research: ${JSON.stringify(MU.json && MU.json.moved)} moved, read_at ${JSON.stringify(_dd.read_at)}, ${fcCalls() - _mu0} Firecrawl call(s) - it must stamp the move only`);
+    const NR = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/read-run`, { count: 0 });
+    ok(NR.code === 422, `count 0 was accepted (${NR.code})`);
+    const NG = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/read-run/nope/cancel`, {});
+    ok(NG.code === 404, `cancelling a run this server is not driving answered ${NG.code}`);
+
+    console.log('── scenario R2: Cancel stops the draw, and what was never reached goes back to the queue');
+    state.sb.discovered_queue = [];
+    sbTable('discovered_queue').push(...'abcdefghijkl'.split('').map(x => qRow(bizReg('R2' + x))));
+    state.slowMs = 1500;
+    const R2 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/read-run`, { count: 12 });
+    ok(R2.code === 200 && R2.json && R2.json.runId, `the second run did not start (${R2.code}: ${JSON.stringify(R2.json).slice(0, 120)}) - the first run's end did not release the server`);
+    const r2id = R2.json && R2.json.runId;
+    await sleep(2500);
+    const C2 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/read-run/${r2id}/cancel`, {});
+    ok(C2.code === 200 && C2.json && C2.json.cancelling === true, `Cancel answered ${C2.code}`);
+    const R2done = await waitRun(r2id);
+    state.slowMs = 0;
+    const _r2 = sbTable('discovered_queue');
+    const _answered = _r2.filter(r => r.read_at || r.read_failed || r.ruled_out_at).length;
+    const _released = _r2.filter(r => r.batch_id === null && !r.read_at).length;
+    const _stuck = _r2.filter(r => r.batch_id === r2id && !r.read_at && !r.read_failed && !r.ruled_out_at).length;
+    ok(R2done && R2done.status === 'partial', `a cancelled run ended ${JSON.stringify(R2done && [R2done.status, R2done.error])} - expected partial`);
+    ok(_answered >= 1 && _answered < 12, `${_answered} of 12 answered after a Cancel sent two seconds in - a Cancel that stops nothing, or a run that read nothing`);
+    ok(_stuck === 0 && _released === 12 - _answered, `${_stuck} lead(s) are still claimed by a run that ended and ${_released} went back to the queue - a lead the run never reached is unread, not read`);
+    ok(R2done && R2done.read_count + R2done.failed_count + R2done.ruled_out_count === _answered, `the run row counts ${JSON.stringify(R2done && [R2done.read_count, R2done.failed_count, R2done.ruled_out_count])} against ${_answered} answered rows`);
+    const Q4 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/find/summary`);
+    ok(Q4.json && Q4.json.unread === _released && Q4.json.running === null, `after the cancel the summary reads ${JSON.stringify(Q4.json).slice(0, 120)} - expected ${_released} unread and nothing running`);
+
+    console.log('── scenario R3: a run that breaks ends failed with a reason, and never stays running');
+    state.sb.discovered_queue = [qRow(bizReg('R3a'))];
+    state.sbFail = { table: 'read_runs', method: 'PATCH', code: 500, times: 1 };
+    const R3 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/read-run`, { count: 1 });
+    const r3id = R3.json && R3.json.runId;
+    ok(R3.code === 200 && !!r3id, `the run after a cancel did not start (${R3.code})`);
+    const R3done = await waitRun(r3id);
+    ok(state.sbFail.times === 0, 'the forced 500 on read_runs was never consumed, so this scenario proved nothing');
+    state.sbFail = null;
+    ok(R3done && R3done.status === 'failed' && String(R3done.error || '').length > 0, `a run whose own row could not be updated ended ${JSON.stringify(R3done && [R3done.status, R3done.error])} - expected failed with the reason`);
+    const Q5 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/find/summary`);
+    ok(Q5.json && Q5.json.running === null, 'a failed run is still reported as running, so the next start is refused for ever');
+    // A row whose stored company object is not JSON: one failure, the run still ends.
+    const _bad = qRow(bizReg('R3b'), { extra: '{not json' });
+    state.sb.discovered_queue = [_bad, qRow(bizReg('R3c'))];
+    const R3b = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/read-run`, { count: 2 });
+    ok(R3b.code === 200 && R3b.json && R3b.json.runId, `a run after a failed one was refused (${R3b.code}: ${JSON.stringify(R3b.json).slice(0, 120)}) - the failure left the server busy`);
+    const R3bdone = await waitRun(R3b.json && R3b.json.runId);
+    ok(R3bdone && R3bdone.status === 'partial' && R3bdone.read_count === 1 && R3bdone.failed_count === 1, `a batch with one unreadable row ended ${JSON.stringify(R3bdone && [R3bdone.status, R3bdone.read_count, R3bdone.failed_count])} - expected partial, 1 read, 1 failed`);
+    const _badRow = qRowOf(_bad.id);
+    ok(_badRow && _badRow.read_failed === true && /JSON/.test(String(_badRow.fail_reason || '')) && _badRow.batch_id === (R3b.json && R3b.json.runId), `the unreadable row reads ${JSON.stringify(_badRow && [_badRow.read_failed, _badRow.fail_reason, _badRow.batch_id])} - it must stay in its batch, failed, with the reason`);
+    // No key in Settings: refused by name before a row is claimed.
+    const _keep = sbTable('user_settings')[0].data;
+    sbTable('user_settings')[0].data = { firecrawlKey: 'fc-test' };
+    const NK = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/read-run`, { count: 1 });
+    ok(NK.code === 422 && /Anthropic/.test(String((NK.json || {}).error || '')), `a run with no Anthropic key in Settings was not refused by name (${NK.code})`);
+    sbTable('user_settings')[0].data = _keep;
+    ok(sbTable('read_runs').every(r => r.status !== 'running'), 'a run row is still "running" after every run on this boot ended');
+    ok(!state.sbLog.some(h => h.table === 'user_settings' && h.method !== 'GET'), 'the server WROTE the Settings row - a background run may read keys, never store them');
+
     // ── E: FIRECRAWL OUT OF CREDITS ─────────────────────
     // LAST on this boot: the 402 latch is process state by design, so every
     // scenario that needs to SPEND has to run above this line.
@@ -916,6 +1263,38 @@ const runLead = async (b, over, capMs) => {
     ok(F1.httpStatus === 200, `the lead that CROSSED the ceiling mid-run was killed (${F1.httpStatus}: ${(F1.error || '').slice(0, 100)}) — a half-lead is pure waste and the rule is admission-only`);
     const F2 = await runLead(biz('G'), {}, 30000);
     ok(/FC_DAILY_BUDGET/.test(String(F2.error || '')), `the lead AFTER the ceiling was not refused naming the setting — got: ${String(F2.error || '(none)').slice(0, 140)}`);
+
+    srv.child.kill(); await sleep(400);
+
+    // ── R4: A RESTART MID-RUN (a merge, a spin-down), ON A THIRD BOOT ────
+    // A run is a row, so the process that replaced this one must pick it up:
+    // resumed when its last progress is recent, failed as stalled when not,
+    // and in both cases nothing is left claimed by a run that is not driving.
+    console.log('── scenario R4: a third boot picks up a live run and fails a stalled one');
+    state.mode = 'findrich'; state.biz = biz('R4');
+    const _uuid = () => require('crypto').randomUUID();
+    const _ago = (ms) => new Date(Date.now() - ms).toISOString();
+    const stalledId = _uuid(), liveId = _uuid();
+    const R4s1 = bizReg('R4a'), R4s2 = bizReg('R4b'), R4l1 = bizReg('R4c'), R4l2 = bizReg('R4d');
+    state.sb.discovered_queue = [
+      qRow(R4s1, { batch_id: stalledId, read_at: _ago(3 * 3600e3) }),
+      qRow(R4s2, { batch_id: stalledId }),
+      qRow(R4l1, { batch_id: liveId, read_at: _ago(90e3) }),
+      qRow(R4l2, { batch_id: liveId }),
+    ];
+    const _runRow = (id, agoMs) => ({ id, started_at: _ago(agoMs + 60e3), progress_at: _ago(agoMs), finished_at: null, status: 'running', requested_count: 2, read_count: 1, failed_count: 0, ruled_out_count: 0, credits_estimated: 10, credits_used: 4, scope: {}, error: null });
+    state.sb.read_runs = [_runRow(stalledId, 3 * 3600e3), _runRow(liveId, 90e3)];
+    srv = await bootServer({});
+    {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 120000 && state.sb.read_runs.some(r => r.status === 'running')) await sleep(1000);
+    }
+    const _st = state.sb.read_runs.find(r => r.id === stalledId), _lv = state.sb.read_runs.find(r => r.id === liveId);
+    ok(_st.status === 'failed' && _st.error === 'stalled', `a run with no progress for three hours was left ${JSON.stringify([_st.status, _st.error])} after a restart - the next start is refused for ever`);
+    ok(qRowOf(qRow(R4s2).id).batch_id === null && qRowOf(qRow(R4s1).id).batch_id === stalledId, 'the stalled run\'s unread lead was not returned to the queue, or its read one was');
+    ok(_lv.status === 'done' && _lv.read_count === 2, `a run interrupted with one lead left ended ${JSON.stringify([_lv.status, _lv.read_count, _lv.error])} after the restart - expected done with both read`);
+    ok(!!qRowOf(qRow(R4l2).id).read_at && /Pete Barnes/.test(String((qRowOf(qRow(R4l2).id).extra || {}).contactOwner || '')), 'the lead left unread by the restart was not read on resume');
+    ok(/resumed after a restart/.test(srv.log()), 'the resume never printed its own line, so an operator reading the log after a merge cannot tell a resumed run from a new one');
 
     if (state.unknown.length) info('endpoints the fake did not know (tolerated by the routes): ' + [...new Set(state.unknown)].slice(0, 6).join(', '));
   } catch (e) {
