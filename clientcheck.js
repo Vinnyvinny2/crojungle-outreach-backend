@@ -3277,6 +3277,10 @@ let contactTally = null;
     ["'#/find/batch/' + ", "encodeURIComponent(", 'Review does not deep-link into the batch, so a batch cannot be opened cold or shared'],
     ["'That batch no longer exists. '", "", 'a deep link to a missing run has no honest ending'],
     ["'already read", " · no credits'", 'the bulk bar does not say a bulk action is free'],
+    // Round 125: the tag sits BEFORE the address. The cell truncates, and on a
+    // long address a tag at the end was the part that vanished (Muse, Davis,
+    // 2026-09-08), so a guess read as a good address.
+    ["h('span', { style: { color: T.amberBorder } }, 'unverif '),", " l.contactEmail)", 'the unverified tag sits after the address, where a long address pushes it out of the cell and a guess reads as a good address'],
     ["}, 3000);", "", 'the running row is not polled'],
     ["if (added.length) saveLeads([...existing, ...added], added);", "", 'the pipeline save pushes something other than EVERY added lead (the one-row-of-fifty defect)'],
     ["if (!quiet) { setChip('email'); setSortBy('fit'); setPicked(new Set(visibleOf(leads, 'email', 'fit')", ".filter(l => queueStateOf(l) === 'read').map(l => l.id))); }", 'Screen B does not open on With email with every visible row pre-selected'],
