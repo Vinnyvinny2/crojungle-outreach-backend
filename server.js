@@ -12076,7 +12076,7 @@ const rosterEligiblePage = (page) => {
   try { path = new URL(path).pathname; } catch { /* not a URL: test what we were given */ }
   return !CAREERS_PAGE_RE.test(path);
 };
-const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName, preFetched = null) => {
+const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName, preFetched = null, navLinks = null) => {
   const _pre = Array.isArray(preFetched) ? preFetched.filter(p => p && p.text && p.text.length > 200) : [];
   // fcKey is required only when we are the ones buying the pages. With a corpus
   // in hand it is irrelevant, and demanding it would make the free path depend
@@ -12124,7 +12124,16 @@ const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, compan
     }
 
     // Ask the site for its real URLs, filtered toward leadership pages
-    const urls = await firecrawlMap(fcKey, website, 'about team leadership founder owner');
+    // Round 122: the free read already harvested this site's own navigation
+    // (Oasis of the Valley: 12 links off the nav, then a sitemap bought that
+    // returned the same 12). With five or more same-host links in hand the
+    // ranker reads THOSE; a map is bought only when nothing was harvested.
+    // Disclosed cost: an about page linked from nowhere in the navigation is
+    // missed on those sites - the sitemap was the only way to see it.
+    const _nav = Array.isArray(navLinks) ? navLinks.filter(u => typeof u === 'string' && /^https?:\/\//i.test(u)) : [];
+    const _useNav = _nav.length >= 5;
+    if (_useNav) console.log(`DM/brain [${companyName}]: ranking the ${_nav.length} link(s) their own navigation already gave us — no sitemap bought (1 credit saved).`);
+    const urls = _useNav ? _nav : await firecrawlMap(fcKey, website, 'about team leadership founder owner');
     // Kept rather than dropped. The chain read downstream can see a locations
     // index only if somebody hands it one, and this list is already bought.
     _setMappedUrls(companyName, website, urls);
@@ -12207,6 +12216,18 @@ const ownerSentenceIsOurs = (m, shapeA, corpus, coTok) => {
   if (!_co) return true;
   return toks.some(t => _co.includes(t));
 };
+// ══ THE OWNER SENTENCE, AT MODULE SCOPE ═══════════════════════════════════
+// Hoisted in Round 122 so a boot check can EXECUTE it on the live sentence
+// rather than pin its text. Shape A: "owner of <company>, <Name> is ...".
+// Shape B: "<Name>, Owner". The role word may not be followed by a hyphen:
+// "Owner-Operated" is an adjective about the business, not a title after a
+// name, and "in Greater Louisville Owner-Operated Contractor" is how Greater
+// Louisville shipped as Black Rock Contracting's decision-maker on 2026-09-08.
+const OWNER_SENTENCE_ROLE = `[Ff]ounder|[Oo]wner|[Pp]resident|[Pp]rincipal|[Pp]roprietor`;
+const OWNER_SENTENCE_NAMETOK = `[A-Z][a-zA-Z'\\u2019-]{1,20}`;
+const OWNER_SENTENCE_RE = new RegExp(
+  `\\b(${OWNER_SENTENCE_ROLE})(?:\\s+and\\s+\\w+)?\\s+of\\s+([^.]{2,80}?),\\s*([A-Z][a-z]{1,15}(?:\\s+${OWNER_SENTENCE_NAMETOK})?)\\s+(?:is|was|has|had|founded|started|began|brings|built|leads|runs|opened)\\b`
+  + `|\\b([A-Z][a-z]{1,15}\\s+${OWNER_SENTENCE_NAMETOK})\\s*,?\\s+(?:the\\s+)?(${OWNER_SENTENCE_ROLE})\\b(?!-)`);
 const _ownerFromCorpus = async (corpus, companyName, website, apiKey, rosterCorpus) => {
   try {
     // ══ THE ROSTER IS READ BEFORE THE MODEL IS ASKED ═════════════════════════
@@ -12407,11 +12428,7 @@ ${corpus}` }]
       // could never have returned anybody. Where the sentence writes only a
       // first name we say so and return nothing: completing it from the
       // company name would be inference reported as a read.
-      const _ROLE = `[Ff]ounder|[Oo]wner|[Pp]resident|[Pp]rincipal|[Pp]roprietor`;
-      const _NAMETOK = `[A-Z][a-zA-Z'\\u2019-]{1,20}`;
-      const _OWNER_SENTENCE = new RegExp(
-        `\\b(${_ROLE})(?:\\s+and\\s+\\w+)?\\s+of\\s+([^.]{2,80}?),\\s*([A-Z][a-z]{1,15}(?:\\s+${_NAMETOK})?)\\s+(?:is|was|has|had|founded|started|began|brings|built|leads|runs|opened)\\b`
-        + `|\\b([A-Z][a-z]{1,15}\\s+${_NAMETOK})\\s*,?\\s+(?:the\\s+)?(${_ROLE})\\b`);
+      const _OWNER_SENTENCE = OWNER_SENTENCE_RE;
       const _m = String(corpus || '').match(_OWNER_SENTENCE);
       const _shapeA = !!(_m && _m[3]);
       const _fallbackName = _m ? String((_shapeA ? _m[3] : _m[4]) || '').trim() : '';
@@ -12420,7 +12437,14 @@ ${corpus}` }]
       // there is nothing to tie the sentence to - refuse rather than guess.
       const _coTok = companyDistinctiveTokens(companyName);
       const _ours = ownerSentenceIsOurs(_m, _shapeA, corpus, _coTok);
-      if (_fallbackName && _ours && looksLikeRealName(_fallbackName) && String(corpus).includes(_fallbackName.split(/\s+/)[0]) && !retiredNear(corpus, _fallbackName)) {
+      // Round 122: the name door, which every other owner source already
+      // passes through. Two capitalised words before an ownership word clear
+      // every SHAPE rule; the door is what knows a place from a person.
+      const _door = _fallbackName ? ownerNameDoor(_fallbackName, companyName) : null;
+      if (_fallbackName && _ours && _door) {
+        console.log(`DM/brain [${companyName}]: an owner sentence names "${_fallbackName}", which reads as ${_door === 'place' ? 'a place' : 'not a person'} — refused. "in Greater Louisville Owner-Operated" is a sentence about where they work, not who runs it.`);
+      }
+      if (_fallbackName && _ours && looksLikeRealName(_fallbackName) && String(corpus).includes(_fallbackName.split(/\s+/)[0]) && !retiredNear(corpus, _fallbackName) && !ownerNameDoor(_fallbackName, companyName)) {
         const _title = _fallbackRole
           ? _fallbackRole.charAt(0).toUpperCase() + _fallbackRole.slice(1).toLowerCase()
           : 'Owner';
@@ -13940,7 +13964,7 @@ ${corpus}` }]
     const bbbUrl = results.map(r => String((r && r.url) || '')).find(u => BBB_PROFILE_RE.test(u) && (!_dt.length || _dt.some(tok => u.toLowerCase().includes(tok))));
     if (bbbUrl) {
       const bbb = await fetchBbbProfile(bbbUrl);
-      if (!bbb.ok) console.log(`SIZE [${companyName}]: BBB profile refused a plain fetch (${bbb.why}) - not bought`);
+      if (!bbb.ok && !/^retired/.test(String(bbb.why))) console.log(`SIZE [${companyName}]: BBB profile refused a plain fetch (${bbb.why}) - not bought`);
       else {
         parsed = parsed || {};
         if (!(Number(parsed.employees) > 0) && Number(bbb.employees) > 0) { parsed.employees = Number(bbb.employees); parsed.employeesFromRange = ''; parsed.source = 'BBB profile'; }
@@ -31763,7 +31787,7 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
     console.log(`\u{1F4C8} REVIEW VELOCITY [${companyName}]: NOT MEASURED - ${velocity.why}. No claim about their review trend is permitted on this lead.`);
   }
 
-  const coverage = meta.totalReviews ? `${mined.length} of ${meta.totalReviews} reviews`
+  const coverage = meta.totalReviews ? (mined.length > meta.totalReviews ? `${mined.length} reviews (their listing shows ${meta.totalReviews})` : `${mined.length} of ${meta.totalReviews} reviews`)
                                      : `${mined.length} reviews (total on the profile unknown)`;
   console.log(`APIFY REVIEWS [${companyName}]: read ${coverage} — ${withText.length} with text, ${negative.length} at 3 stars or below, ${ownerReplies.length} owner replies`);
   // ══ SAY OUT LOUD WHEN WE BOUGHT SOMETHING WE DID NOT USE ════════════
@@ -33574,7 +33598,9 @@ const PERSON_ROLE_NEAR = /\b(dr|doctor|owner|founder|founded|co-?founder|preside
 // that "(no title found)" is the honest render; inventing one is what the
 // || 'Owner' default did before §41 removed it.
 const bizTitleUsable = (t) => {
-  const s = String(t || '').trim();
+  // Round 122: "Owner | Licensed General Contractor" is a title with a pipe, not a
+  // sentence; the head before the pipe is the job.
+  const s = String(t || '').split('|')[0].trim();
   if (!s || s.length > 48) return false;
   if (s.split(/\s+/).filter(Boolean).length > 4) return false;
   if (/^[a-z]+ly\b/i.test(s)) return false;
@@ -33816,6 +33842,13 @@ const ORG_TOKEN_RE = /^(?:journal|constitution|international|corporation|corp|co
 // on 2026-09-04; the eponymous rule happened to win that row, and nothing in
 // the door would have stopped it.
 const HEADLINE_WORD_RE = /^(?:busting|breaking|choosing|finding|avoiding|understanding|proving|winning|fighting|protecting|hiring|selling|buying|saving|preventing|introducing|announcing|myth|myths|tip|tips|reason|reasons|way|ways|step|steps|thing|things|question|questions|mistake|mistakes|sign|signs)$/i;
+// Round 122: "About Black Rock Contracting in Greater Louisville Owner-Operated
+// Contractor" shipped GREATER LOUISVILLE as the decision-maker, title Owner,
+// grade B - a rep would have asked for him. A name whose head is a geographic
+// modifier, or that IS a state, is a place. Disclosed cost: "West" and "North"
+// as a FIRST name are refused here; they are vanishingly rare as first names
+// and the commonest heads of a region.
+const PLACE_HEAD_RE = /^(?:greater|metro|metropolitan|downtown|uptown|midtown|central|north|south|east|west|northern|southern|eastern|western|northeast|northwest|southeast|southwest|upper|lower|coastal|inland|family|locally|serving)$/i;
 const ownerNameDoor = (name, companyName = '') => {
   const s = String(name || '').trim();
   if (!s) return 'empty';
@@ -33828,6 +33861,7 @@ const ownerNameDoor = (name, companyName = '') => {
   const _flat = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').replace(/^the /, '').trim();
   const _co = _flat(companyName), _nm = _flat(s);
   if (_co && _nm && _nm === _co) return 'company';
+  if (PLACE_HEAD_RE.test(toks[0].replace(/[.,]$/, '')) || Object.values(US_STATE_NAMES).some(st => st.toLowerCase() === _nm)) return 'place';
   if (toks.length >= 2 && !looksLikeRealName(s)) return 'not-a-name';
   return null;
 };
@@ -33886,7 +33920,7 @@ const rankOwnerCandidates = (found, companyName = '') => {
 // straight to the site reader, which then buys no map and no scrapes. This is
 // how the Find tab resolves an owner for zero Firecrawl credits while running
 // the identical roster parse, prompt and anti-hallucination gate the audit runs.
-const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '', industry = '', apifyToken = '', callOnly = false, preFetchedPages = null }) => {
+const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '', industry = '', apifyToken = '', callOnly = false, preFetchedPages = null, navLinks = null }) => {
   // ═══ STAGED WATERFALL — STOP PAYING ONCE WE HAVE THE ANSWER ═══════════════
   // This used to fire all seven sources in parallel on EVERY lead, so a company
   // that names its owner on its own About page still paid for two web searches,
@@ -34066,7 +34100,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // ~10-credit stage 2. Firing it here would charge every lead for a
   // question most of them have already answered for nothing.
   const [brain, news, bizName] = await Promise.all([
-    findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName, preFetchedPages).catch(() => null),
+    findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName, preFetchedPages, navLinks).catch(() => null),
     findOwnerViaNews(companyName).catch(() => null),
     findOwnerViaBusinessName(companyName, homepageContent, (website || '').replace(/^https?:\/\//, '').split('/')[0], apiKey).catch(() => null),
   ]);
@@ -59749,6 +59783,61 @@ app.listen(PORT, () => {
     console.log(`⛔ SHEET TRUTH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ---- A PLACE IS NOT A PERSON (ROUND 122) ------------------------------
+  // Twenty leads on 2026-09-08: "Greater Louisville" shipped as a decision-maker,
+  // a sign franchise was dropped as a charity off its industries menu and then
+  // bought a size search on a mangled brand, a one-location remodeler read as
+  // somebody else's branch, and two sitemaps were bought for navigation the
+  // free read already held. Each executed here on the live string.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _src = selfSourceNoCommentsLF();
+    // 1. The owner sentence, executed on the live Black Rock text.
+    const _br = 'About Black Rock Contracting in Greater Louisville Owner-Operated Contractor With 15 Years of Construction Experience';
+    const _bm = _br.match(OWNER_SENTENCE_RE);
+    if (_bm) _fails.push(`the owner sentence still reads "${_bm[0]}" off "Owner-Operated" - a hyphen after the role word is an adjective, not a title`);
+    const _ok = 'Meet the team. Dan Hanson, Owner. Karla Reck, Designer.'.match(OWNER_SENTENCE_RE);
+    if (!_ok || _ok[4] !== 'Dan Hanson') _fails.push(`a plain "<Name>, Owner" no longer resolves: ${JSON.stringify(_ok)}`);
+    const _gb = 'Serving Greater Boston, Owner since 1990'.match(OWNER_SENTENCE_RE);
+    if (!_gb || _gb[4] !== 'Greater Boston') _fails.push('the door fixture lost its sentence - the regex must still yield "Greater Boston" here so the DOOR is what refuses it');
+    for (const [_nm, _co, _want] of [['Greater Louisville', 'Black Rock Contracting', 'place'], ['Downtown Dallas', 'X Co', 'place'], ['North Texas', 'X Co', 'place'], ['Greater Boston', 'X Co', 'place'], ['North Carolina', 'X Co', 'place'], ['Carl Jensen', 'X Co', null], ['Maria Lopez', 'Lopez Roofing', null], ['Dan Hanson', 'Hanson Design Build Remodel', null]]) {
+      const _got = ownerNameDoor(_nm, _co);
+      if (_got !== _want) _fails.push(`ownerNameDoor("${_nm}") is ${JSON.stringify(_got)} and should be ${JSON.stringify(_want)}`);
+    }
+    if (!ownerNameDoor('Family Owned', 'X Co')) _fails.push('"Family Owned" walks through the name door as a person');
+    if (!_src.includes(_n('&& !retiredNear(corpus, _fallbackName)', ' && !ownerNameDoor(_fallbackName, companyName)) {'))) _fails.push('the regex backstop no longer asks the name door, so a place can be the decision-maker again');
+    if (!_src.includes(_n('const _OWNER_SENTENCE =', ' OWNER_SENTENCE_RE;'))) _fails.push('the backstop keeps its own copy of the owner sentence, so this check executes a different regex from the one that ships');
+    // 2. A nonprofit tell needs a self-claim.
+    const _np2 = (text) => readNonprofitEvidence({ pages: [{ url: 'https://image360.com/jacksonville-fl-st-johns-bluff/', text, html: '<p>' + text + '</p>' }] });
+    if (_np2('Industries. Automotive. Education. Healthcare. Non-profit Organization. Real Estate. Restaurant. Retail. We are a locally owned and operated sign company.').isNonprofit) _fails.push('an industries menu naming "Non-profit Organization" drops a sign shop as a charity (Image360, 2026-09-08)');
+    if (_np2('Signage for churches and nonprofit organizations across Jacksonville.').isNonprofit) _fails.push('a business that serves nonprofits is dropped as one');
+    if (!_np2('We are a non-profit organization serving families across the county.').isNonprofit) _fails.push('a business that says it IS a non-profit organization is kept');
+    if (!_np2('Hope House is a registered charitable organization dedicated to housing.').isNonprofit) _fails.push('a charity naming itself is kept');
+    // 3. A dropped lead buys no size search.
+    if (!_src.includes(_n('if (!sizeMeasured(signals) && website && !_ownerWaveFoundNobody', ' && !out.notIcp) {'))) _fails.push('the size lookup is bought on a lead the read has already dropped (Image360: four credits after its own drop line)');
+    // 4/5. The brand, and the town alone.
+    const _im = readOutletTell({ name: 'Image360 Jacksonville-St. Johns Bluff', homeUrl: 'https://image360.com/jacksonville-fl-st-johns-bluff/', city: 'Jacksonville, FL' });
+    if (!_im.isOutlet || _im.brand !== 'Image360') _fails.push(`Image360's branch reads brand "${_im.brand}" - the size lookup then searches for a string no directory has`);
+    const _mk = readOutletTell({ name: 'Miss K Kitchen and Bath Remodels', homeUrl: 'https://misskremodels.com/cottonwood-heights', city: 'Cottonwood Heights, UT' });
+    if (_mk.isOutlet || !_mk.note) _fails.push(`a one-location remodeler whose listing points at a page named after its town on its OWN site reads as a branch: ${JSON.stringify(_mk)}`);
+    if (!readOutletTell({ name: 'Champion Replacement Windows of Raleigh', homeUrl: 'https://www.championwindow.com/Raleigh', city: 'Durham, NC' }).isOutlet) _fails.push('the town-alone rule ate a real branch that carries its own name');
+    if (!_src.includes(_n("${out.outlet && out.outlet.note ? ' | ' + out.outlet.note : ''}", ' | target ${out.target}'))) _fails.push('the TARGET line no longer prints the town-in-the-path note, so the tell that stood down is invisible');
+    // 6. No sitemap when the navigation was read.
+    if (!_src.includes(_n('const urls = _useNav ? _nav : await firecrawlMap(fcKey, website,', " 'about team leadership founder owner');"))) _fails.push('the owner model buys a sitemap on a site whose navigation the free read already harvested');
+    if (!_src.includes(_n('const _useNav = _nav.length', ' >= 5;'))) _fails.push('the navigation threshold is gone, so the owner model either always maps or never does');
+    if (!_src.includes(_n('findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName,', ' preFetchedPages, navLinks)'))) _fails.push('the navigation harvest does not reach the owner model');
+    if (!_src.includes(_n('preFetchedPages: interior,\n', '        navLinks: links,'))) _fails.push('the contact route does not hand its navigation harvest to the owner ladder');
+    // 7. Small ones.
+    if (!_src.includes(_n('if (!bbb.ok && !/^retired/.test(String(bbb.why)))', ' console.log(`SIZE ['))) _fails.push('the retired BBB rung still prints a line on every lead');
+    if (!bizTitleUsable('Owner | Licensed General Contractor')) _fails.push('a title with a pipe after the ownership word is refused, so "Owner | Licensed General Contractor" drops the title (Yin & Yang, 2026-09-08)');
+    if (!_src.includes(_n('mined.length > meta.totalReviews ? `${mined.length} reviews (their listing shows', ' ${meta.totalReviews})`'))) _fails.push('the review coverage line can still say "read 86 of 85"');
+    if (_fails.length) console.log(`⛔ PLACE IS NOT A PERSON CHECK: ${_fails.join(' | ')}.`);
+    else console.log(`✓ PLACE IS NOT A PERSON CHECK: the owner sentence is executed at module scope and refuses "Owner-Operated" as a title, and the regex backstop passes the name door every other source passes, so "Greater Louisville", "Downtown Dallas" and "North Texas" are places and Dan Hanson is still the owner. "Non-profit Organization" in an industries menu no longer drops a sign shop; a business that says it IS one still drops. A lead already out buys no size search. A branch's brand is the words its path does not carry (Image360, not "Image360 Jacksonville-St."), and a town in the path on their own domain is a note, never a branch. The owner model ranks the navigation the free read already harvested instead of buying a sitemap. The retired BBB rung is silent per lead, a pipe in a title keeps the title, and the review coverage line cannot read "86 of 85".`);
+  } catch (e) {
+    console.log(`⛔ PLACE IS NOT A PERSON CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ---- GOOD LEADS IN --------------------------------------------------
   // Mike's brief, 2026-08-31: "we just need to focus on getting good quality
   // leads in our ICP." Everything below is executed against the exact strings a
@@ -60334,7 +60423,7 @@ app.listen(PORT, () => {
       [_n('findSizeViaSearch(sizeName, website, fcKey,', ' apiKey, leadLocation, { reviewCount: signals.reviewCount });'), 'the size lookup is never bought, is bought on the outlet name instead of the brand, or cannot see the review count that decides the second query'],
       [_n("const sizeName = (out.chain && out.chain.kind === 'network'", ' && out.chain.brand) ? out.chain.brand : name;'), 'a branch network is measured as one outlet again (ClearChoice, 2026-09-03)'],
       [_n('if ((signals.branchNetwork === true || signals.peOwned === true || signals.nationalOperator === true)', " && _layers.verdict === 'owner') {"), 'a branch network, PE-owned or national lead reads as owner-run off its own page again, so a held-back name reaches the sheet as the owner'],
-      [_n('if (!sizeMeasured(signals) && website', ' && !_ownerWaveFoundNobody) {'), 'the size lookup is bought on a lead that measured its size, on one with no website, or on one the owner wave already came back empty on - a size decides the tier and the tier decides the lane, and a lead with no name has no call lane to be sorted into'],
+      [_n('if (!sizeMeasured(signals) && website', ' && !_ownerWaveFoundNobody && !out.notIcp) {'), 'the size lookup is bought on a lead that measured its size, on one with no website, or on one the owner wave already came back empty on - a size decides the tier and the tier decides the lane, and a lead with no name has no call lane to be sorted into'],
       [_n('const _ownerWaveFoundNobody = _ownerAttempted === true', ' && !(out.owner && out.owner.name);'), 'nothing measures whether the owner wave ran and found nobody, so the size wave cannot be aimed away from those leads'],
       [_n('sizeWord: _size.band, sizeConfidence: _size.confidence,', ' affordBand: signals.affordBand ||'), 'the lane does not read the sheet\'s own guess, so the two can disagree'],
       [_n("signals.scaleBand = (_scale && !_scale.guess) ?", ' _scale.band : null;'), 'a tenure guess decides the tier the lanes read'],
@@ -60458,7 +60547,7 @@ app.listen(PORT, () => {
       [_n('is retired per the results', ' - REJECTED'), 'the web search no longer refuses a retired name'],
       [_n('is retired - refused', ' before ranking'), 'the door no longer refuses a retired title'],
       [_n('retiredNear(_flatRuns, r.name', ', 120)'), 'the roster no longer marks a retired row'],
-      [_n('&& !retiredNear(corpus, ', '_fallbackName)) {'), 'the regex backstop ships a retired name'],
+      [_n('&& !retiredNear(corpus, ', '_fallbackName) && !ownerNameDoor(_fallbackName, companyName)) {'), 'the regex backstop ships a retired name'],
       [_n('retired, deceased or a former owner', ', do NOT report them'), 'the web-search prompt no longer warns about retired people'],
       [_n('const n = countTeamNames(p.html', ' || p.text);'), 'the team page is no longer counted without titles'],
       [_n('const bbb = await fetchBbbProfile(', 'bbbUrl);'), 'the size lookup no longer fetches the BBB profile'],
@@ -61229,7 +61318,7 @@ app.listen(PORT, () => {
 
     // SIX - THE CALL SITES. Every one of these is what makes the read cheap,
     // and a fixture cannot see any of them.
-    if (!_src.includes(_n('const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName,', ' preFetched = null) => {'))) {
+    if (!_src.includes(_n('const findOwnerViaBrain = async (website, fcKey, apiKey, homepageContent, companyName,', ' preFetched = null, navLinks = null) => {'))) {
       _fails.push('findOwnerViaBrain no longer accepts pre-fetched pages, so the Find read is back to buying a sitemap call plus two scrapes per lead');
     }
     if (!_src.includes(_n("return await _ownerFromCorpus(pages.join('", "\\n').slice(0, 22000), companyName, website, apiKey, rosterPages"))) {
@@ -61247,7 +61336,7 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('const interior = pages.slice(1).map(p => ({ url: p.url, text: p.text,', ' intent: p.intent }));'))) {
       _fails.push("the page's intent is dropped on the way to the owner reader again, so nothing downstream can tell this tab's careers page from its team page");
     }
-    if (!_src.includes(_n('findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName,', ' preFetchedPages)'))) {
+    if (!_src.includes(_n('findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName,', ' preFetchedPages, navLinks)'))) {
       _fails.push('findDecisionMaker does not pass pre-fetched pages down, so supplying them changes nothing and every Find lead pays for the sitemap');
     }
     if (!_src.includes(_n('scrapeEmailsFromSite(website, fcKey, homepageContent, siteConfirmed, siteIsDown,', ' freePages)'))) {
@@ -75167,13 +75256,13 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   // to save ~8 Firecrawl credits and to stop us reporting a false absence.
   try {
     const _fails = [];
-    const _fn = String(_ownerFromCorpus);
-    const _a = _fn.indexOf('const _ROLE = ');
-    const _b = _fn.indexOf('const _m = String(corpus', _a);
-    if (_a < 0 || _b < 0) {
-      _fails.push('the owner-sentence backstop could not be found in _ownerFromCorpus at all, so nothing here is being checked');
+    // Round 122: the regex is at module scope now (OWNER_SENTENCE_RE), so this
+    // check executes the shipping object itself rather than recompiling the
+    // function's text. Its call site is pinned in PLACE IS NOT A PERSON CHECK.
+    const _re = OWNER_SENTENCE_RE;
+    if (!(_re instanceof RegExp)) {
+      _fails.push('the owner-sentence backstop could not be found at all, so nothing here is being checked');
     } else {
-      const _re = new Function('return (function(){' + _fn.slice(_a, _b) + ' return _OWNER_SENTENCE; })()')();
       // A word boundary that is really a literal backslash matches none of
       // these. This is the assertion that would have caught it on day one.
       const _shapeB = 'Mike Taft, founder of CROJungle, has been doing this for years.'.match(_re);
@@ -75241,7 +75330,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     // is ours.
     {
       const _tok = companyDistinctiveTokens('Acme Roofing LLC');
-      const _shapeBre = (_a >= 0 && _b >= 0) ? new Function('return (function(){' + _fn.slice(_a, _b) + ' return _OWNER_SENTENCE; })()')() : null;
+      const _shapeBre = OWNER_SENTENCE_RE;
       const _cases = [
         ['a testimonial naming a supplier\'s owner', 'John Smith, owner of Precision Supply Company, praised the crew.', false],
         ['the same shape about our company', 'John Smith, owner of Acme Roofing, started the company in 1998.', true],
@@ -77898,7 +77987,12 @@ const CHAIN_STATE_ONLY_MIN = 4;   // Round 110: an independent may trade in thre
 // drops only alongside a second tell, and never at all inside a sentence about
 // who they build FOR. Round 107 narrowed "tax-deductible" the same way and for
 // the same reason.
-const NONPROFIT_TEXT_RE = /\b(?:(?:donations?|gifts?|contributions?) (?:is|are) (?:fully )?tax[- ]deductible|tax[- ]deductible (?:donations?|gifts?|contributions?)|make a donation|donate (?:now|today|online)|your donation|our donors|non-?profit organi[sz]ation|charitable organi[sz]ation|registered charity)\b/i;
+const NONPROFIT_TEXT_RE = /\b(?:(?:donations?|gifts?|contributions?) (?:is|are) (?:fully )?tax[- ]deductible|tax[- ]deductible (?:donations?|gifts?|contributions?)|make a donation|donate (?:now|today|online)|your donation|our donors|registered charity)\b/i;
+// Round 122: Image360 Jacksonville - a sign franchise - was dropped on the two
+// words "Non-profit Organization" in its INDUSTRIES menu (the sectors it makes
+// signs for). The bare phrase is out of the strong list above; it counts only
+// inside a sentence in which the business says it about ITSELF.
+const NONPROFIT_SELF_RE = /\b(?:we(?:'re| are)|is|as|being|remains?)\s+an?\s+(?:(?:registered|local|small|community|private|volunteer[- ]run|faith[- ]based|501\s*\(c\)\s*\(?3\)?)\s+){0,2}(?:non-?profit|charitable)(?:\s+organi[sz]ation)?\b|\bour\s+(?:non-?profit|charity)\b|\b(?:non-?profit|charitable)\s+organi[sz]ation\s+(?:dedicated|committed|serving|founded|based|whose|that)\b/i;
 // A first draft of this round carried a "weak tell" counter and a sentence
 // window beside it. It was written as `strong || (weak && strong)`, which is
 // just `strong`: the counter could not change any outcome, and neither could
@@ -77918,6 +78012,8 @@ const readNonprofitEvidence = ({ pages, links } = {}) => {
   if (!denied) {
     const _t = text.match(NONPROFIT_TEXT_RE);
     if (_t) why.push(`their own page says "${_t[0].trim().slice(0, 40)}"`);
+    const _s = !_t && text.match(NONPROFIT_SELF_RE);
+    if (_s) why.push(`their own page says "${_s[0].trim().slice(0, 40)}"`);
     // Round 117: the donation page has to be THEIRS. Atrium Health's link
     // pointed at atriumhealthfoundation.org, a different host, and nothing
     // checked - readChainEvidence has stripped the host since it was written.
@@ -78183,10 +78279,33 @@ const readOutletTell = ({ name, homeUrl, city } = {}) => {
   // a hyphen boundary, so "tampa" catches "tampa-fl-33603" and never "tampax".
   const _carries = (seg, slug) => seg === slug || seg.startsWith(slug + '-') || seg.endsWith('-' + slug) || seg.includes('-' + slug + '-');
   const match = tails.concat([_cityTail]).find(t => t.slug && t.slug.length >= 4 && segs.some(seg => _carries(seg, t.slug)) && !ours(t.slug));
-  if (OUTLET_PATH_RE.test(path) && segs.length >= 2) {
-    return { measured: true, isOutlet: true, why: `their Google listing points at one location's page inside a bigger site (${path})`, brand: (match && match.brand) || '', path };
+  // Round 122: "Image360 Jacksonville-St. Johns Bluff" matched on "Johns Bluff"
+  // and kept "Image360 Jacksonville-St." as the brand, and the size lookup then
+  // searched four credits for that string. The brand is the words the matched
+  // segment does NOT already carry: trailing tokens whose slug sits in that
+  // segment are peeled, and a dangling abbreviation or joiner goes with them.
+  let brand = (match && match.brand) || '';
+  if (match && brand) {
+    const _seg = segs.find(sg => _carries(sg, match.slug)) || '';
+    const _bw = brand.split(/\s+/);
+    while (_bw.length > 1) {
+      const _parts = placeSlug(_bw[_bw.length - 1]).split('-').filter(Boolean);
+      if (_parts.length && _parts.every(p => ('-' + _seg + '-').includes('-' + p + '-'))) _bw.pop(); else break;
+    }
+    brand = _bw.join(' ').replace(/\s+(?:of|at|in|[-–—])$/i, '').replace(/[-–—.,]+$/, '').trim();
   }
-  if (match) return { measured: true, isOutlet: true, why: `their Google listing points at /${match.slug} inside ${host}'s own site rather than at a home page of their own`, brand: match.brand || '', path };
+  if (OUTLET_PATH_RE.test(path) && segs.length >= 2) {
+    return { measured: true, isOutlet: true, why: `their Google listing points at one location's page inside a bigger site (${path})`, brand, path };
+  }
+  if (match && match !== _cityTail) return { measured: true, isOutlet: true, why: `their Google listing points at /${match.slug} inside ${host}'s own site rather than at a home page of their own`, brand, path };
+  // Round 122: the town alone, on their OWN domain, is not a branch. Miss K
+  // Kitchen and Bath Remodels' listing points at misskremodels.com/cottonwood-heights
+  // - one remodeler, one location, a page named after the town it serves - and
+  // this read called it somebody else's branch, which ranks an owner-run shop
+  // last with "ask for the marketing head". A branch carries another tell as
+  // well (a locations host, a locations path, or the brand's own name in the
+  // listing); the town by itself is a NOTE the TARGET line prints.
+  if (match === _cityTail) return { measured: true, isOutlet: false, why: '', brand: '', path, note: `their listing points at /${match.slug} on their own site - a town in the path alone is not a branch` };
   return { measured: true, isOutlet: false, why: '', brand: '', path };
 };
 // ══ IS THE WEBSITE THE THING WE SELL? ═════════════════════════════════════
@@ -80003,6 +80122,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         placeId, industry: (company && company.industry) || '',
         apifyToken, callOnly: !paidOwner,
         preFetchedPages: interior,
+        navLinks: links,
       });
       _ownerAttempted = true;
       // The FACT, not a threshold over total spend. See the OWNER WAVE line.
@@ -80223,7 +80343,12 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   if (_ownerWaveFoundNobody) {
     console.log(`\u{1F4CF} SIZE LOOKUP [${name}]: not bought - the owner wave already came back with nobody, and a size on a lead we cannot call decides a lane it will never be in. ~4 Firecrawl credits saved.`);
   }
-  if (!sizeMeasured(signals) && website && !_ownerWaveFoundNobody) {
+  // Round 122: a lead already OUT (a nonprofit, a franchise) bought the size
+  // search anyway - Image360, four credits after its own drop line.
+  if (out.notIcp && !sizeMeasured(signals) && website && !_ownerWaveFoundNobody) {
+    console.log(`\u{1F4CF} SIZE LOOKUP [${name}]: not bought - this lead is already out (${out.icpReason || 'not our ICP'}), and a size on a dropped lead decides nothing. ~4 Firecrawl credits saved.`);
+  }
+  if (!sizeMeasured(signals) && website && !_ownerWaveFoundNobody && !out.notIcp) {
     out.sizeLookup = { bought: true, source: '', why: 'nothing measured about their size' };
     try {
       const _capi = (companiesApiKey && website) ? await enrichViaCompaniesAPI(website, companiesApiKey) : null;
@@ -80326,7 +80451,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   out.lanes = _lanes;
   // Round 114: a layered or owned-elsewhere lead on the call sheet ranks LAST.
   signals.laneLast = _lanes.last === true;
-  console.log(`\u{1F3AF} TARGET [${name}]: size ${_size.band || 'not measured'} (${_size.confidence}: ${_size.why}) | tier ${_lanes.tier}${_lanes.measured && _scale ? ' (' + _scale.say + ')' : ' (taken as ' + _lanes.tier + ' - not measured)'} | layers ${_layers.verdict}${_layers.why ? ' (' + _layers.why + ')' : ''}${signals.productCompany ? ' | product company (' + out.product.why + ')' : ''}${signals.branchNetwork ? ' | branch network (' + out.chain.why + ')' : ''}${signals.peOwned ? ' | PE-owned (' + out.tells.why + ')' : ''}${signals.nationalOperator ? ' | national (' + out.tells.why + ')' : ''} | target ${out.target}${out.target === 'marketing' && out.marketingLead ? ' ' + out.marketingLead.name + ', ' + out.marketingLead.title : ''} \u2014 ${_target.why}${out.target !== 'marketing' && out.marketingLead ? ` (marketing head also named: ${out.marketingLead.name}, ${out.marketingLead.title})` : ''} | lane ${laneWord(_lanes)}${_lanes.why ? ' (' + _lanes.why + ')' : ''}`);
+  console.log(`\u{1F3AF} TARGET [${name}]: size ${_size.band || 'not measured'} (${_size.confidence}: ${_size.why}) | tier ${_lanes.tier}${_lanes.measured && _scale ? ' (' + _scale.say + ')' : ' (taken as ' + _lanes.tier + ' - not measured)'} | layers ${_layers.verdict}${_layers.why ? ' (' + _layers.why + ')' : ''}${signals.productCompany ? ' | product company (' + out.product.why + ')' : ''}${signals.branchNetwork ? ' | branch network (' + out.chain.why + ')' : ''}${signals.peOwned ? ' | PE-owned (' + out.tells.why + ')' : ''}${signals.nationalOperator ? ' | national (' + out.tells.why + ')' : ''}${out.outlet && out.outlet.note ? ' | ' + out.outlet.note : ''} | target ${out.target}${out.target === 'marketing' && out.marketingLead ? ' ' + out.marketingLead.name + ', ' + out.marketingLead.title : ''} \u2014 ${_target.why}${out.target !== 'marketing' && out.marketingLead ? ` (marketing head also named: ${out.marketingLead.name}, ${out.marketingLead.title})` : ''} | lane ${laneWord(_lanes)}${_lanes.why ? ' (' + _lanes.why + ')' : ''}`);
   // Round 118: the website read reaches the score. Computed at the free read
   // near the top of this function and carried here - a measurement that never
   // reaches the number is the computed-but-not-passed class this file produces
