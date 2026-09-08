@@ -1,6 +1,5 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
 const fetch = require('node-fetch');
 // Optional by design. pngscale downscales a full-page render that exceeds the
 // vision API's 8000px ceiling, using node's own zlib and no new dependency. If
@@ -226,6 +225,69 @@ const installBootRecorder = () => {
   };
 };
 
+// ═══ WHO MAY CALL THIS SERVER, AND FROM WHERE ══════════════════════════════
+// Until 2026-09-08 every route but the cron answered anyone on the internet and
+// CORS was '*': a stranger with the Render URL could start a read run and spend
+// the Anthropic and Firecrawl credit, read every batch's owners and addresses,
+// and rewrite the queue. Two gates, both declared as data so a check can walk
+// them: ALLOWED_ORIGINS says which browsers may call, APP_TOKEN which callers
+// may. The token is one shared access code the page keeps in localStorage and
+// sends as a bearer; it is compared in constant time. When APP_TOKEN is unset
+// the gate stands open and says so on the boot log and on /healthz, so a
+// production boot with no code is visible rather than silent. ACCESS CHECK
+// executes both gates and walks the router.
+const ALLOWED_ORIGINS = String(process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim().replace(/\/+$/, '')).filter(Boolean);
+// Pure: the Origin header and the list -> the header value, or null for "no
+// header, and refuse the preflight". An empty list is the pre-round behaviour
+// ('*'), so a Render instance without the variable keeps serving the page.
+const corsOriginFor = (origin, allowed) => {
+  const list = Array.isArray(allowed) ? allowed : [];
+  if (!list.length) return '*';
+  const o = String(origin || '').trim().replace(/\/+$/, '');
+  return o && list.includes(o) ? o : null;
+};
+const applyCorsHeaders = (req, res) => {
+  const o = corsOriginFor(req.headers && req.headers.origin, ALLOWED_ORIGINS);
+  if (o !== null) res.header('Access-Control-Allow-Origin', o);
+  res.header('Vary', 'Origin');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Max-Age', '86400');
+  return o;
+};
+const appTokenSet = () => String(process.env.APP_TOKEN || '').trim();
+// The paths that answer without the code: the health of the build, the root
+// banner, the ask page a prospect opens from an email, and the cron (its own
+// secret). Everything under /api/ that is not the cron needs the code.
+const AUTH_PUBLIC_PATHS = ['/healthz', '/', '/p/:token', '/api/cron/discover'];
+const _authNorm = (s) => String(s || '').replace(/\/+$/, '') || '/';
+const authPathIsPublic = (path, list) => {
+  const p = _authNorm(path);
+  return (Array.isArray(list) ? list : []).some(pat => {
+    const re = new RegExp('^' + _authNorm(pat).replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/:[A-Za-z_]+/g, '[^/]+') + '$');
+    return re.test(p);
+  });
+};
+const authTokenOk = (header, token) => {
+  const t = String(token || '');
+  const m = String(header || '').match(/^\s*Bearer\s+(.+?)\s*$/i);
+  if (!t || !m) return false;
+  const a = Buffer.from(m[1]), b = Buffer.from(t);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+};
+const AUTH_REFUSED = 'This page needs the access code. Open Settings and paste the code Vin gave you.';
+const appAuthGate = (req, res, next) => {
+  if (req.method === 'OPTIONS') return next();
+  if (authPathIsPublic(req.path, AUTH_PUBLIC_PATHS)) return next();
+  const token = appTokenSet();
+  if (!token) return next();
+  if (authTokenOk(req.headers && req.headers.authorization, token)) return next();
+  // Set by hand: this runs before the CORS middleware, and a 401 with no
+  // header reads in the browser as an opaque network error, not this sentence.
+  applyCorsHeaders(req, res);
+  return res.status(401).json({ error: AUTH_REFUSED, needsToken: true });
+};
+
 // Registered before every middleware on purpose: the health of the build must
 // be readable with no body parsing, no log capture and no auth in the way.
 // 200 only when the verdict is GREEN. 503 while checking, so a Render health
@@ -234,9 +296,10 @@ const installBootRecorder = () => {
 // boot from a log line nobody reads into a deploy that visibly did not land.
 app.get('/healthz', (req, res) => {
   const ok = BOOT_STATUS.phase === 'green';
-  res.header('Access-Control-Allow-Origin', '*');
+  applyCorsHeaders(req, res);
   res.status(ok ? 200 : 503).json({
     status: BOOT_STATUS.phase,
+    auth: appTokenSet() ? 'on' : 'off',
     contract: CONTRACT_VERSION,
     env: process.env.RENDER_ENV || process.env.NODE_ENV || 'production',
     checks: { green: BOOT_STATUS.green, red: BOOT_STATUS.red, expectedRed: BOOT_STATUS.expectedRed },
@@ -267,8 +330,7 @@ const bootWindowGate = (req, res, next) => {
     // This runs BEFORE the CORS middleware, so the headers must be set here or
     // the Netlify-hosted client sees an opaque "Failed to fetch" instead of
     // the retry message this JSON exists to carry.
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    applyCorsHeaders(req, res);
     return res.status(503).json({
       booting: true,
       error: 'The server is still running its own boot checks and is not ready to take work yet. Retry in a few seconds; /healthz answers 200 the moment it is.',
@@ -277,6 +339,7 @@ const bootWindowGate = (req, res, next) => {
   return next();
 };
 app.use(bootWindowGate);
+app.use(appAuthGate);
 
 // ════════════════════════ WHAT TODAY HAS COST, AND WHERE IT STOPS ════════════
 // "What does 50 audits a day cost" could only ever be answered per lead or with
@@ -458,16 +521,102 @@ const PORT = process.env.PORT || 3001;
 // immediately, before any other middleware or route can interfere or crash.
 // A dropped/crashed request loses its CORS headers and shows up in the browser
 // as a "No Access-Control-Allow-Origin" error even when origin:'*' is set.
+// Since 2026-09-08 the header is the caller's own origin when ALLOWED_ORIGINS
+// lists it, '*' when the list is empty, and absent (preflight 403) otherwise.
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.header('Access-Control-Max-Age', '86400');
-  if (req.method === 'OPTIONS') return res.status(204).end();
+  const o = applyCorsHeaders(req, res);
+  if (req.method === 'OPTIONS') return res.status(o === null ? 403 : 204).end();
   next();
 });
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'OPTIONS'], allowedHeaders: ['Content-Type', 'Authorization'] }));
 app.use(express.json({ limit: '10mb' }));
+
+// ═══ THE KEYS LIVE ON RENDER ════════════════════════════════════════════════
+// Every paid key used to arrive in the request body from the page's Settings
+// screen, which kept them in a world-readable Supabase row. From 2026-09-08
+// the server reads each key from its own environment first; a key in the body
+// is honoured only when the environment has none, so the page already deployed
+// keeps working until the next round removes its key fields. One table names
+// the variables; serverKeys() reads each with a literal process.env line so
+// clientcheck's KEY_SOURCES walk can see every one.
+const SERVER_KEY_ENV = {
+  anthropicKey: 'ANTHROPIC_API_KEY', firecrawlKey: 'FIRECRAWL_KEY', apifyToken: 'APIFY_TOKEN',
+  hunterKey: 'HUNTER_KEY', verifierKey: 'MYEMAILVERIFIER_KEY', companiesApiKey: 'COMPANIES_API_KEY',
+  theirstackKey: 'THEIRSTACK_KEY', pdlKey: 'PDL_KEY', ninjaPearKey: 'NINJAPEAR_KEY', fbToken: 'FB_TOKEN',
+  adzunaId: 'ADZUNA_ID', adzunaKey: 'ADZUNA_KEY', pageSpeedKey: 'PAGESPEED_KEY',
+};
+const _envKey = (v) => String(v || '').trim();
+const serverKeys = () => ({
+  anthropicKey: _envKey(process.env.ANTHROPIC_API_KEY),
+  firecrawlKey: _envKey(process.env.FIRECRAWL_KEY),
+  apifyToken: _envKey(process.env.APIFY_TOKEN),
+  hunterKey: _envKey(process.env.HUNTER_KEY),
+  verifierKey: _envKey(process.env.MYEMAILVERIFIER_KEY),
+  companiesApiKey: _envKey(process.env.COMPANIES_API_KEY),
+  theirstackKey: _envKey(process.env.THEIRSTACK_KEY),
+  pdlKey: _envKey(process.env.PDL_KEY),
+  ninjaPearKey: _envKey(process.env.NINJAPEAR_KEY),
+  fbToken: _envKey(process.env.FB_TOKEN),
+  adzunaId: _envKey(process.env.ADZUNA_ID),
+  adzunaKey: _envKey(process.env.ADZUNA_KEY),
+  pageSpeedKey: _envKey(process.env.PAGESPEED_KEY),
+});
+// Environment wins. The body is the fallback for one round only (the deployed
+// page still sends its Settings keys).
+const keysFor = (body, fromServer) => {
+  const b = (body && typeof body === 'object') ? body : {};
+  const bk = (b.keys && typeof b.keys === 'object') ? b.keys : {};
+  const E = fromServer || serverKeys();
+  const out = {};
+  for (const k of Object.keys(SERVER_KEY_ENV)) {
+    const fallback = k === 'anthropicKey' ? (bk.anthropicKey || b.apiKey)
+      : k === 'hunterKey' ? (bk.hunterKey || b.hunterKey)
+      : k === 'verifierKey' ? (bk.verifierKey || b.verifierKey)
+      : bk[k];
+    out[k] = E[k] || String(fallback || '').trim();
+  }
+  return out;
+};
+// Rewrites the body in place, so every route that reads req.body.keys, apiKey,
+// hunterKey or verifierKey sees the server's own key without each being edited.
+const mergeServerKeys = (body, fromServer) => {
+  if (!body || typeof body !== 'object') return body;
+  const E = fromServer || serverKeys();
+  if (!Object.keys(SERVER_KEY_ENV).some(k => E[k])) return body;
+  const merged = keysFor(body, E);
+  body.keys = Object.assign({}, (body.keys && typeof body.keys === 'object') ? body.keys : {}, merged);
+  if (merged.anthropicKey) body.apiKey = merged.anthropicKey;
+  if (merged.hunterKey) body.hunterKey = merged.hunterKey;
+  if (merged.verifierKey) body.verifierKey = merged.verifierKey;
+  return body;
+};
+const serverKeyGate = (req, res, next) => {
+  if (String(req.path || '').startsWith('/api/') && req.body && typeof req.body === 'object' && !Array.isArray(req.body)) mergeServerKeys(req.body);
+  next();
+};
+// The Settings fields that are keys. A settings object leaves this server and
+// enters its store with these removed, always through scrubSecrets.
+const SETTINGS_SECRET_FIELDS = ['apiKey', 'firecrawlKey', 'companiesApiKey', 'theirstackKey', 'pdlKey', 'hunterKey', 'verifierKey', 'apifyToken', 'ninjaPearKey', 'fbToken', 'adzunaId', 'adzunaKey', 'pageSpeedKey'];
+const scrubSecrets = (data) => {
+  const out = {};
+  for (const [k, v] of Object.entries((data && typeof data === 'object') ? data : {})) if (!SETTINGS_SECRET_FIELDS.includes(k)) out[k] = v;
+  return out;
+};
+// The role of a Supabase key from its shape alone; the value is never printed.
+const sbKeyRole = (key) => {
+  const k = String(key || '').trim();
+  if (!k) return 'unset';
+  if (k.startsWith('sb_secret_')) return 'service_role';
+  if (k.startsWith('sb_publishable_')) return 'anon';
+  const parts = k.split('.');
+  if (parts.length === 3) {
+    try {
+      const p = JSON.parse(Buffer.from(parts[1].replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8'));
+      if (p && p.role) return String(p.role);
+    } catch (e) { void e; }
+  }
+  return 'unknown';
+};
+app.use(serverKeyGate);
 
 // ══ SPACE THE HUNTER CALLS INSTEAD OF TRIPPING THEIR LIMIT ═══════════════════
 // Render's free tier runs WEB_CONCURRENCY=1, so every concurrent research shares
@@ -1206,25 +1355,6 @@ const fetchTr = async (url, opts = {}, ms = 10000, _impl) => {
 
 app.get('/', (req, res) => res.json({ status: 'CROJungle Backend v9 — full-stack: stacking + combos + accuracy guards + reachability playbook', sources: ['adzuna_ai','sec_edgar','google_news','bizbuysell','facebook_ads(token)'], ok: true }));
 
-// ── TEST ADZUNA — hit in browser to verify keys work ──────
-// Usage: https://crojungle-outreach-backend.onrender.com/api/test-adzuna?app_id=XXX&app_key=XXX
-app.get('/api/test-adzuna', async (req, res) => {
-  const { app_id, app_key } = req.query;
-  if (!app_id || !app_key) return res.status(400).json({ error: 'Pass ?app_id=YOUR_ID&app_key=YOUR_KEY' });
-  try {
-    const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${app_id}&app_key=${app_key}&results_per_page=5&what=marketing+manager&sort_by=date`;
-    const r = await fetchT(url, { headers: { 'Accept': 'application/json' } }, 10000);
-    const d = await safeJson(r);
-    res.json({
-      httpStatus: r.status,
-      totalJobsInDB: d.count || 0,
-      resultsReturned: (d.results||[]).length,
-      firstCompany: d.results?.[0]?.company?.display_name || 'none',
-      adzunaError: d.exception || d.error || null,
-      working: r.ok && (d.results||[]).length > 0,
-    });
-  } catch(e) { res.json({ error: e.message, working: false }); }
-});
 
 // ══ COPY VERIFIER — GUARDS FOR THE COPY THAT IS ACTUALLY SENT ════════════════
 // THE GAP THIS CLOSES
@@ -4075,25 +4205,6 @@ app.post('/api/scrape', async (req, res) => {
   } catch(e) { res.json({ markdown: '' }); }
 });
 
-// ── HUNTER ────────────────────────────────────────────────
-app.get('/api/email', async (req, res) => {
-  try {
-    const { domain, hunterKey } = req.query;
-    if (!domain || !hunterKey) return res.status(400).json({ error: 'Domain and key required' });
-    const clean = domain.replace(/https?:\/\//,'').replace(/\/.*/,'').replace('www.','');
-    const r = await hunterSerial(() => fetchT(`https://api.hunter.io/v2/domain-search?domain=${clean}&type=personal&limit=5&api_key=${hunterKey}`));
-    const d = await safeJson(r);
-    const emails = d.data?.emails || [];
-    const priority = ['ceo','founder','co-founder','owner','president','cmo'];
-    const sorted = emails.sort((a,b) => {
-      const aS = priority.findIndex(p=>(a.position||'').toLowerCase().includes(p));
-      const bS = priority.findIndex(p=>(b.position||'').toLowerCase().includes(p));
-      return (aS===-1?99:aS)-(bS===-1?99:bS);
-    });
-    const best = sorted[0];
-    res.json({ email: best?.value||'', founderName: `${best?.first_name||''} ${best?.last_name||''}`.trim(), title: best?.position||'' });
-  } catch(e) { res.json({ email:'', founderName:'', title:'' }); }
-});
 
 // ── FIND WEBSITE ──────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════
@@ -36201,6 +36312,8 @@ const applyLabMobileScore = (pageSpeed, realSpeed) => {
 // never asked" - which is how Google's record of the prospect's own visitors
 // stayed dark for the life of this project.
 const KEY_SOURCES = {
+  // Server-owned since 2026-09-08 (serverKeys); the page's field is the fallback for one round.
+  anthropicKey:    'env:ANTHROPIC_API_KEY',
   firecrawlKey:    'client',
   apifyToken:      'client',
   hunterKey:       'client',
@@ -37508,6 +37621,7 @@ const probeSupabaseSchema = async () => {
     console.log('SCHEMA PROBE: Supabase is not configured on this server, so nothing that persists (query memory, bench, observations, call outcomes, ask pages, send log) will record anything. Set SUPABASE_URL and SUPABASE_KEY on Render.');
     return;
   }
+  console.log(`SUPABASE KEY ROLE: ${sbKeyRole(SB_KEY)} (service_role, the sb_secret_ key, is what this server needs once row-level security is on; an anon key would then be refused on every table).`);
   const missing = [];
   for (const [t, c] of SB_EXPECTED_SCHEMA) {
     const rows = await sbRest(`/${t}?select=${c}&limit=1`, { prefer: 'return=representation' });
@@ -61989,6 +62103,124 @@ app.listen(PORT, () => {
     console.log(`⛔ READ RUN CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ---- WHO MAY CALL THIS SERVER, WHOSE KEYS IT USES, AND WHERE A KEY MAY NOT APPEAR
+  // Live 2026-09-08 (a read-only survey): every route but the cron answered any
+  // caller on the internet, CORS was '*', every paid key travelled in the
+  // request body from a world-readable Supabase row, and four credit testers
+  // took the key in the query string. Each gate below is EXECUTED on a
+  // synthetic request with the environment saved and restored, then its
+  // registration is pinned, because a gate that exists and is never
+  // registered guards nothing (the boot-window lesson, section 48).
+  try {
+    const _fails = [];
+    const _n = (...p) => p.join('');
+    const _src = selfSourceNoCommentsLF();
+    const _envKeep = { APP_TOKEN: process.env.APP_TOKEN, ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS };
+    const _run = (gate, method, path, headers) => {
+      const hdr = {}; for (const [k, v] of Object.entries(headers || {})) hdr[k.toLowerCase()] = v;
+      const out = { status: 0, body: null, headers: {}, nexted: false };
+      const res = { header: (k, v) => { out.headers[String(k).toLowerCase()] = v; return res; }, status: (s) => { out.status = s; return res; }, json: (b) => { out.body = b; return res; }, end: () => res };
+      gate({ method, path, headers: hdr }, res, () => { out.nexted = true; });
+      return out;
+    };
+    try {
+      // 1. THE ACCESS CODE, executed.
+      delete process.env.APP_TOKEN;
+      if (!_run(appAuthGate, 'POST', '/api/read-run', {}).nexted) _fails.push('with no APP_TOKEN set the gate refuses everyone, so a Render instance without the variable would lock the rep out instead of standing open loudly');
+      process.env.APP_TOKEN = 'boot-check-token';
+      // An empty ALLOWED_ORIGINS answers '*'; a listed origin is echoed; either way the 401 must carry the header.
+      const _none = _run(appAuthGate, 'POST', '/api/read-run', { Origin: ALLOWED_ORIGINS[0] || 'https://page.example' });
+      if (_none.nexted || _none.status !== 401 || !/access code/.test(String((_none.body || {}).error || '')) || !(_none.body || {}).needsToken) _fails.push(`a call with no code is not refused 401 with the access-code sentence (got ${_none.nexted ? 'next' : _none.status})`);
+      if (_none.headers['access-control-allow-origin'] !== (ALLOWED_ORIGINS[0] || '*')) _fails.push('the 401 carries no CORS header for the page, so it sees an opaque network error instead of the sentence that tells the rep what to paste');
+      if (_run(appAuthGate, 'GET', '/api/find/summary', { Authorization: 'Bearer boot-check-tokeN' }).nexted) _fails.push('a wrong code is let through');
+      if (_run(appAuthGate, 'GET', '/api/find/summary', { Authorization: 'Bearer boot' }).nexted) _fails.push('a code of a different length is let through');
+      if (_run(appAuthGate, 'GET', '/api/find/summary', { Authorization: 'boot-check-token' }).nexted) _fails.push('a code sent without the Bearer scheme is let through');
+      if (!_run(appAuthGate, 'GET', '/api/find/summary', { Authorization: 'Bearer boot-check-token' }).nexted) _fails.push('the right code is refused');
+      if (!_run(appAuthGate, 'OPTIONS', '/api/read-run', {}).nexted) _fails.push('a preflight is refused, so a browser never gets to send the code at all');
+      for (const p of ['/healthz', '/', '/p/abcdef', '/api/cron/discover', '/healthz/']) if (!_run(appAuthGate, 'GET', p, {}).nexted) _fails.push(`the public path ${p} is behind the code`);
+      if (_run(appAuthGate, 'GET', '/p', {}).nexted || _run(appAuthGate, 'GET', '/api/read-run', {}).nexted || _run(appAuthGate, 'GET', '/api/cron/discover/x', {}).nexted || _run(appAuthGate, 'GET', '/healthzz', {}).nexted) _fails.push('a path that is not on the public list is let through, so the list is matched as a prefix rather than as a path');
+      if (AUTH_PUBLIC_PATHS.some(p => p.startsWith('/api/') && p !== '/api/cron/discover')) _fails.push('the public list holds an /api/ path other than the cron: ' + AUTH_PUBLIC_PATHS.filter(p => p.startsWith('/api/')).join(', '));
+      // 2. THE GATE SITS BEFORE EVERY ROUTE THAT NEEDS IT (express 4: app._router.stack).
+      const _stack = (app._router && app._router.stack) || [];
+      const _gateAt = _stack.findIndex(l => l.handle === appAuthGate);
+      const _routes = _stack.map((l, i) => ({ i, path: l.route && l.route.path })).filter(x => typeof x.path === 'string');
+      if (_gateAt < 0) _fails.push('appAuthGate is not registered on the app, so every route is reachable without the code');
+      if (_routes.length < 40) _fails.push(`only ${_routes.length} routes are visible on the router, so the walk is not looking at the real app`);
+      const _early = _routes.filter(r => r.i < _gateAt && !authPathIsPublic(r.path, AUTH_PUBLIC_PATHS)).map(r => r.path);
+      if (_gateAt >= 0 && _early.length) _fails.push(`route(s) registered BEFORE the access gate and not on the public list, so they answer without the code: ${_early.slice(0, 6).join(', ')}`);
+      if (!_src.includes(_n('app.use(appAuth', 'Gate);'))) _fails.push('the registration line app.use(appAuthGate) is gone');
+      // 3. CORS BY ORIGIN, executed.
+      if (corsOriginFor('https://evil.example', []) !== '*') _fails.push('an empty ALLOWED_ORIGINS no longer means the open door, so an instance without the variable would refuse the page');
+      if (corsOriginFor('https://app.example', ['https://app.example']) !== 'https://app.example') _fails.push('a listed origin is not echoed');
+      if (corsOriginFor('https://app.example/', ['https://app.example']) !== 'https://app.example') _fails.push('a trailing slash on the origin defeats the list');
+      if (corsOriginFor('https://evil.example', ['https://app.example']) !== null) _fails.push('an origin that is not on the list still gets a header');
+      if (corsOriginFor('https://app.example.evil.example', ['https://app.example']) !== null || corsOriginFor('', ['https://app.example']) !== null) _fails.push('the origin list is matched as a prefix, or an empty origin passes it');
+      if (!_src.includes(_n('const o = applyCorsHeaders(', 'req, res);'))) _fails.push('the CORS middleware no longer asks the origin list, so the list is decoration');
+      if (!_src.includes(_n('return res.status(o === null ', '? 403 : 204).end();'))) _fails.push('a preflight from an origin that is not on the list is no longer refused');
+      if (String(bootWindowGate).indexOf('applyCorsHeaders') < 0) _fails.push('the boot-window 503 no longer carries the CORS headers');
+      if (String(appAuthGate).indexOf('applyCorsHeaders') < 0) _fails.push('the 401 no longer carries the CORS headers');
+      if (_src.includes(_n('app.use(cors(', '{ origin: '))) _fails.push('the cors() package is registered with its own origin again, so the origin list is decoration');
+      // 4. THE KEYS: the environment wins, and every one is read from the environment.
+      const _keyKeep = {};
+      for (const name of Object.values(SERVER_KEY_ENV)) { _keyKeep[name] = process.env[name]; process.env[name] = 'from-render'; }
+      const _stale = {}; for (const k of Object.keys(SERVER_KEY_ENV)) _stale[k] = 'stale';
+      const _sk = serverKeys(), _kf = keysFor({ apiKey: 'stale', hunterKey: 'stale', verifierKey: 'stale', keys: _stale });
+      const _mb = mergeServerKeys({ apiKey: 'stale', keys: { firecrawlKey: 'stale', extra: 'kept' } });
+      for (const k of Object.keys(SERVER_KEY_ENV)) {
+        if (_sk[k] !== 'from-render') _fails.push(`serverKeys().${k} does not read ${SERVER_KEY_ENV[k]}`);
+        if (_kf[k] !== 'from-render') _fails.push(`keysFor() lets a body key beat the environment for ${k}`);
+        if (!_mb.keys || _mb.keys[k] !== 'from-render') _fails.push(`mergeServerKeys leaves the body's ${k} in place`);
+      }
+      if (_mb.apiKey !== 'from-render' || _mb.keys.extra !== 'kept') _fails.push('mergeServerKeys leaves the body apiKey in place or drops a body key it does not know');
+      for (const [name, v] of Object.entries(_keyKeep)) { if (v === undefined) delete process.env[name]; else process.env[name] = v; }
+      const _kfNo = keysFor({ apiKey: 'from-body', keys: { firecrawlKey: 'fc-body' } }, { anthropicKey: '', firecrawlKey: '' });
+      if (_kfNo.anthropicKey !== 'from-body' || _kfNo.firecrawlKey !== 'fc-body') _fails.push('with no key on Render the body key is dropped, so the page already deployed stops working before its replacement is dragged in');
+      const _mbNo = mergeServerKeys({ apiKey: 'from-body' }, { anthropicKey: '' });
+      if (_mbNo.apiKey !== 'from-body' || 'keys' in _mbNo) _fails.push('with no key on Render the body is rewritten anyway');
+      if (readRunKeysFrom({ apiKey: 'stale' }, { anthropicKey: 'k' }).anthropicKey !== 'k') _fails.push('a background read prefers the Settings row to the environment');
+      if (readRunKeysFrom({ apiKey: 'row' }, {}).anthropicKey !== 'row') _fails.push('a background read with no key on Render drops the Settings key this round still allows');
+      const _sc = scrubSecrets({ apiKey: 'x', hunterKey: 'y', findPaidOwner: true, tone: 'plain' });
+      if ('apiKey' in _sc || 'hunterKey' in _sc || _sc.findPaidOwner !== true || _sc.tone !== 'plain') _fails.push('scrubSecrets keeps a key or drops a preference');
+      for (const k of Object.keys(SERVER_KEY_ENV)) { const f = k === 'anthropicKey' ? 'apiKey' : k; if (!SETTINGS_SECRET_FIELDS.includes(f)) _fails.push(`the Settings field ${f} is a key this server reads and scrubSecrets does not strip it`); }
+      if (!_src.includes(_n('const data = scrubSecrets(req.body', ' && req.body.data);'))) _fails.push('the settings PUT no longer scrubs, so a key can be written into the row again');
+      if (!_src.includes(_n('data: scrubSecrets(S', ' || {}), serverKeys: held'))) _fails.push('the settings GET no longer scrubs, so a key in the row reaches the browser');
+      if (!_src.includes(_n('const keys = readRunKeysFrom(S,', ' serverKeys());'))) _fails.push('the read-run driver no longer hands the environment to readRunKeysFrom');
+      const _gi = _src.indexOf(_n('app.use(server', 'KeyGate);')), _ji = _src.indexOf(_n('app.use(express.json(', "{ limit: '10mb' }));"));
+      if (_gi < 0) _fails.push('serverKeyGate is not registered, so no route sees the environment keys');
+      else if (_ji < 0 || _gi < _ji) _fails.push('serverKeyGate is registered before the JSON body parser, so it runs on an empty body every time');
+      if (KEY_SOURCES.anthropicKey !== 'env:ANTHROPIC_API_KEY') _fails.push('KEY_SOURCES does not declare the Anthropic key as an environment key');
+      for (const [k, name] of Object.entries(SERVER_KEY_ENV)) if (!_src.includes('process.env.' + name)) _fails.push(`${k} is declared as ${name} and nothing reads process.env.${name}`);
+      // 5. THE DATABASE KEY'S ROLE is readable from its shape and never printed.
+      const _jwt = 'x.' + Buffer.from(JSON.stringify({ role: 'service_role' })).toString('base64').replace(/=+$/, '') + '.y';
+      if (sbKeyRole('') !== 'unset' || sbKeyRole('sb_secret_abc') !== 'service_role' || sbKeyRole('sb_publishable_abc') !== 'anon' || sbKeyRole(_jwt) !== 'service_role' || sbKeyRole('sb_servercheck') !== 'unknown') _fails.push('sbKeyRole misreads a key shape');
+      if (!_src.includes(_n('SUPABASE KEY ROLE: ${sbKeyRole(', 'SB_KEY)}'))) _fails.push('the boot no longer prints the role of the Supabase key');
+      // 6. KEYS IN QUERY STRINGS: the cron secret plus the four credit testers' one-round fallbacks.
+      const _qs = (_src.match(/req\.query\.(key|hunterKey|apiKey|app_key|secret)\b/g) || []).length;
+      if (_qs !== 5) _fails.push(`${_qs} query-string key read(s), expected 5 (the cron secret and the four credit testers' fallbacks)`);
+      if (_src.includes(_n("app.get('/api/em", "ail'")) || _src.includes(_n("app.get('/api/test-", "adzuna'"))) _fails.push('a dead tester that took a key in the URL is back');
+    } finally {
+      for (const [k, v] of Object.entries(_envKeep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+    }
+    if (_fails.length) {
+      console.log(`⛔ ACCESS CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log('✓ ACCESS CHECK: every /api route but the cron sits behind the access code when APP_TOKEN is set (a preflight and the public paths pass; a wrong or missing code is refused 401 with the sentence the rep needs), CORS answers only the listed origins, every paid key is read from this server\'s environment before the body, the Settings row goes out and comes in without a secret, and the Supabase key\'s role is printed by shape.');
+    }
+    if (!appTokenSet()) console.log('⚠ AUTH GATE OFF: APP_TOKEN is not set on this server, so every route answers without the access code. Set it on Render once the page that sends the code is deployed.');
+    {
+      // SECRET SURFACE: a warning while the page still holds the key; a refusal once it must not.
+      const _fsq = require('fs'), _pathq = require('path');
+      const _ip = _pathq.join(__dirname, 'index.html');
+      if (_fsq.existsSync(_ip)) {
+        const _page = _fsq.readFileSync(_ip, 'utf8');
+        const _hits = ['sb_publishable_', 'sb_secret_', 'supabase.co'].filter(s => _page.includes(s));
+        if (_hits.length) console.log(`⚠ SECRET SURFACE: index.html still carries ${_hits.join(', ')}, so the browser still talks to Supabase with a key anyone can read in the page source; the page stops doing that in the next round.`);
+      }
+    }
+  } catch (e) {
+    console.log(`⛔ ACCESS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ---- THE ONLY PAID CALLS NO CLAIM CAN EVER CONSUME --------------------
   // Every other paid read on a lead ends up inside a rung, a gate or a
   // sentence. The two DataForSEO Labs reads do not: they are a MODEL of his
@@ -62860,7 +63092,7 @@ app.listen(PORT, () => {
       if (!selfSourceNoComments().includes(_n('app.use(bootWindow', 'Gate);'))) {
         _fails.push('the gate is not registered on the app, so every POST route is reachable during the boot window');
       }
-      if (!String(bootWindowGate).includes('Access-Control-Allow-Origin')) {
+      if (!String(bootWindowGate).includes('applyCorsHeaders')) {
         _fails.push('the 503 carries no CORS header - it runs BEFORE the CORS middleware, so the Netlify client sees an opaque network error instead of the retry message this JSON exists to carry');
       }
       {
@@ -81204,11 +81436,11 @@ const readRunCompanyFrom = (company) => {
 };
 // An object literal on purpose: clientcheck's KEY_SOURCES walk reads the keys a
 // route destructures out of req.body.keys, and anthropicKey has no row there.
-const readRunKeysFrom = (settingsData) => {
-  const S = settingsData || {};
+const readRunKeysFrom = (settingsData, fromServer) => {
+  const S = settingsData || {}, E = fromServer || {};
   return {
-    anthropicKey: S.apiKey || '', firecrawlKey: S.firecrawlKey || '', verifierKey: S.verifierKey || '',
-    apifyToken: S.apifyToken || '', hunterKey: S.hunterKey || '', companiesApiKey: S.companiesApiKey || '',
+    anthropicKey: E.anthropicKey || S.apiKey || '', firecrawlKey: E.firecrawlKey || S.firecrawlKey || '', verifierKey: E.verifierKey || S.verifierKey || '',
+    apifyToken: E.apifyToken || S.apifyToken || '', hunterKey: E.hunterKey || S.hunterKey || '', companiesApiKey: E.companiesApiKey || S.companiesApiKey || '',
   };
 };
 const readRunOptsFrom = (settingsData) => {
@@ -81421,8 +81653,8 @@ const driveReadRun = async (runId, o = {}) => {
   let stopped = false, error = null;
   try {
     const S = await settingsData();
-    if (!S || !S.apiKey) throw new Error(S ? 'No Anthropic key in Settings, so nobody can be identified.' : 'the Settings row (user_settings) could not be read, so the run has no keys');
-    const keys = readRunKeysFrom(S);
+    const keys = readRunKeysFrom(S, serverKeys());
+    if (!keys.anthropicKey) throw new Error(S ? 'No Anthropic key: set ANTHROPIC_API_KEY on Render (for one more round the key in Settings still counts), so nobody can be identified.' : 'the Settings row (user_settings) could not be read and ANTHROPIC_API_KEY is not set on Render, so the run has no keys');
     const opts = readRunOptsFrom(S);
     let rows;
     if (o.resume) {
@@ -81528,6 +81760,59 @@ const EMAIL_GRADE_VERIFIED = ['published_personal', 'smtp_confirmed'];
 const emailVerifiedRow = (email, grade, sendable, tier) => !!email
   && (EMAIL_GRADE_VERIFIED.includes(String(grade || '')) || (String(sendable) === 'true' && Number(tier) >= 1 && Number(tier) <= 2));
 
+// ── the store the page reads and writes through this server ─────────────────
+// Until 2026-09-08 the page spoke to Supabase directly with a publishable key
+// pasted in its source, on tables with row-level security off. These routes
+// are the page's only door from the next round on; the server's own key is the
+// only key. Settings go out with every secret field removed and come in the
+// same way, so a key can never again sit in a world-readable row.
+const STORE_PAGE_MAX = 100;
+app.get('/api/store/leads', async (req, res) => {
+  const off = _sbOff();
+  if (off) return res.status(503).json({ error: off });
+  const limit = Math.max(1, Math.min(STORE_PAGE_MAX, Math.floor(Number(req.query.limit)) || 20));
+  const after = String(req.query.after || '');
+  const rows = await sbRest(`/leads?order=id.asc&limit=${limit}${after ? '&id=gt.' + encodeURIComponent(after) : ''}`, { prefer: 'return=representation' });
+  if (!Array.isArray(rows)) return res.status(502).json({ error: 'the leads page could not be read: ' + (sbWhy('leads') || 'Supabase gave no reason') });
+  res.json({ rows, limit, last: rows.length ? rows[rows.length - 1].id : null, done: rows.length < limit });
+});
+app.post('/api/store/leads/upsert', async (req, res) => {
+  const off = _sbOff();
+  if (off) return res.status(503).json({ error: off });
+  const rows = Array.isArray(req.body && req.body.rows) ? req.body.rows.filter(r => r && typeof r === 'object' && r.id) : [];
+  if (!rows.length) return res.status(422).json({ error: 'rows: a non-empty list of lead rows, each with an id.' });
+  const r = await sbRest('/leads?on_conflict=id', { method: 'POST', body: JSON.stringify(rows), prefer: 'return=minimal,resolution=merge-duplicates' });
+  if (r === null) return res.status(502).json({ error: 'the leads could not be saved: ' + (sbWhy('leads') || 'Supabase gave no reason') });
+  res.json({ ok: true, saved: rows.length });
+});
+app.post('/api/store/leads/delete', async (req, res) => {
+  const off = _sbOff();
+  if (off) return res.status(503).json({ error: off });
+  const id = String((req.body && req.body.id) || '').trim();
+  if (!id) return res.status(422).json({ error: 'id required.' });
+  const r = await sbRest(`/leads?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE' });
+  if (r === null) return res.status(502).json({ error: 'the lead could not be deleted: ' + (sbWhy('leads') || 'Supabase gave no reason') });
+  res.json({ ok: true, id });
+});
+app.get('/api/store/settings', async (req, res) => {
+  const off = _sbOff();
+  if (off) return res.status(503).json({ error: off });
+  const S = await settingsData();
+  if (S === null && sbWhy('user_settings')) return res.status(502).json({ error: 'the Settings row could not be read: ' + sbWhy('user_settings') });
+  const E = serverKeys();
+  const held = {};
+  for (const k of Object.keys(SERVER_KEY_ENV)) held[k] = !!E[k];
+  res.json({ data: scrubSecrets(S || {}), serverKeys: held, envNames: SERVER_KEY_ENV });
+});
+app.put('/api/store/settings', async (req, res) => {
+  const off = _sbOff();
+  if (off) return res.status(503).json({ error: off });
+  const data = scrubSecrets(req.body && req.body.data);
+  const r = await sbRest('/user_settings?on_conflict=id', { method: 'POST', body: JSON.stringify({ id: 'singleton', data, updated_at: new Date().toISOString() }), prefer: 'return=minimal,resolution=merge-duplicates' });
+  if (r === null) return res.status(502).json({ error: 'the Settings row could not be saved: ' + (sbWhy('user_settings') || 'Supabase gave no reason') });
+  res.json({ ok: true, saved: Object.keys(data).length });
+});
+
 app.get('/api/find/summary', async (req, res) => {
   const off = _sbOff();
   if (off) return res.status(503).json({ error: off });
@@ -81589,8 +81874,8 @@ app.post('/api/read-run', async (req, res) => {
   if (Array.isArray(running) && running.length) return res.status(409).json({ error: 'a read is already recorded as running; it resumes on its own or is failed as stalled after an hour.', runId: running[0].id, busy: true });
   const ceiling = budgetRefusal(['fc', 'anthropicUsd']);
   if (ceiling) return res.status(429).json({ error: ceiling.message, budgetStopped: true });
-  const S = await settingsData();
-  if (!S || !S.apiKey) return res.status(422).json({ error: 'No Anthropic key is set in Settings, so nobody can be identified.', preflightStopped: true });
+  const S = (await settingsData()) || {};
+  if (!readRunKeysFrom(S, serverKeys()).anthropicKey) return res.status(422).json({ error: 'No Anthropic key: set ANTHROPIC_API_KEY on Render (for one more round the key in Settings still counts), so nobody can be identified.', preflightStopped: true });
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const row = { id, started_at: now, progress_at: now, status: 'running', requested_count: count, read_count: 0, failed_count: 0, ruled_out_count: 0,
@@ -81694,7 +81979,7 @@ app.get('/api/find-pool', async (req, res) => {
 });
 
 app.get('/api/firecrawl-credits', async (req, res) => {
-  const key = req.query.key;
+  const key = serverKeys().firecrawlKey || req.query.key;
   if (!key) return res.status(400).json({ error: 'key required' });
   try {
     const r = await fetchT('https://api.firecrawl.dev/v1/team/credit-usage', {
@@ -81715,7 +82000,7 @@ app.get('/api/firecrawl-credits', async (req, res) => {
 });
 
 app.get('/api/hunter-credits', async (req, res) => {
-  const key = req.query.key;
+  const key = serverKeys().hunterKey || req.query.key;
   if (!key) return res.status(400).json({ error: 'key required' });
   try {
     const r = await fetchT(`https://api.hunter.io/v2/account?api_key=${encodeURIComponent(key)}`, {}, 8000);
@@ -81734,7 +82019,7 @@ app.get('/api/hunter-credits', async (req, res) => {
 });
 
 app.get('/api/hunter-sequences', async (req, res) => {
-  const hunterKey = req.query.key;
+  const hunterKey = serverKeys().hunterKey || req.query.key;
   if (!hunterKey) return res.status(400).json({ error: 'key required' });
   try {
     const r = await fetchT(`https://api.hunter.io/v2/campaigns?api_key=${encodeURIComponent(hunterKey)}`, {}, 10000);
@@ -81772,7 +82057,7 @@ app.get('/api/hunter-sequences', async (req, res) => {
 // Never overwrite a sentiment already recorded by a person with a coarser
 // machine value; a human who read the reply knows more than the status does.
 app.get('/api/hunter-outcomes', async (req, res) => {
-  const hunterKey = req.query.key;
+  const hunterKey = serverKeys().hunterKey || req.query.key;
   const sequenceId = req.query.sequenceId;
   if (!hunterKey) return res.status(400).json({ error: 'key required' });
   if (!sequenceId) return res.status(400).json({ error: 'sequenceId required \u2014 which sequence to read outcomes from' });

@@ -84,7 +84,16 @@ Settings row, resumes its run on the environment's keys, and must print
 
 ### What the falsification runs found
 
-FALSIFICATION_PLACEHOLDER
+Eleven reverts, each alone against a green baseline, each red on its own
+named line of `ACCESS CHECK`: the gate unregistered; the preflight refused;
+a body key beating Render's; the settings PUT unscrubbed; a dead tester put
+back; the CORS middleware ignoring the list; the driver dropping the
+environment; the background read preferring the row; an `/api` path added
+to the public list; the public list matched as a prefix; the body rewritten
+when Render holds nothing. The first run of the check itself went red under
+`servercheck`'s environment, on a synthetic 401 sent with no Origin while
+`ALLOWED_ORIGINS` was set: no header was the right answer, and the check
+was wrong, so it now sends the listed origin and expects it echoed.
 
 ### Deploy (hands, after the merge)
 
