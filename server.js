@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261005;
+const CONTRACT_VERSION = 20261006;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -37442,6 +37442,8 @@ const SB_EXPECTED_SCHEMA = [
   ['places_query_state', 'q'], ['lead_bench', 'id'], ['business_observations', 'biz'],
   ['call_outcomes', 'outcome'], ['lead_pages', 'token'], ['send_log', 'email'],
   ['leads', 'held_back_contact'], ['leads', 'corpus_read'],
+  // Round 124: the server-owned Find queue, the read runs and the Settings row a run reads its keys from.
+  ['discovered_queue', 'batch_id'], ['discovered_queue', 'reach_predict'], ['read_runs', 'status'], ['user_settings', 'data'],
 ];
 // ══ ONE FREE CALL THAT SETTLES "IS THE DATAFORSEO PASSWORD RIGHT" ═══════════
 // The first credentialed run failed on every call with "no tasks in the
@@ -38506,6 +38508,19 @@ const runDiscovery = async (body) => {
   }
   if (_knownHosts.size || _knownNames.size) {
     console.log(`DEDUPE: client already holds ${_knownHosts.size} domain(s) and ${_knownNames.size} business name(s) — those will be skipped before they take a queue slot or cost an audit.`);
+  }
+  // Round 124: the queue and the pipeline are read HERE, so a lead this server
+  // already holds is skipped whether or not the browser pressing Find knows it.
+  if (SB_URL && SB_KEY) {
+    const _qRows = await rqKnown();
+    const _pRows = await pipelineNames();
+    let _held = 0;
+    for (const r of [...(_qRows || []), ...(_pRows || [])]) {
+      const h = _hostOf((r && r.website) || ''); if (h && h.includes('.')) _knownHosts.add(h);
+      const k = _normName((r && r.name) || ''); if (k && k.length > 4) _knownNames.add(k);
+      _held += 1;
+    }
+    console.log(`DEDUPE: the server's queue and pipeline hold ${_held} row(s) between them${_qRows === null || _pRows === null ? ' (one of the two could not be read: ' + (sbWhy('discovered_queue') || sbWhy('leads') || 'Supabase gave no reason') + ')' : ''} - those are skipped too.`);
   }
   const { adzunaId, adzunaKey, fbToken, firecrawlKey, companiesApiKey, theirstackKey } = keys || {};
   // Google Places key comes from Render env vars (not the frontend), so it stays
@@ -39697,6 +39712,13 @@ const WEIGHTS = {
     }
     scored.push(..._large);
     if (_skippedKnown) console.log(`DEDUPE: skipped ${_skippedKnown} companies already in your pipeline (~${_skippedKnown * 10} Firecrawl credits not re-spent)`);
+    // Round 124: the queue is written HERE, and BEFORE the bench below is
+    // cleared - a null write keeps the bench untouched, so a lead served off
+    // the bench is never deleted from the one place it still exists.
+    const _queued = (SB_URL && SB_KEY && scored.length) ? await rqUpsert(scored.map(queueRowFromCompany)) : (scored.length ? null : 0);
+    const _queueOk = typeof _queued === 'number' && _queued >= 0;
+    if (!_queueOk) console.log(`\u26d4 FIND QUEUE: ${scored.length} lead(s) could not be written to the queue - ${sbWhy('discovered_queue') || ((SB_URL && SB_KEY) ? 'Supabase gave no reason' : 'Supabase is not configured on this server')}. They are in this response only, and the bench keeps its rows.`);
+    else if (scored.length) console.log(`\u{1F5C2} FIND QUEUE: ${scored.length} lead(s) offered to the queue; a lead already there keeps its row and its stamps.`);
 
     // Breakdown by source
     const breakdown = {};
@@ -39732,7 +39754,7 @@ const WEIGHTS = {
       // longer to read than the search it replaces.
       if (_benchIds.length) {
         const _usedIds = scored.map(c => c._benchId).filter(Boolean);
-        if (_usedIds.length) await clearLeadBench(_usedIds);
+        if (_usedIds.length && _queueOk) await clearLeadBench(_usedIds);
       }
     }
     console.log('Unique:', unique.length, '| Returning:', scored.length);
@@ -39791,7 +39813,7 @@ const WEIGHTS = {
     console.log('Predicted owner-reachability (0-40, free name-based estimate):', reachSummary);
     console.log('=== DISCOVERY END ===\n');
 
-    return { code: 200, payload: { companies: scored, total: scored.length, breakdown } };
+    return { code: 200, payload: { companies: scored, total: scored.length, breakdown, queued: _queueOk ? scored.length : 0, skippedKnown: _skippedKnown } };
 
   } catch(e) {
     console.error('Discovery fatal error:', e);
@@ -53470,6 +53492,8 @@ app.listen(PORT, () => {
       console.log(`\u{1F9E0} RSS BASELINE: this process settles at ${RSS_BASELINE_MB}MB resident, so a lead is admitted below ${rssCeilingNow()}MB (baseline + ${RESEARCH_RSS_HEADROOM_MB}MB for a page render). The old fixed ceiling of ${RESEARCH_RSS_CEILING_MB}MB was written from a 145MB boot, and every lead was tripping it, sleeping the full ${Math.round(RESEARCH_RSS_MAX_WAIT_MS / 1000)}s bound and starting anyway.`);
       probeSupabaseSchema().catch(() => {});
       probeDfsAuth().catch(() => {});
+      // Round 124: a read run left running by the process this one replaced.
+      resumeReadRuns().catch(() => {});
     }, 5000);
     if (_schemaTimer.unref) _schemaTimer.unref();
   }
@@ -61810,6 +61834,127 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ FIND CONTACT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ READ RUN CHECK (Round 124) ════════════════════════════════════════════
+  // The Find queue is written by this server and a read run is a row it
+  // drives and resumes. Every piece that decides something is executed here on
+  // fixtures; every call site that could quietly stop calling it is pinned.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    // 1. THE DRAW ORDER. Readable first is the ONLY thing separating the
+    //    name-only lead with the best guess from the website leads; a missing
+    //    guess sorts below zero; a string extra still reads its place id.
+    {
+      const rows = [
+        { id: 'a', website: '', extra: { placeId: '' }, reach_predict: 60, icp_score: 90 },
+        { id: 'b', website: 'https://b.example', extra: {}, reach_predict: 10, icp_score: 50 },
+        { id: 'c', website: 'https://c.example', extra: {}, reach_predict: 10, icp_score: 70 },
+        { id: 'd', website: 'https://d.example', extra: {}, reach_predict: null, icp_score: 99 },
+        { id: 'e', website: '', extra: JSON.stringify({ placeId: 'ChIJx' }), reach_predict: 0, icp_score: 1 },
+      ];
+      const o = orderUnread(rows).map(r => r.id).join('');
+      if (o !== 'cbeda') _fails.push(`the draw order came back "${o}" instead of "cbeda" - readable-first, then the owner-findable guess, then the Find score, with a missing guess below zero`);
+    }
+    // 2. WHAT A RUN IS CALLED WHEN IT ENDS.
+    if (readRunStatusOf({ failedCount: 0 }) !== 'done') _fails.push('a run where every lead answered is not called done');
+    if (readRunStatusOf({ failedCount: 1 }) !== 'partial') _fails.push('a run with a failed read is not called partial');
+    if (readRunStatusOf({ cancelled: true }) !== 'partial') _fails.push('a cancelled run is not called partial');
+    if (readRunStatusOf({ stopped: true }) !== 'partial') _fails.push('a run stopped at the day ceiling is not called partial');
+    if (readRunStatusOf({ crashed: true }) !== 'failed') _fails.push('a run that broke is not called failed');
+    // 2b. "WITH EMAIL" on a card: the grade on a row is a name, never a letter,
+    //     and the flag and the tier arrive as text.
+    if (!emailVerifiedRow('a@b.com', 'published_personal', 'false', '1')) _fails.push('a published personal address does not count as an email on the batch card');
+    if (emailVerifiedRow('a@b.com', 'verifier_down', 'true', '3')) _fails.push('an address the checker never confirmed counts as an email on the batch card');
+    if (!emailVerifiedRow('a@b.com', '', 'true', '2')) _fails.push('a sendable tier-2 address from an older read does not count on the batch card');
+    if (emailVerifiedRow('', 'published_personal', 'true', '1') || emailVerifiedRow('a@b.com', '', 'true', null)) _fails.push('a row with no address, or no tier, counts as with-email');
+    // 3. THE STALL RULE, at 59 and 61 minutes, and with no clock at all.
+    {
+      const now = Date.now();
+      if (readRunStalled({ progress_at: new Date(now - 59 * 60000).toISOString() }, now)) _fails.push('a run that made progress 59 minutes ago reads as stalled');
+      if (!readRunStalled({ progress_at: new Date(now - 61 * 60000).toISOString() }, now)) _fails.push('a run with no progress for 61 minutes does not read as stalled');
+      if (!readRunStalled({ started_at: new Date(now - 61 * 60000).toISOString() }, now)) _fails.push('a run that never made progress is judged on nothing');
+      if (!readRunStalled({}, now)) _fails.push('a run with no clock at all reads as live');
+    }
+    // 4. THE TRANSLATION OF A READ, on a full answer, an empty one and a drop.
+    {
+      const full = contactFieldsFrom({ icp: { score: 71, measured: 7, of: 10, why: 'w' }, owner: { name: 'Pete Barnes', title: 'Owner', canBuy: true, grade: 'confirmed', sources: ['own_website_brain'] },
+        email: { address: 'pete@b.example', tier: 1, sendable: true, grade: 'A' }, phone: '555', phoneOnSite: true, signals: { adsCode: false, teamCount: 4 }, site: { grade: 7, word: 'fair', measured: true },
+        lanes: { call: true, email: false, noname: false, last: false }, spend: { firecrawl: 3, anthropicUsd: 0.01 } });
+      if (full.contactOwner !== 'Pete Barnes' || full.contactEmail !== 'pete@b.example' || full.contactPhone !== '555' || full.contactIcp !== 71 || full.contactSiteGrade !== 7) _fails.push('a full contact read does not reach the row fields the builders read');
+      if (full.contactReadOk !== true || full.contactReadBuild !== CONTRACT_VERSION) _fails.push('a read is not stamped as read by THIS build');
+      if (!full.contactLanes || full.contactLanes.call !== true) _fails.push('the lane decision does not reach the row');
+      const empty = contactFieldsFrom({});
+      if (empty.contactIcp !== null || empty.contactAdsCode !== null || empty.contactTeamCount !== null || empty.contactPhoneOnSite !== null) _fails.push('an unmeasured signal is converted into a number or a no');
+      if (empty.contactReadOk !== true) _fails.push('an empty answer is not a read');
+      const drop = contactFieldsFrom({ notIcp: true, icpWhy: 'a franchisee' });
+      if (drop.contactNotFit !== true || drop.contactNotFitWhy !== 'a franchisee') _fails.push('a drop on a 200 does not reach the row as a verdict');
+      const unread = contactFailureFields(422, { unreadable: true, unreadableWhy: 'no distinctive word' });
+      if (unread.contactUnreadable !== true || unread.contactFailedAt !== null || unread.contactReadOk !== false) _fails.push('nothing-to-read is recorded as a failure or as a read');
+      const dead = contactFailureFields(500, { error: 'boom' });
+      if (!dead.contactFailedAt || dead.contactNotFit !== false || dead.contactNotes[0] !== 'boom') _fails.push('a failed read does not say when or why');
+    }
+    // 5. THE REQUEST, THE KEYS AND THE SWITCHES, ported from the page.
+    {
+      const c = readRunCompanyFrom({ name: 'X', website: 'https://x.example', placeId: 'ChIJ1', publishedHours: { open: 6 }, marketsSeen: ['Dallas TX', 'Austin TX'], marketingRoles: ['Marketing Manager'], reviewCount: 40, rating: 4.4 });
+      if (c.placeId !== 'ChIJ1' || !c.publishedHours || c.market !== 'Dallas TX' || c.marketingRoles.length !== 1 || c.reviewCount !== 40) _fails.push('the read request drops the place id, the hours, the metro or the roles the page used to send');
+      if (readRunKeysFrom({ apiKey: 'a', firecrawlKey: 'f' }).anthropicKey !== 'a') _fails.push('the Settings apiKey does not become the Anthropic key of the run');
+      if (readRunOptsFrom({ findPaidOwner: false }).paidOwnerLookup !== false) _fails.push('an explicit off for the paid owner lookup is ignored');
+      if (readRunOptsFrom({}).paidOwnerLookup !== true) _fails.push('an unset switch stands the paid owner lookup down');
+      if (readRunOptsFrom({}).resolveWebsiteSearch !== false) _fails.push('the website search is bought without being asked for');
+    }
+    // 6. THE ROW: the page's id rule, string and object extras, the trigger flag.
+    {
+      if (queueIdOf({ name: 'Tuck & Howell, LLC', source: 'google_places' }) !== 'tuckhowellllc_google_places') _fails.push('the queue id no longer matches the rule the page used, so every lead would be banked twice');
+      if (queueIdOf({ id: 'keep', name: 'x' }) !== 'keep') _fails.push('a lead that carries an id loses it');
+      const s = queueExtraOf({ extra: JSON.stringify({ placeId: 'p' }) }); if (!s || s.placeId !== 'p') _fails.push('a row written by the old page (a JSON string) is not read');
+      if (queueExtraOf({ extra: 'not json' }) !== null) _fails.push('an unparsable row reads as an empty company instead of a failure');
+      if (queueExtraOf({}).constructor !== Object) _fails.push('a row with no extra does not read as an empty object');
+      const t = queueRowFromCompany({ name: 'Bob Ray Co', website: 'https://bobray.example', source: 'news_funding', reviewCount: 12 });
+      if (t.from_trigger_source !== true || typeof t.reach_predict !== 'number' || typeof t.extra !== 'object' || t.extra.reachPredict !== t.reach_predict) _fails.push('a trigger-lane lead is not flagged, or its owner-findable guess is missing, so it would sort last forever');
+      if (queueRowFromCompany({ name: 'Bob Ray Co', source: 'google_places', reachPredict: 22 }).from_trigger_source !== false) _fails.push('a Places lead is flagged as a trigger-source lead');
+      if (READ_RUN_POOL >= FIND_CONTACT_CONCURRENCY) _fails.push('the run pool is not below the contact ceiling, so a foreground read can never get a slot while a run drives');
+      if (FIND_CREDITS_PER_READ_EST < 4) _fails.push('the credit estimate is below the lowest measured whole-run cost (4.3 a lead)');
+    }
+    // 7. THE CALL SITES. A pure function nobody calls is the class this file records most.
+    {
+      const drv = String(readOneQueueRow);
+      const iIcp = drv.indexOf(_n('nameIsOutOfIcp(', 'company.name)')), iCeil = drv.indexOf(_n('budgetRefusal([', "'fc', 'anthropicUsd'])")), iRead = drv.indexOf(_n('runFindContactRead(', 'company, keys, opts)'));
+      if (!(iIcp > 0 && iCeil > iIcp && iRead > iCeil)) _fails.push('the background read does not pass the name gate, then the day ceiling, then the read, in the order the foreground route does');
+      // Both answers that carry a read - the plain read and the ruled-out-after-reading one - must merge into what the row held.
+      if (drv.split(_n('Object.assign({}, oldExtra, ', 'fields)')).length - 1 < 2) _fails.push('a read no longer merges into the row it read, so a contact pass would blank what the row already held');
+      if ((_src.match(/_findInFlight \+= 1;/g) || []).length !== 2) _fails.push('the contact ceiling is not shared between the route and the run');
+      for (const [needle, why] of [
+        [_n('resolution=ignore', '-duplicates'), 'the queue upsert merges, so a lead found again overwrites its read'],
+        [_n('resumeReadRuns()', '.catch'), 'nothing resumes a run after a restart'],
+        [_n('rqUpsert(scored.map(', 'queueRowFromCompany))'), 'the Find press no longer writes the queue'],
+        [_n("app.post('/api/read-run'", ', async'), 'a read run cannot be started'],
+        [_n("app.post('/api/leads/move-unread", "-to-research'"), 'unread leads cannot be moved without a read'],
+        [_n("app.get('/api/find", "/summary'"), 'the Find tab cannot read its own counts'],
+        [_n("app.get('/api/find", "/archive'"), 'the archive has no route, so a ruled-out lead can never be seen or put back'],
+      ]) if (_src.indexOf(needle) < 0) _fails.push(why);
+      if ((_src.match(/\{ batch_id: null \}/g) || []).length < 3) _fails.push('an unread lead claimed by a run that stopped is not released back to the queue on every exit path');
+      const qw = _src.indexOf(_n('rqUpsert(scored.map(', 'queueRowFromCompany))')), bc = _src.indexOf(_n('await clearLeadBench(', '_usedIds)'));
+      if (_src.indexOf(_n('if (_usedIds.length && _queueOk)', ' await clearLeadBench(')) < 0) _fails.push('the bench is cleared whether or not the queue write landed, so a served lead can vanish from both');
+      if (!(qw > 0 && bc > qw)) _fails.push('the bench is cleared before the queue is written, so a served lead can vanish from both');
+      if (String(keepAliveWhileDriving).indexOf(_n("+ '/hea", "lthz'")) < 0 || String(keepAliveWhileDriving).indexOf('RENDER_EXTERNAL_URL') < 0) _fails.push('a driving run does not keep the free instance awake');
+      {
+        // The route's OWN body, bounded by the next route, so a neighbour's read_at cannot be blamed on it.
+        const _mu = _src.indexOf(_n("'/api/leads/move-unread", "-to-research'"));
+        const _muEnd = _mu >= 0 ? _src.indexOf('app.post(', _mu + 10) : -1;
+        const _muBody = (_mu >= 0 && _muEnd > _mu) ? _src.slice(_mu, _muEnd) : '';
+        if (!_muBody || _muBody.indexOf(_n('read', '_at')) >= 0) _fails.push('moving unread leads writes a read timestamp on leads nobody read, or the route cannot be found');
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ READ RUN CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ READ RUN CHECK: a read run is a row this server drives and any later process resumes - the draw order is readable-first then the owner-findable guess, a run ends done / partial / failed by what happened, a run silent for an hour is failed as stalled and its unread leads go back, the read passes the foreground route's gates in the same order and shares its ceiling, a read merges into the row it read, the Find press writes the queue before it clears the bench, and the free instance is kept awake while a run drives.`);
+    }
+  } catch (e) {
+    console.log(`⛔ READ RUN CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ---- THE ONLY PAID CALLS NO CLAIM CAN EVER CONSUME --------------------
@@ -80859,6 +81004,646 @@ app.get('/api/find-options', (req, res) => {
     cities: GP_CITIES,
     categories: [...new Set(GP_CATEGORIES.map(c => c.label).filter(Boolean))].sort(),
   });
+});
+
+// ══ ROUND 124: THE FIND QUEUE IS THE SERVER'S, AND A READ RUN OUTLIVES THE TAB ══
+// Until 2026-09-08 the Find queue lived in the browser (localStorage plus a
+// wholesale DELETE-and-reinsert of discovered_queue on every action) and the
+// contact batch was a pool of six fetches inside a React component: close the
+// tab and the run stopped; switch to the Research tab and it stopped. Vin's
+// spec for the rebuilt Find tab: start a 50-lead read, close the tab entirely,
+// come back to a finished batch. So the queue table is written here and only
+// here, a read run is a row in read_runs that this process drives and any
+// later process resumes, and the browser reads batches instead of holding them.
+//
+// Everything below fails the way the rest of this file's Supabase code fails:
+// a null from sbRest is a refused write, named with sbWhy, never a silent
+// success. The gates a read passes are the SAME statements /api/find-contact
+// runs, in the same order, so a background read cannot spend where a foreground
+// one would have refused.
+const READ_RUN_POOL = 6;
+// The measured cost of a contact read is 4.3-7.8 Firecrawl credits a lead
+// (Rounds 106, 117, 120, 121); the spec's 1.5 was never measured anywhere.
+const FIND_CREDITS_PER_READ_EST = 5;
+const READ_RUN_STALL_MS = 60 * 60 * 1000;
+const READ_RUN_KEEPALIVE_MS = 4 * 60 * 1000;
+const READ_RUN_MAX_COUNT = 500;
+
+// ── the client's contactFieldsFrom, ported whole ────────────────────────────
+// This was index.html's translation of a contact read into the camelCase
+// fields every cell builder, lane rule and CSV column reads. The server writes
+// the row now, so the translation lives here and clientcheck executes THIS
+// copy (lifted from this file) through the client's builders. One declaration.
+const contactFieldsFrom = (data) => {
+  const d = data || {};
+  const icp = d.icp || {};
+  const sig = d.signals || {};
+  const own = d.owner || {};
+  const em = d.email || {};
+  return {
+    contactReadOk: true,
+    contactAt: new Date().toISOString(),
+    contactFailedAt: null,
+    contactIcp: (typeof icp.score === 'number') ? icp.score : null,
+    contactIcpMeasured: (typeof icp.measured === 'number') ? icp.measured : null,
+    contactIcpOf: (typeof icp.of === 'number') ? icp.of : null,
+    contactIcpWhy: icp.why || '',
+    contactIcpTerms: Array.isArray(icp.terms) ? icp.terms : [],
+    contactDemotions: Array.isArray(icp.demotions) ? icp.demotions : [],
+    contactChainMeasured: !!(d.chain && d.chain.measured === true),
+    contactOwner: own.name || '',
+    contactOwnerTitle: own.title || '',
+    contactOwnerCanBuy: own.canBuy === true,
+    contactOwnerSources: Array.isArray(own.sources) ? own.sources : [],
+    contactOwnerGrade: own.grade || '',
+    contactOwnerGradeWhy: own.gradeWhy || '',
+    contactOwnerAskAs: own.askAs || '',
+    contactEmail: em.address || '',
+    contactEmailTier: (typeof em.tier === 'number') ? em.tier : null,
+    contactEmailSendable: em.sendable === true,
+    contactEmailLabel: em.label || '',
+    contactEmailKind: em.kind || '',
+    contactEmailOffDomain: em.offDomain === true,
+    contactEmailFromCareers: em.fromCareersPage === true,
+    contactEmailGrade: em.grade || '',
+    contactEmailGradeSay: em.gradeSay || '',
+    contactEmailVerifierDown: em.verifierDown === true,
+    contactEmailBlockReason: em.blockReason || '',
+    contactEmailPattern: em.pattern || '',
+    contactOwnerBlockReason: own.blockReason || '',
+    contactPhone: d.phone || '',
+    contactPhoneOnSite: (d.phoneOnSite === true || d.phoneOnSite === false) ? d.phoneOnSite : null,
+    contactPhoneSource: d.phoneSource || '',
+    contactAdsCode: (sig.adsCode === true || sig.adsCode === false) ? sig.adsCode : null,
+    contactAdsWhy: sig.adsWhy || '',
+    contactTeamCount: (typeof sig.teamCount === 'number') ? sig.teamCount : null,
+    contactHiring: (sig.hiringAny === true || sig.hiringAny === false) ? sig.hiringAny : null,
+    contactHiringMarketing: (sig.hiringMarketing === true || sig.hiringMarketing === false) ? sig.hiringMarketing : null,
+    contactHiringTitles: Array.isArray(sig.hiringTitles) ? sig.hiringTitles : [],
+    contactExecTitles: Array.isArray(sig.execTitles) ? sig.execTitles : [],
+    contactSize: (d.size && d.size.band) || '',
+    contactSizeConfidence: (d.size && d.size.confidence) || '',
+    contactSizeWhy: (d.size && d.size.why) || '',
+    contactSiteWord: (d.site && d.site.word) || '',
+    contactSiteShort: (d.site && d.site.short) || '',
+    contactSiteGap: (d.site && typeof d.site.gap === 'number') ? d.site.gap : null,
+    contactSiteWhy: (d.site && d.site.why) || '',
+    contactSiteMeasured: !!(d.site && d.site.measured === true),
+    contactSitePlatform: (d.site && d.site.platform) || '',
+    contactSiteGrade: (d.site && typeof d.site.grade === 'number') ? d.site.grade : null,
+    contactLayers: (d.layers && d.layers.verdict) || '',
+    contactTarget: d.target || '',
+    contactTargetWhy: d.targetWhy || '',
+    contactSizeTier: (d.size && d.size.tier) || '',
+    contactSizeSay: (d.size && d.size.say) || '',
+    contactLanes: (d.lanes && typeof d.lanes === 'object') ? { call: d.lanes.call === true, email: d.lanes.email === true, noname: d.lanes.noname === true, last: d.lanes.last === true } : null,
+    contactLanesWhy: (d.lanes && d.lanes.why) || '',
+    contactMarketingLead: (d.marketingLead && d.marketingLead.name) || '',
+    contactMarketingLeadTitle: (d.marketingLead && d.marketingLead.title) || '',
+    contactMarketingLeadEmail: (d.marketingLead && d.marketingLead.email) || '',
+    contactMarketingLeadEmailSendable: !!(d.marketingLead && d.marketingLead.sendable === true),
+    contactMarketingLeadCanBuy: !!(d.marketingLead && d.marketingLead.canBuy === true),
+    contactReadVia: d.readVia || '',
+    contactNameNotOnSite: d.nameNotOnSite === true,
+    contactNotes: Array.isArray(d.notes) ? d.notes : [],
+    contactSpendFc: (d.spend && typeof d.spend.firecrawl === 'number') ? d.spend.firecrawl : 0,
+    contactSpendUsd: (d.spend && typeof d.spend.anthropicUsd === 'number') ? d.spend.anthropicUsd : 0,
+    contactReadBuild: CONTRACT_VERSION,
+    contactCallWindow: (d.callWindow && d.callWindow.say) || '',
+    contactCallWindowShort: (d.callWindow && d.callWindow.short) || '',
+    contactCallWindowWhy: d.callWindowWhy || '',
+    contactNotFit: d.notIcp === true,
+    contactNotFitWhy: d.icpWhy || '',
+    contactListingRecovered: d.listingRecovered === true,
+    contactOwnerStages: (typeof d.ownerStagesRun === 'number') ? d.ownerStagesRun : null,
+    contactHiringRoles: (d.hiring && Array.isArray(d.hiring.roles)) ? d.hiring.roles : [],
+    contactHiringDaysAgo: (d.hiring && typeof d.hiring.daysAgo === 'number') ? d.hiring.daysAgo : null,
+    contactHiringPostingUrl: (d.hiring && d.hiring.postingUrl) || '',
+    contactVerifiedEmployees: (typeof sig.verifiedEmployees === 'number') ? sig.verifiedEmployees : null,
+    contactWebsite: d.website || '',
+    contactWebsiteResolved: d.websiteResolved === true,
+    contactWebsiteConfirmed: !!(d.websiteProof && d.websiteProof.confirmedByPages === true),
+    contactWebsiteProof: d.websiteProof ? ((d.websiteProof.rule || '') + (d.websiteProof.source ? ' via ' + d.websiteProof.source : '')) : '',
+    contactUnreadable: false,
+    contactUnreadableWhy: '',
+  };
+};
+// The client's two failure branches, ported. A verdict (notIcp) is permanent;
+// nothing-to-read is its own state; anything else is a failure that comes back.
+const contactFailureFields = (status, body) => {
+  const d = body || {};
+  const _verdict = d.notIcp === true;
+  const _unreadable = d.unreadable === true;
+  return {
+    contactReadOk: false,
+    contactFailedAt: _unreadable ? null : new Date().toISOString(),
+    contactNotFit: _verdict,
+    contactNotFitWhy: _verdict ? (d.icpWhy || d.error || '') : '',
+    contactUnreadable: _unreadable,
+    contactUnreadableWhy: _unreadable ? (d.unreadableWhy || '') : '',
+    contactNotes: [d.error || ('the server answered ' + status)],
+  };
+};
+
+// The client's contactRequestBody, ported: the company half, the keys half and
+// the two switches. A queue row's company object is the Find press's lead.
+const readRunCompanyFrom = (company) => {
+  const C = company || {};
+  return {
+    name: C.name || '', website: C.website || '', phone: C.phone || '',
+    location: C.location || '', industry: C.industry || C.category || '',
+    reviewCount: (typeof C.reviewCount === 'number') ? C.reviewCount : null,
+    rating: (typeof C.rating === 'number') ? C.rating : null,
+    publishedHours: C.publishedHours || null,
+    trade: C.trade || '', tier: C.tier || null,
+    placeId: C.placeId || '',
+    outsideBand: C.outsideBand === true,
+    aboveSizeCeiling: C.aboveSizeCeiling === true,
+    source: C.source || '',
+    verifiedEmployees: (typeof C.verifiedEmployees === 'number') ? C.verifiedEmployees : null,
+    marketingRoles: Array.isArray(C.marketingRoles) ? C.marketingRoles : [],
+    jobPostedAt: C.jobPostedAt || '',
+    signalAgeDays: (typeof C.signalAgeDays === 'number') ? C.signalAgeDays : null,
+    jobPostingUrl: C.jobPostingUrl || '',
+    marketCount: (typeof C.marketCount === 'number') ? C.marketCount : null,
+    affordBand: C.affordBand || '',
+    market: Array.isArray(C.marketsSeen) && C.marketsSeen.length ? String(C.marketsSeen[0] || '') : '',
+  };
+};
+// An object literal on purpose: clientcheck's KEY_SOURCES walk reads the keys a
+// route destructures out of req.body.keys, and anthropicKey has no row there.
+const readRunKeysFrom = (settingsData) => {
+  const S = settingsData || {};
+  return {
+    anthropicKey: S.apiKey || '', firecrawlKey: S.firecrawlKey || '', verifierKey: S.verifierKey || '',
+    apifyToken: S.apifyToken || '', hunterKey: S.hunterKey || '', companiesApiKey: S.companiesApiKey || '',
+  };
+};
+const readRunOptsFrom = (settingsData) => {
+  const S = settingsData || {};
+  return { paidOwnerLookup: S.findPaidOwner !== false, resolveWebsiteSearch: S.resolveWebsiteSearch === true };
+};
+
+// ── the queue row ─────────────────────────────────────────────────────────────
+// The id is the rule the client used for the life of the table, so a lead the
+// old page already banked and a lead this press finds again are ONE row.
+const queueIdOf = (c) => (c && c.id) || (String((c && c.name) || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 40) + '_' + ((c && c.source) || 'find'));
+// extra was written as JSON.stringify(c) into a jsonb column, so an old row
+// holds a STRING; this file writes objects. Both are read; an unparsable one is
+// null, and null is a failed read, never an empty company.
+const queueExtraOf = (row) => {
+  const x = row && row.extra;
+  if (x === null || x === undefined || x === '') return {};
+  if (typeof x === 'string') { try { const o = JSON.parse(x); return (o && typeof o === 'object') ? o : null; } catch { return null; } }
+  return (typeof x === 'object') ? x : null;
+};
+const queueRowFromCompany = (c) => {
+  const src = String((c && c.source) || '');
+  const rp = (typeof c.reachPredict === 'number') ? c.reachPredict
+    : predictReachability(c.name, c.website, { reviewCount: c.reviewCount }).score;
+  return {
+    id: queueIdOf(c),
+    name: c.name || '', website: c.website || '',
+    icp_score: c.icpScore || 0, source: src, signals: c.signals || {},
+    job_title: c.jobTitle || '', location: c.location || '',
+    manual_role_count: c.manualRoleCount || 0, stacked: !!c.stacked,
+    reachability: c.reachability || 0,
+    size_verified: !!c.sizeVerified, size_unverified: !!c.sizeUnverified,
+    verified_employees: c.verifiedEmployees || null,
+    extra: Object.assign({}, c, { reachPredict: rp }),
+    from_trigger_source: src !== 'google_places',
+    reach_predict: rp,
+  };
+};
+// The draw order the browser used (index.html, Round 105): a lead with
+// something to read sorts above one with nothing, then the free
+// owner-findable guess, then the Find score. A missing number sorts BELOW zero,
+// so an unmeasured lead is never dressed as a poor one.
+const _qnum = (v) => (typeof v === 'number' && Number.isFinite(v)) ? v : -1;
+const queueReadable = (row) => {
+  const x = queueExtraOf(row) || {};
+  return ((row && row.website) || x.website || x.placeId) ? 1 : 0;
+};
+const orderUnread = (rows) => (Array.isArray(rows) ? rows.slice() : []).sort((a, b) =>
+  (queueReadable(b) - queueReadable(a))
+  || (_qnum(b.reach_predict) - _qnum(a.reach_predict))
+  || (_qnum(b.icp_score) - _qnum(a.icp_score)));
+// done: every claimed lead answered (read or a verdict); partial: something
+// failed, or the run was stopped (Cancel, the day ceiling); failed: the run
+// itself broke.
+const readRunStatusOf = (o) => {
+  const r = o || {};
+  if (r.crashed) return 'failed';
+  if ((Number(r.failedCount) || 0) > 0 || r.cancelled || r.stopped) return 'partial';
+  return 'done';
+};
+const readRunStalled = (run, now) => {
+  const t = Date.parse((run && (run.progress_at || run.started_at)) || '');
+  if (!Number.isFinite(t)) return true;
+  return (Number(now) || Date.now()) - t > READ_RUN_STALL_MS;
+};
+
+// ── Supabase access, every call through sbRest ───────────────────────────────
+const _sbPage = 1000;
+const rqSelect = async (select, filter) => {
+  const out = [];
+  for (let from = 0; ; from += _sbPage) {
+    const rows = await sbRest(`/discovered_queue?select=${select}${filter ? '&' + filter : ''}&order=id.asc`,
+      { prefer: 'return=representation', headers: { Range: `${from}-${from + _sbPage - 1}` } });
+    if (!Array.isArray(rows)) return from === 0 ? null : out;
+    out.push(...rows);
+    if (rows.length < _sbPage) return out;
+  }
+};
+const rqKnown = () => rqSelect('id,name,website');
+const pipelineNames = async () => {
+  const out = [];
+  for (let from = 0; ; from += _sbPage) {
+    const rows = await sbRest(`/leads?select=name,website&order=id.asc`,
+      { prefer: 'return=representation', headers: { Range: `${from}-${from + _sbPage - 1}` } });
+    if (!Array.isArray(rows)) return from === 0 ? null : out;
+    out.push(...rows);
+    if (rows.length < _sbPage) return out;
+  }
+};
+// ignore-duplicates, never merge: a lead the press finds AGAIN must not
+// overwrite the row that already carries its read and its stamps.
+const rqUpsert = async (rows) => {
+  let n = 0;
+  for (let i = 0; i < rows.length; i += 200) {
+    const r = await sbRest('/discovered_queue?on_conflict=id', {
+      method: 'POST', prefer: 'return=minimal,resolution=ignore-duplicates',
+      body: JSON.stringify(rows.slice(i, i + 200)),
+    });
+    if (r === null) return n ? -n : null;
+    n += Math.min(200, rows.length - i);
+  }
+  return n;
+};
+const rqUnread = () => rqSelect('*', 'batch_id=is.null&read_at=is.null&ruled_out_at=is.null&moved_to_research_at=is.null');
+const rqBatch = (runId) => rqSelect('*', 'batch_id=eq.' + encodeURIComponent(String(runId)));
+const rqByIds = (ids) => rqSelect('*', 'id=in.' + _qInList(ids));
+const _qInList = (ids) => encodeURIComponent('(' + (ids || []).map(i => '"' + String(i).replace(/["\\]/g, '') + '"').join(',') + ')');
+const rqPatch = (id, patch) => sbRest('/discovered_queue?id=eq.' + encodeURIComponent(String(id)), { method: 'PATCH', body: JSON.stringify(patch) });
+const rqPatchMany = async (ids, patch) => {
+  const list = (ids || []).filter(Boolean);
+  if (!list.length) return { ok: true, emptyBody: true };
+  for (let i = 0; i < list.length; i += 100) {
+    const r = await sbRest('/discovered_queue?id=in.' + _qInList(list.slice(i, i + 100)), { method: 'PATCH', body: JSON.stringify(patch) });
+    if (r === null) return null;
+  }
+  return { ok: true, emptyBody: true };
+};
+const rrInsert = (run) => sbRest('/read_runs', { method: 'POST', body: JSON.stringify(run) });
+const rrPatch = (id, patch) => sbRest('/read_runs?id=eq.' + encodeURIComponent(String(id)), { method: 'PATCH', body: JSON.stringify(patch) });
+const rrGet = async (id) => { const r = await sbRest('/read_runs?id=eq.' + encodeURIComponent(String(id)) + '&select=*', { prefer: 'return=representation' }); return Array.isArray(r) ? (r[0] || null) : null; };
+const rrRunning = async () => { const r = await sbRest('/read_runs?status=eq.running&select=*&order=started_at.asc', { prefer: 'return=representation' }); return Array.isArray(r) ? r : null; };
+const rrList = async (limit) => { const r = await sbRest('/read_runs?select=*&order=started_at.desc&limit=' + Math.max(1, Math.min(100, Number(limit) || 20)), { prefer: 'return=representation' }); return Array.isArray(r) ? r : null; };
+// The keys the app already keeps in Supabase (the Settings screen saves the
+// whole object to user_settings). Read for a run, never logged, never stored
+// anywhere else.
+const settingsData = async () => {
+  const r = await sbRest('/user_settings?id=eq.singleton&select=data', { prefer: 'return=representation' });
+  if (!Array.isArray(r) || !r[0] || !r[0].data || typeof r[0].data !== 'object') return null;
+  return r[0].data;
+};
+
+// ── the driver ────────────────────────────────────────────────────────────────
+const _readRuns = new Map();   // runId -> { cancel: boolean }
+let _keepAliveTimer = null;
+// Render's free instance idles on inbound silence, and a run that is only
+// making OUTBOUND calls is silent. While a run drives, this process asks its
+// own public URL for /healthz every four minutes. Render sets
+// RENDER_EXTERNAL_URL; on a machine without it, and under the fake upstream,
+// nothing is pinged.
+const keepAliveWhileDriving = () => {
+  const base = String(process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
+  if (!base || process.env.FAKE_UPSTREAM || _keepAliveTimer) return;
+  _keepAliveTimer = setInterval(() => {
+    if (!_readRuns.size) { clearInterval(_keepAliveTimer); _keepAliveTimer = null; return; }
+    fetchT(base + '/healthz', {}, 8000).catch(() => {});
+  }, READ_RUN_KEEPALIVE_MS);
+  if (_keepAliveTimer.unref) _keepAliveTimer.unref();
+};
+const _readRunSleep = (ms) => new Promise(r => setTimeout(r, ms));
+const _runLog = (runId, msg) => console.log(`\u{1F4D6} READ RUN ${String(runId).slice(0, 8)}: ${msg}`);
+
+// One queue row through the SAME gates /api/find-contact runs, in the same
+// order. Returns what the row's patch and the run's counters need.
+const readOneQueueRow = async (row, keys, opts) => {
+  const company = readRunCompanyFrom(Object.assign({}, queueExtraOf(row) || {}, { name: row.name || (queueExtraOf(row) || {}).name }));
+  const who = String(company.name || 'lead');
+  const oldExtra = queueExtraOf(row);
+  if (oldExtra === null) return { kind: 'failed', why: 'the row could not be read (its stored company object is not valid JSON)', extra: null };
+  if (!company.name) return { kind: 'failed', why: 'the row has no company name', extra: oldExtra };
+  if (company.website) {
+    try { new URL(String(company.website)); }
+    catch { return { kind: 'failed', why: `"${String(company.website).slice(0, 60)}" is not a usable website address`, extra: oldExtra }; }
+  }
+  const _outOfIcp = nameIsOutOfIcp(company.name);
+  if (_outOfIcp) {
+    console.log(`\u{1F6D1} FIND CONTACT [${who}]: REFUSED - ${_outOfIcp.why}. Nothing was read and nothing was spent.`);
+    return { kind: 'ruled_out', why: _outOfIcp.why, extra: Object.assign({}, oldExtra, contactFailureFields(422, { notIcp: true, icpWhy: _outOfIcp.why, error: _outOfIcp.why })) };
+  }
+  const ceiling = budgetRefusal(['fc', 'anthropicUsd']);
+  if (ceiling) return { kind: 'ceiling', why: ceiling.message, extra: oldExtra };
+  if (!company.website && !company.placeId) {
+    const _allow = resolveAllowedFor(company.name);
+    if (!_allow.ok) {
+      return { kind: 'failed', why: 'nothing to read: no website, no Google listing, and ' + _allow.why,
+        extra: Object.assign({}, oldExtra, contactFailureFields(422, { unreadable: true, unreadableWhy: _allow.why, error: 'nothing to read' })) };
+    }
+  }
+  // The foreground route refuses at the ceiling; a background run waits its
+  // turn instead, so the ceiling is shared and never doubled.
+  while (_findInFlight >= FIND_CONTACT_CONCURRENCY) await _readRunSleep(1500);
+  _findInFlight += 1;
+  try {
+    const out = await runWithLead(who, () =>
+      FC_LEDGER.run({ spent: 0, saved: 0, ops: 0, throttled: 0, places: 0, anthropicUsd: 0, apify: 0 },
+        () => runFindContactRead(company, keys, opts)));
+    const fields = contactFieldsFrom(out);
+    const spend = (out && out.spend && typeof out.spend.firecrawl === 'number') ? out.spend.firecrawl : 0;
+    // A drop can arrive on a 200: a chain is only visible once their own pages
+    // were read. The read is real and kept; the lead is still not a lead.
+    if (out && out.notIcp === true) return { kind: 'ruled_out', why: out.icpWhy || 'not an owner-operated business in our range', extra: Object.assign({}, oldExtra, fields), spend, read: true };
+    return { kind: 'read', extra: Object.assign({}, oldExtra, fields), spend, withEmail: !!fields.contactEmail, withOwner: !!fields.contactOwner };
+  } catch (e) {
+    const why = (e && e.message) || 'the contact read failed';
+    return { kind: 'failed', why, extra: Object.assign({}, oldExtra, contactFailureFields(500, { error: why })) };
+  } finally {
+    _findInFlight -= 1;
+  }
+};
+
+const driveReadRun = async (runId, o = {}) => {
+  const run = await rrGet(runId);
+  if (!run) return;
+  const ctl = _readRuns.get(runId) || { cancel: false };
+  _readRuns.set(runId, ctl);
+  keepAliveWhileDriving();
+  const counters = {
+    read: Number(run.read_count) || 0, failed: Number(run.failed_count) || 0,
+    ruledOut: Number(run.ruled_out_count) || 0, credits: Number(run.credits_used) || 0,
+  };
+  let stopped = false, error = null;
+  try {
+    const S = await settingsData();
+    if (!S || !S.apiKey) throw new Error(S ? 'No Anthropic key in Settings, so nobody can be identified.' : 'the Settings row (user_settings) could not be read, so the run has no keys');
+    const keys = readRunKeysFrom(S);
+    const opts = readRunOptsFrom(S);
+    let rows;
+    if (o.resume) {
+      const mine = await rqBatch(runId);
+      if (mine === null) throw new Error('the batch could not be read: ' + (sbWhy('discovered_queue') || 'Supabase gave no reason'));
+      rows = mine.filter(r => !r.read_at && !r.read_failed && !r.ruled_out_at);
+      _runLog(runId, `resumed after a restart with ${rows.length} of ${run.requested_count} still to read.`);
+    } else {
+      const unread = await rqUnread();
+      if (unread === null) throw new Error('the queue could not be read: ' + (sbWhy('discovered_queue') || 'Supabase gave no reason'));
+      const scope = (run.scope && typeof run.scope === 'object') ? run.scope : {};
+      const pool = scope.placesOnly ? unread.filter(r => !!(queueExtraOf(r) || {}).placeId) : unread;
+      rows = orderUnread(pool).slice(0, Math.max(0, Number(run.requested_count) || 0));
+      const claimed = await rqPatchMany(rows.map(r => r.id), { batch_id: runId });
+      if (claimed === null) throw new Error('the leads could not be claimed for this run: ' + (sbWhy('discovered_queue') || 'Supabase gave no reason'));
+      _runLog(runId, `claimed ${rows.length} of ${run.requested_count} asked for (${unread.length} unread, ${pool.length} in scope).`);
+    }
+    let next = 0;
+    const one = async (row) => {
+      const res = await readOneQueueRow(row, keys, opts);
+      const nowIso = new Date().toISOString();
+      if (res.kind === 'ceiling') { stopped = true; error = res.why; ctl.cancel = true; return; }
+      let patch;
+      if (res.kind === 'read') {
+        counters.read += 1; counters.credits += res.spend || 0;
+        patch = { read_at: nowIso, read_failed: false, fail_reason: null, extra: res.extra };
+      } else if (res.kind === 'ruled_out') {
+        counters.ruledOut += 1; counters.credits += res.spend || 0;
+        patch = Object.assign({ ruled_out_at: nowIso, ruled_out_why: String(res.why || '').slice(0, 300), extra: res.extra }, res.read ? { read_at: nowIso } : {});
+      } else {
+        counters.failed += 1;
+        patch = Object.assign({ read_failed: true, fail_reason: String(res.why || '').slice(0, 300) }, res.extra ? { extra: res.extra } : {});
+      }
+      const w = await rqPatch(row.id, patch);
+      if (w === null) console.log(`\u26d4 READ RUN ${String(runId).slice(0, 8)}: the row for ${row.name} could not be written - ${sbWhy('discovered_queue') || 'Supabase gave no reason'}. The read was paid for and is not on the row.`);
+      const p = await rrPatch(runId, { read_count: counters.read, failed_count: counters.failed, ruled_out_count: counters.ruledOut, credits_used: Math.round(counters.credits * 100) / 100, progress_at: nowIso });
+      if (p === null) throw new Error('the run row could not be updated: ' + (sbWhy('read_runs') || 'Supabase gave no reason'));
+    };
+    const worker = async () => {
+      for (;;) {
+        if (ctl.cancel) return;
+        const i = next++;
+        if (i >= rows.length) return;
+        await one(rows[i]);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(READ_RUN_POOL, Math.max(1, rows.length)) }, worker));
+    // Whatever was claimed and never answered goes back to the queue: a lead
+    // the run never reached is unread, not read.
+    const unanswered = rows.slice(next).concat([]);
+    if (ctl.cancel || stopped) {
+      const mine = await rqBatch(runId);
+      const left = (mine || []).filter(r => !r.read_at && !r.read_failed && !r.ruled_out_at).map(r => r.id);
+      if (left.length) await rqPatchMany(left, { batch_id: null });
+      void unanswered;
+    }
+    const status = readRunStatusOf({ failedCount: counters.failed, cancelled: ctl.cancel && !stopped, stopped });
+    await rrPatch(runId, { status, finished_at: new Date().toISOString(), error: error || null,
+      read_count: counters.read, failed_count: counters.failed, ruled_out_count: counters.ruledOut, credits_used: Math.round(counters.credits * 100) / 100 });
+    _runLog(runId, `${status}: ${counters.read} read, ${counters.failed} failed, ${counters.ruledOut} ruled out, ${Math.round(counters.credits)} Firecrawl credit(s)${error ? ' - ' + error : ''}.`);
+  } catch (e) {
+    const why = (e && e.message) || String(e);
+    const mine = await rqBatch(runId);
+    const left = (mine || []).filter(r => !r.read_at && !r.read_failed && !r.ruled_out_at).map(r => r.id);
+    if (left.length) await rqPatchMany(left, { batch_id: null });
+    await rrPatch(runId, { status: 'failed', finished_at: new Date().toISOString(), error: why.slice(0, 500),
+      read_count: counters.read, failed_count: counters.failed, ruled_out_count: counters.ruledOut, credits_used: Math.round(counters.credits * 100) / 100 });
+    _runLog(runId, `FAILED - ${why}. ${counters.read} lead(s) were read before it broke and are on their rows.`);
+  } finally {
+    _readRuns.delete(runId);
+  }
+};
+
+// A run left 'running' by a process that is gone: resumed if its last progress
+// is recent, failed as 'stalled' if not. Called once the boot verdict settles.
+const resumeReadRuns = async () => {
+  if (!SB_URL || !SB_KEY) return;
+  const running = await rrRunning();
+  if (!Array.isArray(running) || !running.length) return;
+  for (const run of running) {
+    if (_readRuns.has(run.id)) continue;
+    if (readRunStalled(run, Date.now())) {
+      const mine = await rqBatch(run.id);
+      const left = (mine || []).filter(r => !r.read_at && !r.read_failed && !r.ruled_out_at).map(r => r.id);
+      if (left.length) await rqPatchMany(left, { batch_id: null });
+      await rrPatch(run.id, { status: 'failed', finished_at: new Date().toISOString(), error: 'stalled' });
+      _runLog(run.id, `left running with no progress for over ${Math.round(READ_RUN_STALL_MS / 60000)} minutes - marked failed (stalled); ${left.length} unread lead(s) returned to the queue.`);
+      continue;
+    }
+    driveReadRun(run.id, { resume: true }).catch(() => {});
+  }
+};
+
+// ── the routes ────────────────────────────────────────────────────────────────
+const _sbOff = () => (!SB_URL || !SB_KEY) ? 'Supabase is not configured on this server (SUPABASE_URL and SUPABASE_KEY), so the Find queue cannot be read or written.' : '';
+const _queueStateOf = (r) => r.moved_to_research_at ? 'moved' : r.ruled_out_at ? 'ruled_out' : r.read_failed ? 'failed' : r.read_at ? 'read' : 'unread';
+// "With email" on a batch card is the page's own letter rule: an A grade (an
+// address published on their site as a person, or SMTP-confirmed), or a
+// sendable address at tier 1-2 from an older read. The grade on a row is a
+// NAME (published_personal), never a letter, and PostgREST hands the
+// sendable flag and the tier back as text.
+const EMAIL_GRADE_VERIFIED = ['published_personal', 'smtp_confirmed'];
+const emailVerifiedRow = (email, grade, sendable, tier) => !!email
+  && (EMAIL_GRADE_VERIFIED.includes(String(grade || '')) || (String(sendable) === 'true' && Number(tier) >= 1 && Number(tier) <= 2));
+
+app.get('/api/find/summary', async (req, res) => {
+  const off = _sbOff();
+  if (off) return res.status(503).json({ error: off });
+  const rows = await rqSelect('id,website,read_at,read_failed,fail_reason,ruled_out_at,moved_to_research_at,batch_id,from_trigger_source,placeId:extra->>placeId');
+  if (rows === null) return res.status(502).json({ error: 'the queue could not be read: ' + (sbWhy('discovered_queue') || 'Supabase gave no reason') });
+  const s = { unread: 0, unreadTrigger: 0, read: 0, failed: 0, ruledOut: 0, moved: 0, noListing: 0, readEver: 0 };
+  for (const r of rows) {
+    const st = _queueStateOf(r);
+    if (r.read_at) s.readEver += 1;   // read, whatever happened to it since
+    if (st === 'unread' && r.batch_id) continue;   // claimed by a run in flight
+    if (st === 'unread') { s.unread += 1; if (r.from_trigger_source) s.unreadTrigger += 1; }
+    else if (st === 'read') s.read += 1;
+    else if (st === 'failed') { s.failed += 1; if (/^nothing to read/.test(String(r.fail_reason || ''))) s.noListing += 1; }
+    else if (st === 'ruled_out') s.ruledOut += 1;
+    else if (st === 'moved') s.moved += 1;
+  }
+  const running = [..._readRuns.keys()][0] || null;
+  res.json(Object.assign(s, { running, creditsPerReadEst: FIND_CREDITS_PER_READ_EST, dayCeiling: budgetRefusal(['fc', 'anthropicUsd']),
+    scope: { trades: GP_CATEGORIES.filter(c => GP_TIER_C_ON || CATEGORY_TIER[c.label] !== 'C').length, metros: GP_CITIES.length } }));
+});
+app.get('/api/read-runs', async (req, res) => {
+  const off = _sbOff();
+  if (off) return res.status(503).json({ error: off });
+  const runs = await rrList(req.query.limit);
+  if (runs === null) return res.status(502).json({ error: 'the runs could not be read: ' + (sbWhy('read_runs') || 'Supabase gave no reason') });
+  // The per-batch counts the cards read, off the rows themselves.
+  const ids = runs.map(r => r.id);
+  const rows = ids.length ? await rqSelect('batch_id,read_at,read_failed,ruled_out_at,moved_to_research_at,emailGrade:extra->>contactEmailGrade,emailSendable:extra->>contactEmailSendable,emailTier:extra->>contactEmailTier,email:extra->>contactEmail', 'batch_id=in.' + _qInList(ids)) : [];
+  const by = new Map(ids.map(id => [id, { withEmail: 0, inResearch: 0, ruledOut: 0 }]));
+  for (const r of (rows || [])) {
+    const b = by.get(r.batch_id); if (!b) continue;
+    if (r.moved_to_research_at) b.inResearch += 1;
+    if (r.ruled_out_at) b.ruledOut += 1;
+    if (r.read_at && emailVerifiedRow(r.email, r.emailGrade, r.emailSendable, r.emailTier)) b.withEmail += 1;
+  }
+  res.json(runs.map(r => Object.assign({}, r, by.get(r.id) || {}, { live: _readRuns.has(r.id) })));
+});
+app.get('/api/read-runs/:id/leads', async (req, res) => {
+  const off = _sbOff();
+  if (off) return res.status(503).json({ error: off });
+  const run = await rrGet(req.params.id);
+  if (!run) return res.status(404).json({ error: 'That batch no longer exists.' });
+  const rows = await rqBatch(run.id);
+  if (rows === null) return res.status(502).json({ error: 'the batch could not be read: ' + (sbWhy('discovered_queue') || 'Supabase gave no reason') });
+  res.json({ run, leads: rows.map(r => Object.assign({}, queueExtraOf(r) || { name: r.name, unparsable: true }, {
+    id: r.id, name: r.name || (queueExtraOf(r) || {}).name || '', website: r.website || (queueExtraOf(r) || {}).website || '',
+    batchId: r.batch_id, readAt: r.read_at, readFailed: r.read_failed === true, failReason: r.fail_reason || '',
+    ruledOutAt: r.ruled_out_at, ruledOutWhy: r.ruled_out_why || '', movedToResearchAt: r.moved_to_research_at,
+    fromTriggerSource: r.from_trigger_source === true, reachPredict: r.reach_predict, exportedAt: r.exported_at, exportedTo: r.exported_to,
+  })) });
+});
+app.post('/api/read-run', async (req, res) => {
+  const off = _sbOff();
+  if (off) return res.status(503).json({ error: off });
+  const count = Math.floor(Number((req.body || {}).count));
+  if (!Number.isFinite(count) || count < 1 || count > READ_RUN_MAX_COUNT) return res.status(422).json({ error: `count must be 1 to ${READ_RUN_MAX_COUNT}.` });
+  if (_readRuns.size) return res.status(409).json({ error: 'a read is already in progress on this server.', runId: [..._readRuns.keys()][0], busy: true });
+  const running = await rrRunning();
+  if (Array.isArray(running) && running.length) return res.status(409).json({ error: 'a read is already recorded as running; it resumes on its own or is failed as stalled after an hour.', runId: running[0].id, busy: true });
+  const ceiling = budgetRefusal(['fc', 'anthropicUsd']);
+  if (ceiling) return res.status(429).json({ error: ceiling.message, budgetStopped: true });
+  const S = await settingsData();
+  if (!S || !S.apiKey) return res.status(422).json({ error: 'No Anthropic key is set in Settings, so nobody can be identified.', preflightStopped: true });
+  const id = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const row = { id, started_at: now, progress_at: now, status: 'running', requested_count: count, read_count: 0, failed_count: 0, ruled_out_count: 0,
+    credits_estimated: count * FIND_CREDITS_PER_READ_EST, credits_used: 0,
+    scope: { placesOnly: S.findPlacesOnly === true, trades: GP_CATEGORIES.filter(c => GP_TIER_C_ON || CATEGORY_TIER[c.label] !== 'C').length, metros: GP_CITIES.length } };
+  const ins = await rrInsert(row);
+  if (ins === null) return res.status(502).json({ error: 'the run could not be recorded: ' + (sbWhy('read_runs') || 'Supabase gave no reason') });
+  _readRuns.set(id, { cancel: false });
+  driveReadRun(id).catch(() => {});
+  res.json({ runId: id });
+});
+app.post('/api/read-run/:id/cancel', (req, res) => {
+  const ctl = _readRuns.get(req.params.id);
+  if (!ctl) return res.status(404).json({ error: 'that run is not driving on this server.' });
+  ctl.cancel = true;
+  res.json({ ok: true, cancelling: true });
+});
+const _idsOf = (b) => (Array.isArray(b && b.ids) ? b.ids : (Array.isArray(b && b.leadIds) ? b.leadIds : [])).map(String).filter(Boolean).slice(0, 1000);
+const _companiesOf = (rows) => (rows || []).map(r => Object.assign({}, queueExtraOf(r) || {}, { id: r.id, name: r.name || (queueExtraOf(r) || {}).name || '', website: r.website || (queueExtraOf(r) || {}).website || '' }));
+app.get('/api/find/archive', async (req, res) => {
+  const off = _sbOff(); if (off) return res.status(503).json({ error: off });
+  const out = await rqSelect('*', 'ruled_out_at=not.is.null');
+  const failed = out === null ? null : await rqSelect('*', 'read_failed=is.true');
+  if (out === null || failed === null) return res.status(502).json({ error: 'the archive could not be read: ' + (sbWhy('discovered_queue') || 'Supabase gave no reason') });
+  const seen = new Set();
+  const keep = out.concat(failed).filter(r => !seen.has(r.id) && seen.add(r.id) && !r.moved_to_research_at && (r.ruled_out_at || /^nothing to read/.test(String(r.fail_reason || ''))));
+  res.json({ leads: keep.map(r => Object.assign({}, queueExtraOf(r) || { name: r.name, unparsable: true }, {
+    id: r.id, name: r.name || (queueExtraOf(r) || {}).name || '', website: r.website || (queueExtraOf(r) || {}).website || '',
+    batchId: r.batch_id, readAt: r.read_at, readFailed: r.read_failed === true, failReason: r.fail_reason || '',
+    ruledOutAt: r.ruled_out_at, ruledOutWhy: r.ruled_out_why || '', movedToResearchAt: r.moved_to_research_at,
+  })) });
+});
+app.post('/api/leads/move-to-research', async (req, res) => {
+  const off = _sbOff(); if (off) return res.status(503).json({ error: off });
+  const ids = _idsOf(req.body); if (!ids.length) return res.status(422).json({ error: 'ids required' });
+  const rows = await rqByIds(ids);
+  if (rows === null) return res.status(502).json({ error: 'the leads could not be read: ' + (sbWhy('discovered_queue') || 'Supabase gave no reason') });
+  const movable = rows.filter(r => !r.moved_to_research_at);
+  const w = await rqPatchMany(movable.map(r => r.id), { moved_to_research_at: new Date().toISOString() });
+  if (w === null) return res.status(502).json({ error: 'the move could not be recorded: ' + (sbWhy('discovered_queue') || 'Supabase gave no reason') });
+  res.json({ moved: movable.length, leads: _companiesOf(movable) });
+});
+app.post('/api/leads/move-unread-to-research', async (req, res) => {
+  const off = _sbOff(); if (off) return res.status(503).json({ error: off });
+  const count = Math.floor(Number((req.body || {}).count));
+  if (!Number.isFinite(count) || count < 1 || count > READ_RUN_MAX_COUNT) return res.status(422).json({ error: `count must be 1 to ${READ_RUN_MAX_COUNT}.` });
+  const unread = await rqUnread();
+  if (unread === null) return res.status(502).json({ error: 'the queue could not be read: ' + (sbWhy('discovered_queue') || 'Supabase gave no reason') });
+  const take = orderUnread(unread).slice(0, count);
+  // The move only. read_at stays null: nothing was read and nothing was spent.
+  const w = await rqPatchMany(take.map(r => r.id), { moved_to_research_at: new Date().toISOString() });
+  if (w === null) return res.status(502).json({ error: 'the move could not be recorded: ' + (sbWhy('discovered_queue') || 'Supabase gave no reason') });
+  res.json({ moved: take.length, leads: _companiesOf(take) });
+});
+app.post('/api/leads/rule-out', async (req, res) => {
+  const off = _sbOff(); if (off) return res.status(503).json({ error: off });
+  const ids = _idsOf(req.body); if (!ids.length) return res.status(422).json({ error: 'ids required' });
+  const why = String((req.body || {}).why || 'ruled out by hand').slice(0, 300);
+  const w = await rqPatchMany(ids, { ruled_out_at: new Date().toISOString(), ruled_out_why: why });
+  if (w === null) return res.status(502).json({ error: 'the rule-out could not be recorded: ' + (sbWhy('discovered_queue') || 'Supabase gave no reason') });
+  res.json({ ruledOut: ids.length });
+});
+// "Put them back": the server verdict and the failure both clear, on the row
+// AND inside the company object the builders read.
+app.post('/api/leads/restore', async (req, res) => {
+  const off = _sbOff(); if (off) return res.status(503).json({ error: off });
+  const ids = _idsOf(req.body); if (!ids.length) return res.status(422).json({ error: 'ids required' });
+  const rows = await rqByIds(ids);
+  if (rows === null) return res.status(502).json({ error: 'the leads could not be read: ' + (sbWhy('discovered_queue') || 'Supabase gave no reason') });
+  let n = 0;
+  for (const r of rows) {
+    const x = queueExtraOf(r) || {};
+    const w = await rqPatch(r.id, { ruled_out_at: null, ruled_out_why: null, read_failed: false, fail_reason: null, batch_id: r.read_at ? r.batch_id : null,
+      extra: Object.assign({}, x, { contactNotFit: false, contactNotFitWhy: '', contactUnreadable: false, contactUnreadableWhy: '', contactFailedAt: null, contactNotes: [] }) });
+    if (w !== null) n += 1;
+  }
+  res.json({ restored: n });
+});
+app.post('/api/leads/exported', async (req, res) => {
+  const off = _sbOff(); if (off) return res.status(503).json({ error: off });
+  const ids = _idsOf(req.body); if (!ids.length) return res.status(422).json({ error: 'ids required' });
+  const dest = String((req.body || {}).dest || 'csv').slice(0, 40);
+  const w = await rqPatchMany(ids, { exported_at: new Date().toISOString(), exported_to: dest });
+  if (w === null) return res.status(502).json({ error: 'the export stamp could not be recorded: ' + (sbWhy('discovered_queue') || 'Supabase gave no reason') });
+  res.json({ stamped: ids.length });
 });
 
 // Round 123: the pool by metro and by trade, from the query memory, so the

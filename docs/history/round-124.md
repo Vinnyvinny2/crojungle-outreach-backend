@@ -174,7 +174,24 @@ and its bands. `predictReach` stays; the server's value orders the draw.
 
 ### What the falsification runs found
 
-FALSIFICATION_RESULTS
+**Seventeen reverts, each fix alone against a baseline the harness proves
+green first (boot GREEN, clientcheck GREEN), each RED on its own named
+assertion, each restored byte for byte.** Eleven on the server: the
+readable-first term dropped (`"acbed"` instead of `"cbeda"`); a read that
+replaces the row instead of merging (both branches); the bench cleared on a
+lost queue write; Cancel keeping its claim; `merge-duplicates` in place of
+`ignore-duplicates`; the resume call gone; the self-ping at the wrong door;
+the ceiling checked before the name gate; move-unread stamping a read; the
+grade read as a letter instead of a name; the stall rule at half an hour. Six
+on the page, each red in `clientcheck.js`: the checker-down grade counted as
+verified (caught by the parity test against the server's rule); the deep link
+gone; the pipeline save pushing one lead of fifty; the page reading a lead
+itself through `/api/find-contact`; the trigger lanes on by default; the
+review screen opening on All with nothing selected. One revert proved nothing
+on its first two tries and said so — its anchor also matched the foreground
+route — and went red on the third with an anchor unique to the driver, which
+is the record this project keeps: a revert that does not apply is NO VERDICT,
+never a pass.
 
 ### Migration (run in Supabase BEFORE this server deploys)
 
