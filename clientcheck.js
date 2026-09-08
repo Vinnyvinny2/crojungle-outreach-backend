@@ -2331,11 +2331,11 @@ const PENDING = [];
 let contactStat = null;
 let contactTally = null;
 {
-  const NEED2 = ['contactTabOf', 'CONTACT_TABS', 'findCsvCell', 'FIND_CSV_CTRL', 'FIND_CSV_COLUMNS', 'findContactRows', 'findContactCsv', 'findSheetPayload',
-                 'contactFieldsFrom', 'contactRequestBody', 'contactYesNo', 'hasContactData',
-                 // A contact read stamps the build that produced it, so the panel
-                 // can say which rows predate a parser fix instead of re-exporting
-                 // them forever. contactFieldsFrom reads the constant directly.
+  const NEED2 = ['contactTabOf', 'CONTACT_TABS', 'findCsvCell', 'FIND_CSV_CTRL', 'FIND_CSV_COLUMNS', 'findContactRows', 'findContactCsv',
+                 'contactYesNo', 'hasContactData',
+                 // A contact read stamps the build that produced it. Round 124: the
+                 // stamp is the SERVER's contactFieldsFrom now (lifted below); the
+                 // page keeps its own number so the two can be compared.
                  'CLIENT_CONTRACT',
                  // The CSV's affordability column reads the same labeller the card
                  // reads, so it has to be lifted with it.
@@ -2345,12 +2345,11 @@ let contactTally = null;
                  'findRunTally', 'findTallyLine',
                  // The column CHOICE. Twenty-one columns were being deleted by
                  // hand after every paste, so the lean set is the default and
-                 // the full set is a tick box - and both destinations have to
-                 // read the same chooser or the CSV and the sheet drift.
-                 'FIND_CSV_ESSENTIAL', 'findCsvColumns', 'FIND_SHEET_SCRIPT',
-                 // Round 105: the view state, the run id, the export stamp and the
+                 // the full set is a tick box.
+                 'FIND_CSV_ESSENTIAL', 'findCsvColumns',
+                 // Round 105: the view state, the export stamp and the
                  // resolved-domain provenance are pure so they can be executed here.
-                 'FIND_VIEW_DEFAULTS', 'mergeFindView', 'latestRunIdOf', 'stampExportedRows', 'exportedCell', 'websiteProvenanceCell',
+                 'FIND_VIEW_DEFAULTS', 'mergeFindView', 'stampExportedRows', 'exportedCell', 'websiteProvenanceCell',
                  // Round 106: the lean sheet is grades, and each grade is one pure
                  // function shared by the card chip and both export destinations.
                  'OWNER_GRADE_RATING', 'ownerGradeRating', 'EMAIL_GRADE_RATING', 'emailGradeRating', 'ownerGradeCell', 'bestTimeCell', 'exportedDateCell',
@@ -2360,7 +2359,29 @@ let contactTally = null;
                  // Round 110: size and target cells.
                  'targetOf', 'SHORT_CELL_MAX', 'shortCell', 'nameWithFlag', 'sizeCell', 'siteCell', 'siteGradeCell', 'targetCell', 'targetWhyCell', 'websiteCell', 'lastRowsLast',
                  // Round 111: the lane helpers the rep's sheet is filtered through.
-                 'laneOf', 'laneChip', 'exportableContact', 'LANE_TABS', 'laneHas', 'laneKey'];
+                 'laneOf', 'laneChip', 'exportableContact', 'LANE_TABS', 'laneHas', 'laneKey',
+                 // Round 124: the Find stage reads the server. Every decision the
+                 // two screens make is a pure function so it can be executed here.
+                 'FIND_T', 'FIND_PRESETS', 'FIND_READ_MAX', 'FIND_ROUTE_VIEWS', 'queueStateOf', 'emailStatusOf', 'companyFromBatchLead',
+                 'batchCardStats', 'readCreditEstimate', 'parseFindRoute', 'pipelineAdditions', 'readRunTitle', 'findRunTime', 'readRunAnswered', 'shortLocation',
+                 'leadFromCompany', 'uid', 'today', 'daysFromNow'];
+  // Round 124: the SERVER's ports, lifted from the CR-stripped source. A read
+  // stamps its fields on the row there now, and the driver builds the company
+  // it reads there, so the fixtures below run through those - a field the
+  // server drops and the sheet expects fails here, in the same file, as before.
+  const _srvLF = server.replace(/\r\n/g, '\n');
+  const _lift = (re, what) => { const m = _srvLF.match(re); if (!m) fails.push('server.js no longer declares ' + what + ' at module scope, so the read-run port cannot be verified'); return m ? m[0] : ''; };
+  const SERVER_LIFT = [
+    (_srvLF.match(/const CONTRACT_VERSION = \d+;/) || [''])[0],
+    _lift(/const contactFieldsFrom = \(data\) => \{[\s\S]*?\n\};/, 'contactFieldsFrom'),
+    _lift(/const contactFailureFields = \(status, body\) => \{[\s\S]*?\n\};/, 'contactFailureFields'),
+    _lift(/const readRunCompanyFrom = \(company\) => \{[\s\S]*?\n\};/, 'readRunCompanyFrom'),
+    _lift(/const readRunKeysFrom = \(settingsData\) => \{[\s\S]*?\n\};/, 'readRunKeysFrom'),
+    _lift(/const readRunOptsFrom = \(settingsData\) => \{[\s\S]*?\n\};/, 'readRunOptsFrom'),
+    _lift(/const queueIdOf = [^\n]+\n/, 'queueIdOf'),
+    _lift(/const EMAIL_GRADE_VERIFIED = [^\n]+\n/, 'EMAIL_GRADE_VERIFIED'),
+    _lift(/const emailVerifiedRow = [\s\S]*?\)\);\n/, 'emailVerifiedRow'),
+  ].join('\n');
   const got2 = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && NEED2.includes(n.id.name) && n.init) {
@@ -2373,14 +2394,19 @@ let contactTally = null;
   } else {
     let M = null;
     try {
-      M = new Function(NEED2.map(k => got2[k]).join('\n')
-        + '\nreturn { tabOf: contactTabOf, tabs: CONTACT_TABS, cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv, sheet: findSheetPayload,'
+      M = new Function(SERVER_LIFT + '\n' + NEED2.map(k => got2[k]).join('\n')
+        + '\nreturn { tabOf: contactTabOf, tabs: CONTACT_TABS, cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv,'
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
-        + ' mergeView: mergeFindView, latestRun: latestRunIdOf, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
+        + ' mergeView: mergeFindView, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
         + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, siteCell, targetCell, targetWhyCell, shortCell, SHORT_CELL_MAX, laneOf, laneChip, exportableContact, laneHas, laneKey, laneTabs: LANE_TABS, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
-        + ' fields: contactFieldsFrom, body: contactRequestBody, yn: contactYesNo, has: hasContactData,'
-        + ' tally: findRunTally, tallyLine: findTallyLine, script: FIND_SHEET_SCRIPT,'
-        + ' generic: isGenericMailbox };')();
+        + ' fields: contactFieldsFrom, failureFields: contactFailureFields,'
+        // The request the driver reads: the same shape the browser used to send, from the server's own ports.
+        + ' body: (c, S) => ({ company: readRunCompanyFrom(c), keys: readRunKeysFrom(S), paidOwnerLookup: readRunOptsFrom(S).paidOwnerLookup, resolveWebsiteSearch: readRunOptsFrom(S).resolveWebsiteSearch }),'
+        + ' yn: contactYesNo, has: hasContactData,'
+        + ' tally: findRunTally, tallyLine: findTallyLine,'
+        + ' generic: isGenericMailbox,'
+        + ' state: queueStateOf, emailStatus: emailStatusOf, fromLead: companyFromBatchLead, cardStats: batchCardStats, estimate: readCreditEstimate, route: parseFindRoute, additions: pipelineAdditions,'
+        + ' verifiedRow: emailVerifiedRow, queueId: queueIdOf, tokens: FIND_T, presets: FIND_PRESETS, readMax: FIND_READ_MAX, runTitle: readRunTitle, answered: readRunAnswered, shortLocation, contract: CONTRACT_VERSION, clientContract: CLIENT_CONTRACT };')();
     } catch (e) {
       fails.push('the contact list no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
@@ -2435,17 +2461,6 @@ let contactTally = null;
         const _co = [{ contactReadOk: true, name: 'A Co', contactOwner: 'Jo Blogs', contactEmail: 'a@a.com' }];
         const _h = (M.csv(_co, false).replace(/^\uFEFF/, '').split('\r\n')[0].match(/","/g) || []).length + 1;
         if (_h !== _lean.length) fails.push(`the lean CSV wrote ${_h} column(s) where the chooser says ${_lean.length} - findContactCsv is not reading the chooser`);
-        if (M.sheet(_co, false).header.length !== _lean.length) fails.push('the Google Sheet export ignores the column choice, so the sheet and the CSV are two different files');
-        if (M.sheet(_co, true).header.length !== _full.length) fails.push('the Google Sheet export cannot be asked for every column');
-        // ══ THE APPS SCRIPT MUST NOT COUNT TO THREE ══════════════════════
-        // It deduped on column 3 because 'company' was the third declared
-        // column. In the lean set company is FIRST, so a hard-coded 3 would
-        // have deduped a whole sheet against the decision-maker's name - and
-        // the only thing holding the two in step was a comment, inside a
-        // script pasted into a spreadsheet where nobody would look for it.
-        const _script = String(M.script || '');
-        if (_script && /getRange\(2,\s*3,/.test(_script)) fails.push('the Apps Script still dedupes on a hard-coded column 3, which is the decision-maker in the lean column set');
-        if (_script && _script.indexOf("indexOf('Company')") < 0) fails.push('the Apps Script no longer finds the Company column from the header, so the column order and the dedupe can drift apart again');
       }
 
       // ══ ONE LEAD, ONE TAB ═════════════════════════════════════════════
@@ -2502,7 +2517,6 @@ let contactTally = null;
             if (_names.indexOf('Jobs Co') >= 0) fails.push('a TheirStack lead reached the rep sheet');
             if (_names.indexOf('Older Read Co') < 0) fails.push('a row read on an older build (no lanes) fell off the rep sheet');
             if (_names.indexOf('Older Layered Co') >= 0) fails.push('an older layered row is on the rep sheet');
-            if (M.sheet([_darrel, _layered], false).rows.length !== 1) fails.push('the Google Sheet payload does not read the same lane rule as the CSV');
             if (M.exportableContact(_darrel) !== true || M.exportableContact(_layered) !== false) fails.push('exportableContact disagrees with the rows');
             if (M.laneChip(_darrel) !== 'CALL + EMAIL' || M.laneChip(_layered) !== 'EMAIL' || M.laneChip(_small) !== 'TOO SMALL' || M.laneChip({ contactReadOk: true, contactOwner: 'A B', contactLanes: { call: true, email: false } }) !== 'CALL') fails.push('the lane chip does not say the lane');
             if (M.laneOf(_old).call !== true || M.laneOf(_oldLayered).call !== false) fails.push('the older-row fallback does not read the layers');
@@ -2553,13 +2567,86 @@ let contactTally = null;
             if (!M.laneTabs.some(t => t[0] === 'noname') || M.laneTabs.length !== 4) fails.push('the Read tab does not have the four buckets');
             if (M.lean.indexOf('sizeConfidence') < 0) fails.push('the rep\'s sheet does not carry the size confidence word beside the size');
           }
-          // The run survives a refresh: the newest run id in the data is the run.
-          if (M.latestRun([{ contactRunId: 'run_1a' }, { contactRunId: 'run_zz' }, { contactRunId: 'bogus' }, {}]) !== 'run_zz') fails.push('the newest run id is not recovered from the data, so "the 10 you just read" dies on refresh');
-          if (M.latestRun([]) !== '') fails.push('an empty queue yields a run id');
           // The view state: a saved key wins, an absent or null one keeps its default.
-          if (M.mergeView({ verifiedOnly: false }).verifiedOnly !== false) fails.push('a saved "Show all" does not survive the merge, so a refresh silently narrows the queue again');
-          if (M.mergeView({ verifiedOnly: false }).activeTab !== 'all') fails.push('an absent saved key lost its default');
-          if (M.mergeView(null).verifiedOnly !== true || M.mergeView({ verifiedOnly: null }).verifiedOnly !== true) fails.push('a null saved key overrode its default');
+          if (M.mergeView({ readCount: 25 }).readCount !== 25) fails.push('a saved read count does not survive the merge, so a refresh resets the number the operator typed');
+          if (M.mergeView({ readCount: 25 }).csvFull !== false) fails.push('an absent saved key lost its default');
+          if (M.mergeView(null).readCount !== 50 || M.mergeView({ readCount: null }).readCount !== 50) fails.push('a null saved key overrode its default');
+          // ══ ROUND 124: THE TWO SCREENS DECIDE WITH PURE FUNCTIONS ══════════
+          // A lead's state is derived from its stamps, in one order.
+          if (M.state({ readAt: 'x', movedToResearchAt: 'y', ruledOutAt: 'z', readFailed: true }) !== 'moved') fails.push('a lead moved to Research is not called moved when it also carries older stamps');
+          if (M.state({ readAt: 'x', ruledOutAt: 'z', readFailed: true }) !== 'ruled_out') fails.push('a rule-out does not beat a failed read');
+          if (M.state({ readAt: 'x', readFailed: true }) !== 'failed' || M.state({ readAt: 'x' }) !== 'read' || M.state({}) !== 'unread' || M.state(null) !== 'unread') fails.push('the derived lead state is wrong for a plain row');
+          // "With email" is ONE rule on both sides of the wire: the page's
+          // emailStatusOf and the server's emailVerifiedRow (the batch card
+          // count) must agree on every shape, or the card promises a number
+          // the review screen cannot deliver.
+          {
+            const _shapes = [
+              { contactEmail: 'a@b.com', contactEmailGrade: 'published_personal', contactEmailSendable: false, contactEmailTier: 1 },
+              { contactEmail: 'a@b.com', contactEmailGrade: 'smtp_confirmed', contactEmailSendable: true, contactEmailTier: 2 },
+              { contactEmail: 'a@b.com', contactEmailGrade: 'verifier_down', contactEmailSendable: true, contactEmailTier: 3 },
+              { contactEmail: 'a@b.com', contactEmailGrade: 'published_role', contactEmailSendable: true, contactEmailTier: 1 },
+              { contactEmail: 'a@b.com', contactEmailGrade: '', contactEmailSendable: true, contactEmailTier: 2 },
+              { contactEmail: 'a@b.com', contactEmailGrade: '', contactEmailSendable: false, contactEmailTier: 4 },
+              { contactEmail: '', contactEmailGrade: 'published_personal', contactEmailSendable: true, contactEmailTier: 1 },
+              { contactEmail: 'a@b.com', contactEmailGrade: 'pattern_guess', contactEmailSendable: true, contactEmailTier: null },
+            ];
+            if (M.emailStatus(_shapes[0]) !== 'verified' || M.emailStatus(_shapes[1]) !== 'verified') fails.push('a published personal or SMTP-confirmed address is not "verified" on the review screen');
+            if (M.emailStatus(_shapes[2]) !== 'unverified') fails.push('an address the checker never confirmed shows as verified - the unmeasured-as-measured class, on the one column the rep moves on');
+            if (M.emailStatus(_shapes[6]) !== 'none') fails.push('a row with no address does not read "none"');
+            for (const c of _shapes) {
+              const page = M.emailStatus(c) === 'verified';
+              // PostgREST hands the flag and the tier back as text, which is how the server reads them.
+              const srv = M.verifiedRow(c.contactEmail, c.contactEmailGrade, String(c.contactEmailSendable), c.contactEmailTier === null ? null : String(c.contactEmailTier));
+              if (page !== srv) { fails.push('the page and the server disagree about whether ' + JSON.stringify(c) + ' has a verified email, so the batch card count and the review filter are two different numbers'); break; }
+            }
+          }
+          // The batch card, off the rows.
+          {
+            const _bs = M.cardStats([
+              { readAt: 'x', contactEmail: 'a@b.com', contactEmailGrade: 'published_personal' },
+              { readAt: 'x', contactEmail: 'b@b.com', contactEmailGrade: 'published_personal', movedToResearchAt: 'y' },
+              { readAt: 'x', readFailed: true },
+              { readAt: 'x', ruledOutAt: 'z' },
+              null,
+            ]);
+            if (_bs.total !== 4 || _bs.read !== 4 || _bs.withEmail !== 1 || _bs.inResearch !== 1 || _bs.failed !== 1 || _bs.ruledOut !== 1 || _bs.actionable !== 2) fails.push('the batch card stats are wrong: ' + JSON.stringify(_bs));
+          }
+          // The credit estimate rides the server's figure, never the spec's 1.5.
+          if (M.estimate(37, 5) !== 185 || M.estimate(10, undefined) !== 50 || M.estimate(50, 5) === 75) fails.push('the read button estimates credits from a number typed into the page rather than the server\'s measured per-read figure');
+          // The address bar is the view. A deep link into a batch loads cold.
+          {
+            const _r = M.route('#/find/batch/abc%2Fdef');
+            if (_r.view !== 'find' || _r.batchId !== 'abc/def') fails.push('a deep link into a batch does not parse: ' + JSON.stringify(_r));
+            if (M.route('#/research').view !== 'research' || M.route('').view !== 'find' || M.route('#/nope').view !== 'find') fails.push('the route parser does not fall back to Find on an unknown or empty hash');
+            if (M.route('#/find/archive').archive !== true || M.route('#/find').archive !== false) fails.push('the archive route does not parse');
+          }
+          // A batch lead arrives with the export stamp as one string; the cells expect a list.
+          {
+            const _l = M.fromLead({ id: 'q1', name: 'A Co', contactReadOk: true, contactEmail: 'a@b.com', exportedAt: '2026-09-08T10:00:00Z', exportedTo: 'csv' });
+            if (!Array.isArray(_l.exportedTo) || M.exportedCell(_l) !== '2026-09-08 to csv') fails.push('a server row\'s export stamp breaks the exported cell, so the rep cannot see which rows already went out');
+            if (M.fromLead(null) !== null) fails.push('a null batch lead is not dropped');
+          }
+          // Move to Research: only the companies not already in the pipeline, as pipeline rows, with the read carried.
+          {
+            const _add = M.additions([{ name: 'A Co' }], [{ name: 'a co', contactOwner: 'Z' }, { name: 'B Co', contactOwner: 'Pete Barnes', contactEmail: 'p@b.com', contactReadOk: true }]);
+            if (_add.length !== 1 || _add[0].name !== 'B Co' || _add[0].verifiedCEO !== 'Pete Barnes' || _add[0].contactReadOk !== true || !_add[0].id) fails.push('moving a batch to Research builds the wrong pipeline rows: ' + JSON.stringify(_add.map(a => [a.name, a.verifiedCEO])));
+          }
+          // The tokens are the spec's, exactly (section 4).
+          {
+            const _want = { bg: '#0b0b0d', surface: '#141417', raised: '#1a1a1f', muted: '#0f0f12', rowSel: '#12121a', border: '#292930', borderStrong: '#3a3a42', borderSubtle: '#1e1e23', rowDivider: '#16161a', text: '#ededf0', text2: '#8b8b94', text3: '#5f5f68', textDim: '#b6b6bd', lime: '#c8f751', onLime: '#0b0b0d', purple: '#7c5cff', onPurple: '#0b0b0d', purpleBorder: '#33304a', amber: '#f0a92c', amberDim: '#a97e2a', amberBorder: '#6b4d12', amberBg: '#211a0c' };
+            for (const k of Object.keys(_want)) if (M.tokens[k] !== _want[k]) { fails.push('the Find token ' + k + ' is ' + M.tokens[k] + ', not the spec\'s ' + _want[k]); break; }
+            if (M.presets.join() !== '10,25,50,100' || M.readMax !== 500) fails.push('the read presets or the ceiling drifted from the spec');
+          }
+          // The server's stamp and the page's number are one number.
+          if (M.contract !== M.clientContract) fails.push('the server stamps contactReadBuild ' + M.contract + ' and the page declares ' + M.clientContract + ' - a row read after this deploy reads as stale, or the reverse');
+          if (M.fields({}).contactReadBuild !== M.contract) fails.push('the server\'s contactFieldsFrom does not stamp the build on the row');
+          // The queue id is the rule the page used for the life of the table.
+          if (M.queueId({ name: 'Tuck & Howell, LLC', source: 'google_places' }) !== 'tuckhowellllc_google_places' || M.queueId({ id: 'keep', name: 'x' }) !== 'keep') fails.push('the server\'s queue id is not the id the old page wrote, so a lead already banked and a lead found again are two rows');
+          // The run card wording: an Earlier-reads batch has no timestamp, and a run's progress counts every answer.
+          if (M.runTitle({ scope: { note: 'backfill' }, started_at: '2026-09-08T10:00:00Z' }) !== 'Earlier reads') fails.push('a backfilled batch is titled with a fake date instead of "Earlier reads"');
+          if (M.answered({ read_count: 3, failed_count: 1, ruled_out_count: 2 }) !== 6) fails.push('the running row counts read only, so a batch of refusals looks stuck');
+          if (M.shortLocation('Dallas, TX 75201, USA') !== 'Dallas, TX') fails.push('the review row prints the zip and the country in the one line it has');
           // Provenance for a domain WE found reaches the LEAN file, not only the full one.
           const _pr = [{ name: 'Acme Roofing', contactReadOk: true, contactOwner: 'Bob Acme', contactPhone: '5551234567',
                          contactWebsiteResolved: true, contactWebsite: 'https://acmeroofing.com', contactWebsiteConfirmed: true }];
@@ -2580,29 +2667,9 @@ let contactTally = null;
         }
       }
 
-      // AND THE CALL SITES, because a fixture supplies its own arguments and
-      // therefore cannot see a caller. Three wires, and the middle one is the
-      // whole point: counting alone would leave "a read lead leaves the pool"
-      // true of the numbers and false of the list.
-      {
-        const _need = [
-          ['the panel no longer renders a tab per contact state', "CONTACT_TABS.map(([k, lab]) =>"],
-          // Round 119: the list reads _scoped, not _cShown - the SAME population
-          // the lane counts, the export and the move button read. The two
-          // disagreeing is how "only 18 in the email lane" happened on a queue
-          // carrying hundreds.
-          ['the rendered list is not filtered by the tab AND by the scope, so the lane count and the cards under it describe different populations - "only 18 in the email lane" on a queue carrying hundreds', "_scoped.filter(c => contactTabOf(c) === contactTab)"],
-          ['the lane counts and the rendered list read different populations again - the count says one press and the list shows the whole queue', "const _cLane = Object.fromEntries(LANE_TABS.map(([k]) => [k, _cRead.filter(c => laneHas(c, k))]));"],
-          ['the scope switch is not on the Lane row, where the numbers it decides are', "onClick: () => setContactScope(k) }, lab))) : null,\n            (_cRunSet.length && contactScope === 'run')"],
-          // Round 120, Vin: "need it to shwo total amount of email ones we have
-          // too, it just shows per run." Both numbers on the one button.
-          ['the lane button shows only this press, so the queue total Vin asked for is nowhere on the panel', "+ ((contactScope === 'run' && _cRunSet.length && _cLaneAll[k].length !== _cLane[k].length)"],
-          ['the all-time lane counts are computed off the scoped pool, so the "of N" repeats the number beside it', "const _cReadAll = _cShown.filter(c => contactTabOf(c) === 'read');"],
-          ['the tab counts are not computed from the same pool the list is', "for (const c of _cShown) { const t = contactTabOf(c);"],
-          ['the spending band is no longer confined to the not-read tab', "contactTab !== 'unread' ? null : _cUnread.length === 0 ? _band('Read',"],
-        ];
-        for (const [why, needle] of _need) if (src.indexOf(needle) < 0) fails.push(why);
-      }
+      // Round 124: the tabbed panel is gone (the queue lives on the server and
+      // Screen B is one table per batch), so contactTabOf is executed above for
+      // the CSV rule and no longer pinned to a renderer.
 
       // ══ A LEAD THE SERVER RULED OUT IS IN NO FILE ═════════════════════
       // Live on the 2026-09-01 run: Daniel Bortnick, MD was dropped as a branch
@@ -2621,9 +2688,6 @@ let contactTally = null;
         // list of leads we actually looked at.
         if (M.rows([{ name: 'Never Read Co', contactPhone: '+1 555 0101' }]).length) {
           fails.push('a lead that was never read is in the exported rows');
-        }
-        if (M.sheet([_dropped, _good], false).rows.length !== 1) {
-          fails.push('the Google Sheet export still carries the ruled-out lead, so the two destinations disagree');
         }
       }
 
@@ -2753,11 +2817,9 @@ let contactTally = null;
         // The card. A fixture cannot see a renderer, so the call site is pinned
         // with a needle assembled at runtime.
         const _nk = (a, b) => a + b;
-        if (src.indexOf(_nk('co.contactOwnerGrade ===', " 'unconfirmed' ? '#fca5a5'")) < 0) {
-          fails.push('the contact card no longer marks an unconfirmed owner, so the one row that needs a second question looks like every other');
-        }
-        if (src.indexOf(_nk('(ownerGradeRating(co) ? ownerGradeRating(co)', " + ' \\u00b7 ' : '')")) < 0) {
-          fails.push('the contact card chip no longer carries the owner grade letter, so the card and the sheet grade one row differently');
+        // Round 124: the review row carries the mark the card carried.
+        if (src.indexOf(_nk("if (l.contactOwner && l.contactOwnerGrade === 'unconfirmed')", " flags.push('unconfirmed');")) < 0) {
+          fails.push('the review row no longer marks an unconfirmed owner, so the one row that needs a second question looks like every other');
         }
       }
 
@@ -2871,8 +2933,8 @@ let contactTally = null;
         if (!_g || _g.contactNameNotOnSite !== false) {
           fails.push('the wrong-company flag defaults to something other than false, so an ordinary lead can carry a stop nobody measured');
         }
-        if (src.indexOf('co.contactNameNotOnSite === true') < 0) {
-          fails.push('nothing on the contact card renders the wrong-company stop, so the flag is measured, carried and read by nobody');
+        if (src.indexOf('if (l.contactNameNotOnSite === true) flags.push(') < 0) {
+          fails.push('nothing on the review row renders the wrong-company stop, so the flag is measured, carried and read by nobody');
         }
       }
 
@@ -3044,47 +3106,6 @@ let contactTally = null;
       const teamHead = (M.cols.find(c => c[0] === 'teamSize') || [])[1] || '';
       if (!/floor/i.test(teamHead)) fails.push('the team-size column reads as a headcount rather than as a floor, and it is the closest thing on the row to the revenue band the whole ICP is defined by');
 
-      // SEVEN-B — THE GOOGLE SHEET IS THE SAME LIST, SOMEWHERE ELSE.
-      // The sheet and the CSV must never be two shapes of one list: an operator
-      // handed a sheet that disagrees with the file has no way to tell which is
-      // right. So the payload is asserted against the SAME builder - same row
-      // count, same column count, same header text, same order.
-      {
-        const _leads = [
-          { name: 'Alpha Co', contactEmail: 'a@a.com', contactIcp: 71, contactOwner: 'Jo Blogs' },
-          { name: 'Beta Co', contactPhone: '(317) 555-0134', contactIcp: 12,
-            contactIcpWhy: 'scored on 3 of 5 signals\nthe rest are left out' },
-        ];
-        // Asked for EVERY column, so this block keeps testing the widest shape.
-        const _p = M.sheet(_leads, true);
-        const _r = M.rows(_leads);
-        if (!_p || !Array.isArray(_p.header) || !Array.isArray(_p.rows)) {
-          fails.push('the Google Sheet payload is not a header plus rows, so the export script has nothing to append');
-        } else {
-          if (_p.header.length !== M.cols.length) fails.push('the sheet header does not have one entry per declared column');
-          if (_p.header.join('|') !== M.cols.map(c => String(c[1])).join('|')) {
-            fails.push('the sheet header is not the declared column names in declared order, so the sheet and the CSV would disagree about what each column is');
-          }
-          if (_p.rows.length !== _r.length) fails.push(`the sheet got ${_p.rows.length} row(s) where the CSV builder produced ${_r.length} — they are not the same list`);
-          for (const row of _p.rows) {
-            if (row.length !== M.cols.length) { fails.push(`a sheet row has ${row.length} cell(s) against ${M.cols.length} columns`); break; }
-            if (row.some(v => typeof v !== 'string')) { fails.push('a sheet cell is not a string, so Sheets would coerce it however it likes'); break; }
-            if (row.some(v => /[\r\n]/.test(v))) { fails.push('a sheet cell still carries a line break — the same defect that made the CSV refuse to open'); break; }
-          }
-          // The ORDER must be the ranked order, not queue order: the whole point
-          // of the score is that the rep works the top of the list first.
-          // Read the company column from the HEADER rather than counting to
-          // three, for the same reason the Apps Script now does: the lean set
-          // makes company the first column, and an index typed into a check is
-          // a second hand-kept copy of the column order.
-          const _ci = _p.header.indexOf('Company');
-          if (_ci < 0) fails.push('the sheet header has no Company column, so the Apps Script has nothing to dedupe on and every re-send duplicates the whole list');
-          else if (_p.rows.length === 2 && _p.rows[0][_ci] !== 'Alpha Co') {
-            fails.push('the sheet rows are not in the ranked order the CSV uses');
-          }
-        }
-      }
-
       // EIGHT — who belongs in the file at all.
       if (M.has({}) || M.has({ name: 'X' })) fails.push('a lead with nothing to contact is being exported');
       // The bare Places phone is NOT a contact row. Every lead in the Find
@@ -3225,261 +3246,61 @@ let contactTally = null;
     }
   }
 
-  // ── THE CALL SITES ────────────────────────────────────────────────────────
+  // ── THE CALL SITES (Round 124) ─────────────────────────────────────────
   // A fixture supplies its own arguments and therefore cannot see a caller.
-  // Every wire below is what makes the panel actually do the thing.
+  // The queue lives on the server now and the reads run there; what the page
+  // must do is start, cancel, review, move, rule out, restore and export
+  // through the routes, and never again hold the queue or read a lead itself.
   const _nn = (a, b) => a + b;
-  // ══ THE TICK BOX MEANS WHAT IT SAYS, AND STARTS OFF ═══════════════════════
-  // `|| c.source === 'google_places'` let a lead with NO place id through the
-  // "only businesses with a Google listing" filter, and six of the twelve leads
-  // on 2026-09-01 then printed "this lead carries no Google place id" on the
-  // server. And the default is OFF now: the owner's instruction was that leads
-  // from the other lanes "cost the same to read while ahving the same quality
-  // as places", and the server recovers a listing for a lead without one.
-  // Stops BEFORE the closing parens: counting them in a guard is how a green
-  // build gets called RED, and this file records that trap already.
-  if (html.indexOf(_nn("const _hasListing = (c) => !!(c && c.pla", "ceId)")) < 0) {
-    fails.push('the Google-listing filter has its source escape hatch back, so it passes leads with no place id while claiming to filter on a listing');
-  }
-  if (html.indexOf(_nn('const [contactPlacesOnly, setContactPlacesOnly] = React.useState(', '_fv.contactPlacesOnly === true);')) < 0) {
-    fails.push('the Google-listing filter no longer defaults OFF, so the other lanes are hidden by default again');
-  }
-  if (html.indexOf(_nn("BACKEND + '/api/find", "-contact'")) < 0) {
-    fails.push('nothing in the client calls /api/find-contact — the Find tab button cannot produce a contact');
-  }
-  // The button reads how many to run from the operator's own number, and the
-  // runner takes a POOL plus that number rather than a pre-cut slice - because a
-  // lead the server refuses as a chain must not consume one of the five the
-  // operator asked for. Slicing first is what made a refusal cost a slot.
-  if (html.indexOf(_nn('onClick: () => runContactBatch(_cUnread, Math.max(1,', ' contactHowMany)),')) < 0) {
-    fails.push('the contact panel button no longer starts a contact run for the number the operator chose, or it is pre-slicing the pool so a refused lead costs a slot');
-  }
-  if (html.indexOf(_nn('if (kept + inFlight >= want)', ' return;')) < 0) {
-    fails.push('the runner no longer stops at the number of GOOD leads asked for, so a run of five that hits two chains comes back with three');
-  }
-  // Stop has to abort what is IN FLIGHT. The flag alone is read between leads,
-  // and a lead ran for 155 seconds live - which is why Stop read as broken.
-  if (html.indexOf(_nn('if (contactAbort.current) contactAbort.current', '.abort();')) < 0) {
-    fails.push('Stop no longer aborts the requests in flight, so it cannot take effect until every running lead finishes');
-  }
-  if (html.indexOf(_nn("signal: contactAbort.current ? contactAbort.current.signal :", ' undefined,')) < 0) {
-    fails.push('the contact request is not abortable, so Stop has nothing to cancel');
-  }
-  // An abort is the operator, not a failure: it must not be recorded on the
-  // lead and it must not count toward the dead-server tally.
-  if (html.indexOf(_nn("if (e && (e.name === 'AbortError' ||", ' contactStop.current)) {')) < 0) {
-    fails.push('a cancelled request is being recorded as a failed read, so pressing Stop marks leads as tried');
-  }
-  if (html.indexOf(_nn('const n = downloadFindContacts(_cExport', 'able, csvFull);')) < 0) {
-    fails.push('the Download CSV button is not wired to the contact export');
-  }
-  // ONE POPULATION. "14 read" counted the leads ON SCREEN and "Download CSV (8)"
-  // counted the WHOLE QUEUE, so two numbers about the same thing disagreed on
-  // one panel and the operator could not tell which was wrong. Live, 2026-08-28.
-  // _scoped is that one population: the whole filtered queue, or just the leads
-  // the last press read when the operator is looking at a run.
-  // Both read contactTabOf now: the raw contactReadOk flag is TRUE on a lead the
-  // server RULED OUT - a chain drop is read and answered - so counting it made
-  // the tally and the exported file describe different sets of leads.
-  // ══ ROUND 105 CALL SITES ═══════════════════════════════════════════════
-  // A fixture supplies its own arguments and cannot see a caller.
-  for (const [why, a, b] of [
-    ['the draw pool no longer excludes a lead with nothing to read, so it is asked again on every press', '&& c.contactUnreadable !== true', ' && c.name);'],
-    ['a lead with something to read no longer sorts above one with nothing, so name-only leads lead the draw again', 'const sorted = [...withReach].sort((a,b) =>\n        (_readable(b) - _readable(a))', ' || ((b.reachPredict||0)'],
-    ['the CSV download no longer stamps the rows it handed out', "if (n) _stamp(_cExportable,", " 'csv'); },"],
-    ['the sheet send no longer stamps the rows it handed out', "_stamp(_cExportable, 'sheet'", ');'],
-    ['the view state is no longer written on change, so a refresh resets Show all', 'React.useEffect(() => saveFindView({ activeTab, verifiedOnly, winFilter,', ' contactPlacesOnly, contactSort, contactScope, contactTab, pullFilters }),'],
-    ['the run id no longer rides every lead a run touched', "fields = Object.assign({ contactRunId: runId },", ' fields);'],
-    ['the run set is no longer recovered from the data after a refresh', "const _runId = (contactRun && contactRun.runId) ||", ' latestRunIdOf(_cShown);'],
-    ['the export band no longer says why it has nothing to export', "(_cRead.length && !_cExportable.length) ? _cap('Nothing to export: '", " + _cRead.length"],
-    ['the runner no longer reads the server\'s nothing-to-read verdict', 'const _unreadable = d.unreadable', ' === true;'],
-    ['a resolved domain reaches the research modal without its provenance', "modalSource = 'Found by us from the company name and confirmed by its own pages", " — NOT published by them';"],
-    ['the request no longer sends the paid-search opt-in, so the server can never be asked for it', 'resolveWebsiteSearch: !!(settings && settings.resolveWebsiteSearch', ' === true),'],
+  const _findView = html.slice(html.indexOf('function FindView('), html.indexOf('function ProductCard('));
+  if (_findView.length < 1000) fails.push('FindView is gone or has moved below ProductCard, so the call-site needles read the wrong slice');
+  for (const [a, b, why] of [
+    ["findApi('/api/read-run', { count", " });", 'nothing starts a read run, so the Read button spends nothing and reads nothing'],
+    ["findApi('/api/read-run/' + encodeURIComponent(id) + ", "'/cancel', {});", 'Cancel is not wired to the run'],
+    ["findApi('/api/leads/move-to-research', { ids: ", "list });", 'Move to Research does not stamp the row on the server, so the queue and the pipeline disagree about where a lead is'],
+    ["const added = addManyToPipeline(r.leads", " || []);", 'the leads the server hands back on a move never reach the pipeline, so "moved" is a stamp and nothing arrives in Research'],
+    ["findApi('/api/leads/move-unread-to-research', { ", "count });", 'unread leads cannot be moved without a read'],
+    ["findApi('/api/leads/rule-out', { ids: list, ", "why: why", 'Rule out is not wired'],
+    ["findApi('/api/leads/restore', ", "{ ids: list });", 'Restore is not wired, so the archive is a delete with extra steps'],
+    ["findApi('/api/leads/exported', { ids: rows.map(r => r.id),", " dest: 'csv' });", 'the CSV download no longer stamps the rows it handed out ("i have no clue which ones ive already exported")'],
+    ["findApi('/api/find/summary')", "", 'the Find tab never reads the summary, so the count, the badge and the archive line are blind'],
+    ["findApi('/api/read-runs/' + encodeURIComponent(id) + '/leads')", "", 'Screen B never loads a batch'],
+    ["findApi('/api/find/archive')", "", 'the archive screen never loads'],
+    ["const rows = (leads || []).filter(", "exportableContact);", 'the CSV is no longer the call lane, so the rep\'s sheet carries rows nobody is phoning'],
+    ["const n = downloadFindContacts(rows,", " csvFull);", 'the CSV button is not wired to the export'],
+    ['setReadCount(Math.max(1, Math.min(FIND_READ_MAX,', ' Number(e.target.value) || 1)))', 'the count box no longer clamps to the ceiling'],
+    ["setCsvFull(v =>", " !v)", 'the columns toggle is gone'],
+    ["extraLanes: settings.findExtraLanes", " === true,", 'the Find request no longer carries the lane choice from Settings, so the server falls back to its own default'],
+    ["running ? 'Read in progress'", " : (", 'the Read button does not say a run is in progress'],
+    ["'Nothing to read", " — run Find new leads'", 'an empty queue has no hint'],
+    ["gridTemplateColumns: '24px 32px minmax(0,1fr)", " 122px 58px'", 'the review table grid is not the spec\'s, so a long business name widens the table'],
+    ["'#/find/batch/' + ", "encodeURIComponent(", 'Review does not deep-link into the batch, so a batch cannot be opened cold or shared'],
+    ["'That batch no longer exists. '", "", 'a deep link to a missing run has no honest ending'],
+    ["'already read", " · no credits'", 'the bulk bar does not say a bulk action is free'],
+    ["}, 3000);", "", 'the running row is not polled'],
+    ["if (added.length) saveLeads([...existing, ...added], added);", "", 'the pipeline save pushes something other than EVERY added lead (the one-row-of-fifty defect)'],
+    ["if (!quiet) { setChip('email'); setSortBy('fit'); setPicked(new Set(visibleOf(leads, 'email', 'fit')", ".filter(l => queueStateOf(l) === 'read').map(l => l.id))); }", 'Screen B does not open on With email with every visible row pre-selected'],
   ]) {
-    if (html.indexOf(_nn(a, b)) < 0) fails.push(why);
+    if ((b === '' ? html : _findView).indexOf(b === '' ? a : _nn(a, b)) < 0) fails.push(why);
   }
-  if (html.indexOf(_nn("const _cExportable = _scoped.filter(c => ", "exportableContact(c));")) < 0
-      || html.indexOf(_nn("const _cRead = _scoped.filter(c => contactTabOf(c)", " === 'read');")) < 0) {
-    fails.push('the CSV count is taken from a different population than the read count beside it, so the two numbers on the panel contradict each other');
+  // What the page must NOT do any more.
+  if (/rest\/v1\/discovered_queue/.test(src)) fails.push('the page still talks to discovered_queue directly - the old wholesale delete-and-rewrite is back, and the revoke on delete is the only thing standing between it and the queue');
+  if (/localStorage\.setItem\('cj_discovered_v1'/.test(src)) fails.push('the page still writes the browser queue, so two queues exist again');
+  if (/'\/api\/find-contact'/.test(src)) fails.push('the page still reads leads itself through /api/find-contact, so a closed tab is a dead batch again');
+  if (/runContactBatch/.test(src)) fails.push('the browser-side contact runner is back');
+  if (/findSheetPayload|FIND_SHEET_SCRIPT|sheetWebhookUrl/.test(src)) fails.push('the Google Sheet push is back (Vin, 2026-09-08: CSV only)');
+  if (/runContactBatch|\/api\/read-run/.test(html.slice(html.indexOf('function ResearchView'), html.indexOf('function GenerateView')))) {
+    fails.push('ResearchView references the Find tab read run - the two runs are supposed to share nothing');
   }
-  // And the run-scoped view has to exist at all: contactAt was stamped on every
-  // read and consumed by nothing, so "where did the five I just ran go" had no
-  // answer anywhere in the app.
-  // Round 105: the set is keyed on the run id stamped on every lead, so it survives a refresh.
-  if (html.indexOf(_nn('const _cRunSet = _runId ? _cShown.filter(c => c && c.contactRunId === _runId)', ' : _cShown.filter(c => c && _runNames.has(c.name));')) < 0) {
-    fails.push('there is no run-scoped view of a contact press, so every number on the panel is a cumulative queue total again');
-  }
-  // ══ THE PANEL HAS A GRAMMAR, AND THE COUNTS AGREE ═══════════════════════
-  // Vin: "this section is still messy and unorganized it needs to look
-  // professional." It was twenty-two blocks in one flat vertical stack with
-  // five paragraphs of prose interleaved between about fifteen controls.
-  //
-  // HONEST LIMIT, stated at the assertion: the panel lives inside FindView and
-  // cannot be lifted and executed the way LeadBriefing is, so these are source
-  // needles. What they can prove is that the four bands exist, that every
-  // control that spends money still has its handler, and that the three counts
-  // that disagreed now read one population.
-  if (html.indexOf(_nn('const _band = (label, ...kids) =>', ' React.createElement(')) < 0) {
-    fails.push('the contact panel is back to a flat vertical stack with no bands, which is the layout the owner called messy and unorganized');
-  }
-  for (const [needle, why] of [
-    [_nn('_band(', "'Scope',"), 'the scope band is gone, so the control that decides what a press BUYS is no longer beside the press'],
-    [_nn('_band(', "'Read',"), 'the read band is gone'],
-    [_nn('_band(', "'Export',"), 'the export band is gone, so the CSV, the sheet and the column choice are loose in the stack again'],
-    [_nn('_band(', "'Result',"), 'the result band is gone, so what came back is interleaved with what to press again'],
-  ]) {
-    if (html.indexOf(needle) < 0) fails.push(why);
-  }
-  // Every control that SPENDS or DESTROYS has to survive a layout change. This
-  // is the button that buys real credits and the one that throws away work
-  // already paid for, and section 39's rule is that they all survive.
-  for (const [needle, why] of [
-    [_nn('onClick: () => runContactBatch(_cUnread,', ' _cUnread.length),'), 'the "All N" button is gone, so a full queue can only be read a page at a time'],
-    // A re-read is a SPEND, so it obeys the same number box the first read
-    // does. It passed the whole stale set as the limit, so on a queue of 53
-    // stale reads one confirm bought 53 leads of Firecrawl and model spend.
-    [_nn('runContactBatch(_cStale,', ' _n);'), 'the re-read of stale contact reads is gone, or it is back to spending on every stale lead at once rather than the number the operator chose'],
-    [_nn("setContactPlacesOnly(!!e.target", '.checked),'), 'the Google-listing scope tick box is gone, so the job-board lanes are back in the queue with no way to hide them'],
-    [_nn('setCsvFull(!!e.target', '.checked),'), 'the every-column tick box is gone'],
-    [_nn("setContactSort(v =>", ' !v),'), 'the sort-by-fit button is gone'],
-    [_nn("setContactHowMany(Math.max(1, Math.min(500,", ' Number(e.target.value) || 1))),'), 'the how-many box is gone, so a press can no longer be sized'],
-    [_nn('contactStop.current =', ' true;'), 'the Stop button is gone'],
-    [_nn("findSheetPayload(_cExportable,", ' csvFull);'), 'the Google Sheet send is gone'],
-    [_nn('saveDiscovered(cleared);', ' setDiscovered(cleared);'), 'the Clear-read button is gone, so there is no way back from a bad read'],
-    [_nn('contactNotFit: false, contactFailedAt:', ' null, contactNotes: [] }) : x);'), 'the "Put them back" button is gone, so a lead the filter has wrong can never be re-read'],
-  ]) {
-    if (html.indexOf(needle) < 0) fails.push(why);
-  }
-  // The denominator has to reach the SORT and the CARD, not just the lead.
-  if (html.indexOf(_nn('const Am = (typeof a.contactIcpMeasured ===', " 'number') ? a.contactIcpMeasured : 0;")) < 0) {
-    fails.push('the fit sort no longer breaks a tie on how much we actually know, so a lead scored on three signals sorts level with one scored on seven');
-  }
-  if (html.indexOf(_nn("co.contactIcpMeasured + ' of ' +", ' co.contactIcpOf)')) < 0) {
-    fails.push('the card no longer prints how many signals stood behind the fit score, so 45-of-3 and 45-of-7 look identical');
-  }
-
-  // ══ AND THE THREE COUNTS THAT DISAGREED ════════════════════════════════
-  // The tally read the whole filtered queue while every stat above it read
-  // _scoped, so with "This run" selected the header and the tally described
-  // different sets of leads on one panel.
-  if (html.indexOf(_nn('findTallyLine(findRunTally(', '_scoped))')) < 0) {
-    fails.push('the contact tally is computed over a different population than the numbers directly above it, so one panel reports two answers about one set of leads');
-  }
-  // "68 of these 68 reads" - the stale count printed twice, which is true by
-  // accident on a queue where every read is stale and false the moment one is
-  // re-read.
-  if (html.indexOf(_nn("_cStale.length + ' of these ' +", " _cRead.length + ' read'")) < 0) {
-    fails.push('the stale-read banner prints the stale count where the read count belongs, so it says "N of these N reads" whatever the real numbers are');
-  }
-
-  // And the leads just read have to be movable into Research in one press.
-  if (html.indexOf(_nn('const n = addManyToPipeline(', '_runMovable);')) < 0) {
-    fails.push('the leads a press just read cannot be moved to the pipeline, so a contact run still has no route into an audit');
-  }
-  // The two can still legitimately differ - a lead can be read and carry no
-  // owner, no address and no number - so the panel has to SAY so rather than
-  // leave the gap to be guessed at.
-  if (html.indexOf(_nn('const _cReadNoContact = _cRead.length -', ' _cExportable.length;')) < 0) {
-    fails.push('the panel no longer explains why fewer leads are in the file than were read');
-  }
-  // The write-through must be PER LEAD. A closed tab or a Stop half way must
-  // not throw away reads that were already paid for.
-  if (html.indexOf(_nn('const live = loadDiscovered();', '\n      const merged = live.map(x => (x && results.has(x.name))')) < 0) {
-    fails.push('the contact run no longer saves after every lead, so a Stop or a closed tab loses reads that were already paid for');
-  }
-  // The card strip must be gated on the READ FLAG, not on the timestamp. Live,
-  // 2026-08-28: the server was paused, every request failed instantly, the
-  // failure path stamped contactAt anyway, and a hundred leads were retired as
-  // "read" in about two seconds with nothing on them and no way to press the
-  // button again. contactReadOk is written in ONE place - the success path - so
-  // it cannot be set by anything that did not read the business.
-  if (html.indexOf(_nn('if (co.contactReadOk !== true) return', ' null;')) < 0) {
-    fails.push('the card contact strip is no longer gated on the read flag, so a lead whose request FAILED renders as if it had been read');
-  }
-  // Unread is still decided by the READ FLAG, and now also excludes a lead the
-  // server RULED OUT. Those are different states and they were one: a permanent
-  // verdict ("this is a national brand, not a business we sell to") sat in the
-  // unread pool forever, and the panel said so out loud - "they are still
-  // counted as unread, so the button above picks them up again". A transient
-  // failure must still come back, which is what stops a paused server retiring
-  // a hundred leads.
-  if (html.indexOf(_nn('const _cUnread = _cShown.filter(c => c && c.contactReadOk !== true && c.contactNotFit !==',
-                       ' true && c.contactUnreadable !== true && c.name);')) < 0) {
-    fails.push('the panel decides what is unread from something other than the read flag and the ruled-out flag — either a failed request retires a lead permanently, or a lead the server already ruled out is re-asked on every press forever');
-  }
-  // A verdict is written ONLY where the server said notIcp. Anything wider and
-  // a dead server starts retiring leads permanently again.
-  if (html.indexOf(_nn('const _verdict = d.notIcp ===', ' true;')) < 0) {
-    fails.push('the client no longer reads the server\u2019s not-a-fit verdict, so a refusal it can never change is retried on every press');
-  }
+  // Settings owns the two Find switches now (the spec, section 7), both off by default.
   {
-    const writers = (html.match(/contactNotFit:\s*_verdict/g) || []).length;
-    if (writers !== 1) fails.push(`contactNotFit is written from the verdict in ${writers} place(s); it must be written only where the server actually ruled the business out`);
-  }
-  // A per-lead verdict has ONE home. It rendered twice on one panel - in the
-  // failed box AND as a toast - because the toast fired on every non-ok answer.
-  // The toast is for facts about the RUN.
-  if (html.indexOf(_nn('if (d.budgetStopped || d.busy || d.booting) setContactErr(d.error ||',
-                       " '');")) < 0) {
-    fails.push('a per-lead refusal is being raised as a run-level message again, so the same sentence renders twice on one panel');
-  }
-  // contactReadOk may be assigned true in exactly one place: the function that
-  // reads a real server answer. A second writer is how a failure gets to claim
-  // it read something.
-  {
-    const writers = (html.match(/contactReadOk:\s*true/g) || []).length;
-    if (writers !== 1) fails.push(`contactReadOk is set to true in ${writers} place(s); it must be written only where the server actually answered`);
-    // BOTH failure branches - a refusal and a thrown fetch - must say so on the
-    // lead. This is the assertion the live defect needed and did not have: a
-    // falsification that put the old `contactAt` stamp back on those branches
-    // came back GREEN, because every other assertion here keys on the read flag
-    // and the reverted branches simply wrote a field nothing consulted. Green
-    // for the wrong reason is not a pass, so the branches are asserted directly.
-    const deniers = (html.match(/contactReadOk:\s*false,\s*contactFailedAt:/g) || []).length;
-    if (deniers !== 2) fails.push(`${deniers} of the 2 contact-run failure branches record the failure on the lead; a branch that records nothing leaves a failed lead indistinguishable from an unread one, and a branch that records a READ retires it forever`);
-    // And no failure branch may write the read TIMESTAMP. contactAt is shown as
-    // when we read this business; a failure writing it is a false claim about
-    // work that never happened.
-    const runner = html.slice(html.indexOf('const runContactBatch'), html.indexOf('const addManyToPipeline'));
-    if (/contactNotes: \[(?:d\.error|\(e &&)/.test(runner) && /contactAt: new Date\(\)\.toISOString\(\), contactNotes:/.test(runner)) {
-      fails.push('a contact-run failure branch stamps contactAt - the timestamp that says when we READ this business - on a request that never read anything');
+    const _settings = html.slice(html.indexOf('function SettingsView('), html.indexOf('function SavedView('));
+    for (const k of ['findExtraLanes', 'findPlacesOnly']) {
+      const at = _settings.indexOf("k: '" + k + "'");
+      if (at < 0) fails.push('Settings has no ' + k + ' switch, so the control the spec moved out of the Find tab exists nowhere');
+      else if (!/def: false/.test(_settings.slice(at, at + 120))) fails.push('the ' + k + ' switch does not default OFF');
     }
-  }
-  // A dead server must stop the run rather than burning through the whole queue
-  // in two seconds and reporting it as finished.
-  if (html.indexOf(_nn('if (transportFails >=', ' 3) {')) < 0) {
-    fails.push('the contact run no longer stops after repeated transport failures — a paused server runs the entire queue instantly and reports it as done');
-  }
-  // The Find tab's runner must share NOTHING with the Research batch. Two
-  // artefacts, two costs, two buttons - and one shared runner is how one
-  // silently becomes the other.
-  if (/runContactBatch/.test(html.slice(html.indexOf('function ResearchView'), html.indexOf('function GenerateView')))) {
-    fails.push('ResearchView references the Find tab contact runner — the two runs are supposed to share nothing');
-  }
-  {
-    const defs = (html.match(/const runContactBatch\s*=/g) || []).length;
-    if (defs !== 1) fails.push(`${defs} definition(s) of runContactBatch — one implementation, or the second is the one that rots`);
-  }
-  // ══ "READ 25" MUST RETURN 25 ═════════════════════════════════════════════
-  // Live 2026-09-01: 25 asked for, "31 read of 31" reported. The guard was
-  // checked BEFORE the draw with a pool of six workers, so at kept === want - 1
-  // all six passed it and drew at once. Ceiling was want + (CONTACT_POOL - 1).
-  // The runner lives inside a React component, so this is a source assertion
-  // and says so; the reservation itself is what the needles pin.
-  {
-    const runner2 = html.slice(html.indexOf('const runContactBatch'), html.indexOf('const addManyToPipeline'));
-    if (runner2.indexOf(_nn('inFlight += 1;', '\n        try { await one(list[i]); } finally { inFlight -= 1; }')) < 0) {
-      fails.push('the contact runner does not release its reservation, so a refusal or a failure permanently shrinks the run');
-    }
-    // A failed read stays in Not-read and the panel promises it will be picked
-    // up again. Charging it a slot makes that promise false.
-    if (runner2.indexOf(_nn('const _kept = fields.contactReadOk === true', ' && !_refused;')) < 0) {
-      fails.push('a contact read that FAILED still consumes one of the leads asked for, while the panel says it will be picked up again');
-    }
-  }
-  // The move bar must describe the same population the panel above it does.
-  if (html.indexOf(_nn('const _allMovable = _cShown.filter(c => c && c.name', ' && !alreadyAdded(c.name));')) < 0) {
-    fails.push('the move-to-pipeline bar ignores the Google-listing scope checkbox, so it offers to move the very leads the panel above says it is hiding');
+    if (_findView.indexOf("k: 'findExtraLanes'") >= 0 || /type: 'checkbox', checked: pullFilters\.extraLanes/.test(_findView)) fails.push('the trigger-lanes control is still on the Find tab as well as in Settings - two homes for one spend switch');
   }
 }
 
@@ -3514,7 +3335,7 @@ let findStat = null;
   // ---- 2. The submit goes through the poller, and only the poller ---------
   // A fixture cannot see a caller. If runDiscover goes back to awaiting one
   // long fetch, every assertion here would still pass.
-  if (!/const d = await discoverViaJob\(discoverAbort\.signal/.test(src)) {
+  if (!/const d = await discoverViaJob\(abort\.signal/.test(src)) {
     fails.push('runDiscover no longer submits through discoverViaJob, so a Find run is back to depending on one long HTTP request');
   }
   {
@@ -3525,47 +3346,14 @@ let findStat = null;
     if (_bare !== 1) fails.push(`${_bare} call site(s) hit the synchronous /api/discover door — exactly one is expected, the old-server fallback inside discoverViaJob`);
   }
 
-  // ---- 2b. The trigger lanes are off unless a person ticks them ----------
-  // Vin's decision, 2026-08-31. A Places lead has a Google listing by
-  // construction and every ICP rule in this system reads those fields; a
-  // job-board or funding lead has none of them, so it arrives unjudged and is
-  // then scored as though it had been judged. The default has to be OFF and it
-  // has to be a real control, not a constant somebody has to edit.
-  {
-    if (!/extraLanes:\s*pullFilters\.extraLanes === true/.test(src)) {
-      fails.push('the Find request no longer carries the lane choice, so the server falls back to its own default and the tick box decides nothing');
-    }
-    if (!/extraLanes:\s*false,/.test(src)) {
-      fails.push('extraLanes is no longer declared false in pullFilters, so the trigger lanes are back on by default and every run buys four lanes nobody chose');
-    }
-    if (!/onChange:\s*e => setPullFilters\(p => \(\{ \.\.\.p, extraLanes: e\.target\.checked, extraLanesSet: true \}\)\)/.test(src)) {
-      fails.push('there is no control that sets extraLanes, so the lanes can only be turned on by editing the file - a switch nobody can reach is a switch that rots');
-    }
-    // And Reset must not silently take the choice with it. It used to REPLACE
-    // the whole filter object, so any field added to pullFilters was quietly
-    // deleted by a button labelled Reset - which for a spend switch means an
-    // operator turns the lanes on, presses Reset to clear a market, and buys a
-    // different run than the screen describes.
-    if (/setPullFilters\(\{ niches:\[\]/.test(src)) {
-      fails.push('the Reset button REPLACES pullFilters rather than merging, so it silently clears every field added to that state - including the lane choice, which decides what a run spends');
-    }
+  // ---- 2b. The trigger lanes are a Settings switch, off by default -------
+  // Vin's decision, 2026-08-31, kept through the 2026-09-08 rebuild: the
+  // request says explicitly what Settings holds, so the wire reads the same
+  // whichever way the switch is set, and nothing on the page defaults it on.
+  if (!/extraLanes:\s*settings\.findExtraLanes === true/.test(src)) {
+    fails.push('the Find request no longer carries the lane choice, so the server falls back to its own default and the switch decides nothing');
   }
-
-  // ---- 3. The queue cap is ONE number ------------------------------------
-  // It was 200, hand-written in the merge, the Supabase upsert and the Supabase
-  // restore, so raising it meant finding all three. A run banks over a thousand
-  // leads it paid for; a cap somebody forgets to raise throws them away.
-  {
-    const _decl = src.match(/const FIND_QUEUE_MAX\s*=\s*(\d+);/);
-    if (!_decl) fails.push('FIND_QUEUE_MAX is gone, so the Find queue cap is a hand-written number again');
-    else {
-      const uses = (src.match(/FIND_QUEUE_MAX/g) || []).length;
-      if (uses < 4) fails.push(`FIND_QUEUE_MAX is used ${uses - 1} time(s) after its declaration — the merge, the Supabase write and the Supabase read all need it`);
-      if (/discovered_queue\?order=icp_score\.desc&limit=200/.test(src)) {
-        fails.push('the Supabase queue read still asks for a hardcoded 200, so raising the cap silently does nothing on reload');
-      }
-    }
-  }
+  if (/findExtraLanes:\s*true/.test(src)) fails.push('something on the page turns the trigger lanes on by default');
 
   // ---- 4. The card stops guessing once we have measured ------------------
   // findScoreLine reads affordLabel, so both are lifted together. Executing the
@@ -3717,19 +3505,6 @@ let findStat = null;
   }
 }
 
-// ══ A STALE LOCAL QUEUE MUST NOT PERMANENTLY SHADOW THE CLOUD ═════════════
-// The Find queue restore returned the moment localStorage held anything, so
-// once a browser had ONE queued company the Supabase queue could never load in
-// it again. Same class as the leads loader this file already guards.
-{
-  if (/const local = loadDiscovered\(\);\s*\r?\n\s*if \(local\.length > 0\) return;/.test(src)) {
-    fails.push('the Find queue restore still returns early whenever localStorage holds anything, so a run banked on another machine is invisible in this browser forever');
-  }
-  if (!/const merged = Array\.from\(_byName\.values\(\)\)/.test(src)) {
-    fails.push('the Find queue restore no longer MERGES the cloud with local work - replacing would delete a company queued in this tab and not yet pushed, which is the guard pointed the other way');
-  }
-}
-
 Promise.all(PENDING).then(() => {
   if (fails.length) {
     console.log(`\n✗ index.html: ${fails.length} research-request defect(s)`);
@@ -3740,8 +3515,8 @@ Promise.all(PENDING).then(() => {
   console.log(`\n\u2713 index.html: all ${calls.length} research request(s) go through the one builder at line ${builderLine}, which sends ${builderKeys.length} fields including every measurement nothing downstream can recover. Two hand-written bodies disagreed about seventeen of them on 2026-08-19.`);
   if (roundTrip) console.log(`\u2713 index.html: the Supabase round trip was EXECUTED, not read \u2014 leadToRow and rowToLead run on five real lead shapes. A Find lead keeps every one of its ${roundTrip.fields} stored fields, a never-researched lead does NOT read as audited, the model's draft survives a reload instead of the research-time template, the call outcome survives, an empty lead still stores nothing, and no stored field is write-only. This pair is the only door between the app and its data, it has produced nine duplicate-key collisions, and nothing in this repo had ever run it.`);
   notes.forEach(n => console.log(n));
-  if (findStat) console.log(`\u2713 index.html: the Find run's clock, queue cap and card were EXECUTED, not read \u2014 the browser's wall sits above the server's own sweep so a healthy run is never killed by the wrong file, the submit goes through the poller and exactly one call site still touches the synchronous door as the old-server fallback, the queue cap is one number rather than three, and a lead we have actually read stops showing the name-based guess beside the owner, email and phone we measured. A demoted lead now says why it was sorted last: "${findStat.demoted}". And the card answers what a business can afford instead of inventing a revenue band from its review count: "${findStat.prem}".`);
+  if (findStat) console.log(`\u2713 index.html: the Find run's clock and card were EXECUTED, not read \u2014 the browser's wall sits above the server's own sweep so a healthy run is never killed by the wrong file, the submit goes through the poller and exactly one call site still touches the synchronous door as the old-server fallback, the trigger lanes are a Settings switch that is off by default and sent explicitly, and a lead we have actually read stops showing the name-based guess beside the owner, email and phone we measured. A demoted lead now says why it was sorted last: "Find score 74/100 \u00b7 owner findable 31/40, a guess until we read them \u00b7 sorted last: outside the star band we mine reviews in". And the card answers what a business can afford instead of inventing a revenue band from its review count: "Find score 74/100 \u00b7 Premium fit".`);
   if (contactTally) console.log(`\u2713 index.html: the contact run TALLY was executed \u2014 the first thing in this project that has ever counted whether the owner resolver and the email engine work. Rates are over leads actually READ, the email tier split is reported rather than one "found" number because a published address and a guess are not the same thing, a run under twelve reads says its numbers are counts and not rates, and a run made while the verifier was down says so. On the fixture queue: ${contactTally}`);
-  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the CSV writes the ${contactStat.lean} columns a rep dials and sends from, with all ${contactStat.cols} one tick away and the Google Sheet reading the same choice. It neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, writes the lean file as GRADES (owner A-D, email A-D, best time, the posting age riding the hiring yes) with every sentence one tick away, still gives each email tier its own confidence sentence in the full file, and reports an unmeasured signal as "not checked" rather than as a definite no. Every call site is pinned too: the panel starts the run, the run posts to /api/find-contact, it saves after every lead so a Stop keeps what was paid for, the card strip renders only on a lead that was read, and the Research batch cannot reach any of it. The panel itself now reads as four bands - what this is, what the next press covers, what to press, what came back - with every spending and destroying control still wired, and the three counts that used to describe three different populations on one screen now read one.`);
+  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the CSV writes the ${contactStat.lean} columns a rep dials and sends from, with all ${contactStat.cols} one tick away (the Google Sheet push is retired: CSV only, Vin 2026-09-08). It neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, writes the lean file as GRADES with every sentence one tick away, and reports an unmeasured signal as "not checked" rather than as a definite no. Round 124: the fields a read stamps on a row are the SERVER's contactFieldsFrom now, lifted from server.js and run through the same fixtures, and the request the driver builds is its readRunCompanyFrom, so a field dropped on either side of the wire fails here. The two Find screens decide with pure functions executed here (lead state, the one verified-email rule on both sides, the batch card stats, the credit estimate off the server's figure, the route parser, the pipeline additions, the spec's tokens), and every call site is pinned: start, cancel, review, move, rule out, restore and the export stamp go through the routes, the page never touches discovered_queue, never reads a lead itself, and the Research batch cannot reach any of it.`);
   if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
 }).catch((e) => { console.log('\n\u2717 index.html: the checks could not finish \u2014 ' + (e && e.message)); process.exit(1); });

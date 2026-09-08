@@ -41,3 +41,36 @@ alter table leads add column if not exists corpus_read jsonb;
 create table send_log (
   id bigserial primary key, lead_id text, company text, email text,
   sequence_id text, at timestamptz default now());
+
+-- §124 (docs/history/round-124.md) — the server-owned Find queue and the read runs.
+-- RUN THIS BEFORE THE ROUND 124 SERVER DEPLOYS: PostgREST refuses a whole row on
+-- one unknown column, so a queue write or a run row is lost until it has run.
+create table if not exists discovered_queue (
+  id text primary key, name text, website text, icp_score real, source text, signals jsonb,
+  job_title text, location text, manual_role_count int, stacked boolean, reachability real,
+  size_verified boolean, size_unverified boolean, verified_employees int, extra jsonb);
+alter table discovered_queue add column if not exists batch_id uuid;
+alter table discovered_queue add column if not exists read_at timestamptz;
+alter table discovered_queue add column if not exists read_failed boolean;
+alter table discovered_queue add column if not exists fail_reason text;
+alter table discovered_queue add column if not exists moved_to_research_at timestamptz;
+alter table discovered_queue add column if not exists ruled_out_at timestamptz;
+alter table discovered_queue add column if not exists ruled_out_why text;
+alter table discovered_queue add column if not exists from_trigger_source boolean default false;
+alter table discovered_queue add column if not exists reach_predict int;
+alter table discovered_queue add column if not exists exported_at timestamptz;
+alter table discovered_queue add column if not exists exported_to text;
+create index if not exists discovered_queue_batch_id_idx on discovered_queue (batch_id);
+create table if not exists read_runs (
+  id uuid primary key, started_at timestamptz not null default now(), finished_at timestamptz,
+  progress_at timestamptz, status text not null default 'running',
+  requested_count int not null, read_count int not null default 0, failed_count int not null default 0,
+  ruled_out_count int not null default 0, credits_estimated int, credits_used real, scope jsonb, error text);
+-- The Settings row a background run reads its keys from (the page already writes it).
+create table if not exists user_settings (id text primary key, data jsonb);
+-- The old page wrote extra as a JSON STRING inside jsonb; the server writes objects.
+-- This turns every old string into the object it holds, once.
+update discovered_queue set extra = (extra #>> '{}')::jsonb where jsonb_typeof(extra) = 'string';
+-- Until index.html is re-dragged into Netlify the OLD page still deletes the whole
+-- queue on every action. Nothing on the server deletes a queue row, so:
+revoke delete on discovered_queue from anon, authenticated;
