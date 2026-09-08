@@ -13,62 +13,62 @@ Counts now: **55 declared categories** (`GP_CATEGORIES`; a tier-C one is benched
 | `CATEGORY_TIER` | 5862 | A/B/C: does the retainer maths work | TRADE TABLE COVERAGE CHECK |
 | `ICP_REVENUE_BAND` | 5142 | the ICP ladder: floor / core / upper / ceiling in dollars; every size cut derives from it | SIZE AND LAYERS CHECK |
 | `ICP_REVENUE_PER_EMPLOYEE_BY_TRADE` | 5148 | revenue per head per trade (source + date per row); the default is ICP_REVENUE_PER_EMPLOYEE | SIZE AND LAYERS CHECK |
-| `GP_CATEGORIES` | 5955 | the Places queries + labels (the searched trades) | TRADE TABLE COVERAGE, NICHE BRIEF COVERAGE |
-| `GP_FREE_BUILDER` | 5953 | free site-builder domains | ICP FILTER CHECK |
-| `HIGH_VOLUME_LOW_TICKET` | 6079 | review-floor RAISE set | ICP FILTER CHECK (sets, not categories) |
-| `LOW_VOLUME_HIGH_TICKET` | 6104 | review-floor LOWER set (floor 5) | ICP FILTER CHECK (sets, not categories) |
-| `reviewFloorFor` | 6111 | the trade-aware review floor | ICP FILTER CHECK |
-| `TRADE_CAPACITY_CLASS` | 6142 | solo / mixed / crewed | TRADE TABLE COVERAGE CHECK |
-| `SOLO_TRADE_RE` | 6178 | text fallback for a solo trade | TRADE TABLE COVERAGE CHECK |
-| `GP_CITY_COORDS` | 6391 | coordinates of every searched metro (its keys ARE the searched set) | COVERAGE RADIUS CHECK (moves with GP_CITIES) |
-| `GP_CITIES` | 6433 | the searched metros | COVERAGE RADIUS CHECK |
-| `GP_FRANCHISE` | 6453 | the only unconditional name-delete | ICP FILTER CHECK |
-| `PRACTICE_STAFF_RE` | 12931 | practice staff titles that are not the owner | OWNER TRUTH CHECK |
-| `RECURRING_OFFER_RE` | 14739 | maintenance-plan offer text | RECURRING REVENUE CHECK |
-| `RECURRING_NORMAL_TRADES` | 14776 | trades where a plan is normal | STEM MATCH, SIGNAL TRUTH |
-| `MONEY_PILLARS` | 15765 | the seven loss buckets | MONEY PILLAR CHECK |
-| `REVENUE_BENCHMARKS` | 16031 | cited segment figures with source and date | MONEY PILLAR CHECK |
-| `REFERRAL_TRADES` | 19572 | referral-driven trades | REFERRAL CHECK |
-| `REFERRAL_ADJUST` | 19576 | ladder adjust for referral trades | REFERRAL CHECK |
-| `EMERGENCY_TRADES` | 19623 | bought under duress | URGENCY CHECK |
-| `CONSIDERED_TRADES` | 19648 | bought slowly | URGENCY CHECK |
-| `TRADE_URGENCY_MIXED` | 19664 | declared to have no honest urgency profile | TRADE TABLE COVERAGE CHECK |
-| `URGENCY_ADJUST` | 19683 | reorders findings by purchase urgency | URGENCY, KNOWABILITY, TRADE TABLE COVERAGE |
-| `OUR_PRICE_FIGURES` | 24748 | the only $ figures our catalogue may print | AUDIT MONEY CHECK |
-| `PRODUCT_PRICE_LINE` | 24753 | our price string per product | AUDIT MONEY CHECK |
-| `TRADE_JOB_VALUE` | 24766 | "a job in this trade runs about" rows | TRADE TABLE COVERAGE, TRADE ANCHOR, LIVE EMAIL |
-| `NICHE_BRIEFS` | 25034 | the brief library | NICHE BRIEF CHECK |
-| `BRIEF_MODEL_DISQUALIFIERS` | 25403 | shared "this is a retailer" disqualifier | NICHE BRIEF COVERAGE CHECK |
-| `NICHE_BRIEF_EXPECT` | 25420 | every searched category → its brief or null | NICHE BRIEF COVERAGE CHECK |
-| `NICHE_BRIEF_LIVE_CASES` | 25505 | real trade strings and the brief each must resolve to | NICHE BRIEF COVERAGE CHECK |
-| `NICHE_MONEY_UNITS` | 25608 | money units from the brief library | NICHE BRIEF CHECK |
-| `TRADE_MONEY_UNITS` | 25617 | money units from the trade table | NICHE BRIEF CHECK |
-| `OUR_PRODUCT_WORDS` | 25636 | words that mark a sentence as about OUR product | AUDIT MONEY CHECK |
-| `OUR_CATALOGUE_FIELD` | 25652 | the JSON fields allowed to carry our price | AUDIT MONEY CHECK |
-| `TRADE_MONEY_EXEMPT` | 26506 | trades with no honest single job value | TRADE TABLE COVERAGE CHECK |
-| `FINANCING_RE` | 26523 | consumer-financing vendors and offer text | SIGNAL TRUTH CHECK |
-| `BIG_TICKET_TRADE_RE` | 26544 | trades where missing financing is a gap | MONEY SIGNAL CHECK |
-| `ICP_STAFFING` | 38021 | staffing / recruiting — not our ICP | ICP FILTER, STEM MATCH |
-| `ICP_INSTITUTION` | 38022 | institutions — blocked | ICP FILTER, STEM MATCH |
-| `ICP_SMALL_PRACTICE` | 38033 | the small-practice escape from the health block | ICP FILTER, STEM MATCH |
-| `ICP_BIG_HEALTH` | 38037 | hospitals / health systems — blocked | ICP FILTER, STEM MATCH |
-| `STEM_COMPLETE_WORDS` | 38065 | every bare stem a list may end on | STEM MATCH CHECK |
-| `BRAND_LEGAL_SUFFIX_RE` | 38091 | legal suffixes stripped before a brand compare | ICP FILTER CHECK |
-| `BLOCKED_COMPANIES` | 38119 | brand set 1 (whole-name match) | ICP FILTER CHECK |
-| `STAFFING_BRANDS` | 38185 | brand set 2 | ICP FILTER CHECK |
-| `ENTERPRISE_BRANDS` | 38198 | brand set 3 | ICP FILTER CHECK |
-| `NATIONAL_BRANDS` | 38208 | brand set 4 | ICP FILTER CHECK |
-| `TRADE_WORDS` | 40312 | word → trade lookup | — |
-| `TRADE_MODIFIERS` | 40886 | specialisms that narrow a search | TRADE PHRASE CHECK |
-| `TRADE_SYNONYM_GROUPS` | 41316 | trade words that count as the same word | — |
-| `SLUG_PRODUCT_LINE` | 42134 | product-line URL slugs | page checks |
-| `CHAIN_ROLE_RE` | 78061 | franchisee role titles on their own pages | CHAIN OUTLET CHECK |
-| `CHAIN_SELF_RE` | 78062 | franchise self-description | CHAIN OUTLET CHECK |
-| `CHAIN_DENIAL_RE` | 78064 | "locally owned, not a franchise" — never fires the drop | CHAIN OUTLET CHECK |
-| `FIND_ICP_TERMS` | 79098 | the contact-list FIT score terms | FIND ICP GATE CHECK |
-| `FIND_ICP_MIN_TERMS` | 79353 | below this many measured terms a lead is "not scored" | FIND ICP GATE CHECK |
+| `GP_CATEGORIES` | 5960 | the Places queries + labels (the searched trades) | TRADE TABLE COVERAGE, NICHE BRIEF COVERAGE |
+| `GP_FREE_BUILDER` | 5958 | free site-builder domains | ICP FILTER CHECK |
+| `HIGH_VOLUME_LOW_TICKET` | 6084 | review-floor RAISE set | ICP FILTER CHECK (sets, not categories) |
+| `LOW_VOLUME_HIGH_TICKET` | 6112 | review-floor LOWER set (floor 5) | ICP FILTER CHECK (sets, not categories) |
+| `reviewFloorFor` | 6119 | the trade-aware review floor | ICP FILTER CHECK |
+| `TRADE_CAPACITY_CLASS` | 6150 | solo / mixed / crewed | TRADE TABLE COVERAGE CHECK |
+| `SOLO_TRADE_RE` | 6186 | text fallback for a solo trade | TRADE TABLE COVERAGE CHECK |
+| `GP_CITY_COORDS` | 6399 | coordinates of every searched metro (its keys ARE the searched set) | COVERAGE RADIUS CHECK (moves with GP_CITIES) |
+| `GP_CITIES` | 6441 | the searched metros | COVERAGE RADIUS CHECK |
+| `GP_FRANCHISE` | 6461 | the only unconditional name-delete | ICP FILTER CHECK |
+| `PRACTICE_STAFF_RE` | 12939 | practice staff titles that are not the owner | OWNER TRUTH CHECK |
+| `RECURRING_OFFER_RE` | 14747 | maintenance-plan offer text | RECURRING REVENUE CHECK |
+| `RECURRING_NORMAL_TRADES` | 14784 | trades where a plan is normal | STEM MATCH, SIGNAL TRUTH |
+| `MONEY_PILLARS` | 15773 | the seven loss buckets | MONEY PILLAR CHECK |
+| `REVENUE_BENCHMARKS` | 16039 | cited segment figures with source and date | MONEY PILLAR CHECK |
+| `REFERRAL_TRADES` | 19580 | referral-driven trades | REFERRAL CHECK |
+| `REFERRAL_ADJUST` | 19584 | ladder adjust for referral trades | REFERRAL CHECK |
+| `EMERGENCY_TRADES` | 19631 | bought under duress | URGENCY CHECK |
+| `CONSIDERED_TRADES` | 19656 | bought slowly | URGENCY CHECK |
+| `TRADE_URGENCY_MIXED` | 19672 | declared to have no honest urgency profile | TRADE TABLE COVERAGE CHECK |
+| `URGENCY_ADJUST` | 19691 | reorders findings by purchase urgency | URGENCY, KNOWABILITY, TRADE TABLE COVERAGE |
+| `OUR_PRICE_FIGURES` | 24756 | the only $ figures our catalogue may print | AUDIT MONEY CHECK |
+| `PRODUCT_PRICE_LINE` | 24761 | our price string per product | AUDIT MONEY CHECK |
+| `TRADE_JOB_VALUE` | 24774 | "a job in this trade runs about" rows | TRADE TABLE COVERAGE, TRADE ANCHOR, LIVE EMAIL |
+| `NICHE_BRIEFS` | 25042 | the brief library | NICHE BRIEF CHECK |
+| `BRIEF_MODEL_DISQUALIFIERS` | 25411 | shared "this is a retailer" disqualifier | NICHE BRIEF COVERAGE CHECK |
+| `NICHE_BRIEF_EXPECT` | 25428 | every searched category → its brief or null | NICHE BRIEF COVERAGE CHECK |
+| `NICHE_BRIEF_LIVE_CASES` | 25513 | real trade strings and the brief each must resolve to | NICHE BRIEF COVERAGE CHECK |
+| `NICHE_MONEY_UNITS` | 25616 | money units from the brief library | NICHE BRIEF CHECK |
+| `TRADE_MONEY_UNITS` | 25625 | money units from the trade table | NICHE BRIEF CHECK |
+| `OUR_PRODUCT_WORDS` | 25644 | words that mark a sentence as about OUR product | AUDIT MONEY CHECK |
+| `OUR_CATALOGUE_FIELD` | 25660 | the JSON fields allowed to carry our price | AUDIT MONEY CHECK |
+| `TRADE_MONEY_EXEMPT` | 26514 | trades with no honest single job value | TRADE TABLE COVERAGE CHECK |
+| `FINANCING_RE` | 26531 | consumer-financing vendors and offer text | SIGNAL TRUTH CHECK |
+| `BIG_TICKET_TRADE_RE` | 26552 | trades where missing financing is a gap | MONEY SIGNAL CHECK |
+| `ICP_STAFFING` | 38029 | staffing / recruiting — not our ICP | ICP FILTER, STEM MATCH |
+| `ICP_INSTITUTION` | 38030 | institutions — blocked | ICP FILTER, STEM MATCH |
+| `ICP_SMALL_PRACTICE` | 38041 | the small-practice escape from the health block | ICP FILTER, STEM MATCH |
+| `ICP_BIG_HEALTH` | 38045 | hospitals / health systems — blocked | ICP FILTER, STEM MATCH |
+| `STEM_COMPLETE_WORDS` | 38073 | every bare stem a list may end on | STEM MATCH CHECK |
+| `BRAND_LEGAL_SUFFIX_RE` | 38099 | legal suffixes stripped before a brand compare | ICP FILTER CHECK |
+| `BLOCKED_COMPANIES` | 38127 | brand set 1 (whole-name match) | ICP FILTER CHECK |
+| `STAFFING_BRANDS` | 38193 | brand set 2 | ICP FILTER CHECK |
+| `ENTERPRISE_BRANDS` | 38206 | brand set 3 | ICP FILTER CHECK |
+| `NATIONAL_BRANDS` | 38216 | brand set 4 | ICP FILTER CHECK |
+| `TRADE_WORDS` | 40320 | word → trade lookup | — |
+| `TRADE_MODIFIERS` | 40894 | specialisms that narrow a search | TRADE PHRASE CHECK |
+| `TRADE_SYNONYM_GROUPS` | 41324 | trade words that count as the same word | — |
+| `SLUG_PRODUCT_LINE` | 42142 | product-line URL slugs | page checks |
+| `CHAIN_ROLE_RE` | 78069 | franchisee role titles on their own pages | CHAIN OUTLET CHECK |
+| `CHAIN_SELF_RE` | 78070 | franchise self-description | CHAIN OUTLET CHECK |
+| `CHAIN_DENIAL_RE` | 78072 | "locally owned, not a franchise" — never fires the drop | CHAIN OUTLET CHECK |
+| `FIND_ICP_TERMS` | 79106 | the contact-list FIT score terms | FIND ICP GATE CHECK |
+| `FIND_ICP_MIN_TERMS` | 79361 | below this many measured terms a lead is "not scored" | FIND ICP GATE CHECK |
 
 ## Company identity (what a full company swap would touch)
 
-- server.js: "CROJungle" appears 55 times (first at lines 1135, 1207, 1345, 3285, 4313, 4339, 4365, 4512 …); the audit system prompt `BRAIN_STATIC` is declared at line 8172; `$800k` at lines 5124, 5184, 5830, 5839, 5843, 5957, 6062, 39487, 43897, 60403, 78762, 79093 …; `$15M` at lines 15365, 17376, 74339, 78762, 79093; the 200-employee gate at lines 37195, 37196, 39075; the sending user agent `crojungleteam.com` at line 4313; the Hunter sequence id comes from Settings, read in the send route (first `sequenceId` after `/api/send-to-hunter`, line 81184).
+- server.js: "CROJungle" appears 55 times (first at lines 1135, 1207, 1345, 3285, 4313, 4339, 4365, 4512 …); the audit system prompt `BRAIN_STATIC` is declared at line 8180; `$800k` at lines 5124, 5184, 5830, 5839, 5843, 5926, 5939, 5962, 6067, 39495, 43905, 60411 …; `$15M` at lines 15373, 17384, 74347, 78770, 79101; the 200-employee gate at lines 37203, 37204, 39083; the sending user agent `crojungleteam.com` at line 4313; the Hunter sequence id comes from Settings, read in the send route (first `sequenceId` after `/api/send-to-hunter`, line 81192).
 - index.html: "CROJungle" appears 12 times (lines 6, 3984, 4123, 4166, 4361, 5022, 5085, 10049, 11645, 14484, 17066, 17685); `PILLAR_PRODUCT` at line 2861, `LAYER_PLAIN` at line 2828; the never-cold-email-from-CROJungle.com warning at line 17066.
