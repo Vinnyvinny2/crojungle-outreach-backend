@@ -159,7 +159,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261006;
+const CONTRACT_VERSION = 20261007;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -35094,6 +35094,26 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
       // domain, and a first name that is a given name rather than an article.
       const epEmail = eponymousMailboxFor(name, companyName, domain);
       const eponymous = !!epEmail;
+      // ══ ASK THE MAIL SERVER ONCE MORE BEFORE CALLING IT A GUESS ══════════
+      // dean@davisfacialsurgery.com, 2026-09-08: the domain answered the
+      // catch-all probe (a definite no to a random address), the owner's
+      // first-name mailbox came back "won't say", and the address shipped as a
+      // guess the rep cannot send to. "Won't say" is usually greylisting, which
+      // accepts the same question a few seconds later. One more probe, on THIS
+      // address only, only when the server has shown it answers, and only when
+      // it was not refused outright: a yes makes it a fact (tier 2, sendable),
+      // a no is honoured below, and "won't say" again leaves it the guess it is.
+      if (eponymous && !deniedAddresses.has(epEmail.toLowerCase()) && verifierMayTry()) {
+        await new Promise(r => setTimeout(r, 3000));
+        const _again = await verifyEmailSMTP(epEmail, verifierKey);
+        if (_again.valid === true) {
+          domainPatternMemory.set(domain, '{first}');
+          console.log(`\u2713 EMAIL [${domain}] T2 SMTP-VERIFIED on the second ask: ${epEmail} - the mail server would not say the first time and confirmed the mailbox on retry`);
+          return { email: epEmail, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: '{first}' };
+        }
+        if (_again.invalid === true) { deniedAddresses.add(epEmail.toLowerCase()); console.log(`EMAIL [${domain}]: on the second ask the mail server refused ${epEmail}.`); }
+        else console.log(`EMAIL [${domain}]: the mail server would not say twice about ${epEmail} - it stays a guess, and a guess is not sent.`);
+      }
       // The gate is now this ONE address, not the whole batch. If the server
       // explicitly refused this mailbox we honour that and fall through; if it
       // refused some other pattern, that is not evidence about this one.
@@ -56315,6 +56335,18 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('catchAllCache.set(domain,', ' null);'))) _fails.push('an UNKNOWN catch-all is not cached at all, so every later lead on that domain re-pays two probes and up to sixty seconds to learn the same nothing');
     if (!_src.includes(_n('catchAllCache.delete(domain); }, CATCHALL_UNKNOWN', '_TTL_MS)'))) _fails.push('the UNKNOWN catch-all is cached forever - it is a fact about the probe\'s moment, not about the domain, and a permanent one would disable the SMTP path for the life of the process');
     if (!(CATCHALL_UNKNOWN_TTL_MS > 0 && CATCHALL_UNKNOWN_TTL_MS <= 60 * 60 * 1000)) _fails.push(`the UNKNOWN cache lives ${CATCHALL_UNKNOWN_TTL_MS}ms - long enough to outlast the condition that caused it`);
+    // Round 125: the owner's eponymous mailbox is asked about a second time
+    // before it ships as a guess, and that second ask sits BEFORE the guess is
+    // returned - a retry after the return is a retry nobody sees.
+    {
+      const _again = _src.indexOf(_n('const _again = await verifyEmailSMTP(epEmail,', ' verifierKey);'));
+      const _guess = _src.indexOf(_n('inferredEponymous:', ' true,'));
+      if (_again < 0) _fails.push('the owner\'s eponymous mailbox is never asked about a second time, so a mail server that would not say once ships a guess the rep cannot send to (dean@davisfacialsurgery.com, 2026-09-08)');
+      else if (_guess < 0 || _again > _guess) _fails.push('the second ask on the eponymous mailbox sits after the guess is returned, so it can never promote the address');
+      // The gate itself, not only the line inside it: a falsification that gated the
+      // retry off with `if (false)` stayed GREEN on the two needles above.
+      else if (!_src.includes(_n('if (eponymous && !deniedAddresses.has(epEmail.toLowerCase()) &&', ' verifierMayTry()) {'))) _fails.push('the second ask is gated on something other than an eponymous, not-refused address and a verifier that may be asked - it either never runs or runs on a refused mailbox');
+    }
     if (_fails.length) console.log(`⛔ ADDRESS ROUTE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
     else console.log(`✓ ADDRESS ROUTE CHECK: an UNKNOWN catch-all no longer closes the routes that never needed an SMTP verdict. The Hunter email-finder sits below the SMTP-gated block, so a known-good domain still tries every free and probed route first and spends no extra credit, while a domain whose second probe timed out can finally reach the fallback the timeout line has always promised the operator. UNKNOWN is remembered for ${Math.round(CATCHALL_UNKNOWN_TTL_MS / 60000)} minutes - a fact about the probe's moment, not about the domain - instead of being re-bought on every lead in the batch.`);
   } catch (e) {

@@ -52,7 +52,14 @@ guesses into facts, for one verifier credit each.
 must sit before the guess is returned — a retry after the return is a retry
 nobody sees. `clientcheck.js` pins the tag in front of the address.
 
-FALSIFICATION_RESULTS
+### What the falsification runs found
+
+Three reverts, each alone against a green baseline. Dropping the second ask
+went red on its own line. Moving the tag back behind the address went red in
+`clientcheck.js`. Gating the retry off with `if (false)` stayed **green** on
+the first two needles — the line still existed and still sat before the guess
+— so the check now pins the gate condition itself, and that revert went red
+on the third run. A check that cannot fail is not a check.
 
 ### Deploy
 

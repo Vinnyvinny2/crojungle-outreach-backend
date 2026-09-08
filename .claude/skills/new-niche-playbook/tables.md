@@ -62,13 +62,13 @@ Counts now: **55 declared categories** (`GP_CATEGORIES`; a tier-C one is benched
 | `TRADE_MODIFIERS` | 40936 | specialisms that narrow a search | TRADE PHRASE CHECK |
 | `TRADE_SYNONYM_GROUPS` | 41366 | trade words that count as the same word | — |
 | `SLUG_PRODUCT_LINE` | 42184 | product-line URL slugs | page checks |
-| `CHAIN_ROLE_RE` | 78243 | franchisee role titles on their own pages | CHAIN OUTLET CHECK |
-| `CHAIN_SELF_RE` | 78244 | franchise self-description | CHAIN OUTLET CHECK |
-| `CHAIN_DENIAL_RE` | 78246 | "locally owned, not a franchise" — never fires the drop | CHAIN OUTLET CHECK |
-| `FIND_ICP_TERMS` | 79280 | the contact-list FIT score terms | FIND ICP GATE CHECK |
-| `FIND_ICP_MIN_TERMS` | 79535 | below this many measured terms a lead is "not scored" | FIND ICP GATE CHECK |
+| `CHAIN_ROLE_RE` | 78246 | franchisee role titles on their own pages | CHAIN OUTLET CHECK |
+| `CHAIN_SELF_RE` | 78247 | franchise self-description | CHAIN OUTLET CHECK |
+| `CHAIN_DENIAL_RE` | 78249 | "locally owned, not a franchise" — never fires the drop | CHAIN OUTLET CHECK |
+| `FIND_ICP_TERMS` | 79283 | the contact-list FIT score terms | FIND ICP GATE CHECK |
+| `FIND_ICP_MIN_TERMS` | 79538 | below this many measured terms a lead is "not scored" | FIND ICP GATE CHECK |
 
 ## Company identity (what a full company swap would touch)
 
-- server.js: "CROJungle" appears 55 times (first at lines 1135, 1207, 1345, 3285, 4313, 4339, 4365, 4512 …); the audit system prompt `BRAIN_STATIC` is declared at line 8180; `$800k` at lines 5124, 5184, 5830, 5839, 5843, 5926, 5939, 5962, 6067, 39530, 43947, 60464 …; `$15M` at lines 15373, 17384, 74521, 78944, 79275; the 200-employee gate at lines 37223, 37224, 39118; the sending user agent `crojungleteam.com` at line 4313; the Hunter sequence id comes from Settings, read in the send route (first `sequenceId` after `/api/send-to-hunter`, line 82006).
+- server.js: "CROJungle" appears 55 times (first at lines 1135, 1207, 1345, 3285, 4313, 4339, 4365, 4512 …); the audit system prompt `BRAIN_STATIC` is declared at line 8180; `$800k` at lines 5124, 5184, 5830, 5839, 5843, 5926, 5939, 5962, 6067, 39530, 43947, 60467 …; `$15M` at lines 15373, 17384, 74524, 78947, 79278; the 200-employee gate at lines 37223, 37224, 39118; the sending user agent `crojungleteam.com` at line 4313; the Hunter sequence id comes from Settings, read in the send route (first `sequenceId` after `/api/send-to-hunter`, line 82009).
 - index.html: "CROJungle" appears 12 times (lines 6, 3984, 4123, 4166, 4361, 5022, 5085, 7661, 9257, 12096, 14682, 15311); `PILLAR_PRODUCT` at line 2861, `LAYER_PLAIN` at line 2828; the never-cold-email-from-CROJungle.com warning at line 14682.
