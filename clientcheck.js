@@ -2376,7 +2376,7 @@ let contactTally = null;
     _lift(/const contactFieldsFrom = \(data\) => \{[\s\S]*?\n\};/, 'contactFieldsFrom'),
     _lift(/const contactFailureFields = \(status, body\) => \{[\s\S]*?\n\};/, 'contactFailureFields'),
     _lift(/const readRunCompanyFrom = \(company\) => \{[\s\S]*?\n\};/, 'readRunCompanyFrom'),
-    _lift(/const readRunKeysFrom = \(settingsData\) => \{[\s\S]*?\n\};/, 'readRunKeysFrom'),
+    _lift(/const readRunKeysFrom = \(settingsData(?:, fromServer)?\) => \{[\s\S]*?\n\};/, 'readRunKeysFrom'),
     _lift(/const readRunOptsFrom = \(settingsData\) => \{[\s\S]*?\n\};/, 'readRunOptsFrom'),
     _lift(/const queueIdOf = [^\n]+\n/, 'queueIdOf'),
     _lift(/const EMAIL_GRADE_VERIFIED = [^\n]+\n/, 'EMAIL_GRADE_VERIFIED'),

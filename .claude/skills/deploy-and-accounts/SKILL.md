@@ -69,7 +69,28 @@ nothing and touches no lead Vin is calling.
 - Render health check: `curl -s https://<service>/healthz` answers `{"status":"green", …}` with 200 once booted, and a deploy of a red build does not replace the previous one.
 - GitHub: the `gates` check appears as REQUIRED on a PR, and the merge button is disabled while it is red.
 - Netlify: the site's deploy log shows `mkdir -p dist && cp index.html dist/index.html` from `netlify.toml`, and a merge to `main` produces a Netlify deploy without a drag-in.
+- Render keys (§126): the boot log prints `AUTH GATE OFF` until `APP_TOKEN` is set, and `/api/store/settings` (with the code) lists every key as `true` under `serverKeys`.
 - Supabase: `SCHEMA PROBE` in the boot log names nothing missing; `LEAD BENCH` and the query memory report writes, not refusals (row-level security OFF on the tables the server writes, [§93](../../../docs/history/round-093.md)).
+
+## Render: the keys and the access code (since §126)
+
+Render dashboard → the service → Environment. Add every paid key as a variable
+(`ANTHROPIC_API_KEY`, `FIRECRAWL_KEY`, `APIFY_TOKEN`, `HUNTER_KEY`,
+`MYEMAILVERIFIER_KEY`, `COMPANIES_API_KEY`, `THEIRSTACK_KEY`, `PDL_KEY`,
+`NINJAPEAR_KEY`, `FB_TOKEN`, `ADZUNA_ID`, `ADZUNA_KEY`; the values are the ones on
+the Settings screen today) and `ALLOWED_ORIGINS` (the Netlify address, no
+trailing slash). A set key replaces whatever the page sends; the Settings
+fields stop mattering the moment the variable exists.
+
+`APP_TOKEN` is the one shared access code. Set it ONLY after the page that
+sends it is deployed (the round after §126): the moment it is set, every `/api`
+call without the code answers 401, and a page that does not send one is locked
+out. Rollback is deleting the variable (one restart). Until it is set the boot
+log prints `AUTH GATE OFF` and `/healthz` says `auth: off`.
+
+Read `SUPABASE KEY ROLE` on the boot log. It must say `service_role` (the
+`sb_secret_` key) before row-level security is turned on; an anon key would
+then be refused on every table the server writes.
 
 ## The SCHEMA PROBE line, and what schema.sql covers (verified 2026-09-02)
 

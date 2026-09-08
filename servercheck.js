@@ -261,7 +261,7 @@ const FIND_CAREERS_HTML = (b) => `<!doctype html><html><body><h1>Careers</h1><p>
 const SB_COLUMNS = {
   discovered_queue: ['id', 'name', 'website', 'icp_score', 'source', 'signals', 'job_title', 'location', 'manual_role_count', 'stacked', 'reachability', 'size_verified', 'size_unverified', 'verified_employees', 'extra', 'batch_id', 'read_at', 'read_failed', 'fail_reason', 'moved_to_research_at', 'ruled_out_at', 'ruled_out_why', 'from_trigger_source', 'reach_predict', 'exported_at', 'exported_to'],
   read_runs: ['id', 'started_at', 'finished_at', 'progress_at', 'status', 'requested_count', 'read_count', 'failed_count', 'ruled_out_count', 'credits_estimated', 'credits_used', 'scope', 'error'],
-  user_settings: ['id', 'data'],
+  user_settings: ['id', 'data', 'updated_at'],
 };
 state.sb = {};        // table -> rows
 state.sbFail = null;  // { table, method, code, times }: answer that status for the next N matching calls
@@ -498,6 +498,10 @@ const bootServer = (extraEnv) => new Promise((resolve, reject) => {
       // pins that setting.
       FC_CREDIT_WAIT_MS: '4000',
       RESEARCH_CONCURRENCY: '2',
+      // Round 126: the access code and the origin list. Every helper below
+      // sends the code; AUTH1 sends none, a wrong one, and reads the public paths.
+      APP_TOKEN: SC_TOKEN,
+      ALLOWED_ORIGINS: 'https://app.example',
     }, extraEnv || {}),
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -523,8 +527,9 @@ const bootServer = (extraEnv) => new Promise((resolve, reject) => {
   wait();
 });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const SC_TOKEN = 'sc-token';
 const httpGet = (url) => new Promise((resolve, reject) => {
-  http.get(url, (res) => {
+  http.get(url, { headers: { Authorization: 'Bearer ' + SC_TOKEN } }, (res) => {
     let b = ''; res.on('data', (c) => { b += c; });
     res.on('end', () => { let j = null; try { j = JSON.parse(b); } catch (e) { void e; } resolve({ code: res.statusCode, json: j, text: b }); });
   }).on('error', reject);
@@ -532,11 +537,24 @@ const httpGet = (url) => new Promise((resolve, reject) => {
 const httpPost = (url, obj) => new Promise((resolve, reject) => {
   const body = JSON.stringify(obj);
   const u = new URL(url);
-  const req = http.request({ hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, (res) => {
+  const req = http.request({ hostname: u.hostname, port: u.port, path: u.pathname, method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), Authorization: 'Bearer ' + SC_TOKEN } }, (res) => {
     let b = ''; res.on('data', (c) => { b += c; });
     res.on('end', () => { let j = null; try { j = JSON.parse(b); } catch (e) { void e; } resolve({ code: res.statusCode, json: j }); });
   });
   req.on('error', reject); req.write(body); req.end();
+});
+
+// Round 126: a request with exactly the headers given (no code unless the
+// caller adds one), any verb, the response headers kept for the CORS asserts.
+const httpRaw = (method, path, headers, obj) => new Promise((resolve, reject) => {
+  const body = obj === undefined ? '' : JSON.stringify(obj);
+  const h = Object.assign({}, headers || {});
+  if (body) { h['Content-Type'] = 'application/json'; h['Content-Length'] = Buffer.byteLength(body); }
+  const req = http.request({ hostname: '127.0.0.1', port: SRV_PORT, path, method, headers: h }, (res) => {
+    let b = ''; res.on('data', (c) => { b += c; });
+    res.on('end', () => { let j = null; try { j = JSON.parse(b); } catch (e) { void e; } resolve({ code: res.statusCode, json: j, text: b, headers: res.headers }); });
+  });
+  req.on('error', reject); if (body) req.write(body); req.end();
 });
 
 const leadBody = (b, over) => Object.assign({
@@ -1227,9 +1245,74 @@ const runLead = async (b, over, capMs) => {
     sbTable('user_settings')[0].data = { firecrawlKey: 'fc-test' };
     const NK = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/read-run`, { count: 1 });
     ok(NK.code === 422 && /Anthropic/.test(String((NK.json || {}).error || '')), `a run with no Anthropic key in Settings was not refused by name (${NK.code})`);
+    ok(/ANTHROPIC_API_KEY/.test(String((NK.json || {}).error || '')), 'the refusal does not name the Render variable that fixes it');
     sbTable('user_settings')[0].data = _keep;
     ok(sbTable('read_runs').every(r => r.status !== 'running'), 'a run row is still "running" after every run on this boot ended');
     ok(!state.sbLog.some(h => h.table === 'user_settings' && h.method !== 'GET'), 'the server WROTE the Settings row - a background run may read keys, never store them');
+
+    // ── AUTH1: THE ACCESS CODE ──────────────────────────────────────────
+    console.log('── scenario AUTH1: the access code');
+    {
+      const noCode = await httpRaw('GET', '/api/find/summary', { Origin: 'https://app.example' });
+      ok(noCode.code === 401 && /access code/.test(String((noCode.json || {}).error || '')) && (noCode.json || {}).needsToken === true, `a call with no code got ${noCode.code}: ${JSON.stringify(noCode.json).slice(0, 120)} - expected 401 with the sentence that says what to paste`);
+      ok(noCode.headers['access-control-allow-origin'] === 'https://app.example', 'the 401 carries no CORS header for the listed origin, so the page reads it as a network error');
+      const wrong = await httpRaw('POST', '/api/read-run', { Authorization: 'Bearer sc-tokeN' }, { count: 1 });
+      ok(wrong.code === 401, `a wrong code got ${wrong.code} - expected 401`);
+      const bare = await httpRaw('GET', '/api/spend', { Authorization: SC_TOKEN });
+      ok(bare.code === 401, `a code sent without the Bearer scheme got ${bare.code} - expected 401`);
+      const hz = await httpRaw('GET', '/healthz', {});
+      ok(hz.code === 200 && (hz.json || {}).auth === 'on', `/healthz with no code got ${hz.code} auth=${(hz.json || {}).auth} - the health of the build must be readable without the code, and must say the gate is on`);
+      const root = await httpRaw('GET', '/', {});
+      ok(root.code === 200, `the root banner with no code got ${root.code}`);
+      const ask = await httpRaw('GET', '/p/nothing', {});
+      ok(ask.code === 404, `an ask page a prospect opens got ${ask.code} without the code - expected 404 (the route ran, the token is unknown), never 401`);
+      const cron = await httpRaw('GET', '/api/cron/discover', {});
+      ok(cron.code === 403, `the cron got ${cron.code} without the code - expected 403 from its own secret, never 401 from the access gate`);
+      const right = await httpRaw('GET', '/api/spend', { Authorization: 'Bearer ' + SC_TOKEN });
+      ok(right.code === 200, `the right code got ${right.code} on /api/spend`);
+    }
+    // ── CORS1: ONLY THE LISTED ORIGIN ───────────────────────────────────
+    console.log('── scenario CORS1: only the listed origin');
+    {
+      const evil = await httpRaw('OPTIONS', '/api/read-run', { Origin: 'https://evil.example', 'Access-Control-Request-Method': 'POST' });
+      ok(evil.code === 403 && !evil.headers['access-control-allow-origin'], `a preflight from an origin not on the list got ${evil.code} with ACAO=${evil.headers['access-control-allow-origin'] || 'none'} - expected 403 and no header`);
+      const good = await httpRaw('OPTIONS', '/api/read-run', { Origin: 'https://app.example', 'Access-Control-Request-Method': 'POST' });
+      ok(good.code === 204 && good.headers['access-control-allow-origin'] === 'https://app.example', `a preflight from the listed origin got ${good.code} with ACAO=${good.headers['access-control-allow-origin'] || 'none'} - expected 204 echoing the origin`);
+      ok(/PUT/.test(String(good.headers['access-control-allow-methods'] || '')), 'the preflight does not allow PUT, so the settings save the page will send is refused by the browser');
+      const hz = await httpRaw('GET', '/healthz', { Origin: 'https://app.example' });
+      ok(hz.headers['access-control-allow-origin'] === 'https://app.example', '/healthz does not echo the listed origin');
+    }
+    // ── STORE1: THE PAGE'S STORE, THROUGH THIS SERVER ───────────────────
+    console.log('── scenario STORE1: leads and settings through the store routes');
+    {
+      state.sb.leads = [];
+      const up = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/store/leads/upsert`, { rows: [{ id: 'l1', name: 'A' }, { id: 'l2', name: 'B' }, { name: 'no id' }] });
+      ok(up.code === 200 && (up.json || {}).saved === 2 && sbTable('leads').length === 2, `the upsert answered ${up.code} ${JSON.stringify(up.json)} and the table holds ${sbTable('leads').length} row(s) - expected 2 saved, the row with no id dropped`);
+      const up2 = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/store/leads/upsert`, { rows: [{ id: 'l1', name: 'A2' }] });
+      ok(up2.code === 200 && sbTable('leads').length === 2 && sbTable('leads').find(r => r.id === 'l1').name === 'A2', 'a second save of the same lead did not merge into its row');
+      const p1 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/store/leads?limit=1`);
+      ok(p1.code === 200 && Array.isArray((p1.json || {}).rows) && p1.json.rows.length === 1 && p1.json.last === 'l1' && p1.json.done === false, `the first page reads ${JSON.stringify(p1.json).slice(0, 120)} - expected one row, last l1, not done`);
+      const p2 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/store/leads?limit=1&after=l1`);
+      ok(p2.code === 200 && p2.json.rows.length === 1 && p2.json.rows[0].id === 'l2', 'the page after l1 is not l2');
+      const p3 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/store/leads?limit=5&after=l2`);
+      ok(p3.code === 200 && p3.json.rows.length === 0 && p3.json.done === true, 'the page after the last row is not the end');
+      const del = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/store/leads/delete`, { id: 'l1' });
+      ok(del.code === 200 && sbTable('leads').length === 1 && !sbTable('leads').find(r => r.id === 'l1'), 'the delete did not remove the row');
+      const _keepS = sbTable('user_settings')[0].data;
+      const put = await new Promise((resolve, reject) => {
+        const body = JSON.stringify({ data: { apiKey: 'leak-me', hunterKey: 'leak-me', tone: 'plain', findPaidOwner: false } });
+        const req = http.request({ hostname: '127.0.0.1', port: SRV_PORT, path: '/api/store/settings', method: 'PUT', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), Authorization: 'Bearer ' + SC_TOKEN } }, (res) => {
+          let b = ''; res.on('data', (c) => { b += c; });
+          res.on('end', () => { let j = null; try { j = JSON.parse(b); } catch (e) { void e; } resolve({ code: res.statusCode, json: j }); });
+        });
+        req.on('error', reject); req.write(body); req.end();
+      });
+      const rowNow = sbTable('user_settings')[0].data || {};
+      ok(put.code === 200 && !('apiKey' in rowNow) && !('hunterKey' in rowNow) && rowNow.tone === 'plain' && rowNow.findPaidOwner === false, `the settings PUT answered ${put.code} and the row now holds ${JSON.stringify(rowNow)} - expected the two keys stripped and the two preferences kept`);
+      const gs = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/store/settings`);
+      ok(gs.code === 200 && gs.json && gs.json.data && !('apiKey' in gs.json.data) && gs.json.data.tone === 'plain' && gs.json.serverKeys && gs.json.serverKeys.anthropicKey === false && gs.json.envNames && gs.json.envNames.anthropicKey === 'ANTHROPIC_API_KEY', `the settings GET answered ${JSON.stringify(gs.json).slice(0, 200)} - expected no key, the preference, and the server-key booleans naming the Render variable`);
+      sbTable('user_settings')[0].data = _keepS;
+    }
 
     // ── E: FIRECRAWL OUT OF CREDITS ─────────────────────
     // LAST on this boot: the 402 latch is process state by design, so every
@@ -1284,7 +1367,15 @@ const runLead = async (b, over, capMs) => {
     ];
     const _runRow = (id, agoMs) => ({ id, started_at: _ago(agoMs + 60e3), progress_at: _ago(agoMs), finished_at: null, status: 'running', requested_count: 2, read_count: 1, failed_count: 0, ruled_out_count: 0, credits_estimated: 10, credits_used: 4, scope: {}, error: null });
     state.sb.read_runs = [_runRow(stalledId, 3 * 3600e3), _runRow(liveId, 90e3)];
-    srv = await bootServer({});
+    // Round 126: this boot has NO code set and NO key in the Settings row; the
+    // keys come from the environment, and the boot must say the gate is off.
+    sbTable('user_settings')[0].data = { findPaidOwner: true };
+    srv = await bootServer({ APP_TOKEN: '', ANTHROPIC_API_KEY: 'k-env', FIRECRAWL_KEY: 'fc-env' });
+    ok(/AUTH GATE OFF/.test(srv.log()), 'a boot with no APP_TOKEN did not say on its own log that every route answers without the code');
+    {
+      const hz = await httpRaw('GET', '/healthz', {});
+      ok(hz.code === 200 && (hz.json || {}).auth === 'off', `/healthz says auth=${(hz.json || {}).auth} on a boot with no code - expected off`);
+    }
     {
       const t0 = Date.now();
       while (Date.now() - t0 < 120000 && state.sb.read_runs.some(r => r.status === 'running')) await sleep(1000);
