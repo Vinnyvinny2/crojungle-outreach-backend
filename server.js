@@ -5930,8 +5930,8 @@ const CATEGORY_TIER = {
   'Tree Service':'C',       // $750 a removal; mean firm ~$226k; 24 PE platforms
   'Garage Doors':'B',       // $1,230 a replacement, but the typical independent is ~$960k (90% of a $16B market) - clears the floor
   'Pest Control':'B',       // $171 a treatment; two thirds single-location, and the typical one clears the floor on recurring revenue
-  Flooring:'C',             // $3,159 a job; mean firm ~$307k
-  Insulation:'C',           // $1,852 a job; TopBuild holds ~40% of residential (the 2026-08-28 $5.5k spray-foam figure disagrees and is on the record)
+  Flooring:'B',             // $3,159 a job and a ~$307k mean, but Vin (2026-09-08): the big ones exist; the 40-review floor finds them
+  Insulation:'B',           // $1,852 a job (the 2026-08-28 $5.5k spray-foam figure disagrees), but Vin (2026-09-08): the big ones exist; behind the 40 floor now
   Coatings:'C',             // $2,517 a floor; franchise-led
   'Fire Protection':'B',    // bid work, but a regional sprinkler contractor is $500k-5M with NFPA 25 inspection recurring
   Excavation:'B',           // $3,980 a residential job, but the mean firm is ~$862k and the site-work operators clear the floor
@@ -6089,6 +6089,9 @@ const HIGH_VOLUME_LOW_TICKET = new Set([
   // sixty reviews. HVAC was considered and left out - its replacement ticket is
   // $8-18k, so a 40-review floor would cost more good leads than it saves.
   'Plumbing', 'Electrical',
+  // Insulation, 2026-09-08: kept in on Vin's word that the big firms exist; a $1.9k job
+  // earns a review the way a service call does, so the floor is what finds them.
+  'Insulation',
   // Med Spa, 2026-09-08: a $536 visit (AmSpa 2024) earns a review the way a
   // service call does, and the promotion to tier A leans on the 40 floor.
   'Med Spa',

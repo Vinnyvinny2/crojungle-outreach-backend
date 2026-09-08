@@ -151,7 +151,9 @@ practice is $800k–1.3M), vets (~$1.5M a practice, AVMA 2024), accountants,
 insurance agencies (half over $500k), funeral homes (~$1.1M a location). Six
 stay benched because the typical firm cannot pay any tier: tree service
 (~$226k), flooring (~$307k), insulation (~$472k), epoxy coatings, estate law
-(solo firms), weight-loss clinics. **49 searched of 55.**
+(solo firms), weight-loss clinics. **49 searched of 55.** Then flooring and
+insulation too, on Vin's word that the big firms exist (*"there's huge companies
+of those niches"*), both behind the 40-review floor that finds them. **51 of 55.**
 
 The same day's first press on the 39-trade grid ran only 24 Google searches,
 because the bench already held 1,000 paid-for leads and the rep had a week's
