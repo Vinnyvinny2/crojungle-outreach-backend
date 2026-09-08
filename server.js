@@ -5922,21 +5922,26 @@ const CATEGORY_TIER = {
   //    argument that the 40-review floor finds the crewed operators; the research
   //    says the floor finds the $3M+ operators PE is already buying. Both
   //    arguments stand in docs/history/round-123.md and Vin picks. ──
+  //    Vin picked, 2026-09-08, and set the rule: "can they afford us at all? if
+  //    the answer is yes they should be in there." So the line is the $800k
+  //    floor of the ladder, not the $1.2M core: a trade whose TYPICAL firm
+  //    clears the floor is searched (ten moved C->B above); a trade whose
+  //    typical firm cannot pay any tier stays here.
   'Tree Service':'C',       // $750 a removal; mean firm ~$226k; 24 PE platforms
-  'Garage Doors':'C',       // $1,230 a replacement; PE is buying the $3M+ ones
-  'Pest Control':'C',       // $171 a treatment; the top six hold 45% of the market
+  'Garage Doors':'B',       // $1,230 a replacement, but the typical independent is ~$960k (90% of a $16B market) - clears the floor
+  'Pest Control':'B',       // $171 a treatment; two thirds single-location, and the typical one clears the floor on recurring revenue
   Flooring:'C',             // $3,159 a job; mean firm ~$307k
   Insulation:'C',           // $1,852 a job; TopBuild holds ~40% of residential (the 2026-08-28 $5.5k spray-foam figure disagrees and is on the record)
   Coatings:'C',             // $2,517 a floor; franchise-led
-  'Fire Protection':'C',    // bid work; Pye-Barker made 57 acquisitions in 2025
-  Excavation:'C',           // $3,980 residential; site work is bid-led
-  Masonry:'C',              // repair tickets in the hundreds; commercial work is bid-led
-  LASIK:'C',                // $2,632 an eye, volume down 10-15%, LASIK-only centres are chains
-  Veterinary:'C',           // $598 a client a year; 1-5% on marketing; 22% corporate-owned
-  Accounting:'C',           // 2-3% of revenue on marketing; referral-led (a solo CPA booked one of the Round 117 meetings, so Vin's hedge applies)
+  'Fire Protection':'B',    // bid work, but a regional sprinkler contractor is $500k-5M with NFPA 25 inspection recurring
+  Excavation:'B',           // $3,980 a residential job, but the mean firm is ~$862k and the site-work operators clear the floor
+  Masonry:'B',              // repair tickets in the hundreds, but the mean firm is ~$1.8M
+  LASIK:'B',                // $2,632 an eye and chains own the LASIK-only centres, but a solo ophthalmology practice is $800k-1.3M
+  Veterinary:'B',           // $598 a client a year and 1-5% on marketing, but the average practice is ~$1.5M (AVMA 2024)
+  Accounting:'B',           // 2-3% on marketing and referral-led, but partners net ~$250k each and a solo CPA booked a Round 117 meeting
   'Estate Law':'C',         // a $1.5-4.5k flat fee
-  Insurance:'C',            // half the agencies are under $500k
-  'Funeral Homes':'C',      // ~3% on marketing; demand is not created by search
+  Insurance:'B',            // half the agencies are under $500k, which means half are not; the 5 floor keeps the small ones out of the way
+  'Funeral Homes':'B',      // ~3% on marketing and demand is not search-created, but a home is ~$1.1M a location
   'Weight Loss':'C',        // the compounded-GLP-1 pathway closed in 2025-26; sub-$1.2M clinics
 };
 // Set GP_INCLUDE_TIER_C=1 to search the cut trades again (e.g. to test the thesis).

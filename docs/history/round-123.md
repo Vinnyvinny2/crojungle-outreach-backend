@@ -138,6 +138,29 @@ search volume per trade per metro, which the DataForSEO Labs credentials the
 app already holds can price. Deferred to a round with the first two presses of
 pool data in hand.
 
+### Vin's ruling on the cut, the same day
+
+Shown the sixteen benched trades, Vin set the rule the tier list should have
+used: *"can they afford us at all? if the answer is yes they should be in
+there."* That is the $800k floor of the ladder, not the $1.2M core, and it is
+a better rule because the lower tier exists to be closed when the fit is right.
+Ten came back to B on it, each because the TYPICAL firm clears the floor:
+garage doors (~$960k), pest control, fire protection ($500k–5M regionals),
+excavation (~$862k mean), masonry (~$1.8M mean), LASIK (a solo ophthalmology
+practice is $800k–1.3M), vets (~$1.5M a practice, AVMA 2024), accountants,
+insurance agencies (half over $500k), funeral homes (~$1.1M a location). Six
+stay benched because the typical firm cannot pay any tier: tree service
+(~$226k), flooring (~$307k), insulation (~$472k), epoxy coatings, estate law
+(solo firms), weight-loss clinics. **49 searched of 55.**
+
+The same day's first press on the 39-trade grid ran only 24 Google searches,
+because the bench already held 1,000 paid-for leads and the rep had a week's
+work queued — so the pool measurement moves at 24 pairs a press and the metro
+swap is not two presses away; it is weeks away, or ruled on the research. Vin
+also said the side lanes (jobs, funding, news, for-sale) should be off: that
+press spent TheirStack and Firecrawl credits sizing Tyson Foods, LVMH, IMAX and
+Six Flags.
+
 ### What else changed, at the root
 
 - **`COVERAGE RADIUS CHECK` asserts `GP_CITIES` and `Object.keys(GP_CITY_COORDS)`
