@@ -134,3 +134,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 120 | 2026-09-04 | The email lane repeated the call list, the website cell was a sentence, and four terms is not a fit score — 2026-09-04 | Find / Client | [round-120.md](round-120.md) |
 | 121 | 2026-09-04 | The resolver was working; half the press was not callable, and four things were lying about it — 2026-09-04 | Find | [round-121.md](round-121.md) |
 | 122 | 2026-09-08 | A place is not a person, a menu is not a charity, and a dropped lead buys nothing — 2026-09-08 | Find / Cost | [round-122.md](round-122.md) |
+| 123 | 2026-09-08 | The queue: the trades re-tiered on sourced job values, and the metros wait on the pool the memory already holds — 2026-09-08 | Find / Cost | [round-123.md](round-123.md) |

@@ -5860,98 +5860,84 @@ const predictReachability = (name, website, opts = {}) => {
 //          their revenue range, so they are ranked below tier A rather than cut.
 // TIER C — the maths does not work at any plausible revenue. Not searched.
 const CATEGORY_TIER = {
-  Roofing:'A', Restoration:'A', Foundation:'A', Solar:'A', 'Kitchen Remodel':'A',
-  'Bath Remodel':'A', 'Windows & Doors':'A', 'Pool Construction':'A', 'Home Builder':'A',
-  Construction:'A', HVAC:'A', 'Plastic Surgery':'A',
-  Dermatology:'A', Orthodontics:'A', 'Oral Surgery':'A', 'Cosmetic Dentistry':'A',
-  LASIK:'A', 'PI Law':'A',
-  // Added 2026-08-28. Each clears the premium floor on one job or a few clients.
-  'Behavioral Health':'A',   // $30-60k per admission
-  'Dental Implants':'A',     // $25-50k full-arch case
-  'Commercial Roofing':'A',  // $80-500k
-  'Commercial Mechanical':'A', // $100k-1M
-  'Outdoor Living':'A',      // $40-150k
-  'Home Additions':'A',      // $80-300k
-  'Basement Finishing':'A',  // $30-80k
-  Cabinetry:'A',             // $25-80k
-  Siding:'A',                // $15-45k, the same economics as Windows & Doors
-  // ── TIER CORRECTIONS, 2026-08-28 ──────────────────────────────────────
-  // Hardscaping was B while Decks was A, at a 3-5x larger ticket: an
-  // outdoor-living build is $25-120k against a deck at $5-25k. Both moved.
-  Hardscaping:'A',
-  // Paving was tiered on the residential driveway. A commercial parking lot is
-  // $50-250k, and the operators who do them are exactly the ICP.
-  Paving:'A',
-  // Well & Septic: wells run $3,500-$15,000, septic $3,600-$12,500, and a
-  // combined rural install is $8,000-$30,000 - Foundation-class economics, and
-  // Foundation is A. The argument that held it at B was marketing dependence in
-  // thin RURAL markets, which is a statement about where we search rather than
-  // about the trade: the grid is metros.
-  'Well & Septic':'A',
+  // ── TIER A: the typical INDEPENDENT firm clears the $1.2M core floor
+  //    (ICP_REVENUE_BAND.coreFrom), one job is $5k or more, and the owner still
+  //    signs. Re-tiered 2026-09-08 (Round 123) on sourced job values and firm
+  //    sizes; every figure's source and year is in docs/history/round-123.md. ──
+  Roofing:'A',              // $9,528 a replacement (Angi 2025); RC survey median firm $2-4.9M
+  'Commercial Roofing':'A', // $50-500k a project; the contractor median is $2-15M
+  HVAC:'A',                 // $7,500 a replacement; ~120k firms, three quarters independent
+  'Kitchen Remodel':'A',    // a major midrange kitchen is $82,793 (Cost vs Value 2025)
+  'Bath Remodel':'A',       // a midrange bath is $26,138 (Cost vs Value 2025)
+  Construction:'A',         // design-build; the NAHB remodeler median is $1.7M, unconsolidated
+  'Home Additions':'A',     // $50,997 an addition (Angi 2026)
+  'Home Builder':'A',       // the NAHB builder median is $3.7M (2024)
+  'Pool Construction':'A',  // $41,924 a build; mean firm ~$1.09M, no firm over 2% of the market
+  'Windows & Doors':'A',    // whole-house $8-15k; a one-call-close trade that already buys marketing
+  Siding:'A',               // fiber cement $14,674 (2025); the same economics as Windows & Doors
+  'Basement Finishing':'A', // $32,000 a finish-out (Angi 2026); cold markets only
+  Paving:'A',               // the COMMERCIAL lot at $50-250k; the query moved with it (a driveway-only paver is a ~$126k firm)
+  'Plastic Surgery':'A',    // $8-11k a case (ASPS 2023); surgeon-owned, 8-12% of revenue on marketing
+  Orthodontics:'A',         // $6,219 a case; $1.57M production per orthodontist (2025 survey)
+  'PI Law':'A',             // about $18k of fee on a $55k average settlement; 10-20% of revenue on marketing
+  'Behavioral Health':'A',  // $13-35k an admission; screened, since only 41% of centres are for-profit
+  'Dental Implants':'A',    // a full arch is $12-28k; the same GP dentist as Cosmetic, found by the page
+  'Cosmetic Dentistry':'A', // a veneer case is $8-25k
+  // Promoted B->A on 2026-09-08. AmSpa 2024: the average med spa takes $1.4M, spends
+  // ~7% of it on marketing, is single-owner two times in three and PE-owned about
+  // 3% of the time. The 2026-08-28 demotion described the modal one-injector
+  // shop; the average clears the core floor and an NP or MD owner signs. The
+  // capacity class is 'mixed' now and the review floor is 40, because a $536
+  // visit earns many cheap reviews.
+  'Med Spa':'A',
 
-  Concrete:'B', Masonry:'B', Flooring:'B', Plumbing:'B',
-  Electrical:'B', 'Pest Control':'B', Veterinary:'B', Dental:'B', 'Estate Law':'B',
-  Accounting:'B', Insurance:'B', 'Senior Care':'B',
-  // Decks moved A->B: $5-25k on a seasonal, weather-bound, small-crew model,
-  // below both Concrete and Masonry at the top end.
-  Decks:'B',
-  // Med Spa moved A->B: the modal med spa is one or two injectors under $1M,
-  // and its own money line ($1-4k a course) is the lowest of any tier-A row.
-  'Med Spa':'B',
-  // Added 2026-08-28.
-  'Funeral Homes':'B',   // $8-15k a service, high margin, steady volume
-  'Home Care':'B',       // recurring hourly, $25-40/hr
-  'Managed IT':'B',      // $3-15k a month PER CLIENT, so it is the client count
-  'Weight Loss':'B',     // $5-15k a program, cash-pay
-  Coatings:'B',          // $5-20k
-  // Both of these were cut in the first pass and both cuts were WRONG on the data.
-  // Insulation: the average residential spray-foam job is ~$5,500 at ~50% gross
-  // margin, whole-house runs $10-30k, and a single-rig operator does $800k-$1.2M
-  // with multi-rig firms reaching $3M. That is HVAC-class economics, not low-ticket.
-  Insulation:'B',
-  // ('Well & Septic':'B' sat here and was DEAD - the promotion to A above is
-  // declared earlier in the same literal, so this later row silently won and
-  // the promotion never happened. Caught by dupkeys, which is the whole reason
-  // its baseline is zero: a number you are allowed to match is a number you
-  // stop reading. Its argument is folded into the A entry above.)
+  // ── TIER B: the big ones fit and the typical one does not; the review floor
+  //    and the size read do the sorting. ──
+  Concrete:'B',             // $6,400 a driveway; mean firm ~$982k
+  Electrical:'B',           // $348 a service call; the panel / EV / commercial shops at $2M+ fit (floor 40)
+  Plumbing:'B',             // $275 a call; the repipe / sewer shops at $2M+ fit (floor 40)
+  Decks:'B',                // $18-25k a deck (Cost vs Value 2025) but the mean firm is ~$191k
+  Signage:'B',              // $2-5k a sign, B2B repeat buyers; ~1,000 franchise units to screen out
+  Dental:'B',               // GP owner billings $942k (ADA 2024); 13.8% DSO-affiliated
+  'Senior Care':'B',        // $74k a resident a year, but 56% chain or REIT owned: an email-lane trade
+  'Home Care':'B',          // the median agency is $2.3M at a 9.7% margin
+  'Managed IT':'B',         // median $2.8M ARR; B2B and referral-led
+  // Demoted A->B on 2026-09-08, each on the published average against the tier's own claim:
+  Restoration:'B',          // $3,833 a job (HomeAdvisor 2025), not five figures; insurer networks route the claims
+  Foundation:'B',           // $5,175 a job; a $2.9B market that Groundworks is consolidating
+  Solar:'B',                // $29k median, but the 30% credit ended in Dec 2025 and acquisition costs 24-34% of the ticket
+  Hardscaping:'B',          // $9,000 a project; the landscaping mean firm is ~$340k
+  'Outdoor Living':'B',     // an outdoor kitchen is $13,180 and a pergola $4,251, not $40-150k
+  Cabinetry:'B',            // the mean shop is ~$3.8M but it sells through remodelers and dealers
+  'Well & Septic':'B',      // ~$1.1M mean, $8k a job, need-driven rather than search-driven
+  'Commercial Mechanical':'B', // fits on size; bid- and relationship-led, so lead generation is a hard sell
+  Dermatology:'B',          // medical dermatology needs no lead generation; fits only with a cosmetic screen
+  'Oral Surgery':'B',       // referral-fed by general dentists and orthodontists
 
-  // Cut. Average ticket too low, or the work is won by bid and relationship rather
-  // than by inbound marketing, so nothing we sell moves their revenue.
-  // RESTORED TO B on the industry data. The 'C' cut cited a $300-700 ticket, but
-  // that is the REPAIR-only figure: replacements run $1,200-$4,500+, the trade
-  // benchmarks 10-15% of gross revenue on marketing for growth (5-8% in maintenance
-  // mode) — ABOVE the SBA's 7-8% general figure — $2M single-location operators are
-  // ordinary, and ownership is still overwhelmingly independent rather than
-  // consolidated. At 10-15% of $2M that is $17-25k/month of marketing budget, which
-  // funds the retainer twice over. Gated behind a higher review floor below so we
-  // get the crewed operators rather than the one-van repair guys.
-  'Garage Doors':'B',
-  // Same correction, same shape. A 2-truck tree crew is $750k-$1.5M and a
-  // crane-capable operator is $2M-$4M, benchmarking 5-10% on marketing. The small
-  // ones genuinely cannot fund us; the large ones clearly can. Size, not category,
-  // is the real filter — so this is reinstated behind the high review floor.
-  'Tree Service':'B',
-
-  // ── RESTORED FROM C, 2026-08-28 ───────────────────────────────────────
-  // All three were cut on a MARKETING-FIT argument dressed as a job-value one.
-  //
-  // Fire Protection: the cut described new-construction bid work and ignored the
-  //   half where the money and the retention story are. NFPA 25 makes sprinkler
-  //   inspection a legally mandated recurring contract, and a sprinkler
-  //   contractor is a $2-10M owner-operated business.
-  'Fire Protection':'B',
-  // Signage: a regional sign company doing monument, channel-letter and wraps is
-  //   $3-8M and buys Google Ads heavily. Lower confidence than the other two.
-  Signage:'B',
-  // Excavation: true of pure site-work subs, false of the residential
-  //   septic/pond/land-clearing excavators who sell direct at $15-60k.
-  Excavation:'B',
-
-  // Tier C currently has no members: Lawn Care and Physical Therapy were the
-  // last two and both are now deleted from GP_CATEGORIES outright rather than
-  // carried as unsearched rows. The tier and its GP_INCLUDE_TIER_C escape hatch
-  // stay because they are how a category gets benched WITHOUT deleting it, and
-  // TRADE TABLE COVERAGE CHECK proves every category still declares a tier.
+  // ── TIER C: benched, never searched, never deleted. GP_INCLUDE_TIER_C=1 puts
+  //    them back. The rule (2026-09-08): the average job is under about $3k AND
+  //    the typical firm is under $1.2M AND the firms that do fit are the ones
+  //    private equity is already buying, or the buyer normally does not exist.
+  //    Garage Doors and Tree Service were restored from C on 2026-08-28 on the
+  //    argument that the 40-review floor finds the crewed operators; the research
+  //    says the floor finds the $3M+ operators PE is already buying. Both
+  //    arguments stand in docs/history/round-123.md and Vin picks. ──
+  'Tree Service':'C',       // $750 a removal; mean firm ~$226k; 24 PE platforms
+  'Garage Doors':'C',       // $1,230 a replacement; PE is buying the $3M+ ones
+  'Pest Control':'C',       // $171 a treatment; the top six hold 45% of the market
+  Flooring:'C',             // $3,159 a job; mean firm ~$307k
+  Insulation:'C',           // $1,852 a job; TopBuild holds ~40% of residential (the 2026-08-28 $5.5k spray-foam figure disagrees and is on the record)
+  Coatings:'C',             // $2,517 a floor; franchise-led
+  'Fire Protection':'C',    // bid work; Pye-Barker made 57 acquisitions in 2025
+  Excavation:'C',           // $3,980 residential; site work is bid-led
+  Masonry:'C',              // repair tickets in the hundreds; commercial work is bid-led
+  LASIK:'C',                // $2,632 an eye, volume down 10-15%, LASIK-only centres are chains
+  Veterinary:'C',           // $598 a client a year; 1-5% on marketing; 22% corporate-owned
+  Accounting:'C',           // 2-3% of revenue on marketing; referral-led (a solo CPA booked one of the Round 117 meetings, so Vin's hedge applies)
+  'Estate Law':'C',         // a $1.5-4.5k flat fee
+  Insurance:'C',            // half the agencies are under $500k
+  'Funeral Homes':'C',      // ~3% on marketing; demand is not created by search
+  'Weight Loss':'C',        // the compounded-GLP-1 pathway closed in 2025-26; sub-$1.2M clinics
 };
 // Set GP_INCLUDE_TIER_C=1 to search the cut trades again (e.g. to test the thesis).
 const GP_TIER_C_ON = process.env.GP_INCLUDE_TIER_C === '1';
@@ -5976,7 +5962,11 @@ const GP_CATEGORIES = [
   { q: 'kitchen remodeling company', label: 'Kitchen Remodel' },
   { q: 'bathroom remodeling company', label: 'Bath Remodel' },
   { q: 'window and door replacement company', label: 'Windows & Doors' },
-  { q: 'paving contractor', label: 'Paving' }, { q: 'concrete contractor', label: 'Concrete' },
+  // 'paving contractor' returned the residential driveway trade, whose mean firm
+  // is ~$126k (IBISWorld 2025). The parking-lot operators are the ICP and the
+  // tier note above already said so; the query says it too now (2026-09-08).
+  { q: 'commercial paving contractor', label: 'Paving' },
+  { q: 'concrete contractor', label: 'Concrete' },
   { q: 'pool construction company', label: 'Pool Construction' },
   { q: 'custom home builder', label: 'Home Builder' },
   // 'general contractor' was the lowest-precision query in this list: on Places it
@@ -6094,6 +6084,9 @@ const HIGH_VOLUME_LOW_TICKET = new Set([
   // sixty reviews. HVAC was considered and left out - its replacement ticket is
   // $8-18k, so a 40-review floor would cost more good leads than it saves.
   'Plumbing', 'Electrical',
+  // Med Spa, 2026-09-08: a $536 visit (AmSpa 2024) earns a review the way a
+  // service call does, and the promotion to tier A leans on the 40 floor.
+  'Med Spa',
   // ('Chiropractic' was here. The category is deleted, so the entry was dead.)
 ]);
 
@@ -6165,14 +6158,15 @@ const TRADE_CAPACITY_CLASS = {
   'Pest Control':'mixed', 'Managed IT':'mixed', Veterinary:'mixed', Dental:'mixed',
   'Dental Implants':'mixed', Orthodontics:'mixed', 'Oral Surgery':'mixed',
   'Cosmetic Dentistry':'mixed', Dermatology:'mixed', LASIK:'mixed',
-  'Plastic Surgery':'mixed', Accounting:'mixed', Insurance:'mixed',
+  'Plastic Surgery':'mixed', Accounting:'mixed', Insurance:'mixed', 'Med Spa':'mixed',
   'Estate Law':'mixed', 'PI Law':'mixed',
 
   // SOLO - the modal business is one provider personally delivering every unit,
   // so review volume measures how busy that person is, not how big the business
-  // could become. Both of these earn many cheap reviews, which is exactly the
-  // shape that fools a volume proxy.
-  'Med Spa':'solo', 'Weight Loss':'solo',
+  // could become. It earns many cheap reviews, which is exactly the shape that
+  // fools a volume proxy. (Med Spa sat here until 2026-09-08; AmSpa's average
+  // shop is an NP or MD owner with injectors under her, which is 'mixed'.)
+  'Weight Loss':'solo',
 };
 
 // The same judgement as text, for the two cases a label cannot reach: a lead
@@ -6387,7 +6381,7 @@ const GP_MAX_REVIEWS = parseInt(process.env.GP_MAX_REVIEWS || '2000', 10);
 const GP_LARGE_SHARE = Math.max(0, Math.min(0.5, Number(process.env.GP_LARGE_SHARE ?? '0.1') || 0));
 
 // ══ COORDINATES, SO A COVERAGE CLAIM CANNOT BE ABSURD ════════════════════════
-// The grid is twenty unrelated national metros. Without distance, "you do not
+// The grid is two dozen unrelated national metros (GP_CITIES is the count). Without distance, "you do not
 // come up in Phoenix" gets sent to a Charlotte roofer — nineteen markets he was
 // never trying to serve, and the most dismissible sentence we could write.
 //
@@ -6423,7 +6417,7 @@ const milesBetween = (a, b) => {
 // absence says nothing about their marketing.
 const SERVICE_RADIUS_MILES = 120;
 
-// Twenty metros, sampled EQUALLY - which is what makes the choice of metro a
+// Every metro in GP_CITIES is sampled EQUALLY - which is what makes the choice of metro a
 // real decision rather than a list. Every city gets the same share of a fixed
 // query budget, so a metro with 800k people costs exactly what one with 5.1m
 // costs and returns a fraction of the businesses.
@@ -6756,6 +6750,64 @@ const pqOutcomeRows = (outcomes, state, nowIso) => {
     });
   }
   return rows;
+};
+
+// ══ THE POOL, READ BACK ══════════════════════════════════════════════════════
+// Round 123 (2026-09-08). The metro list was about to be re-ranked on population
+// growth and household income, and Vin stopped it: "you don't actually know if
+// Orlando has more pool contractors than Louisville." He was right, and the
+// number was already in hand. Every press writes one row per trade x metro pair
+// into places_query_state: how many times it was searched, how many NEW
+// businesses the last search returned after the review floor and the franchise
+// rule, and how many runs in a row returned nothing. That is the pool we can
+// actually sell to, per trade, per metro, and the only reader it ever had was
+// the freshness sort. This groups it.
+//
+// PURE, so a boot check executes it. A name with no searched pair at all is
+// UNMEASURED and ranks after every measured one: "we did not look" has never
+// meant "nothing there" anywhere in this file.
+const poolByDimension = (state, dim, names) => {
+  const st = state instanceof Map ? state : new Map();
+  const key = dim === 'cat' ? 'cat' : 'city';
+  const norm = (x) => String(x || '').trim().toLowerCase();
+  const want = Array.isArray(names) ? names.filter(Boolean) : [];
+  const by = new Map(want.map(n => [norm(n), { name: n, pairs: 0, runs: 0, newLastRun: 0, dryPairs: 0 }]));
+  for (const [q, v] of st) {
+    if (!v) continue;
+    // pqKey is `${cat}|${city}`; the row's own cat and city are preferred and
+    // the key is the fallback for a row loaded without them.
+    const parts = String(q).split('|');
+    const raw = v[key] || (key === 'cat' ? parts[0] : parts[1]) || '';
+    const k = norm(raw);
+    if (!k) continue;
+    let row = by.get(k);
+    if (!row) {
+      if (want.length) continue;   // a name outside the asked-for set (a deleted category) is not a row
+      row = { name: raw, pairs: 0, runs: 0, newLastRun: 0, dryPairs: 0 };
+      by.set(k, row);
+    }
+    row.pairs += 1;
+    row.runs += Number(v.runs) || 0;
+    row.newLastRun += Number(v.lastNew) || 0;
+    if ((Number(v.dryStreak) || 0) > 0) row.dryPairs += 1;
+  }
+  const rows = [...by.values()].map(r => ({ ...r, measured: r.pairs > 0, dryShare: r.pairs ? r.dryPairs / r.pairs : null }));
+  rows.sort((a, b) => (Number(b.measured) - Number(a.measured)) || (b.newLastRun - a.newLastRun)
+    || ((a.dryShare ?? 1) - (b.dryShare ?? 1)) || String(a.name).localeCompare(String(b.name)));
+  return rows;
+};
+
+// One line a press prints per dimension. Deepest three, thinnest three, and the
+// unmeasured named rather than ranked.
+const poolLine = (rows, what) => {
+  const m = (rows || []).filter(r => r && r.measured), u = (rows || []).filter(r => r && !r.measured);
+  const tag = `\u{1F4CA} POOL BY ${what}`;
+  if (!m.length) return `${tag}: nothing measured yet - no ${String(what).toLowerCase()} has a searched pair on record, so no ranking is claimed.`;
+  const say = (r) => `${r.name} (${r.pairs} pair${r.pairs === 1 ? '' : 's'}, ${r.newLastRun} new last run, ${Math.round(100 * r.dryShare)}% dry)`;
+  const best = m.slice(0, 3).map(say).join('; ');
+  const worst = m.length > 3 ? m.slice(-3).reverse().map(say).join('; ') : '';
+  return `${tag}: ${m.length} measured. Deepest: ${best}.${worst ? ` Thinnest: ${worst}.` : ''}`
+    + (u.length ? ` ${u.length} unmeasured (no pair searched yet): ${u.slice(0, 6).map(r => r.name).join(', ')}${u.length > 6 ? ', \u2026' : ''}.` : '');
 };
 
 // PURE. Takes the per-category city buckets and the remembered state, returns
@@ -12623,7 +12675,7 @@ const TITLE_HEAD_FOLLOWERS = /^(?:officer|officers|and|of|the|at|emeritus|elect|
 // Chiropractor, CPA, Accountant. The trades titles - Owner, President,
 // Founder, Estimator, Office Manager - were all fine.
 //
-// Fifteen of the 114 rows in GP_CATEGORIES are professional practices, and the
+// Fifteen of the 55 rows in GP_CATEGORIES (as of 2026-09-01) are professional practices, and the
 // ICP is 'trades AND owner-operated professional practices'. So the free owner
 // read was dark on the whole second half of what this pipeline hunts, and every
 // miss buys the ~10-credit paid search wave out of a 1,000-credit lifetime
@@ -24720,9 +24772,9 @@ const TRADE_JOB_VALUE = [
   // query were the same fact said twice.
   { re: /\bhome addition|\broom addition|\bsecond stor(?:y|ey) addition/i, say: 'a home addition runs $80k-$300k' },
   { re: /\bdesign[- ]build|\bdesign and build/i, say: 'a design-build remodel runs $40k-$150k' },
-  { re: /\boutdoor (?:living|kitchen)|\bpergola|\bcovered patio/i, say: 'an outdoor kitchen or living build runs $40k-$150k' },
+  { re: /\boutdoor (?:living|kitchen)|\bpergola|\bcovered patio/i, say: 'an outdoor kitchen or living build runs $5k-$25k' },
   { re: /\bcommercial mechanical|\bmechanical contract/i, say: 'a commercial mechanical contract runs into six figures' },
-  { re: /\bwaterproof|\bfoundation|\bcrawl ?space|\bpiering|\bslabjack|\bunderpinning|\bstructural repair/i, say: 'a foundation or waterproofing job runs five figures' },
+  { re: /\bwaterproof|\bfoundation|\bcrawl ?space|\bpiering|\bslabjack|\bunderpinning|\bstructural repair/i, say: 'a foundation or waterproofing job runs $2k-$16k' },
   // A basement REMODEL is a finish-out, not foundation work and not a kitchen.
   // Bare `basement` is deliberately matched by none of these — a "basement
   // contractor" could be either trade, and no figure is always safe where a
@@ -24769,6 +24821,10 @@ const TRADE_JOB_VALUE = [
   // same ten-times error. Service is matched first.
   { re: /\bpool (?:service|cleaning|maintenance)|\bpool tech/i, say: 'a season of pool service runs several hundred dollars' },
   { re: /\bpool build|\bpool install|\bpool construction|\bspa install|\bpool/i, say: 'a pool build runs $40k-$100k' },
+  // 2026-09-08: the Paving query asks for the commercial operator now, and a
+  // parking lot is not a driveway. Angi 2026 prices a lot at $2.50-7 a square
+  // foot; the tier note's $50-250k is a 20-40k square-foot lot. Matched first.
+  { re: /\bcommercial paving|\bparking lot|\bcommercial asphalt/i, say: 'a commercial lot paving job runs $50k-$250k' },
   { re: /\bconcrete|\bpaving|\basphalt|\bdriveway/i, say: 'a driveway or concrete job runs $5k-$25k' },
   // ══ LAWN CARE IS NOT LANDSCAPING, AND THIS FILE ALREADY KNEW ════════════
   // One row said 'a landscaping project runs $5k-$30k' and matched `lawn care`.
@@ -24787,12 +24843,16 @@ const TRADE_JOB_VALUE = [
   // Hardscaping returned NO money line at all until this was widened.
   { re: /\blandscap|\bhardscap/i, say: 'a landscaping or hardscaping project runs $5k-$30k' },
   { re: /\bsolar/i, say: 'a solar install runs $15k-$40k' },
-  { re: /\bfence|\bdeck|\bpatio/i, say: 'a deck or fence job runs $5k-$25k' },
+  // 2026-09-08: Cost vs Value 2025 puts a plain wood deck at $18,263 and a
+  // composite one at $25,096; the old $5k-$25k row carried the fence in the same
+  // figure. A fence has no sourced figure and so no row: no money line is the
+  // honest outcome, as the law row already chose.
+  { re: /\bdeck|\bpatio/i, say: 'a deck or patio build runs $15k-$30k' },
   // Home services / trades
   { re: /\bhvac|\bheating|\bair condition|\bfurnace/i, say: 'a system replacement runs $6k-$15k' },
   { re: /\bplumb/i, say: 'a repipe or major plumbing job runs $4k-$15k' },
   { re: /\belectric/i, say: 'a panel upgrade or rewire runs $3k-$12k' },
-  { re: /\brestoration|\bwater damage|\bmold|\bdisaster|\bcleanup/i, say: 'a restoration job runs five figures' },
+  { re: /\brestoration|\bwater damage|\bmold|\bdisaster|\bcleanup/i, say: 'a restoration job runs $2k-$8k, and a large loss more' },
   { re: /\bpest|\bexterminat/i, say: 'an annual pest contract runs several hundred dollars' },
   // (the second garage-door row lived here and was unreachable — the row near
   //  the top catches every one of its alternatives — while quoting a DIFFERENT
@@ -25366,7 +25426,7 @@ const NICHE_BRIEF_EXPECT = {
   'kitchen remodeling company': 'crew_trades',
   'bathroom remodeling company': 'crew_trades',
   'window and door replacement company': 'crew_trades',
-  'paving contractor': 'crew_trades',
+  'commercial paving contractor': 'crew_trades',
   'concrete contractor': 'crew_trades',
   'pool construction company': 'crew_trades',
   'custom home builder': 'crew_trades',
@@ -37500,7 +37560,7 @@ const writeObservation = async (key, company, snap) => {
 // lead engine is not an optimisation.
 const loadPlacesQueryState = async () => {
   const out = new Map();
-  const rows = await sbRest('/places_query_state?select=q,last_run,dry_streak,runs');
+  const rows = await sbRest('/places_query_state?select=q,cat,city,last_run,dry_streak,runs,last_new');
   if (!Array.isArray(rows)) return out;
   for (const r of rows) {
     if (!r || !r.q) continue;
@@ -37509,6 +37569,11 @@ const loadPlacesQueryState = async () => {
       lastRun: Number.isFinite(t) ? t : 0,
       dryStreak: Number(r.dry_streak) || 0,
       runs: Number(r.runs) || 0,
+      // Round 123: the pool read groups the memory by metro and by trade, so the
+      // row's own cat and city ride along with what the last search returned.
+      cat: r.cat == null ? '' : String(r.cat),
+      city: r.city == null ? '' : String(r.city),
+      lastNew: Number(r.last_new) || 0,
     });
   }
   return out;
@@ -38606,6 +38671,15 @@ const runDiscovery = async (body) => {
           const _saved = await savePlacesQueryState(_rows);
           const _dry = _rows.filter(r => r.dry_streak > 0).length;
           console.log(`\u267b QUERY MEMORY [Places]: recorded ${_rows.length} searched pair(s), ${_dry} of them returning nothing new${_saved ? '' : ` \u2014 BUT THE WRITE FAILED, so nothing was remembered and the next run will pay for these same searches again. ${sbWhy('places_query_state') || 'Supabase gave no reason'}`}.`);
+        }
+        // Round 123: the pool, read back from the memory this run just wrote,
+        // so the metro and trade lists are ranked on what Places actually
+        // returned rather than on population tables.
+        {
+          const _merged = new Map(_pqState);
+          for (const r of _rows) _merged.set(r.q, { ...(_merged.get(r.q) || {}), cat: r.cat, city: r.city, runs: r.runs, lastNew: r.last_new, dryStreak: r.dry_streak, lastRun: Date.parse(r.last_run) || 0 });
+          console.log(poolLine(poolByDimension(_merged, 'city', GP_CITIES), 'METRO'));
+          console.log(poolLine(poolByDimension(_merged, 'cat', GP_CATEGORIES.map(c => c.label)), 'TRADE'));
         }
         return _leads;
       })(),
@@ -53953,7 +54027,7 @@ app.listen(PORT, () => {
   }
 
   // ══ A COVERAGE CLAIM MUST NOT BE A MAP OF THE UNITED STATES ══════════════
-  // The grid is twenty unrelated national metros. Without a distance gate, the
+  // The grid is two dozen unrelated national metros. Without a distance gate, the
   // absence list told a Charlotte roofer he does not come up in Phoenix, Dallas,
   // Tampa, Denver and fifteen more — markets he was never trying to serve, and
   // the most dismissible sentence we could possibly send.
@@ -53968,13 +54042,21 @@ app.listen(PORT, () => {
       const near = _searched.filter(c => homes.some(h => milesBetween(h, GP_CITY_COORDS[c]) <= SERVICE_RADIUS_MILES));
       return { near, absent: near.filter(c => !seen.includes(c)) };
     };
+    // The two lists move TOGETHER (new-niche-playbook, B) and until 2026-09-08
+    // nothing enforced it: a metro in GP_CITIES with no coordinate booted green
+    // and the coverage finding silently stopped firing for it, because
+    // GP_CITY_COORDS[city] is undefined there and filtered away.
+    const _noCoord = GP_CITIES.filter(c => !GP_CITY_COORDS[c]);
+    const _noSearch = _searched.filter(c => !GP_CITIES.includes(c));
     const _clt = _cover(['Charlotte NC']);
     const _cmh = _cover(['Columbus OH']);
     const _absurd = _clt.absent.filter(c => milesBetween(GP_CITY_COORDS['Charlotte NC'], GP_CITY_COORDS[c]) > SERVICE_RADIUS_MILES);
     // Charlotte to Greenville is 92 miles: a genuine neighbouring market that
     // must survive, or the finding can never fire at all.
     const _keepsReal = _clt.absent.includes('Greenville SC') || _cmh.absent.includes('Cincinnati OH');
-    if (_absurd.length) {
+    if (_noCoord.length || _noSearch.length) {
+      console.log(`\u26d4 COVERAGE RADIUS CHECK: GP_CITIES and GP_CITY_COORDS disagree \u2014 ${_noCoord.length ? `${_noCoord.join(', ')} searched with no coordinate, so a coverage finding can never fire there` : ''}${_noCoord.length && _noSearch.length ? '; ' : ''}${_noSearch.length ? `${_noSearch.join(', ')} has a coordinate and is never searched, so an owner could be told he is absent from a market we never looked at` : ''}. The two lists move together.`);
+    } else if (_absurd.length) {
       console.log(`\u26d4 COVERAGE RADIUS CHECK: ${_absurd.slice(0, 3).join(', ')} would be reported as markets a Charlotte business is absent from. They are hundreds of miles away and he was never trying to appear there.`);
     } else if (!_keepsReal) {
       console.log(`\u26d4 COVERAGE RADIUS CHECK: a genuine neighbouring market (Charlotte\u2013Greenville, 92 miles) is being filtered out too. The gate is so tight the finding can never fire.`);
@@ -59240,7 +59322,7 @@ app.listen(PORT, () => {
     // Measured against the real parseTeamRoster on 2026-09-01: 29 of 41
     // realistic roster titles came back NULL, and a null kind means the run is
     // not a title, so the NAME ABOVE IT was never paired. All 29 were
-    // professional practices - fifteen of the 114 rows in GP_CATEGORIES - and
+    // professional practices - fifteen of the 55 rows in GP_CATEGORIES then - and
     // every miss buys the ~10-credit paid owner wave.
     //
     // DECLARED, the way STEM_COMPLETE_WORDS and NICHE_BRIEF_EXPECT are: a
@@ -62351,10 +62433,10 @@ app.listen(PORT, () => {
       // his own company and does all the jobs is likely not worth it - he may
       // have great reviews and a lot of reviews." Same tier on both sides, so
       // only the capacity class can separate them.
-      const _solo = placesTriageScore({ reviewCount: 400, rating: 4.5, reachScore: 30, label: 'Med Spa', tier: 'B' });
+      const _solo = placesTriageScore({ reviewCount: 400, rating: 4.5, reachScore: 30, label: 'Weight Loss', tier: 'B' });
       const _crew = placesTriageScore({ reviewCount: 60, rating: 4.5, reachScore: 30, label: 'Roofing', tier: 'B' });
       if (!(_crew > _solo)) _fails.push(`a solo trade at 400 jobs scores ${_solo} against a crewed trade at 60 scoring ${_crew} - review volume is being read as capacity again, which is the whole failure the capacity class exists for`);
-      const _band = affordabilityBand({ reviewCount: 400, rating: 4.5, label: 'Med Spa', tier: 'A' });
+      const _band = affordabilityBand({ reviewCount: 400, rating: 4.5, label: 'Weight Loss', tier: 'A' });
       if (_band.band === 'premium') _fails.push('a solo trade reached the premium band on volume alone - the cap is a ceiling, not a deduction');
       // A low-volume high-ticket trade must not be punished for the volume it
       // never has. A $6m custom home builder may have NINE reviews.
@@ -66675,6 +66757,47 @@ app.listen(PORT, () => {
           _r.byKind[_k] = (_r.byKind[_k] || 0) - 1;
           if (_r.byKind[_k] <= 0) delete _r.byKind[_k];
         } }
+    }
+
+    // 11. THE POOL, READ BACK (Round 123). A metro whose every pair went dry
+    // ranks last among the measured; a metro with no rows is UNMEASURED and
+    // never reads as empty; the counts on the line are the counts; and the
+    // press and the route both call it, because a pure function nobody calls is
+    // the class this file records most.
+    {
+      const st = new Map([
+        [pqKey('Roofing', 'Dallas TX'), { cat: 'Roofing', city: 'Dallas TX', runs: 2, lastNew: 9, dryStreak: 0 }],
+        [pqKey('HVAC', 'Dallas TX'), { cat: 'HVAC', city: 'Dallas TX', runs: 1, lastNew: 4, dryStreak: 0 }],
+        [pqKey('Roofing', 'Cleveland OH'), { cat: 'Roofing', city: 'Cleveland OH', runs: 3, lastNew: 0, dryStreak: 2 }],
+        [pqKey('HVAC', 'Cleveland OH'), { cat: 'HVAC', city: 'Cleveland OH', runs: 3, lastNew: 0, dryStreak: 1 }],
+      ]);
+      // The unmeasured name sorts FIRST alphabetically on purpose: the first draft used
+      // Orlando, and the revert that dropped the measured-first term stayed green
+      // because a tie fell through to the name and Cleveland happens to precede it.
+      const rows = poolByDimension(st, 'city', ['Dallas TX', 'Cleveland OH', 'Atlanta GA']);
+      const dal = rows.find(r => r.name === 'Dallas TX'), cle = rows.find(r => r.name === 'Cleveland OH'), orl = rows.find(r => r.name === 'Atlanta GA');
+      if (!dal || dal.pairs !== 2 || dal.newLastRun !== 13 || dal.runs !== 3 || dal.dryShare !== 0) _fails.push('the pool read miscounts a metro\'s pairs, runs, new businesses or dry share');
+      if (!cle || cle.dryShare !== 1) _fails.push('a metro whose every pair went dry does not read as fully dry');
+      if (!dal || !cle || rows.indexOf(dal) > rows.indexOf(cle)) _fails.push('a metro whose every pair is dry ranks above one still producing');
+      if (!orl || orl.measured !== false || orl.pairs !== 0) _fails.push('a metro with no searched pair reads as measured, so "we did not look" becomes "nothing there"');
+      if (!orl || !cle || rows.indexOf(orl) < rows.indexOf(cle) || rows[rows.length - 1] !== orl) _fails.push('an unmeasured metro is ranked among the measured ones');
+      const line = poolLine(rows, 'METRO');
+      if (!/unmeasured/.test(line) || !/Atlanta GA/.test(line)) _fails.push('the pool line does not name the unmeasured metros');
+      if (!/Dallas TX \(2 pairs, 13 new last run, 0% dry\)/.test(line)) _fails.push('the pool line does not carry the counts a reader needs');
+      if (!/nothing measured yet/.test(poolLine(poolByDimension(new Map(), 'city', ['Dallas TX']), 'METRO'))) _fails.push('an empty memory claims a ranking');
+      const byTrade = poolByDimension(st, 'cat', ['Roofing', 'HVAC']);
+      if (!byTrade[0] || byTrade[0].name !== 'Roofing' || byTrade[0].newLastRun !== 9 || byTrade[0].pairs !== 2) _fails.push('the pool by trade does not group on the category');
+      // A row loaded without cat/city (an older loader) still groups off the key.
+      const bare = poolByDimension(new Map([[pqKey('HVAC', 'Austin TX'), { runs: 1, lastNew: 2, dryStreak: 0 }]]), 'city', ['Austin TX']);
+      if (!bare[0] || bare[0].pairs !== 1 || bare[0].newLastRun !== 2) _fails.push('a memory row without its own city does not group off the key');
+      const _src = selfSourceNoCommentsLF();
+      const _n = (a, b) => a + b;
+      for (const [needle, why] of [
+        [_n('poolByDimension(_merged, ', "'city', GP_CITIES)"), 'the press does not print the pool by metro'],
+        [_n('poolByDimension(_merged, ', "'cat', GP_CATEGORIES.map("), 'the press does not print the pool by trade'],
+        [_n("app.get('/api/find-pool'", ', async'), 'the pool cannot be read without a log'],
+        [_n('select=q,cat,city,last_run,', 'dry_streak,runs,last_new'), 'the loader does not fetch the columns the pool read groups on'],
+      ]) if (!_src.includes(needle)) _fails.push(why);
     }
 
     if (_fails.length) {
@@ -78959,7 +79082,7 @@ const readOwnershipTells = ({ pages } = {}) => {
 };
 
 // ── THE SCORE ───────────────────────────────────────────────────────────────
-// ELEVEN terms, each declared with its own maximum and its own scorer, and a
+// The terms (FIND_ICP_TERMS.length of them), each declared with its own maximum and its own scorer, and a
 // scorer returns null when the signal was never measured. The score is then a
 // percentage of what we COULD measure, so it is genuinely out of 100 and the
 // row still says how many of the eleven stood behind it. (This comment said
@@ -80728,6 +80851,21 @@ app.get('/api/find-options', (req, res) => {
     cities: GP_CITIES,
     categories: [...new Set(GP_CATEGORIES.map(c => c.label).filter(Boolean))].sort(),
   });
+});
+
+// Round 123: the pool by metro and by trade, from the query memory, so the
+// ranking can be read without a log. An unmeasured row is named, never ranked.
+app.get('/api/find-pool', async (req, res) => {
+  try {
+    const st = await loadPlacesQueryState();
+    res.json({
+      metros: poolByDimension(st, 'city', GP_CITIES),
+      trades: poolByDimension(st, 'cat', GP_CATEGORIES.map(c => c.label)),
+      note: 'pairs = trade x metro searches on record; newLastRun = new businesses the LAST search of each pair returned after the review floor and the franchise rule; runs = searches on record; an unmeasured row has no searched pair yet and is not ranked.',
+    });
+  } catch (e) {
+    res.status(500).json({ error: (e && e.message) || 'the pool read failed' });
+  }
 });
 
 app.get('/api/firecrawl-credits', async (req, res) => {
