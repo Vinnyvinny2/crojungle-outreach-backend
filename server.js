@@ -8127,7 +8127,7 @@ const crypto = require('crypto');
 // forever.
 let _selfSourceCache = null;
 const selfSource = () => {
-  if (_selfSourceCache === null) _selfSourceCache = require('fs').readFileSync(__filename, 'utf8'); // HAND EDIT
+  if (_selfSourceCache === null) _selfSourceCache = require('fs').readFileSync(__filename, 'utf8');
   return _selfSourceCache;
 };
 // ══ FOURTEEN CHECKS, FOURTEEN COPIES OF THE SAME 3MB STRING ═══════════════
