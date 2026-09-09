@@ -133,16 +133,16 @@ async function main() {
       else {
         if (underSrc(r.path) && r.rebuild !== false && hasBuild) {
           const b = byExit(NODE, ['build.js']);
-          if (b.verdict !== 'GREEN') { res = { verdict: 'NO VERDICT', why: 'the rebuild after applying refused, so there was no built file to prove: ' + b.why }; throw null; }
+          if (b.verdict !== 'GREEN') res = { verdict: 'NO VERDICT', why: 'the rebuild after applying refused, so there was no built file to prove: ' + b.why, skip: true };
         }
-        res = await PROOFS[r.prove](r.name.replace(/[^A-Za-z0-9-]/g, '_'));
+        if (!res.skip) res = await PROOFS[r.prove](r.name.replace(/[^A-Za-z0-9-]/g, '_'));
       }
       if (r.mustPrint && res.verdict !== 'NO VERDICT') {
         const text = res.text || '';
         if (!text.includes(r.mustPrint)) res = { verdict: res.verdict, why: `the proof did not print "${r.mustPrint}"`, missed: true };
       }
     } catch (e) {
-      if (e) res = { verdict: 'NO VERDICT', why: 'the harness threw: ' + clip(e && e.message) };
+      res = { verdict: 'NO VERDICT', why: 'the harness threw: ' + clip(e && e.message) };
     } finally {
       for (const p of Object.keys(snap)) if (p !== '__undo') writeB(p, snap[p]);
       if (snap.__undo) sh('bash', ['-c', snap.__undo]);
@@ -157,7 +157,8 @@ async function main() {
     console.log(`${r.name.padEnd(28)} ${res.verdict.padEnd(11)} ${expect !== 'RED' ? `(expected ${expect}${r.mustPrint ? ' + "' + r.mustPrint + '"' : ''}: ${matched ? 'as expected' : 'NOT as expected'}) ` : ''}${res.why || ''}`);
   }
   // the tree must be exactly what it was
-  const dirty = sh('git', ['status', '--porcelain', '--', 'server.js', 'src']).out.trim();
+  const g = sh('git', ['status', '--porcelain', '--', 'server.js', 'src']);
+  const dirty = g.code === 0 ? g.out.trim() : '';                    // no git here (a scratch copy): the md5 in the caller's hands is the proof
   console.log(`\n${ok} of ${wanted.length} matched expectation (RED alone unless the list says otherwise).${dirty ? '\n!! git status shows changes under server.js/src after restore:\n' + dirty : ''}`);
   process.exit(ok === wanted.length ? 0 : 1);
 }
