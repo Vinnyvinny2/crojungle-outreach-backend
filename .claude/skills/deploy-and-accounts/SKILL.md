@@ -70,7 +70,7 @@ nothing and touches no lead Vin is calling.
 - GitHub: the `gates` check appears as REQUIRED on a PR, and the merge button is disabled while it is red.
 - Netlify: the site's deploy log shows `mkdir -p dist && cp index.html dist/index.html` from `netlify.toml`, and a merge to `main` produces a Netlify deploy without a drag-in.
 - Render keys (§126): the boot log prints `AUTH GATE OFF` until `APP_TOKEN` is set, and `/api/store/settings` (with the code) lists every key as `true` under `serverKeys`.
-- Supabase: `SCHEMA PROBE` in the boot log names nothing missing; `LEAD BENCH` and the query memory report writes, not refusals (row-level security OFF on the tables the server writes, [§93](../../../docs/history/round-093.md)).
+- Supabase: `SCHEMA PROBE` in the boot log names nothing missing; `LEAD BENCH` and the query memory report writes, not refusals. Since [§127](../../../docs/history/round-127.md) row-level security is ON everywhere with no anon policy and the server's key is the service_role one (`SUPABASE KEY ROLE: service_role` on the boot log); [§93](../../../docs/history/round-093.md) turned it off only because the server then used the anon key.
 
 ## Render: the keys and the access code (since §126)
 
@@ -82,11 +82,19 @@ the Settings screen today) and `ALLOWED_ORIGINS` (the Netlify address, no
 trailing slash). A set key replaces whatever the page sends; the Settings
 fields stop mattering the moment the variable exists.
 
-`APP_TOKEN` is the one shared access code. Set it ONLY after the page that
-sends it is deployed (the round after §126): the moment it is set, every `/api`
-call without the code answers 401, and a page that does not send one is locked
-out. Rollback is deleting the variable (one restart). Until it is set the boot
-log prints `AUTH GATE OFF` and `/healthz` says `auth: off`.
+`APP_TOKEN` is the one shared access code (32+ random characters from a password
+manager). The moment it is set, every `/api` call without the code answers 401;
+the §127 page sends it from Settings (pasted once) or from a link ending in
+`#token=<code>`. Rollback is deleting the variable (one restart). Until it is
+set the boot log prints `AUTH GATE OFF` and `/healthz` says `auth: off`; on a
+Render instance (`RENDER_EXTERNAL_URL` set) that is a red `ACCESS CHECK`, so a
+live deploy with the gate open holds instead of serving.
+
+**The §127 sitting, in this order** (each step works with the one before it):
+1. Render: add the keys and `ALLOWED_ORIGINS` (above). The old page keeps working.
+2. Netlify: drag the §127 `index.html` in. Open it, Settings → paste the access code → Save & test (red until step 3: the server has no code yet). The page already works through the server's store routes.
+3. Render: set `APP_TOKEN` to the same string; wait for the restart; Save & test is green. Send the rep `https://<netlify host>/#token=<code>` privately.
+4. Supabase: run the §127 block of `schema.sql` (row-level security on, anon revoked, the keys stripped from the Settings row). Then, in the dashboard, rotate the publishable key and every paid key that ever sat in that row, updating the Render variables.
 
 Read `SUPABASE KEY ROLE` on the boot log. It must say `service_role` (the
 `sb_secret_` key) before row-level security is turned on; an anon key would

@@ -69,29 +69,53 @@ textarea.input{min-height:140px;resize:vertical}
 <div id="root"></div>
 <script>
 
-// ═══ SUPABASE — persistent cloud storage ═══════════════════════════════════
-// All writes go to BOTH localStorage (instant, offline) AND Supabase (persistent).
-// On load, Supabase wins if it has data — so switching devices/domains is safe.
-const SB_URL = 'https://rxkjgevunvpchcydxsft.supabase.co';
-const SB_KEY = 'sb_publishable_Od9pkGnOkO_kLxjbjBJVLg_RanMHlAI';
-
-const sbFetch = async (path, options = {}) => {
-  try {
-    const r = await fetch(SB_URL + '/rest/v1' + path, {
-      ...options,
-      headers: {
-        'apikey': SB_KEY,
-        'Authorization': 'Bearer ' + SB_KEY,
-        'Content-Type': 'application/json',
-        'Prefer': options.prefer || 'return=minimal',
-        ...(options.headers || {})
-      }
-    });
-    if (!r.ok) { const t = await r.text(); console.warn('Supabase error:', r.status, t); return null; }
-    const text = await r.text();
-    return text ? JSON.parse(text) : null;
-  } catch(e) { console.warn('Supabase fetch failed:', e.message); return null; }
+// ═══ THE SERVER IS THE ONLY DOOR ════════════════════════════════════════════
+// Until 2026-09-09 this page spoke to Supabase directly with a key pasted in
+// its own source, on tables with row-level security off. Now every read and
+// write goes through the server, which holds the only database key, and every
+// call carries the shared access code the rep pastes once into Settings (or
+// arrives with, as #token=... on a link). One wrapper, so a 401 is one thing,
+// and the page never holds or sends an API key.
+const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
+const TOKEN_KEY = 'cj_app_token';
+window.__cjAuth = { needsToken: false };
+const getAppToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; } };
+const setAppToken = (t) => {
+  try { if (t) localStorage.setItem(TOKEN_KEY, String(t).trim()); else localStorage.removeItem(TOKEN_KEY); } catch (e) { /* private mode: the code lives for this tab only */ }
+  window.__cjAuth = { needsToken: false };
 };
+// Which keys Render holds, as booleans from /api/store/settings; null until read.
+window.__cjServerKeys = null;
+window.__cjServerNames = {};
+const keyHeld = (k) => !!(window.__cjServerKeys && window.__cjServerKeys[k]);
+const SERVER_KEY_ROWS = [['anthropicKey', 'Anthropic'], ['firecrawlKey', 'Firecrawl'], ['apifyToken', 'Apify'], ['hunterKey', 'Hunter'], ['verifierKey', 'Email verifier'], ['theirstackKey', 'TheirStack'], ['companiesApiKey', 'The Companies API'], ['pageSpeedKey', 'PageSpeed']];
+// The Settings fields that were keys. Never stored, never sent, stripped from
+// anything older that still carries them.
+const SETTINGS_SECRET_FIELDS = ['apiKey', 'firecrawlKey', 'companiesApiKey', 'theirstackKey', 'pdlKey', 'hunterKey', 'verifierKey', 'apifyToken', 'ninjaPearKey', 'fbToken', 'adzunaId', 'adzunaKey', 'pageSpeedKey'];
+const stripSecrets = (s) => { const out = {}; for (const [k, v] of Object.entries(s || {})) if (!SETTINGS_SECRET_FIELDS.includes(k)) out[k] = v; return out; };
+// #token=... on a link is stored and stripped from the address bar before the
+// router reads the hash, so the code never sits in the history or a screenshot.
+(() => {
+  try {
+    const m = String(location.hash || '').match(/[#&]token=([^&]+)/);
+    if (!m) return;
+    setAppToken(decodeURIComponent(m[1]));
+    const rest = location.hash.replace(/[#&]token=[^&]*/, '').replace(/^#&/, '#');
+    history.replaceState(null, '', location.pathname + location.search + (rest === '#' ? '' : rest));
+  } catch (e) { /* nothing to strip */ }
+})();
+const apiFetch = (url, opts) => {
+  const o = Object.assign({}, opts || {});
+  const h = Object.assign({}, o.headers || {});
+  const t = getAppToken();
+  if (t) h['Authorization'] = 'Bearer ' + t;
+  o.headers = h;
+  return fetch(url, o).then((r) => {
+    if (r.status === 401) window.__cjAuth = { needsToken: true };
+    return r;
+  });
+};
+const api = (path, opts) => apiFetch(BACKEND + path, opts);
 
 // ---- ONE PERSISTED BLOCK, NOT TWO ----------------------------------------
 // leadToRow used to build this list inside the first branch of a ternary and a
@@ -553,7 +577,7 @@ const recordOutcome = async (lead, outcome, extra) => {
     nextStep: x.nextStep || '',
     predicted: String((sim && (sim.reason || sim.why || sim.reaction)) || '').slice(0, 400),
   };
-  const r = await fetch(BACKEND + '/api/call-outcome', {
+  const r = await apiFetch(BACKEND + '/api/call-outcome', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   }).then(x2 => x2.json()).catch(e => ({ ok: false, why: e.message }));
   return r;
@@ -1064,11 +1088,11 @@ const rowToLead = (r) => ({
 
 // Upsert a single lead to Supabase (fire and forget — localStorage is primary)
 const sbSaveLead = async (lead) => {
-  await sbFetch('/leads?on_conflict=id', {
+  await api('/api/store/leads/upsert', {
     method: 'POST',
-    prefer: 'return=minimal,resolution=merge-duplicates',
-    body: JSON.stringify(leadToRow(lead))
-  });
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rows: [leadToRow(lead)] })
+  }).catch(() => null);
 };
 
 // Load all leads from Supabase (called once on app init)
@@ -1110,8 +1134,8 @@ const sbLoadLeads = async () => {
   // a slow load instead of a lost pipeline.
   let size = 20;
   for (let guard = 0; guard < 400; guard++) {
-    const q = '/leads?order=id.asc&limit=' + size + (after === null ? '' : '&id=gt.' + encodeURIComponent(after));
-    const rows = await sbFetch(q, { headers: { 'Prefer': 'return=representation' } });
+    const q = '/api/store/leads?limit=' + size + (after === null ? '' : '&after=' + encodeURIComponent(after));
+    const rows = await api(q).then(r => (r.ok ? r.json() : null)).then(d => (d && Array.isArray(d.rows) ? d.rows : null)).catch(() => null);
     if (!Array.isArray(rows)) {
       if (size <= 1) return null;                    // could not read even one row
       size = Math.max(1, Math.floor(size / 2));
@@ -1142,10 +1166,7 @@ const _writeDeletedIds = (set) => { try { localStorage.setItem(DELETED_KEY, JSON
 const sbDeleteLead = async (id) => {
   const _t = _deletedIds(); _t.add(id); _writeDeletedIds(_t);
   try {
-    const r = await fetch(SB_URL + '/rest/v1/leads?id=eq.' + encodeURIComponent(id), {
-      method: 'DELETE',
-      headers: { 'apikey': SB_KEY, 'Authorization': 'Bearer ' + SB_KEY },
-    });
+    const r = await api('/api/store/leads/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
     if (r.ok) { const _t2 = _deletedIds(); _t2.delete(id); _writeDeletedIds(_t2); }
     else console.warn('Supabase delete failed (' + r.status + ') — tombstoned, will retry at next boot:', id);
   } catch (e) { console.warn('Supabase delete unreachable — tombstoned, will retry at next boot:', id); }
@@ -1156,7 +1177,6 @@ const {
   useState,
   useEffect
 } = React;
-const BACKEND = 'https://crojungle-outreach-backend.onrender.com';
 
 // discoverViaJob - press Find, and stop depending on one long HTTP request.
 //
@@ -1250,7 +1270,7 @@ const findScoreLine = (co) => {
   return parts.join(' \u00b7 ');
 };
 const discoverViaJob = async (signal, onTick, body) => {
-  const post = (path) => fetch(BACKEND + path, {
+  const post = (path) => apiFetch(BACKEND + path, {
     method: 'POST', signal,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -1289,7 +1309,7 @@ const discoverViaJob = async (signal, onTick, body) => {
     if (signal && signal.aborted) throw new DOMException('Find was stopped', 'AbortError');
     if (Date.now() - t0 > FIND_WALL_MS) return { error: 'The Find run has not answered in 25 minutes. Press Find again.' };
     if (typeof onTick === 'function') onTick(Math.round((Date.now() - t0) / 1000));
-    const pr = await fetch(BACKEND + '/api/discover-job/' + encodeURIComponent(sub.jobId), { signal });
+    const pr = await apiFetch(BACKEND + '/api/discover-job/' + encodeURIComponent(sub.jobId), { signal });
     if (pr.status === 404) return { error: 'That Find run is no longer on the server. Press Find again.' };
     let pd = null;
     try { pd = await pr.json(); } catch (e) { pd = null; }
@@ -1321,7 +1341,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261007;
+const CLIENT_CONTRACT = 20261008;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -1457,16 +1477,7 @@ const buildResearchBody = (lead, settings, extra) => {
   return {
     company: L.name || L.company || '',
     website: X.website || L.website || '',
-    apiKey: S.apiKey,
-    keys: {
-      firecrawlKey: S.firecrawlKey,
-      apifyToken: S.apifyToken,
-      fbToken: S.fbToken,
-      hunterKey: S.hunterKey,
-      ninjaPearKey: S.ninjaPearKey,
-      companiesApiKey: S.companiesApiKey,
-      verifierKey: S.verifierKey,
-    },
+    // No key travels: the server reads every key from its own environment (Round 126).
     // A re-run must actually re-run: the backend keeps a contact cache for
     // owner, email and revenue and skips those paid lookups on a hit. Live on
     // Hannah Custom Homes the run logged "CACHE HIT: owner — skipping paid
@@ -2083,8 +2094,7 @@ const buildComposeBody = (lead, settings) => {
             // connect them into prose, then checks every figure and every
             // claim before allowing it. No key means no writer, and the email
             // silently stays in its assembled form — working, but the exact
-            // thing the writer exists to fix. Same key every other call uses.
-            apiKey: settings.apiKey,
+            // thing the writer exists to fix. The server holds the key (Round 126).
             // ══ GREET THE PERSON THE EMAIL IS ADDRESSED TO ═══════════════════
             // Live on Hannah Custom Homes: the email went TO
             // dusty@hannahcustomhomes.com and opened "Kacie — 39 reviews across
@@ -2346,7 +2356,7 @@ const researchViaQueue = async (body, opts) => {
   // real answer should be let through.
   let submit;
   for (let _try = 0; ; _try++) {
-    submit = await fetch(BACKEND + '/api/research-async', {
+    submit = await apiFetch(BACKEND + '/api/research-async', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -2363,7 +2373,7 @@ const researchViaQueue = async (body, opts) => {
     // so a stale deploy degrades instead of breaking.
     if (submit.status === 404) {
       console.log('research queue not available on this backend — using the synchronous route');
-      return fetch(BACKEND + '/api/research', {
+      return apiFetch(BACKEND + '/api/research', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body), signal: o.signal,
       });
@@ -2643,7 +2653,7 @@ const runBatchAudit = async (opts) => {
     }
 
     try {
-      const cr = readComposeResponse(await (await fetch(BACKEND + '/api/compose-email', {
+      const cr = readComposeResponse(await (await apiFetch(BACKEND + '/api/compose-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildComposeBody(row, settings)),
@@ -4464,7 +4474,7 @@ const pollResearchJob = async (jobId, o) => {
     await new Promise(r => setTimeout(r, 3000));
     let poll;
     try {
-      poll = await fetch(BACKEND + '/api/research-job/' + jobId, { signal: o.signal });
+      poll = await apiFetch(BACKEND + '/api/research-job/' + jobId, { signal: o.signal });
     } catch (e) {
       if (e && e.name === 'AbortError') throw e;
       continue;   // transient network blip — the job is still running server-side
@@ -4770,15 +4780,10 @@ const sbPushRows = rows => {
   if (cur.length) chunks.push(cur);
   if (chunks.length > 1) console.log(`Cloud save: ${rows.length} leads split into ${chunks.length} requests (payload too large for one).`);
   for (const chunk of chunks) {
-    fetch(SB_URL + '/rest/v1/leads?on_conflict=id', {
+    api('/api/store/leads/upsert', {
       method: 'POST',
-      headers: {
-        'apikey': SB_KEY,
-        'Authorization': 'Bearer ' + SB_KEY,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=minimal,resolution=merge-duplicates'
-      },
-      body: JSON.stringify(chunk)
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ rows: chunk })
     })
     // ══ A FAILED CLOUD WRITE MUST BE VISIBLE ═══════════════════════════════
     // This was `.catch(() => {})` — every failure swallowed, no counter, no
@@ -4909,29 +4914,23 @@ const getSettings = () => {
 // Save to BOTH localStorage (instant) AND Supabase (survives site changes/deploys).
 // Uses a single row in user_settings with id='singleton'.
 const saveSettings = s => {
-  localStorage.setItem(SK, JSON.stringify(s));
-  // Fire-and-forget to Supabase
-  sbFetch('/user_settings?id=eq.singleton', {
-    method: 'PATCH',
-    body: JSON.stringify({ id: 'singleton', data: s, updated_at: new Date().toISOString() }),
-    prefer: 'return=minimal,resolution=merge-duplicates'
-  }).then(r => {
-    // If PATCH 404s (row doesn't exist yet), INSERT instead
-    if (r === null) {
-      sbFetch('/user_settings', {
-        method: 'POST',
-        body: JSON.stringify({ id: 'singleton', data: s, updated_at: new Date().toISOString() }),
-        prefer: 'return=minimal'
-      }).catch(() => {});
-    }
+  const clean = stripSecrets(s);
+  localStorage.setItem(SK, JSON.stringify(clean));
+  // Fire-and-forget through the server, which strips a key again before the row is written.
+  api('/api/store/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: clean })
   }).catch(() => {});
 };
 // Load settings from Supabase on startup — merges with localStorage so neither is lost.
 const loadSettingsFromSupabase = async () => {
   try {
-    const rows = await sbFetch('/user_settings?id=eq.singleton');
-    if (rows && rows.length > 0 && rows[0].data) {
-      const remote = rows[0].data;
+    const r = await api('/api/store/settings');
+    const d = r.ok ? await r.json() : null;
+    if (d && d.serverKeys) { window.__cjServerKeys = d.serverKeys; window.__cjServerNames = d.envNames || {}; }
+    if (d && d.data && typeof d.data === 'object') {
+      const remote = d.data;
       const local = getSettings();
       // Merge: remote wins for non-empty values (it's the source of truth across sites)
       const merged = { ...local };
@@ -4940,9 +4939,10 @@ const loadSettingsFromSupabase = async () => {
           merged[k] = remote[k];
         }
       });
-      localStorage.setItem(SK, JSON.stringify(merged));
-      console.log('Settings synced from Supabase (' + Object.keys(remote).length + ' keys)');
-      return merged;
+      const cleaned = stripSecrets(merged);
+      localStorage.setItem(SK, JSON.stringify(cleaned));
+      console.log('Settings synced through the server (' + Object.keys(remote).length + ' fields)');
+      return cleaned;
     }
   } catch(e) {
     console.log('Settings Supabase load failed (using localStorage):', e.message);
@@ -5116,8 +5116,8 @@ PRODUCT SELECTION LOGIC:
 // `measured` carries every figure the audit established. The server's allowlist
 // check needs it to tell a traced number from an invented one \u2014 without it every
 // figure in the copy reads as untraceable and the check is worse than useless.
-async function callClaude(system, user, apiKey, measured) {
-  const r = await fetch(BACKEND + '/api/claude', {
+async function callClaude(system, user, measured) {
+  const r = await apiFetch(BACKEND + '/api/claude', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
@@ -5125,7 +5125,6 @@ async function callClaude(system, user, apiKey, measured) {
     body: JSON.stringify({
       system,
       user,
-      apiKey,
       ...(measured || {})
     })
   });
@@ -6407,7 +6406,7 @@ const shortLocation = (s) => String(s || '').replace(/,?\s*(USA|United States)$/
 
 // ── the one way this screen talks to the server ─────────────────────────────
 const findApi = async (path, body) => {
-  const r = await fetch(BACKEND + path, body === undefined ? {} : {
+  const r = await apiFetch(BACKEND + path, body === undefined ? {} : {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   });
   let j = null;
@@ -6459,7 +6458,7 @@ function FindView({
   React.useEffect(() => saveFindView({ readCount, csvFull, pullFilters }), [readCount, csvFull, pullFilters]);
   React.useEffect(() => {
     let alive = true;
-    fetch(BACKEND + '/api/find-options').then(r => r.json())
+    apiFetch(BACKEND + '/api/find-options').then(r => r.json())
       .then(d => { if (alive && d && Array.isArray(d.cities)) setFindOptions(d); })
       .catch(e => console.log('find options unavailable:', e.message));
     return () => { alive = false; };
@@ -6638,18 +6637,12 @@ function FindView({
       const d = await discoverViaJob(abort.signal, setFindSecs, {
         keywords: kw.length ? kw : ['home services'],
         location: settings.targetLocation || '',
-        apiKey: settings.apiKey,
         // Settings decides the lanes now (Vin, 2026-09-08, the build spec):
         // sent explicitly so the wire reads the same whichever way it is set.
         extraLanes: settings.findExtraLanes === true,
         filters: { niches: pullFilters.niches, cities: pullFilters.cities },
         knownDomains: known.domains,
         knownNames: known.names,
-        keys: {
-          adzunaId: settings.adzunaId, adzunaKey: settings.adzunaKey, fbToken: settings.fbToken,
-          firecrawlKey: settings.firecrawlKey, apifyToken: settings.apifyToken,
-          companiesApiKey: settings.companiesApiKey, theirstackKey: settings.theirstackKey,
-        },
       });
       if (d.error) throw new Error(d.error);
       const found = (d.companies || []).length;
@@ -8228,7 +8221,7 @@ function ResearchView({
       // If still nothing, try backend find-website
       if (!website) {
         try {
-          const r = await fetch(BACKEND + '/api/find-website?company=' + encodeURIComponent(lead.name) + '&fcKey=' + encodeURIComponent(settings.firecrawlKey || ''));
+          const r = await apiFetch(BACKEND + '/api/find-website?company=' + encodeURIComponent(lead.name));
           const d = await r.json();
           if (d.website) {
             website = d.website;
@@ -8336,78 +8329,6 @@ function ResearchView({
         emailData.founderName = cachedHunter.founderName || '';
         emailData.title = cachedHunter.title || '';
         console.log('Hunter CACHED for ' + domain + ' — 0 credits spent');
-      } else if (domain && settings.hunterKey) {
-        try {
-          const r = await fetch(`https://api.hunter.io/v2/domain-search?domain=${domain}&type=personal&limit=10&api_key=${settings.hunterKey}`);
-          const d = await r.json();
-
-          // Detect credit exhaustion so we can fall back instead of silently failing
-          const errDetails = d?.errors?.[0]?.details || '';
-          const errId = d?.errors?.[0]?.id || '';
-          if (r.status === 402 || errId === 'usage_limit_reached' || /credit|quota|limit reached/i.test(errDetails)) {
-            hunterCreditsOut = true;
-            console.warn('⚠️ Hunter credits exhausted — falling back to pattern guess');
-          }
-
-          const emails = d.data?.emails || [];
-
-          // ═══ AUTHORITY RANKING — the right PERSON, not just any person ═══
-          // For a founder-led 10-200 person company, only the owner can say yes.
-          // A marketing coordinator's inbox wastes the entire audit. Rank every
-          // contact Hunter returns by real buying authority and take the top one.
-          const AUTHORITY = [
-            [100, /\b(founder|co-?founder|owner|proprietor)\b/i],
-            [95,  /\b(ceo|chief executive)\b/i],
-            [90,  /\b(president)\b/i],
-            [85,  /\b(managing (partner|director)|principal|partner)\b/i],
-            [75,  /\b(coo|chief operating|general manager)\b/i],
-            [70,  /\b(cfo|chief financial)\b/i],
-            [65,  /\b(cmo|chief marketing)\b/i],
-            [60,  /\b(cto|chief technology)\b/i],
-            [50,  /\b(vp|vice president|head of)\b/i],
-            [35,  /\b(director)\b/i],
-            [20,  /\b(manager|lead)\b/i],
-            [10,  /\b(coordinator|specialist|associate|assistant|intern)\b/i],
-          ];
-          const authScore = (t) => {
-            if (!t) return 30;
-            for (const [s, re] of AUTHORITY) if (re.test(t)) return s;
-            return 30;
-          };
-          // Hunter also gives a confidence score per address — break ties with it
-          const ranked = emails
-            .map(e => ({ ...e, _auth: authScore(e.position || ''), _conf: e.confidence || 0 }))
-            .sort((a, b) => (b._auth - a._auth) || (b._conf - a._conf));
-
-          const best = ranked[0];
-          // Persist per-domain so this domain never costs another Hunter credit,
-          // even across re-runs, sessions, or a different lead on the same domain.
-          try {
-            hunterCache[domain] = {
-              email: best ? (best.value || '') : '',
-              founderName: best ? `${best.first_name || ''} ${best.last_name || ''}`.trim() : '',
-              title: best ? (best.position || '') : '',
-              at: Date.now(),
-            };
-            localStorage.setItem('cj_hunter_cache_v1', JSON.stringify(hunterCache));
-            console.log('Hunter result cached for ' + domain + ' — future runs cost 0 credits');
-          } catch {}
-          if (best) emailData = {
-            email: best.value || '',
-            founderName: `${best.first_name || ''} ${best.last_name || ''}`.trim(),
-            title: best.position || '',
-            authorityScore: best._auth,
-            // Keep the ranked runners-up. If the top person's address can't be
-            // verified, we fall DOWN this ladder rather than sending to nobody.
-            alternates: ranked.slice(1, 4).map(e => ({
-              email: e.value, name: `${e.first_name || ''} ${e.last_name || ''}`.trim(),
-              title: e.position || '', authorityScore: e._auth,
-            })),
-          };
-          if (best) console.log(`Hunter: ${emailData.email} | ${emailData.title || 'no title'} | authority ${best._auth}/100 | ${ranked.length - 1} alternates`);
-        } catch (e) {
-          console.log('Hunter:', e.message);
-        }
       }
 
       // ══ REMOVED: A CALL THAT COULD NEVER HAVE SUCCEEDED ═══════════════════
@@ -10012,19 +9933,18 @@ function GenerateView({
   // (2) IT ONLY TOUCHES LEADS WE ACTUALLY SENT. Matching is by email address, so
   //     anything in the sequence that did not come from this pipeline is ignored.
   const syncOutcomes = async () => {
-    const key = (settings && settings.hunterKey) || '';
+    const key = keyHeld('hunterKey');
     // BOTH sequences when rotation is on: an outcome that landed in the second
     // sequence would otherwise never be read, and every lead sent through it
     // would sit at "no outcome" forever — which reads as the rotation failing
     // when it is the sync that never looked.
     const seqs = [settings && settings.hunterSequenceId, settings && settings.hunterSequenceId2].filter(Boolean);
-    if (!key || !seqs.length) { setSyncMsg('Add your Hunter key and sequence in Settings first.'); return; }
+    if (!key || !seqs.length) { setSyncMsg('HUNTER_KEY on Render and a sequence in Settings are both needed.'); return; }
     setSyncing(true); setSyncMsg('');
     try {
       const d = { outcomes: {}, total: 0, counts: {} };
       for (const seq of seqs) {
-        const r = await fetch(BACKEND + '/api/hunter-outcomes?key=' + encodeURIComponent(key)
-          + '&sequenceId=' + encodeURIComponent(seq));
+        const r = await apiFetch(BACKEND + '/api/hunter-outcomes?sequenceId=' + encodeURIComponent(seq));
         const dd = await r.json();
         if (dd.error) { setSyncMsg('Hunter: ' + dd.error); setSyncing(false); return; }
         Object.assign(d.outcomes, dd.outcomes || {});
@@ -10085,7 +10005,7 @@ function GenerateView({
   // once an hour, so opening the tab repeatedly does not hammer Hunter.
   useEffect(() => {
     try {
-      const key = (settings && settings.hunterKey) || '';
+      const key = keyHeld('hunterKey');
       const seq = (settings && settings.hunterSequenceId) || (settings && settings.hunterSequenceId2) || '';
       if (!key || !seq) return;
       const pending = getLeads().filter(l => l.sentSnapshot && !l.sentSnapshot.outcome);
@@ -10349,8 +10269,8 @@ function GenerateView({
   };
 
   const generate = async () => {
-    if (!settings.apiKey) {
-      setError('Add Anthropic API key in Settings first.');
+    if (window.__cjServerKeys && !keyHeld('anthropicKey')) {
+      setError('ANTHROPIC_API_KEY is not set on Render, so nothing can write. Ask Vin.');
       return;
     }
     setLoading(true);
@@ -10359,16 +10279,15 @@ function GenerateView({
     try {
       setStep(0);
       let scraped = null;
-      if (lead.website && settings.firecrawlKey) {
+      if (lead.website && keyHeld('firecrawlKey')) {
         try {
-          const r = await fetch(BACKEND + '/api/scrape', {
+          const r = await apiFetch(BACKEND + '/api/scrape', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json'
             },
             body: JSON.stringify({
-              url: lead.website,
-              firecrawlKey: settings.firecrawlKey
+              url: lead.website
             })
           });
           const d = await r.json();
@@ -11524,7 +11443,7 @@ Do not restate this brief, do not explain your reasoning, do not list what you a
     let _blockedByFactCheck = null;
       if (_ba && !window.__CROJ_FORCE_MODEL) {
         try {
-          const r = await fetch(`${BACKEND}/api/compose-email`, {
+          const r = await apiFetch(`${BACKEND}/api/compose-email`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             // ONE builder, shared with the batch runner — see buildComposeBody.
@@ -11702,7 +11621,7 @@ So if a detail is not written above, leave it out \u2014 not because you are bei
         booking: (lead.brainAudit && lead.brainAudit.bookingPath) || lead.booking || null,
       };
       const measured = _definedWins(_ladder, _explicit);
-      const raw = await callClaude(system, user, settings.apiKey, measured);
+      const raw = await callClaude(system, user, measured);
 const clean = raw.replace(/^```[\w]*\n?/m, '').replace(/\n?```$/m, '').trim();
       // ══ A PROSE REPLY IS NOT A CRASH ══════════════════════════════════════
       // Live: the model answered "I cannot write this email..." and the UI showed
@@ -13912,13 +13831,13 @@ function SendView({ settings }) {
 
   const sendToHunter = async () => {
     if (chosen.length === 0) return;
-    if (!settings.hunterKey || !settings.hunterSequenceId) {
-      setError('Add your Hunter API key and Sequence ID in Settings first.');
+    if ((window.__cjServerKeys && !keyHeld('hunterKey')) || !settings.hunterSequenceId) {
+      setError('HUNTER_KEY on Render and a Sequence ID in Settings are both needed.');
       return;
     }
     setSending(true); setError(''); setResult(null);
     try {
-      const r = await fetch(BACKEND + '/api/send-to-hunter', {
+      const r = await apiFetch(BACKEND + '/api/send-to-hunter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -13929,7 +13848,6 @@ function SendView({ settings }) {
           // never put the same person in two campaigns. One sequence behaves
           // exactly as before.
           sequenceIds: [settings.hunterSequenceId, settings.hunterSequenceId2].filter(Boolean),
-          hunterKey: settings.hunterKey,
         })
       });
       const d = await r.json();
@@ -14148,15 +14066,15 @@ function SendView({ settings }) {
     )
   );
 }
-function FirecrawlCredits({ fcKey }) {
+function FirecrawlCredits({ held }) {
   const [credits, setCredits] = useState(null);
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
 
   const check = () => {
-    if (!fcKey) { setErr('Enter your Firecrawl key above first.'); return; }
+    if (!held) { setErr('FIRECRAWL_KEY is not set on Render.'); return; }
     setLoading(true); setErr('');
-    fetch(BACKEND + '/api/firecrawl-credits?key=' + encodeURIComponent(fcKey))
+    apiFetch(BACKEND + '/api/firecrawl-credits')
       .then(r => r.json())
       .then(d => {
         if (d.error) setErr(d.error);
@@ -14166,7 +14084,7 @@ function FirecrawlCredits({ fcKey }) {
       .catch(e => { setErr(e.message); setLoading(false); });
   };
 
-  useEffect(() => { if (fcKey) check(); }, [fcKey]);
+  useEffect(() => { if (held) check(); }, [held]);
 
   const left = credits && credits.remaining != null ? credits.remaining : null;
   const cos = left != null ? Math.floor(left / 11) : null; // ~11 credits per company
@@ -14203,7 +14121,7 @@ function FirecrawlCredits({ fcKey }) {
   );
 }
 
-function HunterSequenceFinder({ hunterKey }) {
+function HunterSequenceFinder({ held }) {
   const [seqs, setSeqs] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState('');
@@ -14211,18 +14129,18 @@ function HunterSequenceFinder({ hunterKey }) {
 
   // Auto-check credits on mount so you always know where you stand
   useEffect(() => {
-    if (!hunterKey) return;
-    fetch(BACKEND + '/api/hunter-credits?key=' + encodeURIComponent(hunterKey))
+    if (!held) return;
+    apiFetch(BACKEND + '/api/hunter-credits')
       .then(r => r.json())
       .then(d => { if (!d.error) setCredits(d); })
       .catch(() => {});
-  }, [hunterKey]);
+  }, [held]);
 
   const fetchSeqs = async () => {
-    if (!hunterKey) { setErr('Enter your Hunter API key above first.'); return; }
+    if (!held) { setErr('HUNTER_KEY is not set on Render.'); return; }
     setLoading(true); setErr(''); setSeqs(null);
     try {
-      const r = await fetch(BACKEND + '/api/hunter-sequences?key=' + encodeURIComponent(hunterKey));
+      const r = await apiFetch(BACKEND + '/api/hunter-sequences');
       const d = await r.json();
       if (d.error) { setErr(d.error + (d.raw ? ' — ' + JSON.stringify(d.raw).slice(0,200) : '')); }
       else setSeqs(d.sequences || []);
@@ -14287,19 +14205,12 @@ function ContactEngineTester({ settings }) {
     if (!company || !website) { setErr('Enter both a company name and website.'); return; }
     setLoading(true); setErr(''); setResult(null);
     try {
-      const r = await fetch(BACKEND + '/api/test-contact-engine', {
+      const r = await apiFetch(BACKEND + '/api/test-contact-engine', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           company,
           website: website.startsWith('http') ? website : 'https://' + website,
-          apiKey: settings.apiKey,
-          keys: {
-            firecrawlKey: settings.firecrawlKey,
-            apifyToken: settings.apifyToken,
-            hunterKey: settings.hunterKey,
-            verifierKey: settings.verifierKey,
-          },
         }),
       });
       const d = await r.json();
@@ -14397,19 +14308,35 @@ function SettingsView({
   });
   const [diagResults, setDiagResults] = useState(null);
   const [diagLoading, setDiagLoading] = useState(false);
+  // The keys live on Render; this screen shows which are held and takes the access code.
+  const [srv, setSrv] = useState({ keys: window.__cjServerKeys, names: window.__cjServerNames || {}, status: 'idle', why: '' });
+  const readServerKeys = async () => {
+    try {
+      const r = await api('/api/store/settings');
+      if (r.status === 401) { setSrv(p => ({ ...p, status: 'refused', why: 'The server refused this code. Check it with Vin and paste it again.' })); return; }
+      const d = r.ok ? await r.json() : null;
+      if (!d || !d.serverKeys) { setSrv(p => ({ ...p, status: 'down', why: 'The server did not answer (HTTP ' + r.status + '). Render may be waking up; try again in a minute.' })); return; }
+      window.__cjServerKeys = d.serverKeys; window.__cjServerNames = d.envNames || {};
+      setSrv({ keys: d.serverKeys, names: d.envNames || {}, status: 'ok', why: '' });
+    } catch (e) { setSrv(p => ({ ...p, status: 'down', why: 'The server could not be reached: ' + e.message })); }
+  };
+  useEffect(() => { readServerKeys(); }, []);
+  const [tokenDraft, setTokenDraft] = useState(getAppToken());
+  const held = srv.keys || {};
+  const keyRows = SERVER_KEY_ROWS.concat(Object.keys(held).filter(k => held[k] && !SERVER_KEY_ROWS.some(r => r[0] === k)).map(k => [k, k]));
   const runDiagnostics = async () => {
     setDiagLoading(true);
     setDiagResults(null);
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 45000);
-      const r = await fetch(BACKEND + '/api/diagnostics', {
+      const r = await apiFetch(BACKEND + '/api/diagnostics', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          keys: form
+          keys: {}
         }),
         signal: controller.signal
       });
@@ -14541,44 +14468,27 @@ function SettingsView({
       maxWidth: 600
     }
   }, React.createElement(Card, {
-    title: 'Core API Keys'
+    title: 'Access code'
+  }, React.createElement('label', { className: 'lbl' }, 'The code Vin gave you'),
+  React.createElement('div', { style: { display: 'flex', gap: 8 } },
+    React.createElement('input', { className: 'input', type: 'password', autoComplete: 'off', placeholder: 'paste the access code', value: tokenDraft,
+      onChange: e => setTokenDraft(e.target.value), style: { flex: 1 } }),
+    React.createElement('button', { className: 'btn btn-a', onClick: () => { setAppToken(tokenDraft); readServerKeys(); } }, 'Save & test')),
+  React.createElement('div', { style: { marginTop: 5, fontSize: 11, color: srv.status === 'ok' ? 'var(--g)' : srv.status === 'idle' ? 'var(--m)' : 'var(--r)' } },
+    srv.status === 'ok' ? '✓ Connected. The server accepts this code.'
+      : srv.status === 'idle' ? 'Kept in this browser only, never saved to the cloud. A link ending in #token=... fills it in.'
+      : srv.why)), React.createElement(Card, {
+    title: 'Keys held on the server'
+  }, React.createElement('div', { style: { fontSize: 12, color: 'var(--m2)', marginBottom: 10 } },
+    'API keys live on Render, never in this page. A key that is NOT SET turns that source off; ask Vin to add it.'),
+  keyRows.map(([k, label]) => React.createElement('div', { key: k, style: { display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', fontSize: 12 } },
+    React.createElement('span', null, label, React.createElement('span', { style: { color: 'var(--m)', marginLeft: 8, fontSize: 11 } }, srv.names[k] || '')),
+    React.createElement('span', { style: { color: srv.keys === null ? 'var(--m)' : held[k] ? 'var(--g)' : 'var(--r)', fontWeight: 700 } },
+      srv.keys === null ? '…' : held[k] ? 'held' : 'NOT SET'))),
+  React.createElement(FirecrawlCredits, { held: !!held.firecrawlKey }),
+  React.createElement(HunterSequenceFinder, { held: !!held.hunterKey })), React.createElement(Card, {
+    title: 'Sequences and switches'
   }, React.createElement(Fld, {
-    label: 'Anthropic API Key',
-    k: 'apiKey',
-    type: 'password',
-    ph: 'sk-ant-...',
-    hint: 'console.anthropic.com · Powers all pitch generation'
-  }), React.createElement(Fld, {
-    label: 'Firecrawl API Key',
-    k: 'firecrawlKey',
-    type: 'password',
-    ph: 'fc-...',
-    hint: 'firecrawl.dev · Auto-scrapes homepages · Free: 500/month'
-  }), React.createElement(FirecrawlCredits, { fcKey: form.firecrawlKey }), React.createElement(Fld, {
-    label: 'The Companies API Key',
-    k: 'companiesApiKey',
-    type: 'password',
-    ph: 'Company enrichment token',
-    hint: 'thecompaniesapi.com · Real headcount + industry from domain · Free: 500 credits, simplified mode free. The size-gate backbone.'
-  }), React.createElement(Fld, {
-    label: 'TheirStack API Key',
-    k: 'theirstackKey',
-    type: 'password',
-    ph: 'eyJ...',
-    hint: 'theirstack.com · Job postings SIZE-FILTERED at the query (10-200 employees) — whales never returned. Free: 200 credits/mo (1 credit/job).'
-  }), React.createElement(Fld, {
-    label: 'People Data Labs API Key',
-    k: 'pdlKey',
-    type: 'password',
-    ph: 'PDL key',
-    hint: 'peopledatalabs.com · Company size by NAME — 70M+ profiles incl. SMBs the Companies API misses. Powers the Audit pass. Free: 1,000 lookups/month.'
-  }), React.createElement(Fld, {
-    label: 'Hunter.io API Key',
-    k: 'hunterKey',
-    type: 'password',
-    ph: 'Hunter key',
-    hint: 'hunter.io · Finds verified founder emails, and (with a Sequence ID below) sends live via Send tab. Free.'
-  }), React.createElement(Fld, {
     label: 'Hunter Sequence ID',
     k: 'hunterSequenceId',
     type: 'text',
@@ -14611,47 +14521,7 @@ function SettingsView({
     type: 'text',
     ph: 'https://cal.com/... or calendly.com/...',
     hint: 'The link that goes at the top and bottom of every write-up. Gong measured that once someone is engaged, a specific booking ask converts 2.5x better than a soft one (37% vs 15%) \u2014 and asking a warm prospect to "reply with some times" spends another round trip at the exact moment he is most interested. Leave blank and the write-up falls back to asking for times.'
-  }), React.createElement(Fld, {
-    label: 'Email Verifier API Key',
-    k: 'verifierKey',
-    type: 'password',
-    ph: 'MyEmailVerifier key',
-    hint: 'myemailverifier.com · 100 FREE SMTP verifications/day, no credit card, credits never expire. This is what makes the email engine fireproof — it confirms a mailbox actually exists instead of guessing. Without it, unverified addresses are blocked from sending.'
-  }), React.createElement(Fld, {
-    label: 'Apify API Token',
-    k: 'apifyToken',
-    type: 'password',
-    ph: 'Apify token',
-    hint: 'apify.com \u2014 FREE plan gives $5 of credits every month, no credit card. Powers the Google review mine (reads up to 40 reviews instead of the 5 the Places API allows) and finds the owner from his signed review replies for free. Without it, no claim about their reviews is permitted \u2014 the audit will say NOT MEASURED rather than guess.'
-  }), React.createElement(HunterSequenceFinder, { hunterKey: form.hunterKey })), React.createElement(Card, {
-    title: 'Discovery API Keys'
-  }, React.createElement(Fld, {
-    label: 'NinjaPear API Key (optional — skip)',
-    k: 'ninjaPearKey',
-    type: 'password',
-    ph: 'Not needed — leave blank',
-    hint: 'DORMANT. Company size + decision-makers are already covered by The Companies API and People Data Labs above, so this is redundant and costs money per lookup. Leave blank unless you have a specific reason.'
-  }), React.createElement(Fld, {
-    label: 'Facebook Ad Library Token (optional — skip)',
-    k: 'fbToken',
-    type: 'password',
-    ph: 'Not needed — leave blank',
-    hint: 'OPTIONAL. Requires Meta identity verification (1-3 days) and covers US local commercial ads poorly, so the payoff is usually thin. The audit is strong without it. Leave blank unless you specifically want ad-spend signals.'
-  }), React.createElement(Fld, {
-    label: 'Adzuna App ID',
-    k: 'adzunaId',
-    type: 'password',
-    ph: 'Adzuna App ID',
-    hint: 'developer.adzuna.com - FREE - powers the AI-replacement hiring signals (primary source)'
-  }), React.createElement(Fld, {
-    label: 'Adzuna App Key',
-    k: 'adzunaKey',
-    type: 'password',
-    ph: 'Adzuna App Key',
-    hint: 'Same account as App ID - REQUIRED or Adzuna returns 0 results'
-  }), React.createElement('div', {
-    style: {padding:'12px 16px', background:'rgba(163,230,53,0.05)', border:'1px solid rgba(163,230,53,0.15)', borderRadius:10, fontSize:12, color:'var(--m2)', marginTop:8}
-  }, '✓ Discovery sources: Adzuna (AI-replacement signals) · SEC EDGAR · Google News · BizBuySell · Facebook Ads (add token above)')), React.createElement(Card, {
+  })), React.createElement(Card, {
     title: 'CEO Framework'
   }, React.createElement('div', {
     style: { padding: '12px 16px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 10, fontSize: 12, color: 'var(--m2)', lineHeight: 1.6 }
@@ -14730,15 +14600,10 @@ function SettingsView({
       let ok = 0, fail = 0, firstError = '';
       for (const lead of leads) {
         try {
-          const res = await fetch(SB_URL + '/rest/v1/leads?on_conflict=id', {
+          const res = await api('/api/store/leads/upsert', {
             method: 'POST',
-            headers: {
-              'apikey': SB_KEY,
-              'Authorization': 'Bearer ' + SB_KEY,
-              'Content-Type': 'application/json',
-              'Prefer': 'return=minimal,resolution=merge-duplicates'
-            },
-            body: JSON.stringify(leadToRow(lead))
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ rows: [leadToRow(lead)] })
           });
           if (res.ok) { ok++; }
           else { fail++; if (!firstError) firstError = 'HTTP ' + res.status + ': ' + (await res.text()).slice(0, 200); }
@@ -14929,12 +14794,14 @@ function App() {
   // callback through every save site: fewer places to forget, and this must work
   // even for writes fired from code paths added later.
   const [cloudInfo, setCloudInfo] = useState({ state: 'idle', fails: 0, lastError: null });
+  const [needsToken, setNeedsToken] = useState(false);
   // Read from the store on a timer so it cannot drift from what the list shows.
   const [leadCount, setLeadCount] = useState(() => getLeads().length);
   React.useEffect(() => {
     const t = setInterval(() => {
       const s = window.__cjSync;
       if (s) setCloudInfo(s);
+      setNeedsToken(!!(window.__cjAuth && window.__cjAuth.needsToken));
       // ══ ONE COUNT, FROM THE ONE STORE ═══════════════════════════════════
       // The sidebar read `leads`, which is App state seeded ONCE at mount and
       // never updated when research adds or changes anything. The Research list
@@ -15270,7 +15137,11 @@ function App() {
       style:{ marginTop:6, padding:'8px 10px', borderRadius:6, fontSize:10, lineHeight:1.5,
         background:'rgba(239,68,68,0.10)', border:'1px solid rgba(239,68,68,0.4)', color:'var(--r)' }
     }, 'Work done now is NOT being saved to the cloud. ' + (cloudInfo.lastError || '') +
-       ' Stop and fix this before researching or generating anything else.')
+       ' Stop and fix this before researching or generating anything else.'),
+    needsToken && React.createElement('div', {
+      style:{ marginTop:6, padding:'8px 10px', borderRadius:6, fontSize:10, lineHeight:1.5,
+        background:'rgba(239,68,68,0.10)', border:'1px solid rgba(239,68,68,0.4)', color:'var(--r)' }
+    }, 'This page needs the access code. Open Settings and paste the code Vin gave you.')
   )), React.createElement('div', {
     className: 'main'
   }, renderView(), renderOther(), researchAlways), toast && React.createElement(Toast, {

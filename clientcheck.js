@@ -118,6 +118,34 @@ const sends = new Set(builderKeys || []);
 const never = serverReads.filter(k => !sends.has(k)).sort();
 if (never.length) console.log(`  \u00b7 ${never.length} req.body field(s) the server reads somewhere and the research request does not send: ${never.slice(0, 20).join(', ')}${never.length > 20 ? ` +${never.length - 20} more` : ''}\n    (several belong to the compose route, not to research \u2014 a list to read, not a failure)`);
 
+
+// ══ THE PAGE HOLDS NO DATABASE KEY, AND EVERY CALL CARRIES THE ACCESS CODE ═══
+// Round 127. Until 2026-09-09 the page carried the Supabase address and a
+// publishable key in its own source and spoke to the database directly, on
+// tables with row-level security off; every paid key sat in a row it could
+// read. Now the server is the only door, reached through ONE wrapper that
+// sends the shared access code, so a 401 is one thing and no key is anywhere
+// a browser can see.
+{
+  for (const bad of ['sb_publishable_', 'sb_secret_', 'supabase.co', 'SB_KEY', 'SB_URL']) if (html.includes(bad)) fails.push(`index.html still carries "${bad}", so a browser can reach the database without the server`);
+  const bare = (html.match(/[^A-Za-z]fetch\(BACKEND/g) || []).length + (html.match(/[^A-Za-z]fetch\(`\$\{BACKEND\}/g) || []).length;
+  if (bare) fails.push(`${bare} call(s) reach the server with a bare fetch instead of apiFetch, so they carry no access code and fail 401 the moment APP_TOKEN is set`);
+  const viaWrapper = (html.match(/apiFetch\((?:BACKEND|`\$\{BACKEND\})/g) || []).length;
+  if (viaWrapper < 15) fails.push(`only ${viaWrapper} apiFetch call sites: the wrapper is not what the page uses`);
+  const wrap = html.match(/const apiFetch = \(url, opts\) => \{[\s\S]*?\n\};/);
+  if (!wrap) fails.push('the apiFetch wrapper is gone');
+  else {
+    if (!/Authorization/.test(wrap[0]) || !/Bearer/.test(wrap[0])) fails.push('the wrapper does not send the access code as a bearer');
+    if (!/401/.test(wrap[0])) fails.push('the wrapper does not notice a 401, so the rep never learns the code is missing');
+  }
+  if (!/token=/.test(html) || !/replaceState/.test(html)) fails.push('a link with #token= no longer fills the code in and strips it from the address bar');
+  if (!/cj_app_token/.test(html)) fails.push('the code is not kept in the browser under its key');
+  if (!/needs the access code/.test(html)) fails.push('nothing on screen tells the rep the code is missing');
+  if (!/const clean = stripSecrets\(s\);/.test(html) || !/api\('\/api\/store\/settings', \{\s*method: 'PUT'/.test(html)) fails.push('Settings are not saved through the server with the key fields stripped');
+  if (!/api\('\/api\/store\/leads\/upsert'/.test(html) || !/api\('\/api\/store\/leads\/delete'/.test(html) || !/'\/api\/store\/leads\?limit='/.test(html)) fails.push('the leads no longer go through the store routes');
+  if (!fails.some(f => /index\.html still carries|bare fetch|apiFetch|store routes|stripped/.test(f))) notes.push('\u2713 index.html: no database key or address in the page, every server call goes through apiFetch with the access code, a 401 is surfaced, Settings and leads travel through the store routes, and a link ending in #token= fills the code in');
+}
+
 // ══ 5. THE MERGE, RUN FOR REAL ══════════════════════════════════════════════
 // Everything above reads structure. This EXECUTES the client: it lifts
 // applyResearchResult out of index.html with the two helpers it calls, runs it
@@ -1969,8 +1997,15 @@ const PENDING = [];
   if (!sbSrc) {
     fails.push('sbLoadLeads is not a module-scope function any more, so the empty-versus-unreadable distinction cannot be verified');
   } else {
-    const mk = (answer) => new Function('sbFetch', 'rowToLead',
-      sbSrc + '\nreturn sbLoadLeads;')(async () => answer, (r) => ({ id: r.id }));
+    // Round 127: the page reads through the server's store route with the api()
+    // wrapper, which resolves to a Response; the fixture answers rows (or null
+    // for a page that did not answer) the way that route does.
+    const asApi = (answer) => async (path) => {
+      const rows = typeof answer === 'function' ? await answer(path) : answer;
+      return rows === null ? { ok: false, status: 502, json: async () => null } : { ok: true, status: 200, json: async () => ({ rows }) };
+    };
+    const mk = (answer) => new Function('api', 'rowToLead',
+      sbSrc + '\nreturn sbLoadLeads;')(asApi(answer), (r) => ({ id: r.id }));
     PENDING.push((async () => {
       const failed = await mk(null)();
       const empty = await mk([])();
@@ -2001,18 +2036,18 @@ const PENDING = [];
       const _paths = [];
       const _pageFetch = async (path) => {
         _paths.push(String(path));
-        if (String(path).indexOf('id=gt.') < 0) return _rowsA;
-        if (String(path).indexOf('id=gt.a39') >= 0) return _rowsB;
+        if (String(path).indexOf('after=') < 0) return _rowsA;
+        if (String(path).indexOf('after=a39') >= 0) return _rowsB;
         return [];
       };
-      const _paged = await (new Function('sbFetch', 'rowToLead', sbSrc + '\nreturn sbLoadLeads;')(_pageFetch, (r) => ({ id: r.id })))();
+      const _paged = await (new Function('api', 'rowToLead', sbSrc + '\nreturn sbLoadLeads;')(asApi(_pageFetch), (r) => ({ id: r.id })))();
       if (!Array.isArray(_paged) || _paged.length !== 43) {
         fails.push('the leads read is not paginated (or pages are not assembled): a 43-row cloud came back as ' + (Array.isArray(_paged) ? _paged.length : _paged) + ' — one full-table statement is what died with 57014 on launch night');
       }
-      if (!_paths.some(pth => pth.indexOf('id=gt.a39') >= 0)) {
-        fails.push('the second page is not requested by keyset (id=gt.<last>) — offset pages re-sort under concurrent writes and rows shift between pages');
+      if (!_paths.some(pth => pth.indexOf('after=a39') >= 0)) {
+        fails.push('the second page is not requested by keyset (after=<last>) — offset pages re-sort under concurrent writes and rows shift between pages');
       }
-      const _midFail = await (new Function('sbFetch', 'rowToLead', sbSrc + '\nreturn sbLoadLeads;')(async (path) => (String(path).indexOf('id=gt.') < 0 ? _rowsA : null), (r) => ({ id: r.id })))();
+      const _midFail = await (new Function('api', 'rowToLead', sbSrc + '\nreturn sbLoadLeads;')(asApi(async (path) => (String(path).indexOf('after=') < 0 ? _rowsA : null)), (r) => ({ id: r.id })))();
       if (_midFail !== null) {
         fails.push('a page that fails MID-WALK returns a PARTIAL list as the truth — every cloud lead on the unread pages would be dropped as a stale local relic, which is worse than no read at all');
       }
@@ -2243,18 +2278,21 @@ const PENDING = [];
       continue;
     }
     if (from.startsWith('env:')) {
-      // The boot EXECUTES the resolver for these; all this side can check is
-      // that the variable is real and that the app is not also being asked for it.
+      // The boot EXECUTES the resolver for these; this side checks that the
+      // variable is real and, since Round 127, that the page holds NO field and
+      // sends NO payload for it: a key in a browser is the exposure coming back.
       if (!new RegExp('process\\.env\\.' + from.slice(4) + '\\b').test(serverCode)) {
         dead.push(`${k} (declared as ${from} and server.js never reads that variable)`);
       }
+      const pageName = k === 'anthropicKey' ? 'apiKey' : k;
+      if (offered.has(pageName) || offered.has(k)) dead.push(`${k} (the server reads it from ${from}, and the page still has a Settings field for it)`);
+      if (sent.has(pageName) || sent.has(k)) dead.push(`${k} (the server reads it from ${from}, and a request payload still sends it)`);
       continue;
     }
-    if (!offered.has(k)) dead.push(`${k} (declared as a client key and there is no Settings field to fill it)`);
-    else if (!sent.has(k)) dead.push(`${k} (a Settings field exists but no request payload sends it)`);
+    dead.push(`${k} (declared as a client key; since Round 127 every key is read from the server's environment and the page holds none)`);
   }
   if (dead.length) {
-    fails.push(`the server reads ${dead.length} key(s) out of req.body.keys that the app cannot supply: ${dead.join('; ')}. A key with nowhere to come from is silently empty forever, and the measurement behind it reads as "the API had nothing" rather than as "we never asked"`);
+    fails.push(`${dead.length} key(s) are declared, read or offered in the wrong place: ${dead.join('; ')}. A key with nowhere to come from is silently empty forever, and a key in the page is readable by anyone who views the source`);
   } else if (every.size < 8) {
     fails.push(`only ${every.size} API key(s) could be resolved between the scan and KEY_SOURCES, so this check is not looking at the real set`);
   } else {
@@ -2702,8 +2740,9 @@ let contactTally = null;
         if (_co.placeId !== 'ChIJ-test') {
           fails.push('the contact request does not send the place id, so the server cannot read who signs their Google review replies - the best free read of an owner-run shop owner');
         }
-        if (_k.apifyToken !== 'apify_x') {
-          fails.push('the contact request does not send the Apify token, so the review-reply owner source stays structurally unreachable');
+        // Round 127: the server holds the Apify token; the request must carry none.
+        if (_k.apifyToken) {
+          fails.push('the contact request carries an Apify token, which since Round 127 is the exposure coming back');
         }
         if (_co.outsideBand !== true || _co.aboveSizeCeiling !== true) {
           fails.push('the contact request does not send what discovery already decided, so a demoted lead scores exactly like a clean one');
@@ -3078,7 +3117,7 @@ let contactTally = null;
       for (const k of ['name', 'website', 'phone', 'location', 'industry', 'reviewCount', 'rating']) {
         if (b.company[k] === undefined || b.company[k] === null || b.company[k] === '') fails.push(`the contact request drops ${k}, so the server cannot use it`);
       }
-      if (!b.keys.anthropicKey) fails.push('the contact request does not send the Anthropic key, so every lead is refused at preflight');
+      if (b.keys && Object.values(b.keys).some(Boolean)) fails.push('the contact request carries a key; the server holds every key and the page must send none');
       if (M.body({ name: 'X', reviewCount: '40' }, {}).company.reviewCount !== null) fails.push('the contact request sends a review count that is not a number, which the score then treats as a measurement');
       // ══ THE PAID OWNER LOOKUP DEFAULTS ON ══════════════════════════════
       // The free stage of the owner ladder settles about half of leads and

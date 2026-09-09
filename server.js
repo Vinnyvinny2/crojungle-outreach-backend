@@ -158,7 +158,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261007;
+const CONTRACT_VERSION = 20261008;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -560,20 +560,14 @@ const serverKeys = () => ({
   adzunaKey: _envKey(process.env.ADZUNA_KEY),
   pageSpeedKey: _envKey(process.env.PAGESPEED_KEY),
 });
-// Environment wins. The body is the fallback for one round only (the deployed
-// page still sends its Settings keys).
+// The environment is the only source. A key in the request body is ignored
+// (since 2026-09-09; for one round it was a fallback while the old page still
+// sent its Settings keys). The body parameter stays so a caller reads naturally.
 const keysFor = (body, fromServer) => {
-  const b = (body && typeof body === 'object') ? body : {};
-  const bk = (b.keys && typeof b.keys === 'object') ? b.keys : {};
+  void body;
   const E = fromServer || serverKeys();
   const out = {};
-  for (const k of Object.keys(SERVER_KEY_ENV)) {
-    const fallback = k === 'anthropicKey' ? (bk.anthropicKey || b.apiKey)
-      : k === 'hunterKey' ? (bk.hunterKey || b.hunterKey)
-      : k === 'verifierKey' ? (bk.verifierKey || b.verifierKey)
-      : bk[k];
-    out[k] = E[k] || String(fallback || '').trim();
-  }
+  for (const k of Object.keys(SERVER_KEY_ENV)) out[k] = E[k] || '';
   return out;
 };
 // Rewrites the body in place, so every route that reads req.body.keys, apiKey,
@@ -581,12 +575,13 @@ const keysFor = (body, fromServer) => {
 const mergeServerKeys = (body, fromServer) => {
   if (!body || typeof body !== 'object') return body;
   const E = fromServer || serverKeys();
-  if (!Object.keys(SERVER_KEY_ENV).some(k => E[k])) return body;
   const merged = keysFor(body, E);
+  // Always rewritten: a key the page sent is replaced, and an empty one where
+  // Render holds nothing makes the route refuse by name instead of spending.
   body.keys = Object.assign({}, (body.keys && typeof body.keys === 'object') ? body.keys : {}, merged);
-  if (merged.anthropicKey) body.apiKey = merged.anthropicKey;
-  if (merged.hunterKey) body.hunterKey = merged.hunterKey;
-  if (merged.verifierKey) body.verifierKey = merged.verifierKey;
+  body.apiKey = merged.anthropicKey;
+  body.hunterKey = merged.hunterKey;
+  body.verifierKey = merged.verifierKey;
   return body;
 };
 const serverKeyGate = (req, res, next) => {
@@ -4184,8 +4179,10 @@ app.post('/api/claude', async (req, res) => {
 // ── FIRECRAWL ─────────────────────────────────────────────
 app.post('/api/scrape', async (req, res) => {
   try {
-    const { url, firecrawlKey } = req.body;
-    if (!url || !firecrawlKey) return res.status(400).json({ error: 'URL and key required' });
+    const { url } = req.body;
+    const firecrawlKey = serverKeys().firecrawlKey;
+    if (!url) return res.status(400).json({ error: 'URL required' });
+    if (!firecrawlKey) return res.status(503).json({ error: 'FIRECRAWL_KEY is not set on Render.' });
     // This was the one Firecrawl door with no meter and no ceiling — a credit
     // per call invisible to /api/spend, to leadSpend, and to FC_DAILY_BUDGET,
     // which falsified the ledger's own "fed by the same doors" promise. Same
@@ -4593,8 +4590,8 @@ app.get('/api/find-website', async (req, res) => {
   // Method 3: WEB SEARCH — the reliable one. Clearbit misses constantly (which is
   // why the "confirm website" modal kept appearing) and domain-guessing only works
   // when the company name happens to equal the domain. A real web search just
-  // finds it. Requires the Firecrawl key to be passed.
-  const fcKey = req.query.fcKey;
+  // finds it. The Firecrawl key is this server's own.
+  const fcKey = serverKeys().firecrawlKey;
   if (fcKey) {
     try {
       const found = await findWebsiteViaSearch(cleanName, fcKey, req.query.location);
@@ -31623,7 +31620,7 @@ const apifyAccountNote = () => APIFY_ACCOUNT_PROBLEM;
 const apifyAccountProblem = (status) => {
   const s = Number(status);
   if (s === 402) return 'Apify is out of credits for this month, so no lead in this run had its reviews mined.';
-  if (s === 401 || s === 403) return 'The Apify token is being rejected (HTTP ' + s + '), so no lead in this run had its reviews mined. Fix it in Settings.';
+  if (s === 401 || s === 403) return 'The Apify token is being rejected (HTTP ' + s + '), so no lead in this run had its reviews mined. Fix APIFY_TOKEN on Render.';
   return '';
 };
 
@@ -31795,7 +31792,7 @@ const _fetchApifyReviewsUncached = async ({ placeId, apifyToken, companyName = '
                                    // 116-review place is a failure wearing an HTTP 200.
                                    placeTotalHint = 0 }) => {
   if (!placeId) return { checked: false, why: 'no placeId for this lead' };
-  if (!apifyToken) return { checked: false, why: 'no Apify token configured in Settings' };
+  if (!apifyToken) return { checked: false, why: 'APIFY_TOKEN is not set on Render' };
   const url = `https://api.apify.com/v2/acts/${APIFY_ACTOR}/run-sync-get-dataset-items?token=${encodeURIComponent(apifyToken)}`;
   // Counted at DISPATCH, before the await, same rule as Places: an actor run
   // that starts is billed whether or not we wait for the dataset.
@@ -36312,18 +36309,20 @@ const applyLabMobileScore = (pageSpeed, realSpeed) => {
 // never asked" - which is how Google's record of the prospect's own visitors
 // stayed dark for the life of this project.
 const KEY_SOURCES = {
-  // Server-owned since 2026-09-08 (serverKeys); the page's field is the fallback for one round.
+  // Every key is server-owned since 2026-09-09 (serverKeys; the names are
+  // SERVER_KEY_ENV). The page has no key field and sends no key; clientcheck
+  // refuses a 'client' row and a page field for any of these.
   anthropicKey:    'env:ANTHROPIC_API_KEY',
-  firecrawlKey:    'client',
-  apifyToken:      'client',
-  hunterKey:       'client',
-  fbToken:         'client',
-  ninjaPearKey:    'client',
-  companiesApiKey: 'client',
-  verifierKey:     'client',
-  adzunaId:        'client',
-  adzunaKey:       'client',
-  theirstackKey:   'client',
+  firecrawlKey:    'env:FIRECRAWL_KEY',
+  apifyToken:      'env:APIFY_TOKEN',
+  hunterKey:       'env:HUNTER_KEY',
+  fbToken:         'env:FB_TOKEN',
+  ninjaPearKey:    'env:NINJAPEAR_KEY',
+  companiesApiKey: 'env:COMPANIES_API_KEY',
+  verifierKey:     'env:MYEMAILVERIFIER_KEY',
+  adzunaId:        'env:ADZUNA_ID',
+  adzunaKey:       'env:ADZUNA_KEY',
+  theirstackKey:   'env:THEIRSTACK_KEY',
   // Server-owned: a Google Cloud key from the same project as GOOGLE_PLACES_KEY.
   // Deliberately NOT a Settings field - it would need a Netlify deploy to reach
   // anybody and would put a Google credential in a browser for no reason.
@@ -37484,7 +37483,7 @@ const sbDiagnose = (table, status, bodyText) => {
   // Order matters: RLS is checked before anything that could read as "missing",
   // because a permission refusal is the cause that gets misreported as one.
   if (code === '42501' || /row-level security|permission denied for/i.test(all)) {
-    return `the ${t} table EXISTS but row-level security is refusing this write. Add a policy that lets this key write to it, or disable RLS on ${t}. Creating the table again will not help — it is already there`;
+    return `the ${t} table EXISTS but row-level security is refusing this write, which means this server's SUPABASE_KEY is not the service_role key (it must start sb_secret_; the boot line SUPABASE KEY ROLE says what it is). Row-level security stays ON and no policy is ever added for anon. Creating the table again will not help — it is already there`;
   }
   if (code === 'PGRST205' || /could not find the table/i.test(all)) {
     return `the ${t} table does not exist yet. Run the CREATE TABLE for it (the statement is in the comment above this function in server.js) and this write starts working with no code change`;
@@ -51888,7 +51887,7 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         : brainError
         ? brainError
         : !firecrawlKey
-        ? 'Firecrawl key missing — add fc-... key in Settings so we can scrape the homepage'
+        ? 'Firecrawl key missing — set FIRECRAWL_KEY on Render so we can scrape the homepage'
         // ══ NAME THE REAL CAUSE: THEIR SITE, NOT OUR KEY ═══════════════════════
         // James Dougherty Construction, live and three times: their homepage
         // returned 0 characters on the first attempt AND the retry. There was
@@ -52669,10 +52668,10 @@ const preflightResearch = (body, env) => {
     }
   }
   if (!String(b.apiKey || '').trim()) {
-    return { refuse: 'no Anthropic API key came with this request, so no audit could be written at all while Places, Firecrawl and Apify were still paid in full. Nothing was spent. Add the key in Settings and re-run.' };
+    return { refuse: 'no Anthropic API key: ANTHROPIC_API_KEY is not set on Render, so no audit could be written at all while Places, Firecrawl and Apify were still paid in full. Nothing was spent. Set it on Render and re-run.' };
   }
   if (website && !String(keys.firecrawlKey || '').trim()) {
-    return { refuse: 'this lead has a website and no Firecrawl key came with the request, so the entire website half of the audit would be dark while everything else still gets paid for. Nothing was spent. Add the Firecrawl key in Settings and re-run.' };
+    return { refuse: 'this lead has a website and no Firecrawl key (FIRECRAWL_KEY is not set on Render), so the entire website half of the audit would be dark while everything else still gets paid for. Nothing was spent. Set it on Render and re-run.' };
   }
   const _contactOnly = b.contactOnly === true;
   if (!String(e.GOOGLE_PLACES_KEY || '').trim() && !_contactOnly) {
@@ -62046,7 +62045,7 @@ app.listen(PORT, () => {
     {
       const c = readRunCompanyFrom({ name: 'X', website: 'https://x.example', placeId: 'ChIJ1', publishedHours: { open: 6 }, marketsSeen: ['Dallas TX', 'Austin TX'], marketingRoles: ['Marketing Manager'], reviewCount: 40, rating: 4.4 });
       if (c.placeId !== 'ChIJ1' || !c.publishedHours || c.market !== 'Dallas TX' || c.marketingRoles.length !== 1 || c.reviewCount !== 40) _fails.push('the read request drops the place id, the hours, the metro or the roles the page used to send');
-      if (readRunKeysFrom({ apiKey: 'a', firecrawlKey: 'f' }).anthropicKey !== 'a') _fails.push('the Settings apiKey does not become the Anthropic key of the run');
+      if (readRunKeysFrom({ apiKey: 'a', firecrawlKey: 'f' }, { anthropicKey: 'e' }).anthropicKey !== 'e') _fails.push('the environment key does not become the Anthropic key of the run');
       if (readRunOptsFrom({ findPaidOwner: false }).paidOwnerLookup !== false) _fails.push('an explicit off for the paid owner lookup is ignored');
       if (readRunOptsFrom({}).paidOwnerLookup !== true) _fails.push('an unset switch stands the paid owner lookup down');
       if (readRunOptsFrom({}).resolveWebsiteSearch !== false) _fails.push('the website search is bought without being asked for');
@@ -62174,11 +62173,11 @@ app.listen(PORT, () => {
       if (_mb.apiKey !== 'from-render' || _mb.keys.extra !== 'kept') _fails.push('mergeServerKeys leaves the body apiKey in place or drops a body key it does not know');
       for (const [name, v] of Object.entries(_keyKeep)) { if (v === undefined) delete process.env[name]; else process.env[name] = v; }
       const _kfNo = keysFor({ apiKey: 'from-body', keys: { firecrawlKey: 'fc-body' } }, { anthropicKey: '', firecrawlKey: '' });
-      if (_kfNo.anthropicKey !== 'from-body' || _kfNo.firecrawlKey !== 'fc-body') _fails.push('with no key on Render the body key is dropped, so the page already deployed stops working before its replacement is dragged in');
+      if (_kfNo.anthropicKey !== '' || _kfNo.firecrawlKey !== '') _fails.push('with no key on Render a key in the request body is honoured, so a key pasted into any browser still spends');
       const _mbNo = mergeServerKeys({ apiKey: 'from-body' }, { anthropicKey: '' });
-      if (_mbNo.apiKey !== 'from-body' || 'keys' in _mbNo) _fails.push('with no key on Render the body is rewritten anyway');
+      if (_mbNo.apiKey !== '' || !_mbNo.keys || _mbNo.keys.anthropicKey !== '') _fails.push('with no key on Render the body\'s own key survives the gate');
       if (readRunKeysFrom({ apiKey: 'stale' }, { anthropicKey: 'k' }).anthropicKey !== 'k') _fails.push('a background read prefers the Settings row to the environment');
-      if (readRunKeysFrom({ apiKey: 'row' }, {}).anthropicKey !== 'row') _fails.push('a background read with no key on Render drops the Settings key this round still allows');
+      if (readRunKeysFrom({ apiKey: 'row' }, {}).anthropicKey !== '') _fails.push('a background read with no key on Render still takes a key from the Settings row');
       const _sc = scrubSecrets({ apiKey: 'x', hunterKey: 'y', findPaidOwner: true, tone: 'plain' });
       if ('apiKey' in _sc || 'hunterKey' in _sc || _sc.findPaidOwner !== true || _sc.tone !== 'plain') _fails.push('scrubSecrets keeps a key or drops a preference');
       for (const k of Object.keys(SERVER_KEY_ENV)) { const f = k === 'anthropicKey' ? 'apiKey' : k; if (!SETTINGS_SECRET_FIELDS.includes(f)) _fails.push(`the Settings field ${f} is a key this server reads and scrubSecrets does not strip it`); }
@@ -62194,9 +62193,22 @@ app.listen(PORT, () => {
       const _jwt = 'x.' + Buffer.from(JSON.stringify({ role: 'service_role' })).toString('base64').replace(/=+$/, '') + '.y';
       if (sbKeyRole('') !== 'unset' || sbKeyRole('sb_secret_abc') !== 'service_role' || sbKeyRole('sb_publishable_abc') !== 'anon' || sbKeyRole(_jwt) !== 'service_role' || sbKeyRole('sb_servercheck') !== 'unknown') _fails.push('sbKeyRole misreads a key shape');
       if (!_src.includes(_n('SUPABASE KEY ROLE: ${sbKeyRole(', 'SB_KEY)}'))) _fails.push('the boot no longer prints the role of the Supabase key');
-      // 6. KEYS IN QUERY STRINGS: the cron secret plus the four credit testers' one-round fallbacks.
-      const _qs = (_src.match(/req\.query\.(key|hunterKey|apiKey|app_key|secret)\b/g) || []).length;
-      if (_qs !== 5) _fails.push(`${_qs} query-string key read(s), expected 5 (the cron secret and the four credit testers' fallbacks)`);
+      // 6. KEYS IN QUERY STRINGS: the cron secret and nothing else.
+      const _qs = (_src.match(/req\.query\.(key|hunterKey|apiKey|app_key|fcKey|secret)\b/g) || []).length;
+      if (_qs !== 1) _fails.push(`${_qs} query-string key read(s), expected 1 (the cron secret only)`);
+      // 7. THE LIVE INSTANCE: on Render (RENDER_EXTERNAL_URL is set) the code must be set and the database key must be the service_role one.
+      const _onRender = !!String(process.env.RENDER_EXTERNAL_URL || '').trim();
+      if (_onRender && !String(_envKeep.APP_TOKEN || '').trim()) _fails.push('APP_TOKEN is not set on this Render instance, so every route answers anyone on the internet; set it on Render');
+      if (_onRender && sbKeyRole(SB_KEY) === 'anon') _fails.push('SUPABASE_KEY is the publishable (anon) key; with row-level security on, every write this server makes is refused. Use the sb_secret_ key');
+      // 8. THE PAGE beside this file (CI, a laptop; Render deploys it separately) holds no database key and calls this server only through the wrapper that sends the code.
+      const _fsq = require('fs'), _pathq = require('path');
+      const _ip = _pathq.join(__dirname, 'index.html');
+      if (_fsq.existsSync(_ip)) {
+        const _page = _fsq.readFileSync(_ip, 'utf8');
+        const _hits = ['sb_publishable_', 'sb_secret_', 'supabase.co', 'SB_KEY'].filter(s => _page.includes(s));
+        if (_hits.length) _fails.push(`index.html carries ${_hits.join(', ')}, so a browser can reach the database without this server`);
+        if (/[^A-Za-z]fetch\(BACKEND/.test(_page) || /[^A-Za-z]fetch\(`\$\{BACKEND\}/.test(_page)) _fails.push('index.html calls this server with a bare fetch that carries no access code');
+      }
       if (_src.includes(_n("app.get('/api/em", "ail'")) || _src.includes(_n("app.get('/api/test-", "adzuna'"))) _fails.push('a dead tester that took a key in the URL is back');
     } finally {
       for (const [k, v] of Object.entries(_envKeep)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
@@ -62206,17 +62218,7 @@ app.listen(PORT, () => {
     } else {
       console.log('✓ ACCESS CHECK: every /api route but the cron sits behind the access code when APP_TOKEN is set (a preflight and the public paths pass; a wrong or missing code is refused 401 with the sentence the rep needs), CORS answers only the listed origins, every paid key is read from this server\'s environment before the body, the Settings row goes out and comes in without a secret, and the Supabase key\'s role is printed by shape.');
     }
-    if (!appTokenSet()) console.log('⚠ AUTH GATE OFF: APP_TOKEN is not set on this server, so every route answers without the access code. Set it on Render once the page that sends the code is deployed.');
-    {
-      // SECRET SURFACE: a warning while the page still holds the key; a refusal once it must not.
-      const _fsq = require('fs'), _pathq = require('path');
-      const _ip = _pathq.join(__dirname, 'index.html');
-      if (_fsq.existsSync(_ip)) {
-        const _page = _fsq.readFileSync(_ip, 'utf8');
-        const _hits = ['sb_publishable_', 'sb_secret_', 'supabase.co'].filter(s => _page.includes(s));
-        if (_hits.length) console.log(`⚠ SECRET SURFACE: index.html still carries ${_hits.join(', ')}, so the browser still talks to Supabase with a key anyone can read in the page source; the page stops doing that in the next round.`);
-      }
-    }
+    if (!appTokenSet()) console.log('⚠ AUTH GATE OFF: APP_TOKEN is not set on this server, so every route answers without the access code. Set it on Render (on a Render instance this is a red check, not a warning).');
   } catch (e) {
     console.log(`⛔ ACCESS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
@@ -81437,10 +81439,12 @@ const readRunCompanyFrom = (company) => {
 // An object literal on purpose: clientcheck's KEY_SOURCES walk reads the keys a
 // route destructures out of req.body.keys, and anthropicKey has no row there.
 const readRunKeysFrom = (settingsData, fromServer) => {
-  const S = settingsData || {}, E = fromServer || {};
+  // The Settings row carries no key since 2026-09-09; only the environment does.
+  void settingsData;
+  const E = fromServer || {};
   return {
-    anthropicKey: E.anthropicKey || S.apiKey || '', firecrawlKey: E.firecrawlKey || S.firecrawlKey || '', verifierKey: E.verifierKey || S.verifierKey || '',
-    apifyToken: E.apifyToken || S.apifyToken || '', hunterKey: E.hunterKey || S.hunterKey || '', companiesApiKey: E.companiesApiKey || S.companiesApiKey || '',
+    anthropicKey: E.anthropicKey || '', firecrawlKey: E.firecrawlKey || '', verifierKey: E.verifierKey || '',
+    apifyToken: E.apifyToken || '', hunterKey: E.hunterKey || '', companiesApiKey: E.companiesApiKey || '',
   };
 };
 const readRunOptsFrom = (settingsData) => {
@@ -81654,7 +81658,7 @@ const driveReadRun = async (runId, o = {}) => {
   try {
     const S = await settingsData();
     const keys = readRunKeysFrom(S, serverKeys());
-    if (!keys.anthropicKey) throw new Error(S ? 'No Anthropic key: set ANTHROPIC_API_KEY on Render (for one more round the key in Settings still counts), so nobody can be identified.' : 'the Settings row (user_settings) could not be read and ANTHROPIC_API_KEY is not set on Render, so the run has no keys');
+    if (!keys.anthropicKey) throw new Error(S ? 'No Anthropic key: set ANTHROPIC_API_KEY on Render, so nobody can be identified.' : 'the Settings row (user_settings) could not be read and ANTHROPIC_API_KEY is not set on Render, so the run has no keys');
     const opts = readRunOptsFrom(S);
     let rows;
     if (o.resume) {
@@ -81875,7 +81879,7 @@ app.post('/api/read-run', async (req, res) => {
   const ceiling = budgetRefusal(['fc', 'anthropicUsd']);
   if (ceiling) return res.status(429).json({ error: ceiling.message, budgetStopped: true });
   const S = (await settingsData()) || {};
-  if (!readRunKeysFrom(S, serverKeys()).anthropicKey) return res.status(422).json({ error: 'No Anthropic key: set ANTHROPIC_API_KEY on Render (for one more round the key in Settings still counts), so nobody can be identified.', preflightStopped: true });
+  if (!readRunKeysFrom(S, serverKeys()).anthropicKey) return res.status(422).json({ error: 'No Anthropic key: set ANTHROPIC_API_KEY on Render, so nobody can be identified.', preflightStopped: true });
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   const row = { id, started_at: now, progress_at: now, status: 'running', requested_count: count, read_count: 0, failed_count: 0, ruled_out_count: 0,
@@ -81979,8 +81983,8 @@ app.get('/api/find-pool', async (req, res) => {
 });
 
 app.get('/api/firecrawl-credits', async (req, res) => {
-  const key = serverKeys().firecrawlKey || req.query.key;
-  if (!key) return res.status(400).json({ error: 'key required' });
+  const key = serverKeys().firecrawlKey;
+  if (!key) return res.status(503).json({ error: 'FIRECRAWL_KEY is not set on Render.' });
   try {
     const r = await fetchT('https://api.firecrawl.dev/v1/team/credit-usage', {
       headers: { 'Authorization': `Bearer ${key}` },
@@ -82000,8 +82004,8 @@ app.get('/api/firecrawl-credits', async (req, res) => {
 });
 
 app.get('/api/hunter-credits', async (req, res) => {
-  const key = serverKeys().hunterKey || req.query.key;
-  if (!key) return res.status(400).json({ error: 'key required' });
+  const key = serverKeys().hunterKey;
+  if (!key) return res.status(503).json({ error: 'HUNTER_KEY is not set on Render.' });
   try {
     const r = await fetchT(`https://api.hunter.io/v2/account?api_key=${encodeURIComponent(key)}`, {}, 8000);
     const d = await safeJson(r);
@@ -82019,8 +82023,8 @@ app.get('/api/hunter-credits', async (req, res) => {
 });
 
 app.get('/api/hunter-sequences', async (req, res) => {
-  const hunterKey = serverKeys().hunterKey || req.query.key;
-  if (!hunterKey) return res.status(400).json({ error: 'key required' });
+  const hunterKey = serverKeys().hunterKey;
+  if (!hunterKey) return res.status(503).json({ error: 'HUNTER_KEY is not set on Render.' });
   try {
     const r = await fetchT(`https://api.hunter.io/v2/campaigns?api_key=${encodeURIComponent(hunterKey)}`, {}, 10000);
     const d = await safeJson(r);
@@ -82057,9 +82061,9 @@ app.get('/api/hunter-sequences', async (req, res) => {
 // Never overwrite a sentiment already recorded by a person with a coarser
 // machine value; a human who read the reply knows more than the status does.
 app.get('/api/hunter-outcomes', async (req, res) => {
-  const hunterKey = serverKeys().hunterKey || req.query.key;
+  const hunterKey = serverKeys().hunterKey;
   const sequenceId = req.query.sequenceId;
-  if (!hunterKey) return res.status(400).json({ error: 'key required' });
+  if (!hunterKey) return res.status(503).json({ error: 'HUNTER_KEY is not set on Render.' });
   if (!sequenceId) return res.status(400).json({ error: 'sequenceId required \u2014 which sequence to read outcomes from' });
   try {
     // Paginate: a month of sending is ~550 recipients and the default page is 20.

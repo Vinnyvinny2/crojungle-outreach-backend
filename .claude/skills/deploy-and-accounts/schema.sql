@@ -1,7 +1,9 @@
 -- Every CREATE / ALTER the server expects, collected from the round notes on 2026-09-02.
--- Run in the Supabase SQL editor. Tables the server WRITES need row-level security
--- disabled (see docs/history/round-093.md). SCHEMA PROBE in the boot log names
--- whatever is still missing.
+-- Run in the Supabase SQL editor. Since §127 (2026-09-09) row-level security is ON on
+-- every table with NO policy for anon: the server's SUPABASE_KEY is the service_role
+-- (sb_secret_) key, which bypasses RLS, and the browser never talks to Supabase. (Rounds
+-- 16 and 93 had RLS off because the server then used the anon key.) SCHEMA PROBE in the
+-- boot log names whatever is still missing.
 
 -- §11 (docs/history/round-011.md)
 create table places_query_state (
@@ -74,3 +76,29 @@ update discovered_queue set extra = (extra #>> '{}')::jsonb where jsonb_typeof(e
 -- Until index.html is re-dragged into Netlify the OLD page still deletes the whole
 -- queue on every action. Nothing on the server deletes a queue row, so:
 revoke delete on discovered_queue from anon, authenticated;
+
+-- §127 (docs/history/round-127.md) — row-level security ON, the browser locked out.
+-- Run ONLY after the Round 127 index.html is live on Netlify and APP_TOKEN is set
+-- on Render: from that build the page never talks to Supabase, and the server
+-- holds the service_role (sb_secret_) key, which bypasses these policies.
+-- The old page (any build before 2026-09-09) stops syncing the moment this runs.
+alter table places_query_state enable row level security;
+alter table lead_bench enable row level security;
+alter table business_observations enable row level security;
+alter table call_outcomes enable row level security;
+alter table lead_pages enable row level security;
+alter table send_log enable row level security;
+alter table leads enable row level security;
+alter table discovered_queue enable row level security;
+alter table read_runs enable row level security;
+alter table user_settings enable row level security;
+alter table contact_cache enable row level security;
+alter table company_size_cache enable row level security;
+alter table cron_state enable row level security;
+-- No policy is ever added for anon or authenticated: the publishable key reads nothing.
+revoke all on all tables in schema public from anon, authenticated;
+alter default privileges in schema public revoke all on tables from anon, authenticated;
+-- The keys that sat in the Settings row for the life of the project come out of it.
+update user_settings set data = data - 'apiKey' - 'firecrawlKey' - 'companiesApiKey' - 'theirstackKey' - 'pdlKey' - 'hunterKey' - 'verifierKey' - 'apifyToken' - 'ninjaPearKey' - 'fbToken' - 'adzunaId' - 'adzunaKey' - 'pageSpeedKey' where id = 'singleton';
+-- Rollback (not expected): `alter table <t> disable row level security;` per table and
+-- `grant select, insert, update, delete on all tables in schema public to anon, authenticated;`.
