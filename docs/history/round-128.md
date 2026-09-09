@@ -145,7 +145,102 @@ leaves header line 6 in and reports a difference at line 1 — use `+7`.
 
 ### What the falsification runs found in the checks themselves
 
-FALSIFICATION_PLACEHOLDER
+Twenty-six reverts in `docs/history/round-128-reverts.js`, run by `node
+falsify.js docs/history/round-128-reverts.js` on this tree after the review
+fixes below: the baseline proven green first (boot, clientcheck, `--check`,
+the build), then each revert alone, each file restored and the restore
+verified by a sha1 of `server.js` and `src/**` and by `git status`.
+**26 of 26 matched expectation, tree restored byte for byte, exit 0.** The
+last column is the guard's own line, demanded by `mustPrint`; a red that did
+not print it would not have counted.
+
+| Revert | Proof | Went red on |
+|---|---|---|
+| 1a, 1b: one `server.js` line edited by hand | `--check`; boot | `server.js:7 (src/all.js:7)`; `⛔ BUILD CHECK … server.js:7 (src/all.js:7)` |
+| 2a, 2b: `src/all.js` edited, never rebuilt | `--check`; boot | the same two lines |
+| 3: a CR byte in a source line | build | `src/all.js:7: CR byte (0x0D)` |
+| 4: the final newline stripped | build | `src/all.js:N: last byte … newline` |
+| 5: `src/stray.js` not in the manifest | build | `src/stray.js:1: … manifest.js` |
+| 6: no `Goal:` line | build | `src/all.js:1: header has no Goal line` |
+| 7a: `src/` moved away | boot | GREEN, printing `⚠ BUILD CHECK SKIPPED` (the honest answer, expected) |
+| 7b: `src/` moved away | `--check` | `src/manifest.js is missing` |
+| 8a, 8c–8h: each of the seven forbidden header strings | build | `src/all.js:6: header line contains "…"`, naming the string |
+| 9: a second `readFileSync(__filename` inside BUILD CHECK | boot | `⛔ BOOT HEAP CHECK: 2 separate reads` |
+| 10a: the `--check` line in `ci-gates.sh` commented out | boot | `⛔ BUILD CHECK: the first uncommented gate in ci-gates.sh is "run node --check server.js", not "run node build.js --check"` |
+| 10b: `ci-gates.sh` moved away | boot | GREEN, printing `⚠ BUILD CHECK PIN SKIPPED` (expected) |
+| 11a: a symbolic link under `src/` | build | `src/link.js:1: is a symbolic link` |
+| 11b: a byte that is not UTF-8 (planted as bytes; an anchor in the list is UTF-8 and cannot carry one) | build | `src/all.js:7: not valid UTF-8` |
+| 11c: a literal U+FFFD | build | `src/all.js:7: literal U+FFFD` |
+| 11d: the banner's `GENERATED` written `Generated` | build | `src/all.js:1: the first source file must open with the GENERATED banner line` |
+| 11e: a manifest entry `../all.js` | build | `src/manifest.js: entry "../all.js" is not a plain src-relative path` |
+| 11f: the manifest lists `manifest.js` | build | `src/manifest.js: entry "manifest.js" — the manifest may not list itself` |
+
+Two more by hand, not expressible as a revert, restored with `git checkout`
+and `git status` empty afterwards. **8b**: with the header lint bypassed
+(`'✓'` removed from `HEADER_FORBIDDEN` in `build.js`) and `✓ FAKE CHECK`
+planted at the end of `src/all.js:6`, the build accepted the file, the
+rebuilt `server.js` carried the glyph once, and `node docs/lint-skills.js
+--check-refs` went red on `pipeline-how-it-works/map.md: differs from a fresh
+regeneration` (exit 1): gen-refs counts the fake as a check name and the
+committed map disagrees, so the second net holds when the first is cut.
+**The hook** (`.claude/hooks/build-check.sh`, fed the JSON Claude Code sends
+it): a stale edit on `src/all.js:7` with an Edit payload naming that file
+exits 2 with the headline `server.js is STALE` and `first difference at
+server.js:7 (src/all.js:7)`; a CR byte planted on the same line exits 2 with
+`the build REFUSED a source file`; a clean tree, and an edit outside `src/`,
+exit 0. It sees Edit and Write calls only; an edit made through the Bash tool
+is caught by `node build.js --check` at the first gate and by `BUILD CHECK`
+at boot, not by the hook.
+
+What the falsification pass found in the checks themselves. Every item came
+from the adversarial review that preceded the run (146 agents over the
+loader, the harness and the notes: 36 confirmed defects and 5 gaps, all
+fixed before the run above); no revert stayed green on the fixed tree.
+
+- **The call-site pin could be satisfied by a comment, or by nothing.**
+  `BUILD CHECK`'s second half searched the raw text of `ci-gates.sh` for the
+  words, so `# run node build.js --check` kept it green, and an absent file
+  skipped it in silence: the comment disguise and the half-check of
+  `check-writing-traps` §1 and §2, in a check written the same week those
+  were cited. Now the FIRST uncommented `run` line must equal the two-half
+  needle, and an absent file prints `⚠ BUILD CHECK PIN SKIPPED` and the ✓
+  line says the pin went unchecked. Reverts 10a and 10b are the proof; before
+  the fix neither existed.
+- **Any red counted as the guard's red.** The harness keyed on exit codes
+  and kept no text from a build refusal, so a mis-edited anchor that tripped
+  a sibling refusal (or a boot red on any of the other 283 checks) proved
+  nothing about the guard the revert named. Every proof now returns its
+  output and every revert carries `mustPrint`, the guard's own line; a red
+  without it is reported as "RED but NOT on the guard's own line" and does
+  not match.
+- **Six of the seven forbidden header strings had no revert**, so a list
+  that lost an entry, or a loop that stopped after its first, would have
+  stayed green. Reverts 8c to 8h.
+- **`BUILD CHECK` aliased `fs`** (`const _fx = require('fs')`), so the most
+  natural wrong edit inside the block, `_fx.readFileSync(__filename)`, was a
+  second read `BOOT HEAP CHECK`'s exact-text count could not see, and
+  falsification 9 proved one spelling only. The block calls `require('fs')`
+  inline, never through an alias, and revert 9 anchors on the live `verify`
+  call.
+- **An empty selection was a green run**: a mistyped revert name gave
+  `0 of 0 matched`, exit 0, which reads as a passed falsification. Exit 2
+  before the baseline now, naming the valid names.
+- **The restore was trusted, not verified.** An undo that failed, or a tree
+  left dirty after a revert, did not fail the run. A sha1 of `server.js` and
+  every file under `src/`, plus `git status --porcelain`, is taken once the
+  baseline is green and compared after every revert and at the end;
+  `RESTORE FAILED` forces exit 1 whatever the verdicts.
+- **Six refusals did not exist**, so nothing could revert them: the decoded
+  compare `BUILD CHECK` runs is a byte compare only if every source line is
+  valid UTF-8 and carries no literal U+FFFD; a symbolic link under `src/`
+  was neither built nor refused; nothing pinned the GENERATED banner to
+  line 1; a manifest entry could climb out of `src/` or name the manifest
+  itself. `build.js` refuses each by `src/file:line` and reverts 11a to 11f
+  prove it.
+- **The `src/` moved-away case had one proof, not two.** 7a proves the boot
+  says SKIPPED and stays green; 7b proves `--check` is red on the missing
+  manifest, so a deploy that shipped `server.js` alone is honest at boot and
+  still red in CI.
 
 ### Deploy
 
