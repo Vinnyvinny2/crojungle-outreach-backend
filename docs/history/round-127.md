@@ -77,7 +77,17 @@ the read run and the credit tester all refuse by name and spend nothing.
 
 ### What the falsification runs found
 
-FALSIFICATION_PLACEHOLDER
+Ten reverts, each alone against a green baseline, each red on its own
+named line. On the page (`clientcheck`): a bare `fetch(BACKEND` put back; the
+publishable key put back; the wrapper sending no bearer; Settings saved
+unstripped; an Anthropic key field back on the Settings screen. On the
+server (`ACCESS CHECK`): a body key honoured; the Settings row's key
+honoured by the background read; a key accepted in the credit tester's
+URL; a `KEY_SOURCES` row back to `client`; the body's own key surviving the
+gate. The first `servercheck` run went red on one line of its own: STORE1
+still expected the server to hold no Anthropic key, which was true of the
+§126 boot and false now that every spending scenario boots with the keys on
+the fake Render; the expectation was corrected, not the server.
 
 ### Deploy (one sitting, in this order; each step works with the one before)
 

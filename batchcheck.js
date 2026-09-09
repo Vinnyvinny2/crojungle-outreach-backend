@@ -100,6 +100,10 @@ const saveLeads = (l, changed) => { __W.writes++; __store = l.map(x => ({ ...x }
 const setInflightJob = (id, jid) => { __W.jobIds.add(jid); };
 const clearInflightJob = (id) => {};
 const BACKEND = 'http://fake';
+// Round 127: every server call goes through the page's wrapper, which adds the
+// access code and hands the call to fetch; here fetch is the fake network.
+const apiFetch = (url, opts) => fetch(url, opts);
+const api = (p, opts) => apiFetch(BACKEND + p, opts);
 const console = __W.console;
 const fetch = async (url, init) => {
   if (String(url).indexOf('/api/research-async') >= 0) {
@@ -264,9 +268,11 @@ const runBatch = async (opts) => {
     if (W.reReads < 50) fails.push(`storage was re-read ${W.reReads} times for 50 leads — a run that writes back a snapshot taken minutes ago erases whatever finished in between, and fifty in flight is exactly that case`);
     // The request must be the shared builder's, not a hand-written body.
     const b = W.bodies[0] || {};
-    for (const k of ['company', 'website', 'keys', 'leadChannel', 'marketsSeen', 'reachPredict']) {
+    for (const k of ['company', 'website', 'leadChannel', 'marketsSeen', 'reachPredict']) {
       if (!(k in b)) fails.push(`the batch's research request has no "${k}" — it is not going through buildResearchBody, which is how the two hand-written bodies came to disagree about seventeen fields`);
     }
+    // Round 127: the server holds every key; a key in the batch's request is the exposure coming back.
+    if ('keys' in b || 'apiKey' in b) fails.push('the batch\'s research request carries a key; since Round 127 the server holds every key and the page must send none');
     if (b.browserData !== null) fails.push('the batch is sending browser data — doing the browser-side Hunter lookup fifty times spends a whole month of a 50-credit plan in one press');
     // ── AND THE PROGRESS PANEL, DRIVEN BY THE SAME RUN ──────────────────────
     // Vin had to read the server log to know where a run was. What replaced that
