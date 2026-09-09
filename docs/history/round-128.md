@@ -42,7 +42,7 @@ byte otherwise, and a compare proves it every round.
   `server.js:L`; `node build.js --where LINE` confirms it). Against the
   pre-split `server.js` on `backup/server-monolith` every line moved down
   by six up to the `BUILD CHECK` block and by six plus that block's length
-  after it (eighty-seven at this writing), so a line number quoted in an
+  after it (ninety-nine at this writing), so a line number quoted in an
   earlier round note or an old map is that file's. The
   rule is `node build.js --where N`, never arithmetic — and it stops being
   one number at all once Round 129 cuts the file. Render, CI and every tool
@@ -93,6 +93,7 @@ read once as one off-heap Buffer and only one line of it is decoded at a
 time, so nothing beyond one line lands on the V8 heap `BOOT HEAP CHECK`
 measures, and heapUsed moves by under 2MB); `node build.js --check` first in
 the static stage; the refusals inside the build, each naming `src/file:line`
+(a manifest refusal names `src/manifest.js` and the entry)
 (a CR byte, a BOM, an empty file, a missing or doubled final newline, a line
 that is not valid UTF-8 or carries a literal U+FFFD, a manifest that does not
 load or lists a path that is not plain and src-relative, an entry not on
@@ -108,21 +109,23 @@ PR review collapses it.
 Proof that no logic moved — the command, so a reader reruns it instead of
 trusting the sentence: `git diff --stat backup/server-monolith..HEAD --
 server.js` is insertions only, 0 deletions (the six header lines plus the
-`BUILD CHECK` block), and the built file with those lines cut out is the
-monolith byte for byte. The block runs from the blank line above its
-`// ══ THE FILE EVERY CHECK READS …` banner to the `}` that closes its
-`catch`; `grep -n 'THE FILE EVERY CHECK READS' server.js` lands inside it. The recipe, so
-the numbers are never typed by hand:
+`BUILD CHECK` insert), and the built file with those lines cut out is the
+monolith byte for byte. The insert runs from the blank line above the
+`// ══ ONE DOOR TO THE FILES BESIDE THIS ONE …` banner (the eight-line read
+helper the block uses, kept above the block's own scan window) to the `}`
+that closes the block's `catch`; `grep -n 'THE FILE EVERY CHECK READS'
+server.js` lands inside it. The recipe, so the numbers are never typed by
+hand:
 
-    s=$(grep -n 'THE FILE EVERY CHECK READS' server.js | cut -d: -f1)        # the banner; the block starts on the blank line above it
+    s=$(grep -n 'ONE DOOR TO THE FILES BESIDE' server.js | cut -d: -f1)      # the read helper's banner, first line of the insert; the insert starts on the blank line above it
     e=$(awk -v s="$s" 'NR>s && /BUILD CHECK COULD NOT RUN/ {print NR+1; exit}' server.js)   # the } that closes its catch
     cmp <(tail -n +7 server.js | sed "$((s-7)),$((e-6))d") <(git show backup/server-monolith:server.js)
 
 prints nothing. `tail -n +7` drops the six header lines, `sed` drops the
-block (its built line numbers less six). At this writing the block is
-server.js:53639-53719, 81 lines, so the `sed` is `'53633,53713d'`, the
-file is 84,148 lines against the monolith's 84,061, and the diff is
-87 insertions — numbers that move whenever the block is edited; the
+insert (its built line numbers less six). At this writing the insert is
+server.js:53639-53731, 93 lines, so the `sed` is `'53633,53725d'`, the
+file is 84,160 lines against the monolith's 84,061, and the diff is
+99 insertions — numbers that move whenever the block is edited; the
 recipe does not. The plan's own copy of this compare says `tail -n +6`, which
 leaves header line 6 in and reports a difference at line 1 — use `+7`.
 
@@ -155,13 +158,13 @@ leaves header line 6 in and reports a difference at line 1 — use `+7`.
 
 ### What the falsification runs found in the checks themselves
 
-Twenty-nine reverts in `docs/history/round-128-reverts.js`, run by `node
+Thirty-one reverts in `docs/history/round-128-reverts.js`, run by `node
 falsify.js docs/history/round-128-reverts.js` on this tree after the review
 fixes below: the baseline proven green first (boot, clientcheck, `--check`,
 the build), then each revert alone, each file restored and the restore
 verified by a sha1 of `server.js` and `src/**` and by `git status`.
-**29 of 29 matched expectation, tree restored and verified byte for byte,
-exit 0** (the run's own summary line, from the real tree on 2026-09-09). The
+**"31 of 31 matched expectation (RED on its own line unless the list says otherwise). Tree restored: verified byte for byte."** (the run's own line, quoted; exit 0), from the real
+tree on 2026-09-09. The
 last column is the guard's own line, demanded by `mustPrint`; a red that did
 not print it would not have counted.
 
@@ -177,7 +180,9 @@ not print it would not have counted.
 | 7b: `src/` moved away | `--check` | `src/manifest.js is missing` |
 | 8a, 8c–8h: each of the seven forbidden header strings | build | `src/all.js:6: header line contains "…"`, naming the string |
 | 9: a second `readFileSync(__filename` inside BUILD CHECK | boot | `⛔ BOOT HEAP CHECK: 2 separate reads` |
-| 9b: a read of the file through an `fs` alias inside BUILD CHECK | boot | `⛔ BUILD CHECK …` (the pin inside the block itself, which `BOOT HEAP CHECK`'s exact-text count cannot see) |
+| 9b: a read of the file through an `fs` alias inside BUILD CHECK | boot | `⛔ BUILD CHECK: … second read of this file` (the scan of the block's own text, which `BOOT HEAP CHECK`'s exact-text count cannot see) |
+| 9c: a read of the file through `.call` on a path built from `__dirname`, inside BUILD CHECK | boot | `⛔ BUILD CHECK: … second read of this file` |
+| 9d: the block's banner phrase repeated in a comment elsewhere in the file | boot | `⛔ BUILD CHECK: … banner phrase occurs 2 time(s)` (the scan window would be undefined, and says so) |
 | 10a: the `--check` line in `ci-gates.sh` commented out | boot | `⛔ BUILD CHECK: the first uncommented gate in ci-gates.sh is "run node --check server.js", not "run node build.js --check"` |
 | 10b: `ci-gates.sh` moved away | boot | GREEN, printing `⚠ BUILD CHECK PIN SKIPPED` (expected) |
 | 11a: a symbolic link under `src/` | build | `src/link.js:1: is a symbolic link` |
@@ -270,12 +275,29 @@ fixed before the run above); no revert stayed green on the fixed tree.
   tightened to `header has no Goal line`. The harness's baseline build could
   overwrite a hand-edited `server.js` before the run stopped; it now stops at
   the first red baseline kind. The hook's REFUSED/STALE split keyed on a
-  substring 922 lines of the program contain, and an edit of `server.js`
+  substring over 900 lines of the program contain, and an edit of `server.js`
   itself was invisible to it; it now keys on the first line's `✗ build
   refused:` prefix and calls a hand edit of `server.js` GENERATED. And the
   doubled-newline refusal would have told the Round 129 cutter to delete a
   line of `server.js`; it now says to move that blank line to the top of the
   next file (reverts 12a and 12b).
+- **The third review, over the fixes, found the scan's own escape.** The
+  block's read of `ci-gates.sh` had been spelled `readFileSync.call(...)`
+  precisely so the scan's two needles would not match it, which is the
+  spelling any second read could use. The block's two reads now go through
+  `readBeside`, an eight-line helper placed ABOVE the scan window, so the
+  block's own text carries no spelling of a file read at all and the scan
+  refuses the bare words: the `fs` module by its require, the read-file and
+  open-sync calls, a read stream, and the module's own-path name (reverts 9b
+  and 9c). The window's two edges must each occur exactly once in the file,
+  or the check says the block it scans is undefined instead of reporting a
+  read that is not there (revert 9d). Seven smaller ones: three documents
+  said every refusal names `src/file:line` when a manifest refusal names the
+  entry; a log dir under `src/` was accepted and then failed its own restore;
+  the hook's comment overstated the refusal format; `editing-server-js`
+  repeated the `BOOT HEAP CHECK` misstatement; this note quoted a paraphrase
+  as the harness's own line and a line count one short; and `knobs-and-env`
+  promised 81 settings over a table of 95.
 
 ### Deploy
 

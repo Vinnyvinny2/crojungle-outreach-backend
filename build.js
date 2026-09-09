@@ -30,7 +30,8 @@
 // first source file must open with the exact GENERATED line (BANNER below) so
 // server.js line 1 always says what it is.
 //
-// What it refuses (naming src/file:line):
+// What it refuses (naming src/file:line; a manifest refusal names src/manifest.js
+// and the entry, since the entry, not a line, is what is wrong):
 //   a CR byte, a UTF-8 BOM, an empty file, a last byte that is not "\n", a
 //   file that ends on a blank line (a doubled final newline — the refusal says
 //   where that line goes), a line that is not valid UTF-8, a literal U+FFFD

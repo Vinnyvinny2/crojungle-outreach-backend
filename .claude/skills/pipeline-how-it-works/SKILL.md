@@ -90,7 +90,7 @@ The text above was copied from CLAUDE.md and these lines were stale; each was co
 
 now: - `server.js` — ~79,300 lines, Node/Express, Render, auto-deploys from GitHub — measured: `wc -l server.js` = 79,292 at Round 106
 
-now (2026-09-09): - `server.js` — ~84,100 lines … GENERATED from `src/` by `build.js` — measured: at Round 128 the built file was 84,148 lines, the same count as `src/all.js` (`node build.js --check` prints the current count)
+now (2026-09-09): - `server.js` — ~84,100 lines … GENERATED from `src/` by `build.js` — measured: at Round 128 the built file was 84,160 lines, the same count as `src/all.js` (`node build.js --check` prints the current count)
 
 > - `index.html` — ~10,200 lines, compiled React on Netlify. **`React.createElement`
 >   only, no JSX, no build step**. It deploys separately and is NOT in this repo —

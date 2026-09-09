@@ -70,9 +70,9 @@ const ONLY = new Set(process.argv.slice(3));
 const unknown = [...ONLY].filter(n => !REVERTS.some(r => r.name === n));
 if (unknown.length) { console.error(`NO REVERT RAN: no revert named ${unknown.join(', ')} in ${listPath}. The names are: ${REVERTS.map(r => r.name).join(', ')}`); process.exit(2); }
 const LOGDIR = process.env.FALSIFY_LOG_DIR ? path.resolve(process.env.FALSIFY_LOG_DIR) : fs.mkdtempSync(path.join(os.tmpdir(), 'falsify-'));
-{ // the log dir may not be the repo root or contain it: the logs are filtered out of git status by their path relative to ROOT, which is '' or '..'-led for either
+{ // the log dir may not be the repo root, contain it, or sit under src/: the logs are filtered out of git status by their path relative to ROOT ('' or '..'-led for the first two), and src/** is fingerprinted whole
   const rel = path.relative(ROOT, LOGDIR);
-  if (rel === '' || (rel.startsWith('..') && !path.relative(LOGDIR, ROOT).startsWith('..'))) { console.error(`FALSIFY_LOG_DIR=${LOGDIR} is the repo root or a folder containing it — the boot logs would land in the tree the restore is measured against and every revert would report RESTORE FAILED on its own logs. Use a folder outside the repo, or a subfolder of it`); process.exit(2); }
+  if (rel === '' || /^src([\\/]|$)/.test(rel) || (rel.startsWith('..') && !path.relative(LOGDIR, ROOT).startsWith('..'))) { console.error(`FALSIFY_LOG_DIR=${LOGDIR} is the repo root, a folder containing it, or under src/ — the boot logs would land in the tree the restore is measured against (server.js and src/** are fingerprinted) and every revert would report RESTORE FAILED on its own logs. Use a folder outside the repo, or a subfolder of it outside src/`); process.exit(2); }
 }
 fs.mkdirSync(LOGDIR, { recursive: true });
 let port = Number(process.env.FALSIFY_PORT) || 4920;                        // boots take port+1, port+2, ...; FALSIFY_PORT moves the base off a busy range

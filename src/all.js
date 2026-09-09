@@ -53637,6 +53637,15 @@ app.listen(PORT, () => {
     if (_schemaTimer.unref) _schemaTimer.unref();
   }
 
+  // ══ ONE DOOR TO THE FILES BESIDE THIS ONE, FOR THE BLOCK BELOW ══════════
+  // BUILD CHECK (next block) scans its own text and refuses every spelling of a
+  // file read, so the two files it needs — ci-gates.sh and src/manifest.js —
+  // are read HERE, one screen above its scan window, through a name that is
+  // not a read spelling. Returns the text, or null when the file is not beside
+  // server.js. Reads a file named by its caller, never this file: BOOT HEAP
+  // CHECK counts reads of this file's own name, and this is not one.
+  const readBeside = (name) => { const _p = require('path').join(__dirname, name); return require('fs').existsSync(_p) ? require('fs').readFileSync(_p, 'utf8') : null; };
+
   // ══ THE FILE EVERY CHECK READS IS THE FILE THE DEPARTMENTS OWN ═══════════
   // Round 128: server.js is GENERATED. build.js joins the files src/manifest.js
   // lists, in that order, turning each file's LF into CRLF, and the result must
@@ -53657,14 +53666,17 @@ app.listen(PORT, () => {
   // source line can then match).
   // "Not read again" is guarded here, not asked for in a comment: BOOT HEAP
   // CHECK counts the exact text of the one selfSource() read, so a read of
-  // this file through an alias (an fs handle held in a variable, a path built
-  // from __dirname) is one it cannot see. The last step below takes this
-  // block's own text out of selfSource() — from the banner line above to the
-  // COULD NOT RUN line — and fails if it carries the spelling of a file read
-  // or of the module's own-path name, each needle assembled from two halves
-  // so the scan cannot find itself. That is why ci-gates.sh is read through
-  // .call and fs and path are called inline, never aliased: the block's text
-  // never carries the spelling the scan refuses.
+  // this file spelled any other way (the fs module held in a variable, a path
+  // built from __dirname, a call through .call) is one it cannot see. The last
+  // step below takes this block's own text out of selfSource() — from the
+  // banner line above to the COULD NOT RUN line, each edge required to occur
+  // exactly once in the file so the window is never undefined — and fails if
+  // it carries any spelling of a file read (the fs module named by its
+  // require, the read-file and open-sync calls, a read stream) or the module's
+  // own-path name, each needle assembled from two halves so the scan cannot
+  // find itself. That is why the two files this block needs are read through
+  // readBeside, defined above the window: the block's text carries none of
+  // those spellings, so the scan can refuse the bare words.
   // The second half pins the call site (check-writing-traps §2): the FIRST
   // uncommented run line in ci-gates.sh must be the text of this same proof,
   // so CI is red on a mismatch before any gate reads server.js and before any
@@ -53676,33 +53688,33 @@ app.listen(PORT, () => {
   // the comparison cannot run; that is said plainly and not counted as a pass.
   // The same when ci-gates.sh is absent: a warning line, never a silent pass.
   try {
-    const _mf = require('path').join(__dirname, 'src', 'manifest.js');
-    const _gates = require('path').join(__dirname, 'ci-gates.sh');
     const _fails = [];
     let _pinned = false;
-    if (!require('fs').existsSync(_gates)) {
+    const _gatesText = readBeside('ci-gates.sh');
+    if (_gatesText === null) {
       console.log('⚠ BUILD CHECK PIN SKIPPED: ci-gates.sh is not beside server.js, so whether CI runs the byte proof as its first gate could not be checked from here. That is a fact about this checkout, not a finding about the code.');
     } else {
       const _needle = ['run node build.js ', '--check'].join('');
-      const _first = require('fs').readFileSync.call(require('fs'), _gates, 'utf8').split(/\r?\n/).filter(l => !/^\s*#/.test(l)).find(l => /^\s*run\s/.test(l));
+      const _first = _gatesText.split(/\r?\n/).filter(l => !/^\s*#/.test(l)).find(l => /^\s*run\s/.test(l));
       if (_first === undefined) _fails.push('ci-gates.sh has no uncommented gate line at all, so CI would merge a server.js that is not what src/ builds');
       else if (_first.trim() !== _needle) _fails.push(`the first uncommented gate in ci-gates.sh is "${_first.trim()}", not "${_needle}", so CI would read server.js before proving it is what src/ builds, or never prove it`);
       else _pinned = true;
     }
     // This block's own text, scanned for a second read of this file (see above).
     const _own = selfSource();
-    const _from = _own.indexOf(['THE FILE EVERY ', 'CHECK READS'].join(''));
-    const _stop = _from === -1 ? -1 : _own.indexOf(['BUILD CHECK COULD ', 'NOT RUN'].join(''), _from);
-    if (_from === -1 || _stop === -1) {
-      _fails.push('BUILD CHECK cannot find its own block in selfSource() (the banner line or the COULD NOT RUN line moved), so whether this block reads this file a second time went unchecked');
+    const _edge1 = ['THE FILE EVERY ', 'CHECK READS'].join(''), _edge2 = ['⛔ BUILD CHECK COULD ', 'NOT RUN'].join('');
+    const _n1 = _own.split(_edge1).length - 1, _n2 = _own.split(_edge2).length - 1;
+    if (_n1 !== 1 || _n2 !== 1) {
+      _fails.push(`the edges of BUILD CHECK's own block must each occur exactly once in this file, and the banner phrase occurs ${_n1} time(s) and the COULD NOT RUN phrase ${_n2} time(s), so the block it scans for a second read is undefined`);
     } else {
+      const _from = _own.indexOf(_edge1), _stop = _own.indexOf(_edge2);
       const _end = _own.indexOf('\n', _stop);
       const _block = _own.slice(_own.lastIndexOf('\n', _from) + 1, _end === -1 ? _own.length : _end);
-      for (const _bad of [['__file', 'name'].join(''), ['readFile', 'Sync('].join('')]) {
-        if (_block.includes(_bad)) _fails.push(`BUILD CHECK's own block contains ${_bad} — a second read of this file that BOOT HEAP CHECK's exact-text count cannot see; verify() takes selfSource() and nothing else`);
+      for (const _bad of [['require(', "'fs')"].join(''), ['read', 'File'].join(''), ['open', 'Sync('].join(''), ['createRead', 'Stream'].join(''), ['__file', 'name'].join('')]) {
+        if (_block.includes(_bad)) _fails.push(`BUILD CHECK's own block contains ${_bad} — a second read of this file that BOOT HEAP CHECK's exact-text count cannot see; verify() takes selfSource() and nothing else, and the block reads its two files through readBeside above it`);
       }
     }
-    if (!require('fs').existsSync(_mf)) {
+    if (readBeside(require('path').join('src', 'manifest.js')) === null) {
       console.log('⚠ BUILD CHECK SKIPPED: src/manifest.js is not beside server.js, so the running file was not compared with its sources. That is a fact about this checkout (server.js shipped without src/), not a finding about the code.');
       if (_fails.length) console.log(`⛔ BUILD CHECK: ${_fails.join(' | ')}.`);
     } else {
@@ -53711,7 +53723,7 @@ app.listen(PORT, () => {
       if (_fails.length) {
         console.log(`⛔ BUILD CHECK: ${_fails.join(' | ')}.`);
       } else {
-        console.log(`✓ BUILD CHECK: server.js is byte for byte what src/manifest.js builds from ${_r.files} source file${_r.files === 1 ? '' : 's'} (${_r.lines} lines, CRLF), compared one line at a time against the one copy selfSource() holds, so the file every check reads is the file the departments own, and this block's own text carries no second read of this file${_pinned ? ', and the first uncommented run line in ci-gates.sh is that same proof (its text; this check at boot is the backstop)' : ' (ci-gates.sh was not beside this file, so whether CI runs the same proof went unchecked)'}.`);
+        console.log(`✓ BUILD CHECK: server.js is byte for byte what src/manifest.js builds from ${_r.files} source file${_r.files === 1 ? '' : 's'} (${_r.lines} lines, CRLF), compared one line at a time against the one copy selfSource() holds, so the file every check reads is the file the departments own, and this block's own text carries no spelling of a file read (its two files come through readBeside, above the block)${_pinned ? ', and the first uncommented run line in ci-gates.sh is that same proof (its text; this check at boot is the backstop)' : ' (ci-gates.sh was not beside this file, so whether CI runs the same proof went unchecked)'}.`);
       }
     }
   } catch (e) {

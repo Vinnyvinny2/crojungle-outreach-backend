@@ -20,7 +20,8 @@
 #     fix is in the source file it names, never a rebuild;
 #   server.js is STALE (src/ now builds something else): run `node build.js`.
 # The last two are told apart by the FIRST LINE of the --check output: build.js
-# prints "✗ build refused: src/file:N: ..." as its first line for every refusal, and
+# prints "✗ build refused: <what it refused>" as its first line for every refusal
+# (src/file:N: for a per-file refusal; src/manifest.js and the entry for a manifest one), and
 # "✗ build: server.js is not what src/ builds — first difference at ..." for the stale
 # case. Only the first line's prefix is keyed on: the stale case echoes the text of
 # the differing line, and 900-odd lines of src/all.js carry the letters "refus" (line

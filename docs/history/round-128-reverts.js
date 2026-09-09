@@ -105,6 +105,18 @@ module.exports = [
     old: "      const _r = require('./build.js').verify(__dirname, selfSource());\n",
     new: "      const _fs = require('fs'); const _r = require('./build.js').verify(__dirname, _fs.readFileSync(__filename, 'utf8'));\n",
     mustPrint: /^⛔ BUILD CHECK: .*second read of this file/m },
+  // (9c) the spelling the scan once let through — the fs module called through .call on a path
+  // built from __dirname — planted inside the block: the scan bars the fs require and the
+  // read-file word themselves now, and the block's own reads go through readBeside above it
+  { name: '9c-dot-call-self-read-in-build-check', path: 'src/all.js', prove: 'boot',
+    old: "    const _own = selfSource();\n",
+    new: "    const _own = selfSource(); const _again = require('fs').readFileSync.call(require('fs'), require('path').join(__dirname, 'server.js'), 'utf8'); globalThis._keep = _again;\n",
+    mustPrint: /^⛔ BUILD CHECK: .*second read of this file/m },
+  // (9d) the scan window's edge repeated elsewhere in the file: the block it scans would be
+  // undefined, so the boot says the phrase occurs twice instead of reporting a read that is not there
+  { name: '9d-banner-phrase-repeated', path: 'src/all.js', prove: 'boot',
+    old: HEAD + '\n', new: HEAD + ' // see THE FILE EVERY CHECK READS below for why this file is generated\n',
+    mustPrint: /^⛔ BUILD CHECK: .*banner phrase occurs 2 time/m },
   // (10) the call-site pin (check-writing-traps §2): BUILD CHECK reads ci-gates.sh and demands
   // that the FIRST uncommented gate line be the byte proof — comment that line out and the
   // boot names the gate CI would run instead; move the file away and the boot says so in a
