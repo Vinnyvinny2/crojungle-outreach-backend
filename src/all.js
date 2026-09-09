@@ -164,7 +164,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261008;
+const CONTRACT_VERSION = 20261009;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -362,11 +362,13 @@ app.use(appAuthGate);
 // Persisting spend to Supabase would add a failure mode to every request to
 // make a safety net pretend to be a ledger; the authoritative number is the
 // invoice, which is this file's own standing rule.
-const RUN_SPEND = { day: '', fc: 0, places: 0, anthropicUsd: 0, apify: 0, byKind: {} };
+const RUN_SPEND = { day: '', fc: 0, places: 0, anthropicUsd: 0, apify: 0, verifier: 0, byKind: {} };
+
 const _spendDayNow = () => new Date().toISOString().slice(0, 10);
 // Pure on purpose: the check hands it a synthetic ledger and a synthetic day.
 const rollSpendDay = (r, day) => {
-  if (r.day !== day) { r.day = day; r.fc = 0; r.places = 0; r.anthropicUsd = 0; r.apify = 0; r.byKind = {}; }
+  if (r.day !== day) { r.day = day; r.fc = 0; r.places = 0; r.anthropicUsd = 0; r.apify = 0; r.verifier = 0; r.byKind = {}; }
+
   return r;
 };
 const runSpendToday = () => rollSpendDay(RUN_SPEND, _spendDayNow());
@@ -400,13 +402,30 @@ const SPEND_BUDGETS = {
   places: _budgetEnv('PLACES_DAILY_BUDGET', 600),
   anthropicUsd: _budgetEnv('ANTHROPIC_DAILY_BUDGET_USD', 20),
   apify: _budgetEnv('APIFY_DAILY_BUDGET', 150),
+  // Round 129. The mailbox verifier's free allowance is a hundred checks a day,
+  // and until this round NOTHING counted them: the only brake was the vendor's
+  // own refusal, which is discovered by spending a call and hitting the wall.
+  verifier: _budgetEnv('VERIFIER_DAILY_BUDGET', 100),
 };
 const SPEND_NAMES = {
   fc: ['Firecrawl credits', 'FC_DAILY_BUDGET'],
   places: ['Google Places calls', 'PLACES_DAILY_BUDGET'],
   anthropicUsd: ['Anthropic dollars', 'ANTHROPIC_DAILY_BUDGET_USD'],
   apify: ['Apify review pulls', 'APIFY_DAILY_BUDGET'],
+  verifier: ['mailbox checks', 'VERIFIER_DAILY_BUDGET'],
 };
+// ══ A CEILING ON ONE SERVICE IS NOT A REASON TO REFUSE A WHOLE LEAD ═══════
+// The four above are OUR ceilings on OUR spend and they gate admission to a
+// route: a lead that would spend Firecrawl credits we no longer have should not
+// start. The mailbox allowance is a different animal - it is an EXTERNAL free
+// tier with a hard wall, and running out of it costs the address, not the lead.
+// A contact read with no checks left still returns an owner, a phone, a website
+// and a published address, so refusing the read outright would throw away the
+// rest of the answer to save nothing. It is counted and named here, and asked
+// about BY NAME by the one door that spends it, never by the default list.
+const SPEND_NOT_ADMISSION = new Set(['verifier']);
+const spendAdmissionServices = () => Object.keys(SPEND_NAMES).filter(k => !SPEND_NOT_ADMISSION.has(k));
+
 // Spend and budgets are PARAMETERS with live defaults, because the recorded
 // trap is a check that can only exercise the configuration where nothing can
 // go wrong. `>=` on purpose: the ceiling stops the NEXT lead; a lead already
@@ -414,7 +433,8 @@ const SPEND_NAMES = {
 const budgetRefusal = (needs, spend, budgets) => {
   const s = spend || runSpendToday();
   const b = budgets || SPEND_BUDGETS;
-  const list = (Array.isArray(needs) && needs.length) ? needs : Object.keys(SPEND_NAMES);
+  const list = (Array.isArray(needs) && needs.length) ? needs : spendAdmissionServices();
+
   for (const k of list) {
     if (!(k in SPEND_NAMES)) continue;
     if (Number(s[k]) >= Number(b[k])) {
@@ -427,9 +447,10 @@ const budgetRefusal = (needs, spend, budgets) => {
 };
 const daySpendLine = () => {
   const r = runSpendToday();
-  if (!r.fc && !r.places && !r.anthropicUsd && !r.apify) return '';
+  if (!r.fc && !r.places && !r.anthropicUsd && !r.apify && !r.verifier) return '';
+
   const cap = (k) => (SPEND_BUDGETS[k] === Infinity ? 'no ceiling' : 'of ' + SPEND_BUDGETS[k]);
-  return `\u{1F4B0} DAY SPEND (UTC ${r.day}): Firecrawl ${Math.round(r.fc)} ${cap('fc')} credits | Places ${r.places} ${cap('places')} calls | Anthropic $${r.anthropicUsd.toFixed(2)} ${cap('anthropicUsd')} | Apify ${r.apify} ${cap('apify')} pulls. Resets at UTC midnight and on restart; ceilings are the *_DAILY_BUDGET settings.`;
+  return `\u{1F4B0} DAY SPEND (UTC ${r.day}): Firecrawl ${Math.round(r.fc)} ${cap('fc')} credits | Places ${r.places} ${cap('places')} calls | Anthropic $${r.anthropicUsd.toFixed(2)} ${cap('anthropicUsd')} | Apify ${r.apify} ${cap('apify')} pulls | mailbox checks ${Math.round(r.verifier)} ${cap('verifier')}. Resets at UTC midnight and on restart; ceilings are the *_DAILY_BUDGET settings.`;
 };
 for (const _k of Object.keys(SPEND_BUDGETS)) {
   if (SPEND_BUDGETS[_k] === Infinity) console.log(`\u26a0 SPEND CEILING OFF: ${SPEND_NAMES[_k][1]} is set to 0, so nothing stops a runaway ${SPEND_NAMES[_k][0]} day. Deliberate is fine; forgotten is how an account empties with every line item correctly logged.`);
@@ -441,11 +462,14 @@ app.get('/api/spend', (req, res) => {
   const r = runSpendToday();
   res.json({
     day: r.day,
-    spend: { fc: r.fc, places: r.places, anthropicUsd: Number(r.anthropicUsd.toFixed(4)), apify: r.apify },
+    spend: { fc: r.fc, places: r.places, anthropicUsd: Number(r.anthropicUsd.toFixed(4)), apify: r.apify, verifier: r.verifier },
+
     budgets: { fc: SPEND_BUDGETS.fc === Infinity ? null : SPEND_BUDGETS.fc,
                places: SPEND_BUDGETS.places === Infinity ? null : SPEND_BUDGETS.places,
                anthropicUsd: SPEND_BUDGETS.anthropicUsd === Infinity ? null : SPEND_BUDGETS.anthropicUsd,
-               apify: SPEND_BUDGETS.apify === Infinity ? null : SPEND_BUDGETS.apify },
+               apify: SPEND_BUDGETS.apify === Infinity ? null : SPEND_BUDGETS.apify,
+               verifier: SPEND_BUDGETS.verifier === Infinity ? null : SPEND_BUDGETS.verifier },
+
     byKind: r.byKind,
     notes: 'UTC calendar day; a process restart resets it. A null budget means that ceiling is off. The invoice is the authority.',
   });
@@ -5338,6 +5362,30 @@ const sizeMeasured = (s) => {
   if (Number(d.teamCount) >= scaleCuts(revenuePerEmployeeFor(d.tradeLabel)).core) return true;
   return false;
 };
+// ══ SETTLED SMALL: WEAKER THAN MEASURED, AND ENOUGH TO STOP SPENDING ═══════
+// Round 129. sizeMeasured is the BAND's rule and stays exactly as it is: a
+// four-name team page is not a headcount, and the rep's sheet must keep saying
+// "guess" until something real measures the business. But the BUY gate was
+// asking that same question, so a practice publishing three, four or five
+// people on its own team page counted as "nothing measured" and bought a
+// four-credit directory search that has no record of an owner-operated
+// practice - 20 of the 30 Firecrawl credits on the 2026-09-09 run, nothing
+// found on five of seven leads, and both hits came back "6 employees from the
+// range 1-10", the tier the free guess already gave.
+//
+// This is the weaker question the SPEND should have been asking: has the lead
+// already told us it is small? Three names is the floor the team-page reader
+// itself uses (Round 116); one or two names is a page layout, not a
+// measurement. Only 'solo' settles a trade by its capacity class - 'mixed'
+// means one truck or twelve and holds Electrical, Plumbing and Dental, so
+// vetoing on it would blind the size gate across half the ICP.
+const sizeSettledSmall = (s) => {
+  const d = s || {};
+  const n = Number(d.teamCount);
+  if (Number.isFinite(n) && n >= 3 && n < scaleCuts(revenuePerEmployeeFor(d.tradeLabel)).core) return true;
+  if (capacityClassFor(d.tradeLabel, d.trade) === 'solo') return true;
+  return false;
+};
 // ══ WHICH LANE A LEAD BELONGS TO (Round 111) ════════════════════════════════
 // Vin, 2026-09-03: "keep what our ICP has been for cold calling and up it for
 // email" - ONE ladder, TWO lanes drawn on it. The call lane is bounded by
@@ -8730,6 +8778,22 @@ const sendAlreadyProven = (lead) => {
   return /SMTP-verified/i.test(String((l.emailResult && l.emailResult.label) || ''));
 };
 const sendNeedsVerify = (lead) => !sendAlreadyProven(lead);
+// ══ AN UNKNOWN ANSWER IS NOT A YES FOR A NAME NOBODY VOUCHED FOR ══════════
+// The send boundary answers unknown with SEND, deliberately: a catch-all
+// domain cannot be verified at all and refusing every one of them would delete
+// a large slice of the pipeline on no evidence. That reasoning holds for an
+// address built for a person the owner ladder VOUCHED for - the only thing
+// unproven there is the mailbox.
+//
+// It does not hold for the row _unvouchedSendGuard marks. There the person is
+// unproven too, so an unknown answer leaves both halves unmeasured, and "we
+// did not measure it" has never meant "it is fine" anywhere else in this file.
+// One check is offered; nothing but a yes gets through it.
+const sendUnknownIsNotAYes = (lead) => {
+  const l = lead || {};
+  if (!sendNeedsVerify(l)) return false;
+  return (l.emailResult && l.emailResult.verifyToSend === true) || l.verifyToSend === true;
+};
 
 const siteWasRead = (content, visualAnalysis) =>
   !!visualAnalysis || String(content == null ? '' : content).trim().length >= 300;
@@ -10711,6 +10775,55 @@ const applyPattern = (pattern, fullName, domain) => {
   return c ? c.email : '';
 };
 
+// ══ ONE NAME FOR THE FIRST-NAME MAILBOX ═══════════════════════════════════
+// buildCandidates calls the first-name-only mailbox 'first'. The eponymous
+// branch wrote a brace-wrapped spelling of the same idea instead, and every
+// consumer of it failed in silence: applyPattern found no candidate of that
+// name and returned an empty string, so the house-pattern route returned
+// nothing and said nothing; the learned-pattern filter matched nothing, so the
+// fast path that is supposed to save a verifier call on a domain we already
+// solved never fired; and the name travelled out on `pattern`, into the saved
+// lead row, and back in as priorEmailPattern on the next run. The contact-cache
+// comment further down this file already records where that ends: that is how
+// 'oe@' outlived the regex fix that corrected it.
+//
+// So there is ONE copy of the string and ONE door every stored name comes
+// through. normalizePattern asks the LIVE buildCandidates rather than a retyped
+// list, so a pattern added there is accepted here with no second edit, and
+// anything else - a brace-wrapped spelling saved before this round, a name from
+// a build that no longer exists, a stray - is migrated or dropped, never stored.
+const EPONYMOUS_PATTERN = 'first';
+let _patternNamesCache = null;
+const knownPatternNames = () => (_patternNamesCache
+  || (_patternNamesCache = new Set(buildCandidates('Ada Lovelace', 'example.com').map(x => x.pattern))));
+const normalizePattern = (pattern) => {
+  const raw = String(pattern == null ? '' : pattern).trim().toLowerCase();
+  if (!raw) return '';
+  // Rows written before this round carry the brace-wrapped spelling and nothing
+  // else was ever wrapped. Unwrap first, then ask the real table.
+  const bare = /^\{[a-z._]+\}$/.test(raw) ? raw.slice(1, -1) : raw;
+  return knownPatternNames().has(bare) ? bare : '';
+};
+// Every write into the process-lifetime memory goes through here, so a caller
+// that learns a name this file does not hand out cannot install it and cannot
+// pass it to the next lead on the domain - nor out to the lead row, which is
+// where a bad name would outlive the process.
+const rememberPattern = (domain, pattern) => {
+  const known = normalizePattern(pattern);
+  if (known) {
+    domainPatternMemory.set(domain, known);
+    // Round 129: the ONE door, and so the only place a house pattern can reach
+    // the table that outlives this process. normalizePattern has already refused
+    // any name buildCandidates does not hand out, and the vouched guard in the
+    // engine decides whether this is called at all - so a convention inferred
+    // from a person we would not vouch for cannot become a permanent fact about
+    // the domain. Fire and forget: the waterfall never waits for it.
+    saveDomainMailFact(domain, { pattern: known, pattern_at: new Date().toISOString() });
+  }
+  return known;
+};
+
+
 // ── SMTP VERIFICATION (via free API) ───────────────────────────────────────
 // Render blocks outbound port 25, so we can't do raw SMTP ourselves. We use a
 // free verification API. MyEmailVerifier: 100 free/day, no credit card, credits
@@ -10744,7 +10857,112 @@ let VERIFIER_DEAD = false;
 // somebody forgets is a second deadlock wearing different clothes. A clock
 // cannot be forgotten. One probe per window, so fifty leads cannot hammer a
 // door that is genuinely shut.
+// ══ THE ALLOWANCE, COUNTED - NOT DISCOVERED BY WALKING INTO THE WALL ══════
+// VERIFIER_EXHAUSTED above is a LATCH, not a counter. It is set only after a
+// call has already been spent and the vendor answered with a quota-shaped body,
+// and every restart clears it. So nothing in this file knew how many of the free
+// hundred checks today had already cost: the ten-lead read on 2026-09-09 spent
+// about thirty of them and handed the operator no address he could send to, and
+// no line anywhere could have said stop.
+//
+// Fifty leads a day is the send budget and the free allowance is a hundred
+// checks, so two checks a lead is the whole arithmetic - and a number nobody
+// keeps is a number nobody can spend against.
+//
+// HONEST SHAPE, STATED FIRST: this is a brake, not accounting. The vendor's own
+// refusal remains the authority, and the latch above still catches an allowance
+// that ran out somewhere this count could not see. The day is the UTC calendar
+// day. The count is SEEDED from Supabase at boot, because a free instance that
+// slept through the afternoon has to resume the day rather than start it again;
+// a seed that could not be read is SAID to be unseeded rather than printed as
+// "0 of 100 used", which would be this file's own unmeasured-treated-as-zero
+// class pointed at the operator.
+let VERIFIER_DAY_SEEDED = '';
+// The domains this process has opened. It answers ONE question - have we already
+// looked this domain up in this process - for the mail-facts table further down
+// and for the rate on the day line, so there is one of it rather than two.
+const _mailFactsLoaded = new Set();
+const verifierSpendToday = () => {
+  const _r = runSpendToday();
+  // A process already running when the day rolled has counted the new day from
+  // its first minute, so its own count IS today's count.
+  if (VERIFIER_DAY_SEEDED && VERIFIER_DAY_SEEDED !== _r.day) VERIFIER_DAY_SEEDED = _r.day;
+  return _r;
+};
+// Pure, so the boot check hands it a synthetic count and a synthetic ceiling
+// instead of exercising only the allowance this dyno happens to have. A count
+// that is not a number is NOT "all spent": we do not know what today has cost,
+// and refusing every call on that would stop the day instead of running it.
+const verifierSpendRefusal = (n, used, budget) => {
+  const _want = Number.isFinite(Number(n)) && Number(n) > 0 ? Number(n) : 1;
+  const _cap = Number(budget);
+  const _used = Number(used);
+  if (!Number.isFinite(_cap)) return null;
+  if (!Number.isFinite(_used)) return null;
+  if (_used + _want <= _cap) return null;
+  return { used: _used, budget: _cap, wanted: _want };
+};
+const verifierMaySpend = (n) => !verifierSpendRefusal(n, verifierSpendToday().verifier, SPEND_BUDGETS.verifier);
+// Debounced and fire-and-forget: never awaited inside a verify call, which
+// already carries a thirty-second timeout budget of its own, and discarded when
+// the table is not there.
+let _verifierDayWritten = -1;
+// Said once a day, not once a lead: a fact about our account, printed as though
+// it were about the business, is the shape a rep learns to scroll past.
+let _verifierDaySaid = '';
+const saveVerifierDaySpend = (force) => {
+  try {
+    const r = verifierSpendToday();
+    if (!SB_URL || !SB_KEY) return;
+    if (!force && (r.verifier - _verifierDayWritten) < 5) return;
+    _verifierDayWritten = r.verifier;
+    sbRest('/api_day_spend?on_conflict=day,service', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: JSON.stringify([{ day: r.day, service: 'verifier', used: r.verifier, updated_at: new Date().toISOString() }]),
+    }).catch(() => {});
+  } catch (e) { void e; }
+};
+const noteVerifierCall = () => {
+  noteRunSpend('verifier', 1, 'verifier-check');
+  saveVerifierDaySpend(false);
+};
+const verifierDayLine = () => {
+  const r = verifierSpendToday();
+  const cap = SPEND_BUDGETS.verifier;
+  const leads = _mailFactsLoaded.size;
+  const rate = leads > 0 ? (r.verifier / leads) : null;
+  const _capSay = cap === Infinity ? 'and the ceiling is switched off (VERIFIER_DAILY_BUDGET is 0)' : `of the ${cap} free ones`;
+  const _rateSay = rate === null
+    ? 'no lead has asked for an address yet on this process, so there is no rate to read'
+    : `${rate.toFixed(1)} per lead across ${leads} lead(s) this process, a rate that carries ${cap === Infinity ? 'any number of' : (rate > 0 ? Math.floor(cap / rate) : cap)} lead(s) through a day`;
+  const _seedSay = VERIFIER_DAY_SEEDED === r.day
+    ? 'Seeded from the day table at boot, so an instance that slept resumes today instead of starting it again.'
+    : 'NOT SEEDED: this is checks made since this process started, not checks made today, so a restart can spend the allowance twice.';
+  return `VERIFIER DAY (UTC ${r.day}): ${Math.round(r.verifier)} mailbox check(s) spent ${_capSay}, ${_rateSay}. ${_seedSay}`;
+};
+// ONE read at boot, beside the schema probe - not a read per verify call.
+const seedVerifierDay = async () => {
+  try {
+    const r = verifierSpendToday();
+    if (!SB_URL || !SB_KEY) { console.log(verifierDayLine()); return; }
+    const rows = await sbRest(`/api_day_spend?day=eq.${encodeURIComponent(r.day)}&service=eq.verifier&select=used`, { method: 'GET', prefer: 'return=representation' });
+    // An array is the table ANSWERING, and no row in it is a measured zero. A
+    // null is the table not answering at all - a different fact, and the line
+    // below says which one happened rather than printing zero either way.
+    if (!Array.isArray(rows)) { console.log(verifierDayLine()); return; }
+    const row = rows[0] || null;
+    const used = row && Number.isFinite(Number(row.used)) ? Number(row.used) : 0;
+    r.verifier = Math.max(Number(r.verifier) || 0, used);
+    _verifierDayWritten = r.verifier;
+    VERIFIER_DAY_SEEDED = r.day;
+    console.log(verifierDayLine());
+  } catch (e) {
+    console.log(`VERIFIER DAY: today's count could not be read (${(e && e.message) || e}), so the count this process keeps is checks made since it started rather than checks made today.`);
+  }
+};
 const VERIFIER_COOLDOWN_MS = Number(process.env.VERIFIER_COOLDOWN_MS || 10 * 60 * 1000);
+
 let VERIFIER_LATCHED_AT = 0;
 let VERIFIER_PROBE_AT = 0;
 // Read-only: says whether the verifier is currently stood down. Deliberately
@@ -10772,7 +10990,13 @@ const verifierGate = (nowMs) => {
 // That is the §43 deadlock rebuilt one level up, so it is answered here and
 // read-only: it never consumes the probe.
 const verifierMayTry = (nowMs) => {
+  // Round 129: the day's allowance is asked FIRST. The latch below is the
+  // vendor's own refusal, which is only ever discovered by spending a call and
+  // hitting the wall, and every restart clears it - so on its own it is a brake
+  // that arrives after the money has gone.
+  if (!verifierMaySpend(1)) return false;
   if (!verifierBlocked()) return true;
+
   const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
   return now - VERIFIER_LATCHED_AT >= VERIFIER_COOLDOWN_MS && now - VERIFIER_PROBE_AT >= VERIFIER_COOLDOWN_MS;
 };
@@ -10795,7 +11019,19 @@ const VERIFIER_TIMEOUT_MS = Number(process.env.VERIFIER_TIMEOUT_MS || 30000);
 const verifyEmailSMTP = async (email, verifierKey) => {
   if (!email || !verifierKey) return { valid: null, catchAll: null, unknown: true, error: true };
   if (!verifierGate()) return { valid: null, catchAll: null, unknown: true, error: true };
+  // Round 129: this is the ONE door to the verifier, so it is the one place a
+  // check can be counted and the one place the count can refuse. A refusal here
+  // reads as "we could not ask" - the same shape as a closed gate - and never as
+  // "this mailbox does not exist".
+  if (!verifierMaySpend(1)) {
+    if (_verifierDaySaid !== _spendDayNow()) {
+      _verifierDaySaid = _spendDayNow();
+      console.log(`\u{1F534} MAILBOX CHECKS FOR TODAY ARE SPENT: ${verifierDayLine()} Nothing below can be read as "this mailbox does not exist"; it means we did not ask. The allowance resets at UTC midnight, and VERIFIER_DAILY_BUDGET raises or removes this ceiling.`);
+    }
+    return { valid: null, catchAll: null, unknown: true, error: true };
+  }
   try {
+
     // ══ 12 SECONDS IS NOT ENOUGH FOR AN SMTP HANDSHAKE ══════════════════════
     // Every recent lead \u2014 HEGG, Hawk, Craig, Rachel, Scott, Mid-American \u2014
     // logged "SMTP verify failed: timeout", then "catch-all probe COULD NOT
@@ -10813,7 +11049,9 @@ const verifyEmailSMTP = async (email, verifierKey) => {
     //
     // 30 seconds costs us nothing when the answer comes back fast, and buys
     // the entire send path on the leads where it does not.
+    noteVerifierCall();
     const url = `https://client.myemailverifier.com/verifier/validate_single/${encodeURIComponent(email)}/${encodeURIComponent(verifierKey)}`;
+
     const r = await fetchT(url, {}, VERIFIER_TIMEOUT_MS);
     const d = await safeJson(r);
     const status = String(d?.Status || d?.status || '').toLowerCase();
@@ -10887,6 +11125,167 @@ const verifyEmailSMTP = async (email, verifierKey) => {
 // that domain is meaningless. This single check is the difference between
 // trustworthy verification and false confidence.
 const catchAllCache = new Map();
+
+// ══ WHAT WE LEARNED ABOUT A DOMAIN'S MAIL, KEPT PAST THE RESTART ══════════
+// Round 129. Both memories in this engine - the catch-all verdict above and the
+// house pattern further up - are process-lifetime Maps, and a free Render
+// instance sleeps. So the first lead every morning on a domain we had already
+// solved re-paid two catch-all probes and a run of pattern probes to learn what
+// yesterday already knew, out of an allowance of a hundred checks a day.
+//
+// The table sits BEHIND the Maps and never in front of them. The Maps stay the
+// hot-path cache - seven reads per lead, and the boot checks drive
+// rememberPattern and read the Map on the very next statement, so it has to stay
+// synchronous. ONE awaited read per domain per contact read hydrates them; every
+// write is fire and forget and its result is discarded, so a missing table
+// cannot add a millisecond to a lead.
+//
+// NULL IN THIS TABLE MEANS "WE HAVE NO MEASUREMENT". It never means "we measured
+// no". So a fact is hydrated only when it is the right TYPE and inside its own
+// clock, and a stale fact is treated as ABSENT rather than as a verdict.
+//
+// The UNKNOWN catch-all verdict is deliberately NOT persisted: it is a fact
+// about the probe's moment, not about the domain, and it already expires on its
+// own ten minutes after it is recorded.
+//
+//   create table if not exists domain_mail_facts (
+//     domain text primary key, catch_all boolean, catch_all_at timestamptz,
+//     pattern text, pattern_at timestamptz, pattern_source text,
+//     mail_provider text, mail_provider_at timestamptz,
+//     updated_at timestamptz default now());
+//
+// The clocks. A catch-all verdict and a house pattern are both genuinely stable
+// - a mail server does not change accept-everything behaviour over lunch - but
+// neither is permanent, and the dangerous direction is a stale FALSE: it keeps
+// the SMTP path open and lets an acceptance ship as "mailbox exists" on a domain
+// that now accepts everything. Ninety days is an order of magnitude longer than
+// any plausible batch and an order shorter than a mail migration. A wrong house
+// pattern is worse still, because until this round the restart was the only
+// thing that had ever cleaned one, so the clock is what stops a bounded bug
+// becoming an unbounded one. MX records change more often and gate nothing.
+const CATCHALL_FACT_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const PATTERN_FACT_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+const MAIL_PROVIDER_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// RFC 2606 reserved names and the documentation domains. The boot checks drive
+// rememberPattern on made-up domains, and a fixture must never write a row a
+// later lead could read back as a measurement about a real business.
+const _fixtureDomain = (d) => /(^|\.)example\.(com|net|org)$|\.(invalid|test|example|localhost)$/.test(String(d || '').trim().toLowerCase());
+// Pure, so the boot check can age a row without waiting ninety days. Each fact
+// carries its OWN clock because two different doors write this row at two
+// different moments, and one shared timestamp would let a pattern learned today
+// make a nine-month-old catch-all verdict look freshly measured.
+const mailFactFresh = (at, ttlMs, nowMs) => {
+  const t = new Date(String(at || '')).getTime();
+  if (!Number.isFinite(t)) return false;
+  const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  return (now - t) < Number(ttlMs);
+};
+// What we already know about this domain, bought from nobody. `undefined` means
+// NEVER MEASURED, which is not `false` and must never be read as one; `null` is
+// the ten-minute UNKNOWN the probe records about its own moment.
+const catchAllKnown = (domain) => (catchAllCache.has(domain) ? catchAllCache.get(domain) : undefined);
+const hydrateDomainMailFacts = (row, nowMs) => {
+  const out = { catchAll: undefined, pattern: '', provider: '' };
+  if (!row) return out;
+  // typeof, never a double bang: `!!null` is false, which would turn "never
+  // probed" into "normal domain, SMTP trustworthy" - the exact false fact the
+  // UNKNOWN comment above exists to prevent, wearing boolean clothes.
+  if (typeof row.catch_all === 'boolean' && mailFactFresh(row.catch_all_at, CATCHALL_FACT_TTL_MS, nowMs)) out.catchAll = row.catch_all;
+  // Through the same door as every other stored pattern name, a second time on
+  // the way OUT: a row written by hand, by an older build, or carrying a name
+  // this build no longer hands out reads as unknown rather than as a
+  // measurement, and an address is never built from it.
+  if (mailFactFresh(row.pattern_at, PATTERN_FACT_TTL_MS, nowMs)) out.pattern = normalizePattern(row.pattern);
+  if (mailFactFresh(row.mail_provider_at, MAIL_PROVIDER_TTL_MS, nowMs)) out.provider = String(row.mail_provider || '').trim().toLowerCase();
+  return out;
+};
+const saveDomainMailFact = (domain, patch) => {
+  try {
+    const d = String(domain || '').trim().toLowerCase();
+    if (!d || !patch || !SB_URL || !SB_KEY || _fixtureDomain(d)) return;
+    sbRest('/domain_mail_facts?on_conflict=domain', {
+      method: 'POST',
+      prefer: 'resolution=merge-duplicates,return=minimal',
+      body: JSON.stringify([Object.assign({ domain: d, updated_at: new Date().toISOString() }, patch)]),
+    }).catch(() => {});
+  } catch (e) { void e; }
+};
+const loadDomainMailFacts = async (domain) => {
+  const d = String(domain || '').trim().toLowerCase();
+  if (!d || _mailFactsLoaded.has(d)) return;
+  _mailFactsLoaded.add(d);
+  if (!SB_URL || !SB_KEY) return;
+  const rows = await sbRest(`/domain_mail_facts?domain=eq.${encodeURIComponent(d)}&select=*`, { method: 'GET', prefer: 'return=representation' });
+  const row = Array.isArray(rows) ? rows[0] : null;
+  if (!row) return;
+  const f = hydrateDomainMailFacts(row);
+  const said = [];
+  // Never write null into catchAllCache: null there means UNKNOWN and carries a
+  // ten-minute timer, and a hydrated one would sit there for the life of the
+  // process with nothing to clear it.
+  if (typeof f.catchAll === 'boolean' && !catchAllCache.has(d)) { catchAllCache.set(d, f.catchAll); said.push(f.catchAll ? 'their mail server accepts every address' : 'their mail server rejects addresses that do not exist'); }
+  if (f.pattern && !domainPatternMemory.has(d)) { domainPatternMemory.set(d, f.pattern); said.push(`they build addresses as ${f.pattern}`); }
+  if (f.provider && !MAIL_PROVIDER_MEMORY.has(d)) { MAIL_PROVIDER_MEMORY.set(d, f.provider); said.push(`their mail is hosted on ${f.provider}`); }
+  if (said.length) console.log(`MAIL FACTS [${d}]: measured on an earlier run - ${said.join('; ')}. None of it is bought again for this lead.`);
+  else console.log(`MAIL FACTS [${d}]: a row exists but nothing in it is inside its own clock any more, so this domain is treated as unmeasured rather than as a measurement.`);
+};
+
+// ══ READ WHO HOSTS THEIR MAIL BEFORE SPENDING A CHECK ON IT ═══════════════
+// The SMTP timeout message a few screens up records the cause in as many words:
+// hardened Microsoft 365 tenants stall RCPT TO probes specifically to defeat
+// address harvesting. Those domains burn the full thirty-second cap on every
+// probe and answer nothing, and each of those attempts is one of a hundred free
+// checks a day.
+//
+// Who hosts a domain's mail is FREE - it is a DNS record, not a paid call - and
+// nothing here had ever read the prospect's; the one resolveMx in this file asks
+// about OUR sending domain. So: read it once, remember it, and where the host is
+// one that stalls by design, do not spend a check on a question it will not
+// answer. The address still ships, the log says why no probe ran, and the one
+// check goes to the send boundary, where it decides whether the mail goes out.
+const MAIL_PROVIDER_MEMORY = new Map();
+// ONE declaration of who stalls, read by the classifier's consumers and by the
+// boot check, so a retyped second copy cannot drift from it. Microsoft 365 only:
+// it is the host this file's own evidence names. A gateway that accepts
+// everything at the perimeter is a different failure and is not this list.
+const MAIL_PROVIDERS_THAT_STALL = ['microsoft365'];
+const classifyMailProvider = (mxRows) => {
+  const hosts = (Array.isArray(mxRows) ? mxRows : [])
+    .map(r => String((r && r.exchange) || '').trim().toLowerCase().replace(/\.$/, ''))
+    .filter(Boolean);
+  // No records is NOT a mail host we looked at and found nothing: it is a lookup
+  // that told us nothing, and the empty string means unmeasured everywhere here.
+  if (!hosts.length) return '';
+  const j = ' ' + hosts.join(' ') + ' ';
+  if (/\bmail\.protection\.outlook\.com\b|\bolc\.protection\.outlook\.com\b|\bmail\.eo\.outlook\.com\b/.test(j)) return 'microsoft365';
+  if (/\baspmx\.l\.google\.com\b|\baspmx\.googlemail\.com\b|\bsmtp\.google\.com\b|\bgooglemail\.com\b/.test(j)) return 'google';
+  if (/\bpphosted\.com\b|\bmimecast\.com\b|\bbarracudanetworks\.com\b|\bmessagelabs\.com\b/.test(j)) return 'gateway';
+  return 'other';
+};
+const mailProviderStalls = (domain) => MAIL_PROVIDERS_THAT_STALL.includes(MAIL_PROVIDER_MEMORY.get(String(domain || '').trim().toLowerCase()) || '');
+const readMailProvider = async (domain) => {
+  const d = String(domain || '').trim().toLowerCase();
+  if (!d || !d.includes('.')) return '';
+  if (MAIL_PROVIDER_MEMORY.has(d)) return MAIL_PROVIDER_MEMORY.get(d);
+  let rows = null;
+  try {
+    const _dns = require('dns').promises;
+    // A resolver that hangs must not hold a contact read, and a lookup that did
+    // not complete is not a fact about their mail - it is left unmeasured.
+    rows = await Promise.race([
+      _dns.resolveMx(d),
+      new Promise((res) => { const t = setTimeout(() => res(null), 4000); if (t.unref) t.unref(); }),
+    ]);
+  } catch (e) { rows = null; }
+  if (!Array.isArray(rows)) return '';
+  const provider = classifyMailProvider(rows);
+  if (!provider) return '';
+  MAIL_PROVIDER_MEMORY.set(d, provider);
+  saveDomainMailFact(d, { mail_provider: provider, mail_provider_at: new Date().toISOString() });
+  if (MAIL_PROVIDERS_THAT_STALL.includes(provider)) console.log(`MAIL HOST [${d}]: their mail is hosted on ${provider}, a host that stalls address probes on purpose to stop harvesting. Every probe there runs to the ${Math.round(VERIFIER_TIMEOUT_MS / 1000)}-second cap and answers nothing, so no mailbox check is spent on this domain.`);
+  return provider;
+};
+
 // Domains whose homepage came back empty, and when. Keyed by URL, one hour.
 const EMPTY_SCRAPE_MEMORY = new Map();
 
@@ -10930,7 +11329,20 @@ const CATCHALL_UNKNOWN_TTL_MS = 10 * 60 * 1000;
 const isCatchAllDomain = async (domain, verifierKey) => {
   if (!verifierKey || !domain) return null;
   if (catchAllCache.has(domain)) return catchAllCache.get(domain);
+  // Round 129: a host that stalls address probes on purpose cannot answer this
+  // question, and each attempt burns a check and the full timeout. Unmeasured -
+  // which is what null means everywhere here - rather than guessed at.
+  if (mailProviderStalls(domain)) {
+    console.log(`Catch-all probe [${domain}]: NOT RUN - their mail host stalls address probes by design, so two checks and up to a minute would buy nothing. This domain has no catch-all verdict, which is not the same thing as a normal domain.`);
+    return null;
+  }
+  // It costs two checks, so it is refused when two are not left.
+  if (!verifierMaySpend(2)) {
+    console.log(`Catch-all probe [${domain}]: NOT RUN - today's free mailbox checks are spent. Nothing that follows can be read as "this mailbox does not exist"; it means we could not ask.`);
+    return null;
+  }
   // ══ ONE PROBE IS NOT ENOUGH TO CALL A DOMAIN CATCH-ALL ═══════════════════
+
   // dtaylorcpa.com, seventy minutes apart, same mail server:
   //   01:38  Catch-all probe: normal domain (SMTP trustworthy)
   //          -> deirdre@dtaylorcpa.com  SMTP-VERIFIED  score 95
@@ -10991,7 +11403,13 @@ const isCatchAllDomain = async (domain, verifierKey) => {
     return null;
   }
   const isCatchAll = res.valid === true || res.catchAll === true;
+  // Round 129: two probes agreed, so this is a measurement about the DOMAIN and
+  // it outlives the process. The UNKNOWN a few lines up is never written here -
+  // it is a fact about the probe's moment, and a stored one would shut the SMTP
+  // path on this domain for ninety days.
   catchAllCache.set(domain, isCatchAll);
+  saveDomainMailFact(domain, { catch_all: isCatchAll, catch_all_at: new Date().toISOString() });
+
   console.log(`Catch-all probe [${domain}]: ${isCatchAll ? 'CATCH-ALL (SMTP unreliable here)' : 'normal domain (SMTP trustworthy)'}`);
   return isCatchAll;
 };
@@ -11337,7 +11755,12 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
       // We asked for the right page, paid for it, and discarded the answer. This is
       // the ONE page most likely to carry the owner's address, so it is the last
       // place to be impatient. Same reasoning as the note on firecrawlScrape itself.
-      const md = await firecrawlScrape(fcKey, target, 45000);
+      // Capped, because Round 129 is what makes this line reachable at all.
+      // firecrawlScrapeCapped is the same wrapper the Find page read already
+      // goes through: a lead at its ten-credit ceiling stops here instead of
+      // spending five more guessing contact URLs, and outside a lead ledger
+      // (the audit path) nothing is capped, so that path is unchanged.
+      const md = await firecrawlScrapeCapped(fcKey, target, 45000);
       if (!md || md.length < 100) continue;
       emails = extract(md, false);
       if (emails.length > 0) return { emails, source: 'contact_page' };
@@ -12016,20 +12439,59 @@ const eponymousAuthority = (best, companyName, currentAuthority) => {
   if (EPONYM_JUNIOR_RE.test(String(b.title || ''))) return { lift: false, authority: cur, why: `"${b.title}" is a junior title` };
   return { lift: true, authority: 80, why: 'the business is named after them and their own site confirms it' };
 };
-const isEponymousOwnerRule = (personName, coName, siteUrl) => {
+// ══ ONE RULE, AND IT SAYS WHICH ARM MATCHED ═══════════════════════════════
+// Two tests answered two different questions and both were called eponymous.
+// This one matched the SURNAME. eponymousMailboxFor below matched the surname
+// OR the person's FIRST NAME inside the domain root, which is much weaker
+// evidence - and the line the operator reads said "the company is named after
+// X" whichever of them had fired. On Herbert H. Construction the log asserted
+// one thing and the resolver's own settle computed the other, and the log
+// could not be used to tell which, because the word covered both.
+//
+// So there is one rule and it returns the ARM. Nothing about what each arm
+// means has changed: the company-name half matches whole words, so a
+// three-letter surname is safe ("Tee Ray" of Bob Ray Co); the domain half is a
+// bare substring - domains have no word boundaries - so it keeps the 4-letter
+// floor ("ray" inside raymondplumbing.com). The first-name arm is reported and
+// is NOT part of isEponymousOwnerRule, because the settle stands the paid
+// owner sources down on that answer and a domain carrying somebody's first
+// name is not a business named after them.
+//
+// The mailbox's own preconditions - a real person's name, a given-name first
+// token that is not an article - stay with the mailbox, which is the only
+// caller they are about. This rule answers one question: does the business
+// carry this person's name, and by which half.
+const eponymousMatch = (personName, coName, siteUrl) => {
   const parts = String(personName || '').trim().split(/\s+/)
     .filter(w => w.length > 2 && !/^(dr|mr|mrs|ms|dds|md|do|dvm|esq|jr|sr|iii|ii)\.?$/i.test(w));
-  if (!parts.length) return false;
+  if (!parts.length) return { match: null };
   const surname = parts[parts.length - 1].toLowerCase().replace(/[^a-z]/g, '');
   if (surname.length >= 3) {
     const coWords = String(coName || '').toLowerCase().split(/[^a-z]+/).filter(Boolean);
-    if (coWords.includes(surname)) return true;
+    if (coWords.includes(surname)) return { match: 'surname' };
   }
   if (surname.length >= 4) {
     const dom = String(siteUrl || '').toLowerCase().replace(/[^a-z]/g, '');
-    if (dom.includes(surname)) return true;
+    if (dom.includes(surname)) return { match: 'surname' };
   }
-  return false;
+  // The weak arm, last, so a business that genuinely carries the surname is
+  // never reported as the first-name case.
+  const host = String(siteUrl || '').toLowerCase().replace(/^https?:\/\//, '').split('/')[0];
+  const root = host.split('.')[0];
+  const first = cleanPersonForEmail(personName)[0] || '';
+  if (root && first.length >= 4 && root.includes(first)) return { match: 'first-name' };
+  return { match: null };
+};
+// The SURNAME arm, and only that arm. Every caller of this name - the
+// resolver's eponymous settle, the business-name reader's provenance line -
+// asked the surname question and still does.
+const isEponymousOwnerRule = (personName, coName, siteUrl) => eponymousMatch(personName, coName, siteUrl).match === 'surname';
+// How each arm reads to somebody with the log open. One declaration, so the
+// address line and the label on the row cannot say two different things about
+// one match.
+const EPONYM_ARM_SAY = {
+  'surname': 'the business carries their surname',
+  'first-name': 'their first name is the domain, and the business name does NOT carry their surname \u2014 weaker evidence, which is why this line says which',
 };
 // ══ ONE EPONYMOUS MAILBOX RULE ════════════════════════════════════════════
 // Two hand-kept copies of this lived in the email engine, and both tested
@@ -12049,17 +12511,19 @@ const isEponymousOwnerRule = (personName, coName, siteUrl) => {
 // Zoeller - that row is wrong because a manufacturer is outside the ICP,
 // which is a scope question this rule cannot answer.
 const EPONYMOUS_NOT_A_FIRST_NAME = /^(?:the|and|our|your|team|office|info|sales|admin|staff|crew|family|group)$/;
-const eponymousMailboxFor = (personName, companyName, domain) => {
+// The address AND the arm it stands on, because the line the operator reads
+// has to name the evidence rather than the strongest word for it.
+const eponymousMailboxDetail = (personName, companyName, domain) => {
   const dom = String(domain || '').trim().toLowerCase();
-  if (!dom || !looksLikeRealName(personName)) return '';
+  if (!dom || !looksLikeRealName(personName)) return { email: '', arm: '' };
   const parts = cleanPersonForEmail(personName);
   const first = parts[0] || '';
-  if (!/^[a-z]{3,}$/.test(first) || EPONYMOUS_NOT_A_FIRST_NAME.test(first)) return '';
-  const domRoot = dom.split('.')[0];
-  const eponymous = isEponymousOwnerRule(personName, companyName, 'https://' + dom)
-    || (first.length >= 4 && domRoot.includes(first));
-  return eponymous ? `${first}@${dom}` : '';
+  if (!/^[a-z]{3,}$/.test(first) || EPONYMOUS_NOT_A_FIRST_NAME.test(first)) return { email: '', arm: '' };
+  const m = eponymousMatch(personName, companyName, 'https://' + dom);
+  if (!m.match) return { email: '', arm: '' };
+  return { email: `${first}@${dom}`, arm: m.match };
 };
+const eponymousMailboxFor = (personName, companyName, domain) => eponymousMailboxDetail(personName, companyName, domain).email;
 // ══ A LICENCE HIT MUST TIE THE NAME TO THIS COMPANY ═════════════════════════
 // Pure and module-scope for the same reason. true = some hit line carries the
 // surname AND a distinctive word of the company's name; false = no hit ties
@@ -12992,6 +13456,34 @@ const HONORIFIC_RE = /^(?:dr|doctor|mr|mrs|ms|miss|prof|professor|rev|father|att
 // The two-letter ones that are also real words or names — PA, MS, BS, DO, OD,
 // PE, DC, EA, RA — are accepted ONLY in their dotted form. "Do" is a surname.
 const CREDENTIAL_RE = /^(?:(?:[A-Za-z]\.){2,6}|(?:D\.?D\.?S|D\.?M\.?D|D\.?V\.?M|Ph\.?D|Esq|C\.?P\.?A|M\.?B\.?A|A\.?I\.?A|F\.?A\.?C\.?S|F\.?A\.?G\.?D|C\.?F\.?P|C\.?F\.?A|L\.?M\.?T|M\.?P\.?H|F\.?N\.?P|C\.?R\.?N\.?A|LEED\s*AP|MD|JD|RN|NP)|P\.A|M\.S|B\.S|D\.O|O\.D|P\.E|D\.C|E\.A|R\.A)\.?$/i;
+// ══ A CREDENTIAL AFTER THE COMMA IS NOT PART OF THE JOB ═══════════════════
+// Live roster row: "Owner and founder, Doctor of Dental Surgery". Seven
+// tokens, so the six-word copy cap in looksLikeJobTitle refused it - and the
+// caller there is a FILTER, so the whole row went with the title and the
+// dentist who owns the practice disappeared from the lead entirely.
+//
+// The cap is not the defect and must not be raised: it is the only thing that
+// refuses a line of marketing copy standing exactly where a title stands on a
+// page the Find tab reads whole. WHICH words it counted was the defect. A
+// credential states a qualification, never a job, and it is never part of the
+// sentence the cap is measuring.
+//
+// CREDENTIAL_RE above is the one declaration of what a credential looks like -
+// the same one the name parser strips with - so nothing is retyped here. The
+// spelled-out degree is the single shape it cannot see, and it is a shape
+// rather than a list: a comma segment that is "Doctor of ..." / "Master of
+// ..." and nothing else. Only a TRAILING segment is dropped and never the
+// first, so "President, CEO and Founder" keeps every word it has.
+const CREDENTIAL_PHRASE_RE = /^(?:doctor|doctorate|master|masters|bachelor|bachelors)\s+of\s+[A-Za-z]+(?:\s+(?:of|and|[A-Za-z]+)){0,3}$/i;
+const titleHeadBeforeCredentials = (t) => {
+  const parts = String(t == null ? '' : t).split(',').map(x => x.trim());
+  while (parts.length > 1) {
+    const last = parts[parts.length - 1];
+    if (!last || !(CREDENTIAL_RE.test(last) || CREDENTIAL_PHRASE_RE.test(last))) break;
+    parts.pop();
+  }
+  return parts.join(', ');
+};
 // == A PRACTITIONER IS A REAL PERSON AND IS NOT THE BUYER ==================
 // The name has to be paired or it is lost, and an associate attorney or a
 // staff dentist is emphatically not who buys a $35k build. So this is its own
@@ -13603,11 +14095,17 @@ const parseTeamRoster = (html, companyName = '') => {
     // carries the word partner, so an unbounded strip handed it to
     // ownershipIsHead and a nav label became the decision-maker again - the
     // exact live failure section one of this check exists for.
-    const _abbrev = s.replace(/\b[A-Za-z]\./g, '');
+    // The credential comes off FIRST, so both the sentence test below and the
+    // copy cap under it measure the words that describe the JOB. Stripping is
+    // strictly narrowing - a title with no credential tail is unchanged - and
+    // a marketing line does not end in a credential, so copy still meets both
+    // tests with every word it arrived with.
+    const _head = titleHeadBeforeCredentials(s);
+    const _abbrev = _head.replace(/\b[A-Za-z]\./g, '');
     const _stripped = _abbrev.trim().split(/\s+/).filter(Boolean).length <= 3
       ? _abbrev.replace(/\.$/, '') : _abbrev;
     if (/\./.test(_stripped)) return false;
-    if (s.split(/\s+/).length > 6) return false;         // a line of copy
+    if (_head.split(/\s+/).length > 6) return false;     // a line of copy
     if (/\d\s*\+|\d{2,}/.test(s)) return false;          // "250+ partner practices"
     if (_NAV_PHRASE.test(s)) return false;
     return true;
@@ -14062,11 +14560,21 @@ const findWebsiteViaSearch = async (companyName, fcKey, location) => {
 // Firecrawl calls in flight). A one-truck shop has no LinkedIn company page;
 // from the medium review band up it often does. Bought below that only when
 // the review count is unknown.
+// Round 129: "unknown" was written as `_rv <= 0`, so a MEASURED zero bought the
+// query too - and a business with zero Google reviews certainly has no LinkedIn
+// company page. The rule is lifted out here so a fixture can execute it, and it
+// asks the RAW value before Number() ever sees it: signals.reviewCount is null
+// when the Find press measured nothing, Number(null) is 0 and 0 is finite, so
+// deleting the clause alone would have laundered "we never looked" into
+// "measured zero" and stood the query down on the leads that most need it.
 const SIZE_SECOND_QUERY_MIN_REVIEWS = 150;
+const sizeSecondQueryWorth = (reviewCount) => {
+  const known = typeof reviewCount === 'number' && Number.isFinite(reviewCount);
+  return !known || reviewCount >= SIZE_SECOND_QUERY_MIN_REVIEWS;
+};
 const findSizeViaSearch = async (companyName, website, fcKey, apiKey, location = '', opts = {}) => {
   if (!companyName || !fcKey || !apiKey) return null;
-  const _rv = Number((opts || {}).reviewCount);
-  const secondWorth = !Number.isFinite(_rv) || _rv <= 0 || _rv >= SIZE_SECOND_QUERY_MIN_REVIEWS;
+  const secondWorth = sizeSecondQueryWorth((opts || {}).reviewCount);
   try {
     const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
     const loc = cityState(location);
@@ -34643,12 +35151,28 @@ const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
 //                                     TESTING an unproven name is exactly what
 //                                     this rule permits.
 //   T3/T4 constructed from the name - an assumption about a person the
-//                                     resolver refused to vouch for. Kept on
-//                                     the row, never marked sendable.
+//                                     resolver refused to vouch for. Kept, kept
+//                                     sendable, and marked verifyToSend: it is
+//                                     offered ONE check at the send boundary.
 //
 // The address is NOT deleted. A rep can still see it, and the reason it cannot
 // be sent to is on the row - deleting it would hide a real lead, and this file
 // records that a guard which eats good data is the more expensive failure.
+// ══ AND IT WAS REFUSING A POPULATION IT HAD NO EVIDENCE AGAINST ═══════════
+// This block flipped every constructed tier-3 address to sendable:false on an
+// unvouched name. BOTH hard bounces on record - joseph@jbarnthousemd.com and
+// amaka@amakaaesthetics.com - came out of the eponymous branch with
+// sendable:true on owners who WERE vouched, so this guard was inert on both.
+// It was not what caught them; the check at the send boundary was, and that
+// check's own comment says so.
+//
+// So the address is offered ONE verifier check instead of being deleted, and
+// the row says which kind of row it is. The named difference from the vouched
+// case, and it is mechanical rather than a comment: an UNKNOWN answer does NOT
+// send here. A vouched name leaves only the MAILBOX unproven; an unvouched
+// constructed name leaves the PERSON unproven as well, and two unknowns is not
+// the same evidence as one. sendUnknownIsNotAYes is that rule, and the send
+// route reads it.
 const _unvouchedSendGuard = (r, args) => {
   if (!r || !r.email) return r;
   if ((args && args.ceoVouched) !== false) return r;
@@ -34660,11 +35184,11 @@ const _unvouchedSendGuard = (r, args) => {
   // checks run the guard over fixtures. Section 51 records the same class - a clean
   // boot printing real diagnostics about imaginary businesses - and the glyph
   // would also be counted by the verdict recorder as a failed check.
-  leadDiag(`\u26d4 EMAIL [${r.email}]: built from ${r.name || 'a name'}, whom the authority gate HELD BACK. Kept on the row and NOT sendable \u2014 a constructed address on an unproven name is how an invented person becomes a hard bounce, and the bounce is charged to the sending domain rather than to the lead.`);
+  leadDiag(`\u26a0 EMAIL [${r.email}]: built from ${r.name || 'a name'}, whom the authority gate HELD BACK. Kept on the row and offered ONE check at the send boundary \u2014 it goes out only if the mail server says the mailbox exists, and "cannot say" is a no on this row, because the person is unproven as well as the mailbox.`);
   return Object.assign({}, r, {
-    sendable: false,
+    verifyToSend: true,
     blockReason: r.blockReason
-      || `built from ${r.name || 'a name'}, who was held back by the authority gate \u2014 confirm the person before sending`,
+      || `built from ${r.name || 'a name'}, who was held back by the authority gate \u2014 it is checked against their mail server before it can be sent, and an unconfirmed answer stops it`,
   });
 };
 // == HOW SURE ARE WE THAT THIS ADDRESS REACHES HIM ==========================
@@ -34732,8 +35256,25 @@ const emailConfidenceGrade = (r, opts) => {
   }
   return (opts && opts.verifierDown === true) ? 'verifier_down' : 'pattern_guess';
 };
+// ONE reading of a website into the domain its mail lives on, shared by the
+// engine and by the hydrate above it - two hand-kept copies of one rule is the
+// class this repo records most.
+const emailDomainOf = (website) => (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '').toLowerCase();
+// Round 129. ONE awaited read per domain per contact read, before the engine
+// runs, so the seven hot-path reads inside it stay Map reads. It hydrates what
+// we already learned about this domain's mail and reads who hosts it, which
+// costs nothing: MX is a DNS record, not a paid call. With no table and no DNS
+// answer it hydrates nothing, which is exactly what a cold process does today.
+const primeDomainMailFacts = async (website) => {
+  const d = emailDomainOf(website);
+  if (!d || !d.includes('.')) return;
+  await loadDomainMailFacts(d);
+  await readMailProvider(d);
+};
 const findEmailFireproof = async (_args) => {
+  await primeDomainMailFacts((_args && _args.website) || '');
   const _r = _unvouchedSendGuard(await _findEmailFireproofCore(_args || {}), _args || {});
+
   // Whether the mailbox checker was usable is a fact about THIS RUN, captured
   // where the answer was produced. A missing KEY is deliberately NOT an
   // outage: it is a setting nobody filled in, and reporting the two as one
@@ -34780,8 +35321,9 @@ const findEmailFireproof = async (_args) => {
 //
 // Defaults to true so every existing caller behaves exactly as before; only a
 // caller that has a canBuy verdict in hand passes it.
-const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched = true, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, siteIsDown = false, companyName = '', industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '', freePages = [] }) => {
-  const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '').toLowerCase();
+const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched = true, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, siteIsDown = false, companyName = '', industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '', freePages = [], onAddressSource = null }) => {
+  const domain = emailDomainOf(website);
+
   const name = ceoName || hunterName || '';
   // The company name and their own host travel with every mailboxKind
   // question below, so the company's own mailbox can be told from a person's.
@@ -34812,7 +35354,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
   if (hunterEmail && hunterName) {
     console.log(`EMAIL [${domain}]: Hunter has ${hunterName} <${hunterEmail}>. Decision-maker we want: ${name || 'unknown'}.`);
     const learned = inferPattern(hunterEmail, hunterName);
-    if (learned) domainPatternMemory.set(domain, learned);
+    if (learned) rememberPattern(domain, learned);
 
     const isSamePerson = !name || sameName(hunterName, name);
     if (isSamePerson) {
@@ -34840,8 +35382,16 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
         } else {
           // Catch-all: SMTP can't confirm anything, so Hunter's confirmation is
           // pattern-grade, not mailbox-grade. T3 (sendable, but honest about it).
-          console.log(`EMAIL [${domain}] T3 (Hunter on a catch-all domain — pattern confidence): ${hunterEmail}`);
-          return { email: hunterEmail, ...EMAIL_TIERS.PATTERN_LEARNED, label: 'Hunter-provided (catch-all domain — pattern confidence)', name: hunterName, pattern: learned };
+          // Round 129: and "we never got a verdict" is not "catch-all". The
+          // probe now returns null far more often - a host that stalls, a day
+          // with no checks left - and saying catch-all on a domain we never
+          // measured is a claim about their mail server that nothing supports.
+          const _caSaid = hunterCatchAll === true
+            ? 'catch-all domain — pattern confidence'
+            : 'no catch-all verdict for this domain, so an SMTP answer would prove nothing — pattern confidence';
+          console.log(`EMAIL [${domain}] T3 (Hunter, ${_caSaid}): ${hunterEmail}`);
+          return { email: hunterEmail, ...EMAIL_TIERS.PATTERN_LEARNED, label: `Hunter-provided (${_caSaid})`, name: hunterName, pattern: learned };
+
         }
       } else {
         // No verifier key — Hunter is the best we have.
@@ -34875,7 +35425,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
               for (const c of buildCandidates(name, domain).filter(x => x.pattern !== learned).slice(0, 4)) {
                 const r2 = await verifyEmailSMTP(c.email, verifierKey);
                 if (r2.valid === true) {
-                  domainPatternMemory.set(domain, c.pattern);
+                  rememberPattern(domain, c.pattern);
                   console.log(`✓ EMAIL [${domain}] T2 CONFIRMED on retry: ${c.email} (${c.pattern})`);
                   return { email: c.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: c.pattern };
                 }
@@ -34950,13 +35500,13 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     if (_still.invalid === true) {
       console.log(`EMAIL [${domain}]: the previously verified address ${priorEmail} is now REFUSED by their mail server. Not reusing it \u2014 the mailbox has been closed or renamed since we last looked.`);
     } else {
-      if (priorEmailPattern) domainPatternMemory.set(domain, priorEmailPattern);
+      rememberPattern(domain, priorEmailPattern);
       console.log(`\u2713 EMAIL [${domain}] REUSING A PROVEN ADDRESS: ${priorEmail} was verified on an earlier run${_still.valid === true ? ' and the mail server confirms it again' : ' and nothing since contradicts it'}. Skipping rediscovery \u2014 re-deriving a solved address is how a lead ends up with a weaker one than it already had.`);
       return {
         email: priorEmail,
         ...(priorEmailTier === 1 ? EMAIL_TIERS.CONFIRMED_SCRAPED : EMAIL_TIERS.SMTP_VERIFIED),
         name: ceoName || hunterName || '',
-        pattern: priorEmailPattern || domainPatternMemory.get(domain) || null,
+        pattern: normalizePattern(priorEmailPattern) || domainPatternMemory.get(domain) || null,
         label: priorEmailTier === 1 ? 'Published on their site (confirmed on an earlier run)' : 'SMTP-verified (mailbox exists, confirmed on an earlier run)',
       };
     }
@@ -34964,6 +35514,13 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
 
   // ── TIER 1: published on their own website ────────────────────────────────
   const scraped = await scrapeEmailsFromSite(website, fcKey, homepageContent, siteConfirmed, siteIsDown, freePages);
+  // Where a published address came from, back to the caller's log line:
+  // homepage, free_page, careers_page, contact_page, or none when their site
+  // publishes nothing we could find. A callback rather than a field on the
+  // result because the answer is about the READ - it is true whether or not
+  // the address it found is the one the waterfall finally ships, and a field
+  // returned and read by nobody is the class this repo records most.
+  if (typeof onAddressSource === 'function') onAddressSource(scraped.source || 'none');
   if (scraped.emails.length > 0) {
     // Learn the company's convention from every address we found.
     //
@@ -34975,7 +35532,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     if (_vouched) {
       for (const e of scraped.emails) {
         const p = inferPattern(e, name);
-        if (p) { domainPatternMemory.set(domain, p); break; }
+        if (p) { rememberPattern(domain, p); break; }
       }
     }
     // Prefer an address matching our decision-maker, then any personal address,
@@ -35010,10 +35567,22 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // bounce rate is the single biggest differentiator between senders.
     if (isGeneric && name && verifierKey) {
       try {
+        // ══ ONE CHECK OR NONE, NEVER SIX ═══════════════════════════════
+        // Round 129. This fires on the most common shape in this ICP - a site
+        // that publishes only info@ - and it fires on leads that ALREADY HAVE
+        // an address. It was spending up to six of a hundred daily checks to
+        // maybe improve one of them: two catch-all probes and four blind
+        // guesses at a mailbox. It is worth exactly one check, and only when
+        // the house pattern is already known AND the domain has already been
+        // proved to reject addresses that do not exist. Then the single probe
+        // is a test of a known convention rather than a guess - and only a real
+        // confirmation may displace an address the company published, which is
+        // the rule the block below was written around.
         const _learned = domainPatternMemory.get(domain);
-        const _tryPatterns = _learned ? [_learned] : ['first', 'firstlast', 'f.last', 'first.last'];
-        const _catchAll = await isCatchAllDomain(domain, verifierKey);
+        const _tryPatterns = _learned ? [_learned] : [];
+        const _catchAll = _tryPatterns.length ? catchAllKnown(domain) : undefined;
         if (_catchAll === false) {                      // catch-all proves nothing
+
           for (const _pat of _tryPatterns) {
             const _cand = applyPattern(_pat, name, domain);
             if (!_cand || _cand === best) continue;
@@ -35022,13 +35591,16 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
               console.log(`\u21c4 EMAIL [${domain}]: their site publishes only ${best}, a shared inbox. ${_cand} is ${name}'s own mailbox and SMTP confirms it exists, so the email reaches the person it argues with instead of whoever reads enquiries.`);
               best = _cand;
               isGeneric = false;
-              domainPatternMemory.set(domain, _pat);
+              rememberPattern(domain, _pat);
               break;
             }
           }
           if (isGeneric) console.log(`EMAIL [${domain}]: only the shared inbox ${best} is published and no personal mailbox for ${name} could be confirmed, so the published address stands. An unverified guess is not worth a bounce.`);
+        } else {
+          console.log(`EMAIL [${domain}]: their site publishes only the shared inbox ${best}. ${_learned ? 'We have not proved that their mail server rejects addresses that do not exist, so a yes from it would prove nothing' : `We do not know how this company builds its addresses, so a personal mailbox for ${name} would be a guess`}, and a guess must never displace an address they published. No mailbox check is spent here.`);
         }
       } catch (e) {
+
         console.log(`EMAIL [${domain}]: could not test a personal mailbox (${e && e.message}) \u2014 keeping the published address.`);
       }
     }
@@ -35068,9 +35640,23 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
   const candidates = buildCandidates(name, domain);
   if (candidates.length === 0) return fail();
 
-  // ── Is this domain catch-all? Determines whether SMTP means anything. ─────
-  // Cached per domain, so we only pay this probe ONCE per company domain ever.
-  const catchAll = await isCatchAllDomain(domain, verifierKey);
+  // ══ THE VERDICT IS BOUGHT WHEN IT CAN CHANGE AN ANSWER, NOT BEFORE ═══════
+  // Round 129. This bought two probes on EVERY lead, before a single question
+  // had been put to their mail server - and the verdict only ever changes an
+  // answer on a lead where a candidate address comes back accepted, which is a
+  // minority of them. On all the others it was two of a hundred daily checks
+  // spent to learn something nothing went on to read.
+  //
+  // So: start from what we already know, from this process or from the table.
+  // `undefined` means NEVER MEASURED, which is not `false` and is never read as
+  // one - the probes below may run on an unmeasured domain, but nothing is filed
+  // as SMTP-VERIFIED until the verdict has actually been bought and come back a
+  // definite no, which is the moment a candidate is accepted and no sooner.
+  let catchAll = catchAllKnown(domain);
+  // And who hosts their mail decides whether a probe can answer at all.
+  const _stalls = mailProviderStalls(domain);
+  if (_stalls) console.log(`EMAIL [${domain}]: their mail host stalls address probes by design, so every probe here would run to the ${Math.round(VERIFIER_TIMEOUT_MS / 1000)}-second cap and answer nothing. No mailbox check is spent on this domain; the address below ships with that said, and the one check goes to the send boundary, where it decides whether the mail actually goes out.`);
+
 
   // ── TIER 2: normal domain → verify patterns via SMTP ──────────────────────
   // CREDIT DISCIPLINE: the verifier gives 100 checks/day. So we:
@@ -35079,7 +35665,9 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
   //   2. Otherwise try the 4 most common patterns, not all 8.
   //   3. Stop the instant one resolves.
   // Worst case ~5 checks/company; typical case 1-2. That's 25-50 companies/day.
-  if (catchAll === false && verifierKey) {
+  const _mayProbe = (catchAll !== true) && !!verifierKey && !_stalls;
+  if (_mayProbe) {
+
     const learnedFirst = domainPatternMemory.get(domain);
     // ── ORDER THE PATTERNS BY VERTICAL, NOT BY GLOBAL AVERAGE ─────────────
     // Only the first four candidates are ever probed (the verifier gives 100
@@ -35110,8 +35698,15 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
         ]
       : candidates.slice().sort(byPref);
 
-    // Cap attempts — the 4 most common conventions cover the vast majority.
-    const toTry = ordered.slice(0, learnedFirst ? 5 : 4);
+    // ══ TWO, NOT FIVE ══════════════════════════════════════════════════
+    // Round 129 arithmetic: fifty leads a day inside a hundred free checks is
+    // two checks a lead for everything a lead needs. Four or five blind guesses
+    // at a mailbox was most of a day's allowance spent on the leads where
+    // nothing resolved, and by construction the guesses dropped are the ones the
+    // ordering above already ranks least likely. A remembered pattern is first
+    // in this list, so it is one of the two rather than a sixth.
+    const toTry = ordered.slice(0, 2);
+
 
     // Track whether the server actually DENIED these, or simply refused to answer.
     // Many mail hosts (Microsoft 365, greylisting setups) return neither valid nor
@@ -35138,10 +35733,27 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     for (const c of toTry) {
       const res = await verifyEmailSMTP(c.email, verifierKey);
       if (res.valid === true) {
-        domainPatternMemory.set(domain, c.pattern);
-        console.log(`✓ EMAIL [${domain}] T2 SMTP-VERIFIED (mailbox exists): ${c.email} — pattern ${c.pattern}`);
-        return { email: c.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: c.pattern };
+        // ══ A YES IS WORTH NOTHING FROM A SERVER THAT SAYS YES TO EVERYTHING ══
+        // Round 129: THIS is the moment the catch-all verdict can change an
+        // answer, and the only one. Two nonsense probes that must AGREE, exactly
+        // as before - one sample flipped this verdict on dtaylorcpa.com inside
+        // seventy minutes, and a single sample may never promote an address.
+        if (catchAll === undefined) catchAll = await isCatchAllDomain(domain, verifierKey);
+        if (catchAll === false) {
+          rememberPattern(domain, c.pattern);
+          console.log(`✓ EMAIL [${domain}] T2 SMTP-VERIFIED (mailbox exists): ${c.email} — pattern ${c.pattern}`);
+          return { email: c.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: c.pattern };
+        }
+        if (catchAll === true) {
+          console.log(`✓ EMAIL [${domain}] CATCH-ALL domain: ${c.email} was accepted, and so is every other address there, so the acceptance says nothing about this mailbox. It cannot bounce, so it is sendable - delivery certain, recipient likely.`);
+          return { email: c.email, tier: 3, score: 72, sendable: true, name, pattern: c.pattern, catchAll: true,
+                   label: 'Catch-all domain — delivery is certain (it cannot bounce), but we could not confirm this exact mailbox. Address them by name in the first line.' };
+        }
+        console.log(`EMAIL [${domain}]: ${c.email} was accepted, but the two probes that decide whether this server accepts every address did not settle, so the acceptance is not proof the mailbox exists. Not filing it as verified.`);
+        anyUnknown = true;
+        break;
       }
+
       if (res.invalid === true) { anyDefiniteInvalid = true; deniedAddresses.add(String(c.email).toLowerCase()); }
       else anyUnknown = true;
       await new Promise(r => setTimeout(r, 200)); // be polite to the API
@@ -35206,7 +35818,8 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
       // ONE rule, shared with the branch below: a real person's name, the
       // surname (or a four-letter first name) in the business name or the
       // domain, and a first name that is a given name rather than an article.
-      const epEmail = eponymousMailboxFor(name, companyName, domain);
+      const _epArm = eponymousMailboxDetail(name, companyName, domain);
+      const epEmail = _epArm.email;
       const eponymous = !!epEmail;
       // ══ ASK THE MAIL SERVER ONCE MORE BEFORE CALLING IT A GUESS ══════════
       // dean@davisfacialsurgery.com, 2026-09-08: the domain answered the
@@ -35221,9 +35834,9 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
         await new Promise(r => setTimeout(r, 3000));
         const _again = await verifyEmailSMTP(epEmail, verifierKey);
         if (_again.valid === true) {
-          domainPatternMemory.set(domain, '{first}');
+          rememberPattern(domain, EPONYMOUS_PATTERN);
           console.log(`\u2713 EMAIL [${domain}] T2 SMTP-VERIFIED on the second ask: ${epEmail} - the mail server would not say the first time and confirmed the mailbox on retry`);
-          return { email: epEmail, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: '{first}' };
+          return { email: epEmail, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: EPONYMOUS_PATTERN };
         }
         if (_again.invalid === true) { deniedAddresses.add(epEmail.toLowerCase()); console.log(`EMAIL [${domain}]: on the second ask the mail server refused ${epEmail}.`); }
         else console.log(`EMAIL [${domain}]: the mail server would not say twice about ${epEmail} - it stays a guess, and a guess is not sent.`);
@@ -35237,7 +35850,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
       }
       if (eponymous && !epDenied) {
         if (anyDefiniteInvalid) console.log(`EMAIL [${domain}]: other patterns were refused, but ${epEmail} itself was never denied — the eponymous inference still holds.`);
-        console.log(`\u2713 EMAIL [${domain}] EPONYMOUS: the company is named after ${name}, so ${epEmail} on their own domain is the owner's mailbox`);
+        console.log(`\u2713 EMAIL [${domain}] EPONYMOUS (${_epArm.arm}): ${EPONYM_ARM_SAY[_epArm.arm]}, so ${epEmail} on their own domain is ${name}'s mailbox`);
         return {
           // TIER 3, NOT 2. This address was never SMTP-checked \u2014 it is inferred
           // from the domain carrying the owner's name. That inference is strong
@@ -35270,8 +35883,8 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
           // the question rather than guessing at it.
           email: epEmail, tier: 3, score: 78, sendable: true, name,
           needsVerification: true,
-          pattern: '{first}', inferredEponymous: true,
-          label: `The business is named after ${name}, so ${epEmail} on their own domain is a strong guess \u2014 but it is a GUESS. Verify it before sending: two of these bounced, and a hard bounce is charged to the sending domain.`,
+          pattern: EPONYMOUS_PATTERN, inferredEponymous: true,
+          label: `${name}: ${EPONYM_ARM_SAY[_epArm.arm]}, so ${epEmail} on their own eponymous domain is a strong guess \u2014 but it is a GUESS. Verify it before sending: two of these bounced, and a hard bounce is charged to the sending domain.`,
         };
       }
     }
@@ -35407,7 +36020,8 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // looked and there is nothing there". Opposite meanings, opposite next actions:
     // one says re-run later, the other says stop spending on this lead. Hunter is
     // only the explanation when the free SMTP path did NOT get to run.
-    const _smtpActuallyRan = (catchAll === false && !!verifierKey && !verifierBlocked());
+    const _smtpActuallyRan = (_mayProbe && !verifierBlocked());
+
     const _why = verifierBlocked() ? 'the email verifier stopped answering'
       : (_lookupBlocked && !_smtpActuallyRan)
         ? (_lookupBlocked === 'hunter_key_rejected' ? 'Hunter key rejected' : _lookupBlocked === 'hunter_rate_limited' ? 'Hunter rate-limited — a throttle, not an empty balance; re-run this lead in a minute' : 'Hunter out of credits')
@@ -35473,15 +36087,16 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // honorific and the punctuation, so "Dr. Amaka Nwubah" yields amaka and not
     // the malformed "dr." local part. Two copies of this logic existed and only
     // one would have been fixed if this were done inline.
-    const epEmail = eponymousMailboxFor(name, companyName, domain);
+    const _epArm = eponymousMailboxDetail(name, companyName, domain);
+    const epEmail = _epArm.email;
     if (epEmail) {
-      console.log(`✓ EMAIL [${domain}] EPONYMOUS: the company is named after ${name}, so ${epEmail} on their own domain is the owner's mailbox`);
+      console.log(`✓ EMAIL [${domain}] EPONYMOUS (${_epArm.arm}): ${EPONYM_ARM_SAY[_epArm.arm]}, so ${epEmail} on their own domain is ${name}'s mailbox`);
       return {
         // TIER 3 for the same reason as the other eponymous path: inferred from
         // the domain, never SMTP-confirmed. Strong, sendable, but not proven.
-        email: epEmail, tier: 3, score: 78, sendable: true, name, pattern: '{first}',
+        email: epEmail, tier: 3, score: 78, sendable: true, name, pattern: EPONYMOUS_PATTERN,
         inferredEponymous: true,
-        label: `The business is named after ${name} \u2014 a first-name mailbox on their own eponymous domain (inferred, not SMTP-confirmed)`,
+        label: `${name}: ${EPONYM_ARM_SAY[_epArm.arm]} \u2014 a first-name mailbox on their own eponymous domain (inferred, not SMTP-confirmed)`,
       };
     }
   }
@@ -35495,8 +36110,11 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
   const inferred = candidates[0];
   const _blockWhy = verifierBlocked()
     ? 'the email verifier is unavailable, so nothing could be checked'
-    : catchAll === null
-    ? 'the catch-all probe could not run, so SMTP results would prove nothing'
+    : _stalls
+    ? 'their mail host stalls address probes by design, so no mailbox check was spent on a question it will not answer'
+    : (catchAll !== true && catchAll !== false)
+    ? 'we have no catch-all verdict for this domain, so an SMTP answer would prove nothing either way'
+
     : _lookupBlocked
     ? (_lookupBlocked === 'hunter_key_rejected' ? 'the Hunter key was rejected' : _lookupBlocked === 'hunter_rate_limited' ? 'Hunter was rate-limited on this lead \u2014 a speed limit, not an empty balance. Re-running in a minute will work' : 'Hunter is out of credits')
     : 'no evidence of this mailbox from any source';
@@ -37582,7 +38200,11 @@ const SB_EXPECTED_SCHEMA = [
   ['leads', 'held_back_contact'], ['leads', 'corpus_read'],
   // Round 124: the server-owned Find queue, the read runs and the Settings row a run reads its keys from.
   ['discovered_queue', 'batch_id'], ['discovered_queue', 'reach_predict'], ['read_runs', 'status'], ['user_settings', 'data'],
+  // Round 129: what we have learned about a domain's mail, and the day counter
+  // that lets a slept instance resume the free hundred instead of restarting it.
+  ['domain_mail_facts', 'domain'], ['api_day_spend', 'day'],
 ];
+
 // ══ ONE FREE CALL THAT SETTLES "IS THE DATAFORSEO PASSWORD RIGHT" ═══════════
 // The first credentialed run failed on every call with "no tasks in the
 // DataForSEO response" and the log swallowed their answer, so auth-wrong and
@@ -52182,6 +52804,11 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
     // The day so far, beside the per-lead figures, so "what has this morning
     // cost" is one line in the log instead of arithmetic across fifty.
     { const _d = daySpendLine(); if (_d) console.log(_d); }
+    // Round 129: the free hundred is the one allowance with a hard wall and no
+    // invoice to settle it afterwards, so it gets its own line - what today has
+    // spent, and how many leads the current rate carries.
+    { if (runSpendToday().verifier > 0) console.log(verifierDayLine()); }
+
     // Throttling during a run makes every downstream "not found" untrustworthy.
     // Say so loudly rather than letting the lead look genuinely unreachable.
     // This lead's own refusals when we have a ledger; the process-wide delta
@@ -53630,7 +54257,12 @@ app.listen(PORT, () => {
       RSS_BASELINE_MB = Math.round(process.memoryUsage().rss / 1048576);
       console.log(`\u{1F9E0} RSS BASELINE: this process settles at ${RSS_BASELINE_MB}MB resident, so a lead is admitted below ${rssCeilingNow()}MB (baseline + ${RESEARCH_RSS_HEADROOM_MB}MB for a page render). The old fixed ceiling of ${RESEARCH_RSS_CEILING_MB}MB was written from a 145MB boot, and every lead was tripping it, sleeping the full ${Math.round(RESEARCH_RSS_MAX_WAIT_MS / 1000)}s bound and starting anyway.`);
       probeSupabaseSchema().catch(() => {});
+      // Round 129: one read, here rather than per verify call, so an instance
+      // that slept through the afternoon resumes the day rather than starting it
+      // again and walking into the same wall.
+      seedVerifierDay().catch(() => {});
       probeDfsAuth().catch(() => {});
+
       // Round 124: a read run left running by the process this one replaced.
       resumeReadRuns().catch(() => {});
     }, 5000);
@@ -56491,16 +57123,103 @@ app.listen(PORT, () => {
     for (const [_needle, _msg] of [
       [_n("if (leadCapRefuse(tag ? `${tag} search` :", " 'search')) return [];"), 'the paid search door does not consult the ceiling, so the most expensive purchase on the route is uncapped'],
       [_n("if (leadCapRefuse('page read'))", " return '';"), 'the page-buy door does not consult the ceiling - four of American Driveway\'s fourteen credits were interior pages'],
+      // Round 129: the address lookup's own pages. Its buy was unreachable on
+      // the default setting until this round, and it called the uncapped scrape.
+      [_n('const md = await firecrawlScrapeCapped(fcKey, target,', ' 45000);'), 'the address lookup buys its contact pages outside the per-lead ceiling, so a lead that has already spent its limit can still buy a sitemap call and four scrapes'],
       // Round 121: the early stop applied ONLY where pages were free. The
       // saving is worth nothing there and a credit a page where the site
       // refused a plain fetch, so the guard that switched it off is gone.
-      [_n('if (i + _wave < picks.length) {', "\n        const _soFar = pages.filter(rosterEligiblePage)"), 'the "their own pages already name an owner, stop reading" rule is gated on the pages being FREE again - which is backwards: it saves nothing where pages are free and a credit a page where they are not'],
+      [_n('if (i + _wave < picks.length) {', "\n        const _left = picks.slice(i + _wave);"), 'the "their own pages already name an owner, stop reading" rule is gated on the pages being FREE again - which is backwards: it saves nothing where pages are free and a credit a page where they are not'],
       [_n('out.capped = led.capped', '\n    ? {'), 'the ceiling never reaches the row, so the rep cannot tell a lead that ran out of budget from one that had nothing to find'],
     ]) if (!_src.includes(_needle)) _fails.push(_msg);
     if (_fails.length) console.log(`⛔ LEAD CEILING CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
     else console.log(`✓ LEAD CEILING CHECK: one lead can no longer spend the day's budget on its own. The ceiling is ${FIND_LEAD_CREDIT_CAP} Firecrawl credits and it is shaped like the day ceiling beside it - it stops the NEXT purchase and never unwinds one already made, so a lead finishes early instead of half-finished. Executed inside a real ledger scope in both directions: under the ceiling nothing is refused, at it every further search and page read is, the row names what was skipped, the list is bounded, and a call outside any lead scope is never capped so no other route inherits it.`);
   } catch (e) {
     console.log(`⛔ LEAD CEILING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ EPONYMOUS ARM CHECK - round 129 ══════════════════════════════════════
+  // Two tests answered two different questions and both were called eponymous:
+  // one matched the SURNAME, the other the surname OR the person's first name
+  // inside the domain. The line the operator reads asserted the strong one
+  // whichever had fired, so a log about Herbert H. Construction said one thing
+  // while the resolver's settle computed the other and there was no way to tell
+  // from the log which.
+  //
+  // One rule now, reporting the arm. This check exists to refuse two changes:
+  // the settle widening onto the weak arm, and the line going back to a word
+  // that covers both.
+  try {
+    const _fails = [];
+    const _srcE = selfSourceNoCommentsLF();
+    const _nE = (a, b) => a + b;
+    // Each case is one only ONE arm can answer.
+    for (const [_nm, _co, _url, _want] of [
+      ['Billy Luke', 'Lukes Asphalt Paving', 'https://lukesasphaltpaving.com', 'surname'],
+      ['John Ott', 'Ott Plumbing LLC', '', 'surname'],
+      ['Jane Ray', 'Raymond Plumbing', 'https://raymondplumbing.com', null],
+      // Her surname is nowhere - not in the business name, not in the domain.
+      // Her FIRST name is the domain. That is a real signal and a weaker one.
+      ['Amaka Nwubah', 'Amaka Aesthetics', 'https://amakaaesthetics.com', 'first-name'],
+      ['Marcus Webb', 'Precision Paving', 'https://precisionpaving.com', null],
+    ]) {
+      const _got = eponymousMatch(_nm, _co, _url).match;
+      if (_got !== _want) _fails.push(`eponymousMatch("${_nm}", "${_co}") answers ${JSON.stringify(_got)} and must answer ${JSON.stringify(_want)}`);
+    }
+    // THE ONE THAT MUST NOT WIDEN. The settle stands the paid owner sources
+    // down on this answer, and a domain carrying somebody's first name is not
+    // a business named after them.
+    if (isEponymousOwnerRule('Amaka Nwubah', 'Amaka Aesthetics', 'https://amakaaesthetics.com') !== false) {
+      _fails.push('the eponymous SETTLE now fires on the first-name arm, so a domain that merely carries the owner\'s first name stands down every paid owner source - the weak half of the mailbox rule leaking into the rule that decides what we buy');
+    }
+    // The mailbox still ships on either arm. That half is unchanged, and the
+    // recorded Amaka Nwubah case is the reason the weak arm exists at all.
+    if (eponymousMailboxFor('Dr. Amaka Nwubah', 'Amaka Aesthetics', 'amakaaesthetics.com') !== 'amaka@amakaaesthetics.com') {
+      _fails.push('the first-name mailbox is gone, so the recorded Amaka Nwubah case produces no address at all');
+    }
+    if (eponymousMailboxDetail('Dr. Amaka Nwubah', 'Amaka Aesthetics', 'amakaaesthetics.com').arm !== 'first-name'
+      || eponymousMailboxDetail('Claude Reynolds', 'Claude Reynolds Insurance', 'claudereynoldsinsurance.com').arm !== 'surname') {
+      _fails.push('the mailbox cannot say WHICH arm produced it, so the line the operator reads is back to asserting the business is named after somebody whose surname is nowhere in it');
+    }
+    // The two arms must read DIFFERENTLY to a person, or naming the arm buys
+    // nothing.
+    if (!EPONYM_ARM_SAY['surname'] || !EPONYM_ARM_SAY['first-name']
+      || EPONYM_ARM_SAY['surname'] === EPONYM_ARM_SAY['first-name']) {
+      _fails.push('the two arms are described with the same words, so the log names an arm and still says the same thing about both');
+    }
+    if (!/weaker evidence/i.test(String(EPONYM_ARM_SAY['first-name']))) {
+      _fails.push('the weak arm no longer says it is the weak one, which is the whole reason the line names the arm');
+    }
+    // The research route downgrades a CACHED tier-2 row whose label says it came
+    // from this shortcut, and it finds that out by reading the label for one
+    // word. Rewriting these labels without it switches that downgrade off in
+    // silence, on exactly the rows nobody re-derives.
+    for (const [_needle, _which] of [
+      [_nE('on their own epony',
+        'mous domain is a strong guess'), 'the guess label on the SMTP-gated branch'],
+      [_nE('a first-name mailbox on their own epony',
+        'mous domain (inferred'), 'the inferred label on the second branch'],
+    ]) {
+      if (!_srcE.includes(_needle)) _fails.push(`${_which} no longer carries the word the research route reads it for, so a tier-2 row cached from this shortcut stops being downgraded and reachability reports an inference as a confirmed mailbox`);
+    }
+    // AND THE LINES READ IT. A rule that knows and a line that does not say is
+    // the log we already had.
+    for (const [_needle, _msg] of [
+      [_nE('const _epArm = eponymousMailboxDetail(name,',
+        ' companyName, domain);'), 'an eponymous branch no longer asks which arm matched, so its line claims the business is named after somebody whose surname is not in it'],
+      [_nE('EPONYMOUS (${_epArm.arm}): ${EPONYM_ARM_SAY',
+        '[_epArm.arm]}'), 'the eponymous address line does not name the arm it matched on'],
+    ]) {
+      const _c = _srcE.split(_needle).length - 1;
+      if (_c !== 2) _fails.push(`${_msg} (${_c} of the 2 eponymous branches)`);
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 EPONYMOUS ARM CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 EPONYMOUS ARM CHECK: one rule answers "is the business named after this person", and it says which half answered - the surname in the business name or the domain, or the much weaker case where only the first name is in the domain. The settle that stands the paid owner sources down still requires the surname half and refuses the other, the mailbox still ships on either, and both address lines print the arm and what it is evidence of instead of one word that covered both.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 EPONYMOUS ARM CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ ADDRESS ROUTE CHECK — round 121 ═════════════════════════════════════
@@ -56517,7 +57236,8 @@ app.listen(PORT, () => {
     const _fails = [];
     const _src = selfSourceNoCommentsLF();
     const _n = (a, b) => a + b;
-    const _gate = _src.indexOf(_n('if (catchAll === false', ' && verifierKey) {'));
+    const _gate = _src.indexOf(_n('const _mayProbe = (catchAll !== true)', ' && !!verifierKey && !_stalls;'));
+
     const _hunter = _src.indexOf(_n('const worthACredit = hunterKey && name', ' && looksLikeRealName(name) && catchAll !== true;'));
     // A CODE anchor, not a comment one. The first draft of this used the
     // "Genuinely nothing left" comment - and selfSourceNoCommentsLF STRIPS
@@ -56525,7 +57245,8 @@ app.listen(PORT, () => {
     // the whole positional assertion passed on a build with the block moved
     // back inside. Falsification caught it: the revert stayed GREEN. A check
     // that cannot fail is not a check.
-    const _nothingLeft = _src.indexOf(_n('const _smtpActuallyRan = (catchAll === false', ' && !!verifierKey && !verifierBlocked());'));
+    const _nothingLeft = _src.indexOf(_n('const _smtpActuallyRan = (_mayProbe', ' && !verifierBlocked());'));
+
     if (_gate < 0) _fails.push('the SMTP-gated block could not be found, so nothing here is being checked');
     else if (_hunter < 0) _fails.push('the Hunter email-finder is not guarded on \'catchAll !== true\' - either it was renamed, or its guard was tightened to === false, which is the 2026-09-04 defect: an UNKNOWN catch-all closing the one paid route that does not read an SMTP verdict');
     else if (_hunter < _gate) _fails.push('the Hunter finder runs BEFORE the free and SMTP routes, so every lead pays a Hunter credit for an address the probes would have found for nothing');
@@ -56563,6 +57284,200 @@ app.listen(PORT, () => {
     else console.log(`✓ ADDRESS ROUTE CHECK: an UNKNOWN catch-all no longer closes the routes that never needed an SMTP verdict. The Hunter email-finder sits below the SMTP-gated block, so a known-good domain still tries every free and probed route first and spends no extra credit, while a domain whose second probe timed out can finally reach the fallback the timeout line has always promised the operator. UNKNOWN is remembered for ${Math.round(CATCHALL_UNKNOWN_TTL_MS / 60000)} minutes - a fact about the probe's moment, not about the domain - instead of being re-bought on every lead in the batch.`);
   } catch (e) {
     console.log(`⛔ ADDRESS ROUTE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ PATTERN NAME CHECK — round 129 ══════════════════════════════════════
+  // buildCandidates names the first-name-only mailbox one thing and the
+  // eponymous branch taught the domain memory another name for the same
+  // mailbox. Every consumer failed without a word: applyPattern found no
+  // candidate of that name and returned an empty string, so the house-pattern
+  // route returned nothing; the learned-pattern filter matched nothing, so a
+  // domain whose convention we had already bought was probed from scratch; and
+  // the name shipped on the lead's saved row and came back on the next run.
+  // Round 129 writes learned patterns to a table, so a name this file cannot
+  // read has to be impossible to write. Driven on the real functions and pinned
+  // at its call sites - no source needle can see two names that disagree.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    const _legacy = _n('{fi', "rst}");
+    if (!buildCandidates('Bob Smith', 'example.com').some(c => c.pattern === EPONYMOUS_PATTERN)) _fails.push('the eponymous branch teaches a pattern name buildCandidates does not know, so the learned-pattern fast path is dead and the bad token is written to the contact cache and, from Round 129, to the domain mail-facts table');
+    if (normalizePattern(_legacy) !== EPONYMOUS_PATTERN) _fails.push('a lead row saved before this round carries the brace-wrapped first-name token and is not migrated on the way in, so a domain we already solved is guessed at from scratch and pays for the probes again');
+    const _built = applyPattern(EPONYMOUS_PATTERN, 'Bob Smith', 'example.com');
+    if (_built !== 'bob@example.com') _fails.push(`applyPattern cannot build the owner's own first-name mailbox from the name the eponymous branch teaches - it answered "${_built}", so the house-pattern route hands back an empty address and says nothing about it`);
+    // The fast path itself, run rather than read: the remembered name must pull
+    // its own candidate to the front of the probe order.
+    const _cands = buildCandidates('Bob Smith', 'example.com');
+    const _ordered = [..._cands.filter(c => c.pattern === EPONYMOUS_PATTERN), ..._cands.filter(c => c.pattern !== EPONYMOUS_PATTERN)];
+    if (!_ordered.length || !_ordered[0] || _ordered[0].pattern !== EPONYMOUS_PATTERN || _ordered.length !== _cands.length) _fails.push('a remembered first-name pattern pulls no candidate to the front of the probe order, so a domain whose convention we already learned is probed in the default order and spends verifier credit it does not need');
+    // The migration door: it must pass every name buildCandidates hands out,
+    // migrate the brace-wrapped spelling, and drop everything else.
+    for (const _p of _cands.map(c => c.pattern)) if (normalizePattern(_p) !== _p) _fails.push(`the migration door refuses "${_p}", a name buildCandidates itself hands out - a real pattern would be dropped on the way in and re-bought at a verifier call on every later lead`);
+    if (normalizePattern(_n('{no', 'tapattern}')) !== '' || normalizePattern('  First.Last  ') !== 'first.last' || normalizePattern(null) !== '') _fails.push('the migration door lets a name buildCandidates cannot read through, or mangles one it can - either way an unusable name is stored and outlives the run that made it');
+    const _dom = 'patternnamecheck.invalid';
+    domainPatternMemory.delete(_dom);
+    rememberPattern(_dom, _legacy);
+    if (domainPatternMemory.get(_dom) !== EPONYMOUS_PATTERN) _fails.push('a brace-wrapped token from an older row is not migrated as it enters the domain memory, so it is handed to the next lead on that domain and fails there too');
+    domainPatternMemory.set(_dom, EPONYMOUS_PATTERN);
+    rememberPattern(_dom, 'not-a-pattern-name');
+    if (domainPatternMemory.get(_dom) !== EPONYMOUS_PATTERN) _fails.push('a name buildCandidates does not hand out overwrites a good remembered pattern, so one bad learn poisons every later lead on the domain');
+    domainPatternMemory.delete(_dom);
+    // And the call sites, not only the functions (check-writing-traps §2).
+    if (_src.indexOf(_n("'{fi", "rst}'")) !== -1) _fails.push('the brace-wrapped pattern name is written somewhere in this file again - it reaches the saved lead row, comes back as the prior pattern, and neither side says a word about it');
+    if (!_src.includes(_n('rememberPattern(domain,', ' EPONYMOUS_PATTERN);'))) _fails.push('the eponymous branch teaches the domain memory a name of its own instead of the one constant, so the two can drift apart again');
+    if (!_src.includes(_n('pattern: EPONYMOUS_PATTERN,', ' inferredEponymous: true,'))) _fails.push('the eponymous guess ships a pattern name of its own instead of the one constant, so the name on the lead row and the name this file reads can disagree again');
+    if (!_src.includes(_n('rememberPattern(domain,', ' priorEmailPattern);'))) _fails.push('a pattern arriving on the request is installed in the domain memory without passing the migration door');
+    if (!_src.includes(_n('normalizePattern(priorEmailPattern)', ' || domainPatternMemory.get(domain)'))) _fails.push('a pattern saved on the lead row is handed straight back out without being migrated, so an old brace-wrapped token is written to the row again and survives this fix');
+    if (_fails.length) console.log(`⛔ PATTERN NAME CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ PATTERN NAME CHECK: the eponymous branch and buildCandidates use ONE name for the owner's own first-name mailbox, proven by running both - buildCandidates hands the name out, applyPattern builds ${_built} from it, and a remembered name pulls its own candidate to the front of the probe order, which is the fast path that saves a verifier call on a domain already solved. Every stored name comes in through one door: the brace-wrapped spelling saved before this round migrates to the real name, a name buildCandidates does not hand out is dropped rather than remembered, and no call site writes the brace-wrapped spelling any more - so nothing that outlives the process can carry a name this file cannot read.`);
+  } catch (e) {
+    console.log(`⛔ PATTERN NAME CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ MAIL FACTS CHECK — round 129 ════════════════════════════════════════
+  // What we learn about a domain's mail now outlives the process, and a fact
+  // that outlives the process is a fact that can be WRONG for ninety days.
+  // Until this round the Render restart was the only thing that had ever
+  // cleaned a poisoned house pattern, so every assertion here is about the
+  // difference between a measurement and the absence of one. Driven on the real
+  // hydrate with rows aged by a synthetic clock, then pinned at both write doors
+  // - a fixture supplies its own arguments and cannot see a caller.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    const _day = 24 * 60 * 60 * 1000;
+    const _now = Date.UTC(2026, 8, 9);
+    const _ago = (ms) => new Date(_now - ms).toISOString();
+    const _fresh = hydrateDomainMailFacts({ catch_all: false, catch_all_at: _ago(3 * _day), pattern: 'first', pattern_at: _ago(3 * _day), mail_provider: 'microsoft365', mail_provider_at: _ago(3 * _day) }, _now);
+    if (_fresh.catchAll !== false) _fails.push('a catch-all verdict measured three days ago is not read back, so every domain is re-probed every morning and this round saves nothing it was built to save');
+    if (_fresh.pattern !== 'first') _fails.push('a house pattern measured three days ago is not read back, so a domain whose convention we already bought is guessed at again');
+    if (_fresh.provider !== 'microsoft365') _fails.push('the mail host measured three days ago is not read back');
+    const _stale = hydrateDomainMailFacts({ catch_all: false, catch_all_at: _ago(200 * _day), pattern: 'first', pattern_at: _ago(200 * _day), mail_provider: 'microsoft365', mail_provider_at: _ago(200 * _day) }, _now);
+    if (_stale.catchAll !== undefined) _fails.push('a catch-all verdict two hundred days old is still read as a measurement - a stale false keeps the SMTP path open and ships "mailbox exists" about a domain that now accepts everything');
+    if (_stale.pattern !== '') _fails.push('a house pattern two hundred days old is still read as a measurement, so one wrong name written to the table builds a wrong address for every later lead on that domain for ever - and the restart this round exists to survive was the only thing that had ever cleaned one');
+    if (_stale.provider !== '') _fails.push('the mail host is read back past its own clock, and MX records really do change');
+    const _empty = hydrateDomainMailFacts({ catch_all: null, catch_all_at: null, pattern: null, pattern_at: null, mail_provider: null, mail_provider_at: null }, _now);
+    if (_empty.catchAll !== undefined || _empty.pattern !== '' || _empty.provider !== '') _fails.push('a row with no measurement in it hydrates as one, which is the unmeasured-treated-as-zero class in boolean clothes: "never probed" would read as "normal domain, SMTP trustworthy"');
+    const _typed = hydrateDomainMailFacts({ catch_all: 'false', catch_all_at: _ago(_day) }, _now);
+    if (_typed.catchAll !== undefined) _fails.push('a catch-all column that is not a boolean is coerced into one, so the string "false" written by hand would read as a measured verdict');
+    const _legacyRow = hydrateDomainMailFacts({ pattern: _n('{fi', 'rst}'), pattern_at: _ago(_day) }, _now);
+    if (_legacyRow.pattern !== EPONYMOUS_PATTERN) _fails.push('a brace-wrapped pattern name written by an older build is not migrated on the way OUT of the table, so a domain we already solved is probed from scratch and pays for it again');
+    const _junkRow = hydrateDomainMailFacts({ pattern: 'not-a-pattern-name', pattern_at: _ago(_day) }, _now);
+    if (_junkRow.pattern !== '') _fails.push('a pattern name this build does not hand out is hydrated as a measurement, so a row written by hand or by a build that no longer exists builds an address for every later lead on that domain');
+    if (mailFactFresh(null, _day, _now) !== false) _fails.push('a fact with no timestamp reads as fresh, so an undated row is a permanent measurement');
+    if (mailFactFresh('not a date', _day, _now) !== false) _fails.push('an unparseable timestamp reads as fresh');
+    if (mailFactFresh(_ago(_day), 2 * _day, _now) !== true) _fails.push('a fact inside its own clock reads as stale, so nothing is ever remembered and the table is write-only');
+    if (!(CATCHALL_FACT_TTL_MS > 0 && PATTERN_FACT_TTL_MS > 0 && MAIL_PROVIDER_TTL_MS > 0)) _fails.push('one of the three clocks is switched off, so a fact of that kind never expires');
+    if (!_fixtureDomain('patternnamecheck.invalid') || !_fixtureDomain('example.com')) _fails.push('the boot checks above drive rememberPattern on a made-up domain and it now reaches the table, so every boot writes fixture rows that a later lead reads back as facts about a real business');
+    if (_fixtureDomain('davisfacialsurgery.com')) _fails.push('a real prospect domain is refused as a fixture, so nothing about a real business is ever remembered');
+    if (!SB_EXPECTED_SCHEMA.some(x => x[0] === 'domain_mail_facts')) _fails.push('the schema probe does not know about the mail-facts table, so a server whose SQL was never run says nothing about it at any boot and silently remembers nothing for ever');
+    for (const [_needle, _msg] of [
+      [_n('catchAllCache.set(domain, isCatchAll);\n  saveDomainMailFact(domain,', ' { catch_all: isCatchAll,'), 'the durable catch-all write no longer sits on the two-probes-agreed verdict, so either nothing is remembered or something other than an agreed measurement is'],
+      [_n('domainPatternMemory.set(domain, known);\n    saveDomainMailFact(domain,', ' { pattern: known,'), 'the house pattern is written to the table from somewhere other than the one door that has already put it through normalizePattern and the vouched guard - which is how a name learned from a person we would not vouch for becomes permanent'],
+      [_n('await primeDomainMailFacts((_args &&', " _args.website) || '');"), 'the engine no longer hydrates what we know about the domain before it runs, so every restart starts the day over and re-buys facts we already hold'],
+    ]) if (!_src.includes(_needle)) _fails.push(_msg);
+    const _caWrites = (_src.match(new RegExp(_n('saveDomainMailFact\\(domain, \\{ catch_all', ':'), 'g')) || []).length;
+    if (_caWrites !== 1) _fails.push(`${_caWrites} place(s) write a catch-all verdict to the table and there must be exactly one - the UNKNOWN verdict recorded a few lines above it is a fact about the probe's moment, and a stored one would shut the SMTP path on that domain for ninety days`);
+    if (_fails.length) console.log(`⛔ MAIL FACTS CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ MAIL FACTS CHECK: what we learn about a domain's mail now survives the restart, and only as a measurement. A verdict, a house pattern and a mail host are read back while each is inside its OWN clock (${Math.round(CATCHALL_FACT_TTL_MS / _day)}, ${Math.round(PATTERN_FACT_TTL_MS / _day)} and ${Math.round(MAIL_PROVIDER_TTL_MS / _day)} days), and a stale one is treated as ABSENT rather than as a verdict - proven by ageing real rows against a synthetic clock in both directions. A null, a wrong type and a pattern name this build cannot read all hydrate as "we do not know", never as "we measured no". The brace-wrapped name from an older row migrates on the way out. Both write doors are pinned where they run, exactly one place writes a catch-all verdict, and a boot fixture's made-up domain can never write a row a lead reads.`);
+  } catch (e) {
+    console.log(`⛔ MAIL FACTS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ VERIFIER DAY CHECK — round 129 ══════════════════════════════════════
+  // VERIFIER_EXHAUSTED is a LATCH, not a counter: it is set only after a call
+  // has already been spent and the vendor answered with a quota-shaped body, and
+  // every restart clears it. So the 2026-09-09 ten-lead read spent about thirty
+  // of a hundred free checks and no line in this file could have said stop.
+  // Driven with a synthetic count and a synthetic ceiling, because a probe that
+  // read the live allowance would only ever exercise the configuration this dyno
+  // happens to have - and pinned at the one door that spends a check.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    if (verifierSpendRefusal(1, 0, 100)) _fails.push('the first check of the day is refused, so the brake fires on the normal case and is one somebody turns off');
+    if (verifierSpendRefusal(1, 99, 100)) _fails.push('the hundredth check is refused, so the last check of the free allowance is never spent');
+    if (!verifierSpendRefusal(1, 100, 100)) _fails.push('the hundred-and-first check is allowed, so the counter is a report and not a brake - which is exactly what the latch was: a refusal discovered by spending a call and walking into the wall');
+    if (!verifierSpendRefusal(2, 99, 100)) _fails.push('a two-check purchase is allowed with one check left, so the catch-all probe can start what it cannot finish and half a verdict is no verdict');
+    if (verifierSpendRefusal(1, 0, Infinity)) _fails.push('the ceiling cannot be switched off, so an operator with a paid allowance is held to the free one');
+    if (verifierSpendRefusal(1, NaN, 100)) _fails.push('a count that was never seeded refuses every call - "we do not know what today cost" would become "it is all spent", which stops the day rather than running it');
+    if (!SPEND_NAMES.verifier || !SPEND_NAMES.verifier[1]) _fails.push('the mailbox allowance has no row in the day-budget table, so its ceiling has no name and the log cannot say which setting raises it');
+    if (spendAdmissionServices().includes('verifier')) _fails.push('a spent mailbox allowance now refuses a whole route at admission, so a lead that would still have returned an owner, a phone, a website and a published address is not read at all');
+    if (budgetRefusal(null, { fc: 0, places: 0, anthropicUsd: 0, apify: 0, verifier: 999 }, { fc: 1500, places: 600, anthropicUsd: 20, apify: 150, verifier: 100 })) _fails.push('a spent mailbox allowance refuses a route that spends no mailbox checks at all');
+    if (!budgetRefusal(['verifier'], { verifier: 999 }, { verifier: 100 })) _fails.push('the mailbox allowance cannot be asked about by name, so nothing can consult it deliberately');
+    if (!SB_EXPECTED_SCHEMA.some(x => x[0] === 'api_day_spend')) _fails.push('the schema probe does not know about the day table, so a server whose SQL was never run never says why the count cannot be seeded');
+    const _r = { day: '2026-09-09', fc: 1, places: 1, anthropicUsd: 1, apify: 1, verifier: 88, byKind: {} };
+    rollSpendDay(_r, '2026-09-09');
+    if (_r.verifier !== 88) _fails.push('the same day wipes the mailbox count, so the free hundred can be spent several times over before anything notices');
+    rollSpendDay(_r, '2026-09-10');
+    if (_r.verifier !== 0) _fails.push('a new day does not zero the mailbox count, so yesterday blocks this morning');
+    {
+      const _line = verifierDayLine();
+      if (!/mailbox check/.test(_line)) _fails.push('the day line does not state how many checks today has cost, which is the number the whole round exists to keep');
+      if (VERIFIER_DAY_SEEDED !== _spendDayNow() && !/NOT SEEDED/.test(_line)) _fails.push('a count that was never read out of the day table is printed as though it were today\'s total - "0 of 100 used" off an unseeded counter is the unmeasured-treated-as-zero class pointed at the operator');
+    }
+    if (!String(verifierMayTry).includes(_n('verifierMay', 'Spend'))) _fails.push('the gate every caller asks before spending a check still reads only the latch - and the latch is set by hitting the wall and cleared by every restart, which is why the live run had no brake');
+    for (const [_needle, _msg] of [
+      [_n('    noteVerifierCall();\n    const url = `https://client.myemailverifier.com', '/verifier/validate_single/'), 'the one door to the verifier no longer counts the check it is about to spend, so the day counter is decorative and the wall is discovered by walking into it again'],
+      [_n('if (!verifierMaySpend(1)) {\n    if (_verifierDaySaid !==', ' _spendDayNow()) {'), 'the verifier door no longer refuses when the day is spent, so the count is a report rather than a brake'],
+      [_n('seedVerifierDay().catch(()', ' => {});'), 'the day count is never seeded from the table, so a Render instance that slept resumes at zero and spends the allowance a second time'],
+      [_n('if (!verifierMaySpend(2)) {', '\n'), 'the catch-all probe no longer asks whether two checks are left before starting a purchase that costs two'],
+    ]) if (!_src.includes(_needle)) _fails.push(_msg);
+    if (_fails.length) console.log(`⛔ VERIFIER DAY CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ VERIFIER DAY CHECK: the free ${SPEND_BUDGETS.verifier === Infinity ? 'mailbox' : SPEND_BUDGETS.verifier} mailbox checks a day are COUNTED rather than discovered by hitting the wall - proven on a synthetic count and a synthetic ceiling, in both directions and at the boundary. The count is seeded from the day table at boot so an instance that slept resumes the day, an unseeded count says so in the line rather than printing a zero as a measurement, and a count we do not have never refuses a call. The allowance is named and settable (VERIFIER_DAILY_BUDGET) but is deliberately NOT part of route admission: running out of mailbox checks costs the address, not the lead, and a contact read still returns an owner, a phone and a website. Pinned at the one door that spends a check, at the gate every caller asks first, and at the boot seed.`);
+  } catch (e) {
+    console.log(`⛔ VERIFIER DAY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ CHECK BUDGET CHECK — round 129 ══════════════════════════════════════
+  // Where the hundred checks a day actually went. The catch-all verdict was
+  // bought on EVERY lead before anything had been asked of the mail server; the
+  // shared-inbox upgrade spent up to six checks on leads that already had an
+  // address; the waterfall guessed at four or five mailboxes. Each of those is a
+  // separate mechanism and each gets its own assertion, driven where it can be
+  // driven and pinned where it cannot.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    const _d = 'catchallknowncheck.invalid';
+    catchAllCache.delete(_d);
+    if (catchAllKnown(_d) !== undefined) _fails.push('a domain nobody has ever probed reads as a verdict rather than as unmeasured, and the gap between "we proved this server rejects addresses that do not exist" and "we never asked" is the whole difference between a verified mailbox and a guess');
+    catchAllCache.set(_d, null);
+    if (catchAllKnown(_d) !== null) _fails.push('the ten-minute UNKNOWN is read as a measurement rather than as the fact about the probe\'s moment it is');
+    catchAllCache.set(_d, true);
+    if (catchAllKnown(_d) !== true) _fails.push('a measured verdict is not read back out of memory, so the lazy purchase buys it again on every lead');
+    catchAllCache.delete(_d);
+    if (classifyMailProvider([{ exchange: 'crojungle-com.mail.protection.outlook.com', priority: 0 }]) !== 'microsoft365') _fails.push('a Microsoft 365 tenant is not recognised from its own MX record, so every probe there runs to the timeout and answers nothing, and each of those attempts is one of a hundred free checks');
+    if (classifyMailProvider([{ exchange: 'ASPMX.L.GOOGLE.COM.', priority: 1 }]) !== 'google') _fails.push('Google Workspace is not recognised from its MX record');
+    if (classifyMailProvider([]) !== '') _fails.push('a domain whose MX lookup returned nothing is given a mail host anyway, so "we never looked" becomes a measurement');
+    if (classifyMailProvider(null) !== '') _fails.push('a failed MX lookup is given a mail host anyway');
+    if (!MAIL_PROVIDERS_THAT_STALL.includes('microsoft365')) _fails.push('nothing is on the stall list, so the MX read is done on every lead and never used');
+    if (MAIL_PROVIDERS_THAT_STALL.includes('google') || MAIL_PROVIDERS_THAT_STALL.includes('other')) _fails.push('a host that answers probes perfectly well is on the stall list, so the free SMTP route is switched off on a large share of this ICP for no reason');
+    const _md = 'mxcheck.invalid';
+    MAIL_PROVIDER_MEMORY.delete(_md);
+    if (mailProviderStalls(_md)) _fails.push('a domain whose mail host we never read is treated as one that stalls, so the free SMTP route is switched off on every lead we did not look at');
+    MAIL_PROVIDER_MEMORY.set(_md, 'microsoft365');
+    if (!mailProviderStalls(_md)) _fails.push('a host this file names as one that stalls address probes is probed anyway, so the checks the round set out to save are still spent');
+    MAIL_PROVIDER_MEMORY.set(_md, 'google');
+    if (mailProviderStalls(_md)) _fails.push('a host that answers is skipped, so the tier-2 route is closed on domains where it works');
+    MAIL_PROVIDER_MEMORY.delete(_md);
+    for (const [_needle, _msg] of [
+      [_n('let catchAll =', ' catchAllKnown(domain);'), 'the catch-all verdict is bought up front on every lead again - two of a hundred daily checks spent before a single question has been put to the mail server, on leads where no candidate address is ever accepted and the verdict changes nothing'],
+      [_n('if (catchAll === undefined) catchAll = await isCatchAllDomain(domain,', ' verifierKey);'), 'the verdict is no longer bought at the moment a candidate is accepted, so either an acceptance on a server that accepts everything ships as "SMTP-verified (mailbox exists)", or nothing can ever reach tier 2 at all'],
+      [_n('const toTry = ordered.slice(0,', ' 2);'), 'the pattern waterfall is back to four or five blind guesses a lead, which is most of a day\'s allowance spent on the leads where nothing resolves'],
+      [_n('const _tryPatterns = _learned ?', ' [_learned] : [];'), 'the shared-inbox upgrade guesses at four mailboxes again on a domain whose convention we do not know - up to six of a hundred daily checks spent on a lead that ALREADY HAS an address'],
+      [_n('const _catchAll = _tryPatterns.length ?', ' catchAllKnown(domain) : undefined;'), 'the shared-inbox upgrade buys the two-probe catch-all verdict again for a lead that already has a published address'],
+      [_n('if (mailProviderStalls(domain)) {', '\n'), 'the catch-all probe is spent on a host that stalls address probes by design, which burns two checks and up to a minute to learn nothing'],
+      [_n('const _stalls = mailProviderStalls(domain);', '\n'), 'the waterfall no longer asks who hosts their mail, so every probe on a hardened tenant runs to the cap and answers nothing'],
+    ]) if (!_src.includes(_needle)) _fails.push(_msg);
+    if (_fails.length) console.log(`⛔ CHECK BUDGET CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ CHECK BUDGET CHECK: the four places that spent the day's mailbox checks now spend them only where they can change an answer. The catch-all verdict is read from memory or the table first and BOUGHT only at the moment a candidate address comes back accepted - and it is still two probes that must agree, because one sample flipped that verdict on a live domain inside seventy minutes. A never-measured domain reads as unmeasured and never as "not catch-all". The waterfall guesses twice, not five times. The shared-inbox upgrade costs one check or none instead of six, and only on a domain already proved to reject addresses that do not exist. And a mail host that stalls address probes by design is read free from DNS and skipped, which is the failure this file's own timeout message has always named.`);
+  } catch (e) {
+    console.log(`⛔ CHECK BUDGET CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ TRANSPORT TRUTH CHECK — round 121 ═══════════════════════════════════
@@ -60102,7 +61017,7 @@ app.listen(PORT, () => {
       if (_got !== _want) _fails.push(`eponymousMailboxFor("${_nm}", ${_dom}) is "${_got}" and should be "${_want}"`);
     }
     {
-      const _calls = _src.split(_n('eponymousMailboxFor', '(name, companyName, domain)')).length - 1;
+      const _calls = _src.split(_n('eponymousMailboxDetail', '(name, companyName, domain)')).length - 1;
       if (_calls !== 2) _fails.push(`the email engine has ${_calls} call(s) to the shared eponymous rule and two eponymous branches - a branch is keeping its own copy`);
       if (_src.includes(_n('nameParts.some(w => domRoot', '.includes(w))'))) _fails.push('the any-token domain substring test is back in the email engine, which is what built the@wowfix.us');
     }
@@ -60173,7 +61088,7 @@ app.listen(PORT, () => {
     if (!_np2('We are a non-profit organization serving families across the county.').isNonprofit) _fails.push('a business that says it IS a non-profit organization is kept');
     if (!_np2('Hope House is a registered charitable organization dedicated to housing.').isNonprofit) _fails.push('a charity naming itself is kept');
     // 3. A dropped lead buys no size search.
-    if (!_src.includes(_n('if (!sizeMeasured(signals) && website && !_ownerWaveFoundNobody', ' && !out.notIcp) {'))) _fails.push('the size lookup is bought on a lead the read has already dropped (Image360: four credits after its own drop line)');
+    if (!_src.includes(_n('if (!sizeMeasured(signals) && !sizeSettledSmall(signals) && website && !_ownerWaveFoundNobody', ' && !out.notIcp) {'))) _fails.push('the size lookup is bought on a lead the read has already dropped (Image360: four credits after its own drop line)');
     // 4/5. The brand, and the town alone.
     const _im = readOutletTell({ name: 'Image360 Jacksonville-St. Johns Bluff', homeUrl: 'https://image360.com/jacksonville-fl-st-johns-bluff/', city: 'Jacksonville, FL' });
     if (!_im.isOutlet || _im.brand !== 'Image360') _fails.push(`Image360's branch reads brand "${_im.brand}" - the size lookup then searches for a string no directory has`);
@@ -60473,6 +61388,8 @@ app.listen(PORT, () => {
       [_nd('|business_name|hunter|', 'google_review_replies)$/'), 'the OWNER WAVE line forgot the review signatures again, so a free settle reads as a paid win'],
       [_nd('_ownerWaveLectured', ' = true;'), 'the reading guide is back on every lead\'s OWNER WAVE line'],
       [_nd('freePages: pages.map(p => ({ url: p.url, text: p.text,', ' intent: p.intent })),'), 'the page intent is dropped again, so the extractor cannot tell a careers page from a contact page'],
+      [_nd('onAddressSource: (s) => { _addressSource', " = String(s || 'none'); },"), 'the address lookup is never asked where it found the address, so the FIND CONTACT line reports "none" on every lead including the ones that published one'],
+      [_nd('| address source ${_addressSource}', ' | phone ${out.phone'), 'the FIND CONTACT line no longer says where the address came from, so a batch cannot tell an address we read for free from one we bought a contact page for'],
       [_nd('priorLeads:', ' _bench,'), 'the chain detector lost the cross-run memory the bench already holds'],
       [_nd('licenseQualifier:', ' _isQualifier,'), 'the licence search stopped telling a QUALIFIER from an owner - that is the tradesman who holds the company licence, and it used to come back stamped "Owner"'],
       [_nd('const _kind =', ' mailboxKind(best, _mbCtx);'), 'a tier-1 address no longer says who it reaches, so a recruiting inbox ships as "Published on their site" at score 100 again'],
@@ -60771,6 +61688,23 @@ app.listen(PORT, () => {
       if ((estimateScaleBand({ verifiedEmployees: 4, teamCount: 40 }) || {}).band !== 'entry') _fails.push('the team-page floor overrides a VERIFIED headcount - the floor lifts a band off what a business publishes, it does not argue with a filing');
       if ((sizeBand({ verifiedEmployees: 4, teamCount: 40 }) || {}).band !== 'low') _fails.push('the team-page floor overrides a verified headcount on the rep\'s sheet');
     }
+    // ══ ROUND 129: THE CREDITS THAT BOUGHT NOTHING ═══════════════════════
+    // 20 of the 30 Firecrawl credits on the 2026-09-09 run went to the size
+    // search and five of seven leads got back "no record of this business",
+    // every one of them an owner-operated practice. sizeSettledSmall is a
+    // WEAKER predicate beside sizeMeasured, never a widening of it: the band
+    // still refuses to call a four-name team page a measured size.
+    if (sizeSettledSmall({ teamCount: 4, tradeLabel: 'Dental' }) !== true) _fails.push('a lead whose own team page lists four people still buys the four-credit directory search to be told nothing');
+    if (sizeSettledSmall({ teamCount: 12, tradeLabel: 'Dental' }) !== false) _fails.push('a twelve-person team page reads as settled-small, so a lead big enough to be core never has its size measured at all');
+    if (sizeSettledSmall({ teamCount: 2, tradeLabel: 'Dental' }) !== false) _fails.push('a two-name team page stands the size lookup down - two names is a page layout, not a measurement');
+    if (sizeSettledSmall({ tradeLabel: 'Electrical' }) !== false) _fails.push("a 'mixed' trade with nothing measured stands its own size lookup down - mixed is one truck or twelve, and vetoing on it blinds the size gate across half the ICP");
+    if (sizeSettledSmall({ tradeLabel: 'Weight Loss' }) !== true) _fails.push('a one-person trade still buys the directory search that has no company page to find');
+    if (sizeMeasured({ teamCount: 4, tradeLabel: 'Dental' }) !== false) _fails.push('sizeMeasured was widened instead of a weaker predicate being added beside it, so a four-name team page now reports to the rep as a measured size');
+    if (sizeSecondQueryWorth(0) !== false) _fails.push('the second size query is bought on a MEASURED zero review count, which is not an unknown count');
+    if (sizeSecondQueryWorth(null) !== true) _fails.push('an UNMEASURED review count arrives as null, Number(null) is 0 and 0 is finite, so the second size query is stood down on a count nobody measured');
+    if (sizeSecondQueryWorth(undefined) !== true) _fails.push('a lead whose review count never reached the size lookup stands the second query down on nothing');
+    if (sizeSecondQueryWorth(SIZE_SECOND_QUERY_MIN_REVIEWS) !== true) _fails.push('a lead at the review threshold no longer buys the LinkedIn and BBB query');
+    if (sizeSecondQueryWorth(SIZE_SECOND_QUERY_MIN_REVIEWS - 1) !== false) _fails.push('the second size query is bought below the review threshold on a measured count');
     // The call sites and the one floor.
     const _src = selfSourceNoCommentsLF();
     const _n = (a, b) => a + b;
@@ -60781,7 +61715,9 @@ app.listen(PORT, () => {
       [_n('findSizeViaSearch(sizeName, website, fcKey,', ' apiKey, leadLocation, { reviewCount: signals.reviewCount });'), 'the size lookup is never bought, is bought on the outlet name instead of the brand, or cannot see the review count that decides the second query'],
       [_n("const sizeName = (out.chain && out.chain.kind === 'network'", ' && out.chain.brand) ? out.chain.brand : name;'), 'a branch network is measured as one outlet again (ClearChoice, 2026-09-03)'],
       [_n('if ((signals.branchNetwork === true || signals.peOwned === true || signals.nationalOperator === true)', " && _layers.verdict === 'owner') {"), 'a branch network, PE-owned or national lead reads as owner-run off its own page again, so a held-back name reaches the sheet as the owner'],
-      [_n('if (!sizeMeasured(signals) && website', ' && !_ownerWaveFoundNobody && !out.notIcp) {'), 'the size lookup is bought on a lead that measured its size, on one with no website, or on one the owner wave already came back empty on - a size decides the tier and the tier decides the lane, and a lead with no name has no call lane to be sorted into'],
+      [_n('if (!sizeMeasured(signals) && !sizeSettledSmall(signals) && website', ' && !_ownerWaveFoundNobody && !out.notIcp) {'), 'the size lookup is bought on a lead that measured its size, on one whose own team page already settles it as small, on one with no website, or on one the owner wave already came back empty on - a size decides the tier and the tier decides the lane, and a lead with no name has no call lane to be sorted into'],
+      [_n('const secondWorth = sizeSecondQuery', 'Worth((opts || {}).reviewCount);'), 'the second-query rule is derived inline again, where no fixture can execute it - and inline it read a MEASURED zero review count as an unknown one and bought two more credits on a business with no LinkedIn company page'],
+      [_n('SIZE LOOKUP [${name}]: not bought - ${_sizeSettledWhy}', ', and a directory has no record of a business this size'), 'the size search is stood down on a lead whose own team page already settled it and nothing in the log says so - a saving the operator cannot see reads as a broken feature'],
       [_n('const _ownerWaveFoundNobody = _ownerAttempted === true', ' && !(out.owner && out.owner.name);'), 'nothing measures whether the owner wave ran and found nobody, so the size wave cannot be aimed away from those leads'],
       [_n('sizeWord: _size.band, sizeConfidence: _size.confidence,', ' affordBand: signals.affordBand ||'), 'the lane does not read the sheet\'s own guess, so the two can disagree'],
       [_n("signals.scaleBand = (_scale && !_scale.guess) ?", ' _scale.band : null;'), 'a tenure guess decides the tier the lanes read'],
@@ -60824,7 +61760,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ SIZE AND LAYERS CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
     } else {
-      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the ladder and the layers (Darrel in both; TheirStack and product companies email only; layered, a branch network, PE-owned and national on the call sheet LAST under the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap and email over it; an owner-run business over the cap still called under $${ICP_CALL_REACH_CEILING / 1e6}M; nobody named means no email lane; under the floor benched only when likely or sure); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; and the buying floor has one copy.`);
+      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the ladder and the layers (Darrel in both; TheirStack and product companies email only; layered, a branch network, PE-owned and national on the call sheet LAST under the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap and email over it; an owner-run business over the cap still called under $${ICP_CALL_REACH_CEILING / 1e6}M; nobody named means no email lane; under the floor benched only when likely or sure); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; the size search is not bought on a lead whose own team page already lists three to five people, nor on a one-person trade, nor a second directory query on a MEASURED zero review count; and the buying floor has one copy.`);
     }
   } catch (e) {
     console.log(`⛔ SIZE AND LAYERS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -61706,6 +62642,15 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('fcKey: allowBuy ? fcKey :', " '',"))) {
       _fails.push('the email engine is handed a Firecrawl key unconditionally, so FIND_EMAIL_FIRECRAWL no longer bounds what a contact read can spend');
     }
+    // ══ ROUND 129: AND THE MODE THAT PERMITS THE BUY MUST BE ONE THAT CAN PAY ══
+    // 'fallback' permits it only where pages.length is 0 - the same expression
+    // that tells the engine the site is dead, and the engine returns on that
+    // before it reads the key. A mode that permits nothing spends nothing and
+    // reads exactly like a mode that found nothing worth buying, which is why
+    // this is pinned at the expression rather than left to the bill to reveal.
+    if (!_src.includes(_n("(FIND_EMAIL_FIRECRAWL === 'unfound' && pages.length", ' > 0)'))) {
+      _fails.push('the contact-page buy is no longer permitted on a site that answered and published no address for free - so the only mode left that permits it is the one the email engine refuses before it reads the key, and the paid address read is dead again');
+    }
     // ══ THE OWNER SWITCH, ASSERTED AT ITS CALL SITE ══════════════════════
     // This used to pin `callOnly: true` - the paid owner wave hard-coded OFF.
     // That was the right cost decision for a dial-only batch and the wrong one
@@ -61748,15 +62693,16 @@ app.listen(PORT, () => {
       const _guess = (t) => ({ email: 'dana@x.com', tier: t, sendable: true, name: 'Dana Brooks' });
       for (const _t of [3, 4]) {
         const _r = _unvouchedSendGuard(_guess(_t), _un);
-        if (_r.sendable !== false) _fails.push(`a tier-${_t} address CONSTRUCTED from a held-back name still comes back sendable, which is how an unproven person becomes a hard bounce charged to our own sending domain`);
-        if (!_r.blockReason) _fails.push(`a tier-${_t} address built on a held-back name is refused with no reason on the row, so the rep cannot tell it from a real block`);
-        if (_r.email !== 'dana@x.com') _fails.push('the guard is DELETING the address rather than marking it unsendable - a rep can still use it on a call, and eating good data is the more expensive failure');
+        if (_r.verifyToSend !== true) _fails.push(`a tier-${_t} address CONSTRUCTED from a held-back name is not marked verify-to-send, so the send boundary cannot tell it from an ordinary guess and an unknown answer sends an unproven person's mailbox`);
+        if (!_r.blockReason) _fails.push(`a tier-${_t} address built on a held-back name carries no reason on the row, so the rep cannot tell why it needs a check`);
+        if (_r.email !== 'dana@x.com') _fails.push('the guard is DELETING the address rather than flagging it - a rep can still use it on a call, and eating good data is the more expensive failure');
       }
       // The three that must pass through untouched.
       if (_unvouchedSendGuard(_guess(1), _un).sendable !== true) _fails.push('a published address is being refused because the owner name was held back - the address was read off their own site and has nothing to do with the name');
       if (_unvouchedSendGuard(_guess(2), _un).sendable !== true) _fails.push('an SMTP-CONFIRMED address is being refused on a held-back name - the mailbox answering is the strongest proof the name was right, and testing an unproven name is exactly what this rule permits');
       if (_unvouchedSendGuard(Object.assign(_guess(3), { smtpVerified: true }), _un).sendable !== true) _fails.push('a tier-3 address that was SMTP-verified anyway is being refused - it was tested, not assumed');
       if (_unvouchedSendGuard(_guess(3), _ok).sendable !== true) _fails.push('a vouched owner can no longer produce a sendable pattern address at all, so the guard has widened onto every lead');
+      if (_unvouchedSendGuard(_guess(3), _ok).verifyToSend === true) _fails.push('a VOUCHED owner\'s address is marked verify-to-send, so an unknown answer stops it - that is every catch-all domain in the pipeline, refused on no evidence');
       if (_unvouchedSendGuard(_guess(3), {}).sendable !== true) _fails.push('a caller that passes no verdict is treated as held back, so every path that predates this parameter silently stops sending');
     }
     // The call sites, because the fixtures above supply their own arguments.
@@ -62074,7 +63020,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ FIND CONTACT CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ FIND CONTACT CHECK: the Find tab's contact read is executed end to end — a plain fetch first with Firecrawl only as the fallback, the site's own navigation instead of a paid sitemap call, and the shared owner reader, email engine, roster parser, ad signatures and role classifier rather than second copies of any of them. The score is out of the ${FIND_ICP_TERMS.length} signals it could measure and an unmeasured one leaves the denominator instead of scoring zero — and it is now computed AFTER the owner and address lookups rather than 370 lines before them, so a lead that produced a named buyer and a confirmed address can no longer score the same as one that produced neither. Affordability comes from affordabilityBand, the one derivation the Find card and contactRankFor already read. HONEST SHAPE: no contact read has run against a live business from this build, so the per-lead cost below is bounded by the guards above rather than measured — the first real run's FIND CONTACT line reports what it actually cost. FIND_EMAIL_FIRECRAWL=${FIND_EMAIL_FIRECRAWL} (set it to "always" to let the address lookup buy its own pages, roughly five more credits a lead).`);
+      console.log(`✓ FIND CONTACT CHECK: the Find tab's contact read is executed end to end — a plain fetch first with Firecrawl only as the fallback, the site's own navigation instead of a paid sitemap call, and the shared owner reader, email engine, roster parser, ad signatures and role classifier rather than second copies of any of them. The score is out of the ${FIND_ICP_TERMS.length} signals it could measure and an unmeasured one leaves the denominator instead of scoring zero — and it is now computed AFTER the owner and address lookups rather than 370 lines before them, so a lead that produced a named buyer and a confirmed address can no longer score the same as one that produced neither. Affordability comes from affordabilityBand, the one derivation the Find card and contactRankFor already read. HONEST SHAPE: no contact read has run against a live business from this build, so the per-lead cost below is bounded by the guards above rather than measured — the first real run's FIND CONTACT line reports what it actually cost. FIND_EMAIL_FIRECRAWL=${FIND_EMAIL_FIRECRAWL} — "unfound" lets the address lookup buy their contact page only on a site that answered and published nothing we could find for free; "always" buys on every lead, roughly five more credits each; "fallback" can never buy at all, because the only case it permits is a site the engine has already refused as dead.`);
     }
   } catch (e) {
     console.log(`⛔ FIND CONTACT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -62114,6 +63060,19 @@ app.listen(PORT, () => {
     if (emailVerifiedRow('a@b.com', 'verifier_down', 'true', '3')) _fails.push('an address the checker never confirmed counts as an email on the batch card');
     if (!emailVerifiedRow('a@b.com', '', 'true', '2')) _fails.push('a sendable tier-2 address from an older read does not count on the batch card');
     if (emailVerifiedRow('', 'published_personal', 'true', '1') || emailVerifiedRow('a@b.com', '', 'true', null)) _fails.push('a row with no address, or no tier, counts as with-email');
+    // 2c. SENDABLE and HELD BACK (Round 129). The engine's own verdict after
+    //     the send guard, which is the number the rep can act on, and the two
+    //     rules must not collapse into one meaning in either direction.
+    if (!emailSendableRow('a@b.com', 'pattern_guess', 'true', '3')) _fails.push('a sendable tier-3 address counts as no email at all on the batch card, so ten addresses read as "With email 0" and the Move-to-Research button offers nothing');
+    if (emailVerifiedRow('a@b.com', 'pattern_guess', 'true', '3')) _fails.push('the verified rule has widened onto a tier-3 guess, so "confirmed" on the card no longer means confirmed and the two counts have collapsed into one number');
+    if (emailSendableRow('', 'pattern_guess', 'true', '3')) _fails.push('a lead with no address at all is counted as one we can send to, so the Move button offers a lead with nothing to write to');
+    if (!emailHeldBackRow('a@b.com', 'pattern_guess', 'false', '3') || emailHeldBackRow('a@b.com', 'pattern_guess', 'true', '3') || emailHeldBackRow('', 'pattern_guess', 'false', '3')) _fails.push('held back on the batch card is not "we found an address and the engine refused it", so the rep cannot tell a refused address from a lead that never had one');
+    if (!_src.includes(_n('if (emailSendableRow(r.email, r.emailGrade, r.emailSendable, r.emailTier)) { b.sendableEmail += 1;', ' if (!_ver) b.sendableOnly += 1; }'))) {
+      _fails.push('the batch route no longer counts the addresses the engine says we can send to, so the card is back to the confirmed count alone and the Move-to-Research button offers nothing');
+    }
+    if (!_src.includes(_n('if (emailHeldBackRow(r.email, r.emailGrade, r.emailSendable, r.emailTier))', ' b.heldBackEmail += 1;'))) {
+      _fails.push('the batch route no longer counts the addresses the engine refused, so a lead we found an address for and cannot use reads on the card as a lead with no address');
+    }
     // 3. THE STALL RULE, at 59 and 61 minutes, and with no clock at all.
     {
       const now = Date.now();
@@ -63119,12 +64078,51 @@ app.listen(PORT, () => {
       if (!_free.length || _free[0].intent !== 'team') {
         _fails.push(`the first page read is "${_free.length ? _free[0].intent : 'none'}" rather than the team/about family - that is the page that names an owner, so reading it later means the early exit never fires and the cap truncates the evidence`);
       }
-      const _careersAt = _free.findIndex(p => p.intent === 'careers');
-      if (_careersAt >= 0 && _careersAt < _free.length - 1) {
-        _fails.push('the careers page is not read last, and a job advert is a name-shaped line followed by a job title - which is what a roster row looks like');
+      // ══ ROUND 129: THE CAREERS PAGE IS LAST IN THE CORPUS, NOT IN THE READ ══
+      // This demanded it be FETCHED last, which is a corpus rule enforced in
+      // the wrong place: the corpus is sorted by FIND_INTENT_RANK where it is
+      // built, so a careers page fetched in wave one still reaches the model
+      // last and still reaches the roster parser not at all. Held as a fetch
+      // rule it cost the contact page its place in wave one, and cost the run
+      // every address that is published on a contact page.
+      if (!Number.isFinite(FIND_INTENT_RANK.careers)
+          || FIND_PAGE_INTENTS.some(t => t.key !== 'careers' && !(FIND_INTENT_RANK[t.key] < FIND_INTENT_RANK.careers))) {
+        _fails.push('the careers page no longer sorts last in the corpus, and a job advert is a name-shaped line followed by a job title - which is what a roster row looks like');
       }
-      if (!Number.isFinite(FIND_INTENT_RANK.team) || !(FIND_INTENT_RANK.team < FIND_INTENT_RANK.careers)) {
-        _fails.push('the intent rank no longer puts the owner-likely pages first, so the corpus sort and the fetch order have stopped agreeing');
+      if (!Number.isFinite(FIND_INTENT_RANK.team) || !(FIND_INTENT_RANK.team < FIND_INTENT_RANK.contact)) {
+        _fails.push('the intent rank no longer leads the corpus with the owner-likely pages, so the cap truncates the evidence the parser and the model were meant to see');
+      }
+      // ══ AND A CONTACT PAGE IS IN THE FIRST WAVE ══════════════════════════
+      // Ten live leads, not one published address: the team intent wants twelve
+      // free pages and the picker drained it before it reached the contact
+      // intent, so the first wave of five was five team pages. Fixture: a site
+      // with 12 team links and 2 contact links, at the free budget.
+      {
+        const _rr = [];
+        for (let i = 0; i < 12; i++) _rr.push(`https://y.com/about-${i}`);
+        _rr.push('https://y.com/contact');
+        _rr.push('https://y.com/contact-us');
+        if (!pickFindPages(_rr, 'https://y.com', 20).slice(0, 5).some(p => p.intent === 'contact')) {
+          _fails.push('pickFindPages drains the team intent before the contact intent, so with a free budget of 20 and a wave of 5 no contact page is in the first wave');
+        }
+      }
+      // ══ AND THE READ DOES NOT STOP ONE PAGE SHORT OF IT ══════════════════
+      // EXECUTED, not read: the owner is named on the page already in hand and
+      // the address sits on a contact page still unfetched.
+      {
+        const _co = 'Hannah Custom Homes';
+        const _named = { url: 'https://y.com/about', intent: 'team', text: '<h4>Dusty Hannah</h4><p>CO-OWNER/CEO</p>' };
+        const _quiet = { url: 'https://y.com/about', intent: 'team', text: '<h4>Our Work</h4><p>We build homes across the county.</p>' };
+        const _contact = { url: 'https://y.com/contact', intent: 'contact', text: 'Call us on 555 0100 or write to us.' };
+        if (findReadDone([_named], [_contact], _co) !== false) {
+          _fails.push('the read stops the moment a roster names an owner, so a site that publishes its address on /contact is never asked for it');
+        }
+        if (findReadDone([_named, _contact], [], _co) !== true) {
+          _fails.push('the free read never stops, so a site that has already given us its owner and its contact page is read to the budget and the wall clock is the only brake');
+        }
+        if (findReadDone([_quiet], [_contact], _co) !== false) {
+          _fails.push('the free read stops with nobody named, so the pages that would have named the owner are skipped and the paid wave is asked to find what was there for nothing');
+        }
       }
     }
     // The call sites: a fixture supplies its own arguments and cannot see a
@@ -63133,7 +64131,7 @@ app.listen(PORT, () => {
                            _n('pickFindPages(links, pages[0].url, viaFirecrawl ? FIND_MAX_PAGES', ' : FIND_MAX_FREE_PAGES)'),
                            _n('if (fp && _seenFp.has(fp)) { _dupPages', ' += 1; return false; }'),
                            _n('if (Date.now() - _readStartedAt >', ' FIND_FREE_READ_MS) {'),
-                           _n('if (parseTeamRoster(_soFar, name).some(r =>', ' r.isOwner)) {')]) {
+                           _n('if (findReadDone(pages, _left,', ' name)) {')]) {
       if (!_src.includes(_needle)) {
         _fails.push('the free page read lost a call site: ' + _needle.slice(0, 46));
       }
@@ -63984,6 +64982,69 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 SEND VERIFICATION CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ VERIFY TO SEND CHECK - round 129 ═════════════════════════════════════
+  // _unvouchedSendGuard refused a whole population on no evidence: it flipped
+  // every constructed tier-3 address to not-sendable whenever the owner ladder
+  // would not vouch for the name. BOTH hard bounces on record came out of the
+  // eponymous branch with sendable:true on owners who WERE vouched, so the
+  // guard was inert on both of them. The check at the send boundary is what
+  // caught them, and its own comment says so.
+  //
+  // The row is now offered ONE check instead of being deleted, and the one
+  // named difference from the vouched case is mechanical rather than written
+  // down: an UNKNOWN answer does not send. A vouched name leaves the mailbox
+  // unproven; an unvouched constructed name leaves the person unproven too.
+  try {
+    const _fails = [];
+    const _srcV = selfSourceNoCommentsLF();
+    const _nV = (a, b) => a + b;
+    const _unV = { ceoVouched: false };
+    const _guessV = (t) => ({ email: 'dana@x.com', tier: t, sendable: true, name: 'Dana Brooks' });
+    for (const _t of [3, 4]) {
+      const _r = _unvouchedSendGuard(_guessV(_t), _unV);
+      if (_r.sendable !== true) _fails.push(`a tier-${_t} address built from a held-back name is refused outright rather than offered one check - that deletes a population nothing on record was ever charged to, because neither bounce came through this guard`);
+      if (_r.verifyToSend !== true) _fails.push(`a tier-${_t} address built from a held-back name carries no verify-to-send mark, so the send boundary reads it as an ordinary guess and an unknown answer sends it`);
+    }
+    // The vouched case is untouched, in both directions.
+    const _v3 = _unvouchedSendGuard(_guessV(3), { ceoVouched: true });
+    if (_v3.sendable !== true || _v3.verifyToSend === true) {
+      _fails.push('a VOUCHED owner\'s address is marked verify-to-send, so an unknown answer now stops it - that is every catch-all domain in the pipeline refused on no evidence, which is the blunt version this rule exists to avoid');
+    }
+    // THE DIFFERENCE, EXECUTED ON THE REAL PREDICATE THE ROUTE CALLS.
+    const _row = (extra) => ({ email: 'dana@x.com', emailResult: Object.assign({ tier: 3, email: 'dana@x.com' }, extra || {}) });
+    if (sendUnknownIsNotAYes(_row({ verifyToSend: true })) !== true) {
+      _fails.push('an unknown answer still sends an address constructed for a person nobody vouched for - the person and the mailbox are both unmeasured there, and "we did not measure it" has never meant "it is fine" anywhere else in this file');
+    }
+    if (sendUnknownIsNotAYes(_row({})) !== false) {
+      _fails.push('an ordinary tier-3 address is now refused on an unknown answer, which deletes every catch-all domain from the pipeline on no evidence');
+    }
+    if (sendUnknownIsNotAYes({ emailResult: { tier: 2, verifyToSend: true } }) !== false) {
+      _fails.push('an address the mail server has already confirmed is being held for a second answer, so a proven mailbox is blocked by a mark about the NAME');
+    }
+    if (sendUnknownIsNotAYes({ email: 'dana@x.com', verifyToSend: true }) !== true) {
+      _fails.push('the mark is only read off emailResult, so a lead row that carries it at the top level is waved through');
+    }
+    // AND THE CALL SITE. A correct rule the route does not read is not a gate,
+    // and this file records that failure more often than any other.
+    for (const [_needle, _msg] of [
+      [_nV('let _mustProve = sendUnknownIsNotAYes(lead)',
+        '\n        ? '), 'the send route never asks whether an unknown answer counts for this row, so the mark is decoration and the row sends on an unknown exactly as before'],
+      [_nV('if (_mustProve) {',
+        '\n        console.log('), 'the send route works the answer out and pushes the lead anyway - computed-but-not-passed, on the one gate that protects the sending domain'],
+      [_nV('verifyToSend:',
+        ' true,'), 'the held-back guard no longer writes the mark at all, so nothing downstream can tell this row from an ordinary guess'],
+      [_nV('_mustProve = ',
+        "'';"), 'a valid answer no longer clears the hold, so an address the mail server confirmed is refused anyway and the check is bought for nothing'],
+    ]) if (!_srcV.includes(_needle)) _fails.push(_msg);
+    if (_fails.length) {
+      console.log(`\u26d4 VERIFY TO SEND CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 VERIFY TO SEND CHECK: an address built for a person the owner ladder would not vouch for is no longer deleted on no evidence - neither bounce on record came through that guard. It is kept, it is offered ONE check at the send boundary, and it goes out only on a yes: unknown, a thrown request and a missing verifier key all stop it, because the person is unproven there as well as the mailbox. A vouched owner's address is untouched, so catch-all domains still send on unknown as they did.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 VERIFY TO SEND CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THREE LEADS MUST NOT GET ONE SUBJECT LINE ════════════════════════════
@@ -65301,6 +66362,65 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`\u26d4 ROSTER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ TITLE CREDENTIAL CHECK - round 129 ═══════════════════════════════════
+  // A live roster row read "Owner and founder, Doctor of Dental Surgery". Seven
+  // tokens, so the six-word copy cap refused the title - and the caller is a
+  // filter over the rows, so the whole person went with it and the dentist who
+  // owns the practice was not on the lead at all.
+  //
+  // Driven end to end on parseTeamRoster rather than on the shape test, because
+  // the shape test returning false is not the damage; the row disappearing is.
+  // Both directions, because the cap is doing a real job and raising it to
+  // seven or eight would re-admit the marketing copy this file records.
+  try {
+    const _fails = [];
+    const _card = (n, t) => `<h3>${n}</h3><p>${t}</p>`;
+    const _dds = parseTeamRoster(_card('Ellen Marsh', 'Owner and founder, Doctor of Dental Surgery'), 'Marsh Family Dental');
+    const _em = _dds.find(r => r.name === 'Ellen Marsh');
+    if (!_em) _fails.push('the roster row for an owner whose title carries a spelled-out credential is DELETED - "Owner and founder, Doctor of Dental Surgery" is seven tokens, the copy cap counts the credential, and the caller filters the whole person away with the title');
+    else if (!_em.isOwner) _fails.push(`"${_em.title}" no longer reads as an owner, so the practice's owner is on the sheet as staff`);
+    // The abbreviated cousins, on the same shape. Every one of these is a title
+    // long enough that the cap decides it.
+    for (const _tail of ['DDS', 'MD', 'CPA', 'MBA', 'RN', 'DMD', 'CFP', 'Esq.', 'P.E.']) {
+      const _t = 'Owner and managing partner, ' + _tail;
+      if (!parseTeamRoster(_card('Ellen Marsh', _t), 'Marsh Family Dental').some(x => x.name === 'Ellen Marsh' && x.isOwner)) {
+        _fails.push(`an owner whose title ends ", ${_tail}" is dropped from the roster entirely`);
+      }
+    }
+    // AND THE CAP STILL REFUSES COPY. Eight words of marketing standing where a
+    // title stands, with and without a credential pinned on the end.
+    for (const _copy of ['Gain a partner and keep your practice today', 'Gain a partner and keep your practice today, MD']) {
+      if (parseTeamRoster(_card('Ellen Marsh', _copy), 'Marsh Family Dental').length) {
+        _fails.push(`a line of marketing copy ("${_copy}") is read as a job title, so the copy cap was widened rather than aimed - that is the nav-label class this parser records most`);
+      }
+    }
+    // The rule itself, executed: only a TRAILING credential goes, and never the
+    // first segment, or a title that names two jobs loses one of them.
+    if (titleHeadBeforeCredentials('Owner and founder, Doctor of Dental Surgery') !== 'Owner and founder') {
+      _fails.push('the credential tail is not being taken off the title at all');
+    }
+    if (titleHeadBeforeCredentials('President, CEO and Founder') !== 'President, CEO and Founder') {
+      _fails.push('a real multi-part title is being cut at its comma, so a title naming two jobs loses one of them');
+    }
+    if (titleHeadBeforeCredentials('Doctor of Dental Surgery') !== 'Doctor of Dental Surgery') {
+      _fails.push('a title that is ONLY a credential is emptied, so a practitioner row loses its title');
+    }
+    // And the cap reads the head. A correct rule the cap does not use is not a fix.
+    const _srcT = selfSourceNoCommentsLF();
+    const _nT = (a, b) => a + b;
+    if (!_srcT.includes(_nT('if (_head.split(/\\s+/).length > 6)',
+      ' return false;'))) {
+      _fails.push('the copy cap counts the whole title again, credential and all, so a seven-token title with a credential on the end deletes the roster row');
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 TITLE CREDENTIAL CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 TITLE CREDENTIAL CHECK: an owner whose title carries a credential is read and kept - "Owner and founder, Doctor of Dental Surgery" and its abbreviated cousins all come back as the owner, because the copy cap counts the words that describe the JOB and a credential after the comma is not one of them. The cap itself is unchanged at six: eight words of marketing copy standing where a title stands are still refused, with or without a credential pinned on the end.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 TITLE CREDENTIAL CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ AN IDENTIFIER THAT RESOLVES TO NOTHING ═══════════════════════════════
@@ -78430,9 +79550,19 @@ const findPlainFetch = async (url, timeoutMs = 12000) => {
 // sopeed it up?" - the right instinct, and the order below is the answer. The
 // team/about family is read FIRST because that is where an owner is named, so
 // the early exit fires on the first wave and a site that says who runs it never
-// buys the other pages OR the ~10-credit paid wave. It also decides what goes
-// into the corpus: the cap binds at about three interior pages, so arrival
-// order was silently deciding which evidence the parser and the model ever saw.
+// buys the other pages OR the ~10-credit paid wave.
+//
+// ══ ROUND 129: THE FETCH ORDER AND THE CORPUS ORDER ARE TWO DECISIONS ═════
+// They were one decision, and that is why a live ten-lead run published not a
+// single address. The first row below wants twelve free pages; the picker
+// drained all twelve before it reached the contact row; the read stopped on
+// wave one because a roster had named an owner - so the page that carries the
+// address was never asked for. What goes into the CORPUS is a separate
+// question, answered where the corpus is built: it is sorted by
+// FIND_INTENT_RANK there, so the pages likeliest to name an owner still reach
+// the model and the parser first however they were fetched. That frees the
+// fetch order to round-robin this table, which puts a contact page in wave one
+// for no extra page and no credit.
 //
 // freeWant is the plain-fetch budget and want is the Firecrawl-fallback budget.
 // They differ because a page is free on one path and a credit on the other.
@@ -78489,25 +79619,72 @@ const pickFindPages = (links, homepageUrl, budget) => {
   const pool = (Array.isArray(links) ? links : []).filter(u => String(u).toLowerCase() !== home && !FIND_ASSET_RE.test(String(u)));
   const out = [];
   const taken = new Set();
-  for (const intent of FIND_PAGE_INTENTS) {
+  // ══ ROUND 129: ONE INTENT AT A TIME, NOT ONE INTENT UNTIL IT IS FULL ═════
+  // This drained an intent before it looked at the next one, and the team row
+  // asks for twelve free pages. With a wave of five that is five team pages in
+  // wave one, no contact page anywhere near it, and the read stopping before
+  // the page that publishes the address is ever asked for: ten live leads, not
+  // one published address. So the free path takes ONE page per intent per pass,
+  // in table order - team, contact, careers, team, contact - which is the same
+  // pages, the same budget, not one extra fetch, and still opens on the page
+  // likeliest to name an owner. The paid path keeps the old drain, because
+  // there a page is a credit and the whole budget is four.
+  const lanes = FIND_PAGE_INTENTS.map((intent) => ({
+    key: intent.key,
     // rankUrlsByIntent is the ranker the audit path already uses, with its
     // recorded fixes: a whole path SEGMENT rather than a substring, so
     // "/blog/how-to-talk-about-infertility" is not read as an about page.
-    const ranked = rankUrlsByIntent(pool, intent.re, free ? 24 : 6);
+    ranked: rankUrlsByIntent(pool, intent.re, free ? 24 : 6),
     // `want` was DECLARED on every row of the table above and read by nobody:
-    // this loop broke after the first hit whatever it said. Honoured now, so
+    // the loop broke after the first hit whatever it said. Honoured now, so
     // the table is the thing that decides how many pages an intent is worth.
-    let got = 0;
-    for (const u of ranked) {
-      if (taken.has(u)) continue;
-      taken.add(u);
-      out.push({ url: u, intent: intent.key });
-      got += 1;
-      if (got >= ((free ? intent.freeWant : intent.want) || 1) || out.length >= cap) break;
+    want: (free ? intent.freeWant : intent.want) || 1,
+    at: 0,
+    got: 0,
+  }));
+  const perPass = free ? 1 : Infinity;
+  for (;;) {
+    let moved = false;
+    for (const lane of lanes) {
+      let n = 0;
+      while (out.length < cap && lane.got < lane.want && n < perPass && lane.at < lane.ranked.length) {
+        const u = lane.ranked[lane.at];
+        lane.at += 1;
+        if (taken.has(u)) continue;
+        taken.add(u);
+        out.push({ url: u, intent: lane.key });
+        lane.got += 1;
+        n += 1;
+        moved = true;
+      }
+      if (out.length >= cap) break;
     }
-    if (out.length >= cap) break;
+    if (!moved || out.length >= cap) break;
   }
   return out;
+};
+
+// ══ WHEN THE FREE READ MAY STOP — AND WHY "WE HAVE A NAME" IS HALF OF IT ═══
+// It stopped the moment parseTeamRoster found an owner. That saves the paid
+// owner wave, which is the right saving, and it starved the ADDRESS: an owner
+// is named on /about and the address is published on /contact, so on a site
+// that names its founder in wave one the contact page was never fetched. A
+// live ten-lead run produced zero published addresses.
+//
+// Both questions, then: their pages name an owner, AND a contact page has been
+// read (or their navigation links none, so there is nothing left to read).
+// Both halves are free - a plain GET and a pure parse - and the paid wave is
+// still skipped on exactly the leads it was skipped on before.
+//
+// A named function rather than four lines inside the loop because a fixture
+// cannot drive a loop body: this is the thing a boot check executes.
+const findReadDone = (pagesRead, picksLeft, name) => {
+  const _read = Array.isArray(pagesRead) ? pagesRead : [];
+  const _left = Array.isArray(picksLeft) ? picksLeft : [];
+  const _isContact = (p) => String((p && p.intent) || '').toLowerCase() === 'contact';
+  const _soFar = _read.filter(rosterEligiblePage).map(p => String(p.text || '')).join('\n');
+  if (!parseTeamRoster(_soFar, name).some(r => r.isOwner)) return false;
+  return _read.some(_isContact) || !_left.some(_isContact);
 };
 
 // ── THE THREE SIGNALS, ALL FREE, ALL OFF MARKUP WE ALREADY HOLD ─────────────
@@ -79988,15 +81165,29 @@ const findIcpScore = (signals) => {
 
 // ── ONE LEAD, READ AS CHEAPLY AS IT CAN HONESTLY BE READ ────────────────────
 // FIND_EMAIL_FIRECRAWL decides whether the email engine may buy its OWN pages
-// when the free ones carried no address. 'fallback' (the default) lets it buy
-// only when the plain read of the site failed outright - which is the case
-// where there is nothing free to search. 'always' restores the audit path's
-// behaviour: a sitemap call plus up to four scrapes, about five credits, for
-// the leads whose address is published somewhere the navigation does not link.
-// A setting rather than a constant because the two are a real trade and the
-// first live run is what should decide it: the response reports which mode ran
-// and what it cost, so the difference is measurable rather than argued.
-const FIND_EMAIL_FIRECRAWL = String(process.env.FIND_EMAIL_FIRECRAWL || 'fallback').toLowerCase();
+// when the free ones carried no address. Three modes:
+//
+//   'unfound'  the default since Round 129. The buy is permitted on a lead
+//              whose site ANSWERED; what stops it on a lead that needs nothing
+//              is the email engine's own control flow, which is cheaper than a
+//              flag because it cannot disagree with itself: pass 1 reads the
+//              homepage we already hold and pass 1.5 reads every free page we
+//              already hold, and each RETURNS on a hit, so the sitemap call
+//              plus up to four scrapes is reached only by a lead that nothing
+//              free has solved.
+//   'fallback' the buy is permitted only when the plain read failed outright.
+//              That mode can never spend: the one case it permits is a site
+//              that answered nothing, and the email engine refuses that lead as
+//              a dead site before it ever reads the key. It is the mode that
+//              was running when ten live leads produced no address at all.
+//   'always'   the audit path's behaviour, on every lead including the ones
+//              already solved for free: about five credits a lead.
+//
+// A setting rather than a constant because the modes are a real trade. The
+// FIND CONTACT line now names where each address came from - homepage,
+// free_page, careers_page, contact_page or none - so the next live run answers
+// what the buy is worth with data rather than with argument.
+const FIND_EMAIL_FIRECRAWL = String(process.env.FIND_EMAIL_FIRECRAWL || 'unfound').toLowerCase();
 // A small ceiling of its own. The client runs a pool, but a second tab or a
 // re-press must not multiply it - and unlike the audit queue there is no job
 // record here to dedupe against, because a contact read is cheap enough to
@@ -80394,10 +81585,15 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       // free - and never on the leads where each one costs a credit. Backwards:
       // the saving is worth nothing when the pages are free and a credit a page
       // when they are not. The roster parse is free and pure either way.
+      //
+      // ══ ROUND 129: AND IT STARVED THE ADDRESS ══════════════════════════
+      // "An owner is named" was the whole test, so a site that names its
+      // founder on /about stopped there and /contact - the page that publishes
+      // the address - was never fetched. findReadDone asks both questions.
       if (i + _wave < picks.length) {
-        const _soFar = pages.filter(rosterEligiblePage).map(p => String(p.text || '')).join('\n');
-        if (parseTeamRoster(_soFar, name).some(r => r.isOwner)) {
-          console.log(`\u{1F50E} FIND READ [${name}]: their own pages name an owner after ${pages.length} page(s), so the remaining ${picks.length - i - _wave} were not read and no paid lookup is needed.`);
+        const _left = picks.slice(i + _wave);
+        if (findReadDone(pages, _left, name)) {
+          console.log(`\u{1F50E} FIND READ [${name}]: their own pages name an owner and ${pages.some(p => String(p.intent || '') === 'contact') ? 'we have read their contact page' : 'their navigation links no contact page'}, so the remaining ${_left.length} were not read and no paid lookup is needed.`);
           break;
         }
       }
@@ -80741,6 +81937,11 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // term scored a lead nobody looked up. Set only after the await returns; a
   // throw leaves it false, because a lookup that died did not measure anything.
   let _ownerAttempted = false, _emailAttempted = false;
+  // Which read produced the address, for the FIND CONTACT line: the free pages
+  // we already held, or a contact page we bought. Grep it across a batch and
+  // "is the paid contact-page read worth it" is a measurement rather than an
+  // argument.
+  let _addressSource = 'none';
   if (apiKey && name && !out.notIcp) {
     try {
       const dm = await findDecisionMaker({
@@ -80828,7 +82029,17 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   if (website && !out.notIcp) {
     try {
       const siteConfirmed = pages.length > 0;
+      // ══ ROUND 129: THE ONLY MODE THAT COULD SPEND WAS THE ONE THAT CANNOT ══
+      // 'fallback' permits the buy only when pages.length is 0 - and that same
+      // expression is handed down as siteIsDown, which the email engine refuses
+      // on before it reads the key. So the paid contact-page read was dead on
+      // every lead, on the default setting, for the whole life of the tab.
+      // 'unfound' permits it where it can actually pay: their site answered, so
+      // asking it for its contact page is worth a credit - and the pages we
+      // already hold are searched first INSIDE the engine, whose passes 1 and
+      // 1.5 return on a hit, so a lead solved for free never reaches the buy.
       const allowBuy = FIND_EMAIL_FIRECRAWL === 'always'
+        || (FIND_EMAIL_FIRECRAWL === 'unfound' && pages.length > 0)
         || (FIND_EMAIL_FIRECRAWL === 'fallback' && pages.length === 0);
       const em = await findEmailFireproof({
         website,
@@ -80850,6 +82061,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         // The INTENT travels. Dropped here, the extractor could not tell that
         // a page fetched on purpose as a careers page was a careers page.
         freePages: pages.map(p => ({ url: p.url, text: p.text, intent: p.intent })),
+        onAddressSource: (s) => { _addressSource = String(s || 'none'); },
       });
       _emailAttempted = true;
       if (em) {
@@ -80989,7 +82201,23 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   if (out.notIcp && !sizeMeasured(signals) && website && !_ownerWaveFoundNobody) {
     console.log(`\u{1F4CF} SIZE LOOKUP [${name}]: not bought - this lead is already out (${out.icpReason || 'not our ICP'}), and a size on a dropped lead decides nothing. ~4 Firecrawl credits saved.`);
   }
-  if (!sizeMeasured(signals) && website && !_ownerWaveFoundNobody && !out.notIcp) {
+  // ══ ROUND 129: THEIR OWN TEAM PAGE ALREADY ANSWERED IT ════════════════
+  // sizeMeasured counts a team page only at the core cut, so a practice
+  // publishing three, four or five people read as "nothing measured" and paid
+  // four credits to be told nothing - while that same page is already good
+  // enough for the ICP score and the affordability band. A saving nobody can
+  // see reads as a broken feature, so the skip says which of the two reasons
+  // stood it down, and the sentence is written once and used twice.
+  const _sizeSettledWhy = (!sizeMeasured(signals) && sizeSettledSmall(signals) && website && !_ownerWaveFoundNobody && !out.notIcp)
+    ? (Number(signals.teamCount) >= 3
+        ? `their own team page lists ${Number(signals.teamCount)} people, which settles them as small`
+        : `${signals.tradeLabel || 'this trade'} is a one-person trade, so a directory has no company page to find`)
+    : '';
+  if (_sizeSettledWhy) {
+    out.sizeLookup = { bought: false, source: '', why: _sizeSettledWhy };
+    console.log(`\u{1F4CF} SIZE LOOKUP [${name}]: not bought - ${_sizeSettledWhy}, and a directory has no record of a business this size. ~4 Firecrawl credits saved.`);
+  }
+  if (!sizeMeasured(signals) && !sizeSettledSmall(signals) && website && !_ownerWaveFoundNobody && !out.notIcp) {
     out.sizeLookup = { bought: true, source: '', why: 'nothing measured about their size' };
     try {
       const _capi = (companiesApiKey && website) ? await enrichViaCompaniesAPI(website, companiesApiKey) : null;
@@ -81176,7 +82404,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan. The searches: line names WHICH paid search ran, so the next round cuts on evidence rather than on a hunch.'));
     _ownerWaveLectured = true;
   }
-  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerHeadOffice === true ? 'FREE STAGE ONLY (a branch of a bigger operation - the signer is at head office)' : out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
+  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | address source ${_addressSource} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerHeadOffice === true ? 'FREE STAGE ONLY (a branch of a bigger operation - the signer is at head office)' : out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
   return out;
 };
 
@@ -81862,6 +83090,16 @@ const _queueStateOf = (r) => r.moved_to_research_at ? 'moved' : r.ruled_out_at ?
 const EMAIL_GRADE_VERIFIED = ['published_personal', 'smtp_confirmed'];
 const emailVerifiedRow = (email, grade, sendable, tier) => !!email
   && (EMAIL_GRADE_VERIFIED.includes(String(grade || '')) || (String(sendable) === 'true' && Number(tier) >= 1 && Number(tier) <= 2));
+// Round 129: VERIFIED is not SENDABLE, and the card was reading only the
+// first. A tier-3 address the engine itself marked sendable cleared
+// _unvouchedSendGuard, which is the engine's own verdict that a rep may
+// write to it; the letter rule above counted it as nothing, so the card on
+// the ten-lead run of 2026-09-09 read "With email 0" while several of those
+// addresses were sendable, and the Move-to-Research button offered none of
+// them. These two read that verdict instead. HELD BACK is the third state:
+// we found an address and the engine refused it, and the row carries why.
+const emailSendableRow = (email, grade, sendable, tier) => !!email && String(sendable) === 'true';
+const emailHeldBackRow = (email, grade, sendable, tier) => !!email && String(sendable) !== 'true';
 
 // ── the store the page reads and writes through this server ─────────────────
 // Until 2026-09-08 the page spoke to Supabase directly with a publishable key
@@ -81944,12 +83182,20 @@ app.get('/api/read-runs', async (req, res) => {
   // The per-batch counts the cards read, off the rows themselves.
   const ids = runs.map(r => r.id);
   const rows = ids.length ? await rqSelect('batch_id,read_at,read_failed,ruled_out_at,moved_to_research_at,emailGrade:extra->>contactEmailGrade,emailSendable:extra->>contactEmailSendable,emailTier:extra->>contactEmailTier,email:extra->>contactEmail', 'batch_id=in.' + _qInList(ids)) : [];
-  const by = new Map(ids.map(id => [id, { withEmail: 0, inResearch: 0, ruledOut: 0 }]));
+  const by = new Map(ids.map(id => [id, { withEmail: 0, sendableEmail: 0, sendableOnly: 0, heldBackEmail: 0, inResearch: 0, ruledOut: 0 }]));
   for (const r of (rows || [])) {
     const b = by.get(r.batch_id); if (!b) continue;
     if (r.moved_to_research_at) b.inResearch += 1;
     if (r.ruled_out_at) b.ruledOut += 1;
-    if (r.read_at && emailVerifiedRow(r.email, r.emailGrade, r.emailSendable, r.emailTier)) b.withEmail += 1;
+    if (!r.read_at) continue;
+    // withEmail is the confirmed count and means exactly what it meant before.
+    // sendableEmail is every address the engine says we may write to (the number
+    // the Move button offers); sendableOnly is the rest of that set once the
+    // confirmed ones are named; heldBackEmail is an address we found and cannot use.
+    const _ver = emailVerifiedRow(r.email, r.emailGrade, r.emailSendable, r.emailTier);
+    if (_ver) b.withEmail += 1;
+    if (emailSendableRow(r.email, r.emailGrade, r.emailSendable, r.emailTier)) { b.sendableEmail += 1; if (!_ver) b.sendableOnly += 1; }
+    if (emailHeldBackRow(r.email, r.emailGrade, r.emailSendable, r.emailTier)) b.heldBackEmail += 1;
   }
   res.json(runs.map(r => Object.assign({}, r, by.get(r.id) || {}, { live: _readRuns.has(r.id) })));
 });
@@ -82798,6 +84044,12 @@ app.post('/api/send-to-hunter', async (req, res) => {
       // gate is an improvement on the default, never a new way to lose leads.
       const _tier = emailTierOf(lead);
       let _verified = sendAlreadyProven(lead);
+      // The one row where unknown is not a yes. Set BEFORE the call and cleared
+      // only by a valid answer, so a missing verifier key, a thrown request and
+      // a catch-all all land where they belong on this row: not sent.
+      let _mustProve = sendUnknownIsNotAYes(lead)
+        ? `${lead.email} was built from a name the owner ladder would not vouch for, and nothing has confirmed the mailbox`
+        : '';
       if (sendNeedsVerify(lead)) {
         const _vKey = req.body.verifierKey || process.env.MYEMAILVERIFIER_KEY || '';
         if (_vKey) {
@@ -82813,12 +84065,21 @@ app.post('/api/send-to-hunter', async (req, res) => {
             }
             if (_v && _v.valid) {
               _verified = true;
+              _mustProve = '';
               console.log(`\u2713 HUNTER [${lead.name}]: ${lead.email} was inferred, and the mail server confirms it exists. Sending as a verified address rather than a believed one \u2014 half a credit to turn a guess into a fact.`);
             } else {
               console.log(`\u2139 HUNTER [${lead.name}]: ${lead.email} could not be verified either way${_v && _v.catchAll ? ' (catch-all domain \u2014 the server accepts everything, so nothing can be proven)' : ''}. Sending: refusing every unverifiable address would delete a large part of the pipeline on no evidence.`);
             }
           } catch (e) { void e; }
         }
+      }
+      if (_mustProve) {
+        console.log(`\u26d4 HUNTER [${lead.name}]: NOT pushed \u2014 ${_mustProve}. The owner ladder held the name back, so this address is an assumption about a person AND an assumption about a mailbox. One check was offered and it did not come back a yes. The lead is still workable by phone.`);
+        results.failed.push({
+          name: lead.name, email: lead.email,
+          reason: `${lead.email} was built from a name we could not confirm, and the mail server would not confirm the mailbox either. Two unknowns, so it was not sent. Confirm who runs it, or work it by phone.`,
+        });
+        continue;
       }
 
       // Upsert (create-or-update by email) — avoids duplicate-email errors if

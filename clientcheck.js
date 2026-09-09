@@ -2401,6 +2401,9 @@ let contactTally = null;
                  // Round 124: the Find stage reads the server. Every decision the
                  // two screens make is a pure function so it can be executed here.
                  'FIND_T', 'FIND_PRESETS', 'FIND_READ_MAX', 'FIND_ROUTE_VIEWS', 'queueStateOf', 'emailStatusOf', 'companyFromBatchLead',
+                 // Round 129: sendable and held back, the two the batch card and
+                 // the Move button read now.
+                 'emailSendableOf', 'emailHeldBackOf',
                  'batchCardStats', 'readCreditEstimate', 'parseFindRoute', 'pipelineAdditions', 'readRunTitle', 'findRunTime', 'readRunAnswered', 'shortLocation',
                  'leadFromCompany', 'uid', 'today', 'daysFromNow'];
   // Round 124: the SERVER's ports, lifted from the CR-stripped source. A read
@@ -2419,6 +2422,8 @@ let contactTally = null;
     _lift(/const queueIdOf = [^\n]+\n/, 'queueIdOf'),
     _lift(/const EMAIL_GRADE_VERIFIED = [^\n]+\n/, 'EMAIL_GRADE_VERIFIED'),
     _lift(/const emailVerifiedRow = [\s\S]*?\)\);\n/, 'emailVerifiedRow'),
+    _lift(/const emailSendableRow = [^\n]+\n/, 'emailSendableRow'),
+    _lift(/const emailHeldBackRow = [^\n]+\n/, 'emailHeldBackRow'),
   ].join('\n');
   const got2 = {};
   walk(ast, (n) => {
@@ -2444,6 +2449,7 @@ let contactTally = null;
         + ' tally: findRunTally, tallyLine: findTallyLine,'
         + ' generic: isGenericMailbox,'
         + ' state: queueStateOf, emailStatus: emailStatusOf, fromLead: companyFromBatchLead, cardStats: batchCardStats, estimate: readCreditEstimate, route: parseFindRoute, additions: pipelineAdditions,'
+        + ' sendableOf: emailSendableOf, heldOf: emailHeldBackOf, sendableRow: emailSendableRow, heldRow: emailHeldBackRow,'
         + ' verifiedRow: emailVerifiedRow, queueId: queueIdOf, tokens: FIND_T, presets: FIND_PRESETS, readMax: FIND_READ_MAX, runTitle: readRunTitle, answered: readRunAnswered, shortLocation, contract: CONTRACT_VERSION, clientContract: CLIENT_CONTRACT };')();
     } catch (e) {
       fails.push('the contact list no longer compiles standalone, so it cannot be verified: ' + e.message);
@@ -2638,6 +2644,18 @@ let contactTally = null;
               const srv = M.verifiedRow(c.contactEmail, c.contactEmailGrade, String(c.contactEmailSendable), c.contactEmailTier === null ? null : String(c.contactEmailTier));
               if (page !== srv) { fails.push('the page and the server disagree about whether ' + JSON.stringify(c) + ' has a verified email, so the batch card count and the review filter are two different numbers'); break; }
             }
+            // Round 129: the same wire test for SENDABLE and HELD BACK. A
+            // tier-3 address the engine cleared is one the rep can write to;
+            // the card counts it on the server and the review screen filters
+            // it on the page, and the two must be one rule.
+            if (!M.sendableOf(_shapes[2]) || !M.sendableOf(_shapes[7])) fails.push('a tier-3 address the engine itself marked sendable reads on the page as nothing to send to, so the card says "With email 0" and the Move-to-Research button offers nothing');
+            if (M.sendableOf(_shapes[0]) || !M.heldOf(_shapes[0])) fails.push('an address the engine refused is not shown as held back on the review screen, so the rep cannot tell it from an address we may use');
+            if (M.sendableOf(_shapes[6]) || M.heldOf(_shapes[6])) fails.push('a row with no address at all counts as sendable or as held back');
+            for (const c of _shapes) {
+              const _s = String(c.contactEmailSendable), _t = c.contactEmailTier === null ? null : String(c.contactEmailTier);
+              if (M.sendableOf(c) !== M.sendableRow(c.contactEmail, c.contactEmailGrade, _s, _t)) { fails.push('the page and the server disagree about which addresses we can send to for ' + JSON.stringify(c) + ', so the number on the card is not the number the Move button moves'); break; }
+              if (M.heldOf(c) !== M.heldRow(c.contactEmail, c.contactEmailGrade, _s, _t)) { fails.push('the page and the server disagree about which addresses are held back for ' + JSON.stringify(c)); break; }
+            }
           }
           // The batch card, off the rows.
           {
@@ -2649,6 +2667,15 @@ let contactTally = null;
               null,
             ]);
             if (_bs.total !== 4 || _bs.read !== 4 || _bs.withEmail !== 1 || _bs.inResearch !== 1 || _bs.failed !== 1 || _bs.ruledOut !== 1 || _bs.actionable !== 2) fails.push('the batch card stats are wrong: ' + JSON.stringify(_bs));
+            // Round 129: the three numbers the card prints. A tier-3 address the
+            // engine cleared is one we can send to; one it refused is held back.
+            const _bs2 = M.cardStats([
+              { readAt: 'x', contactEmail: 'a@b.com', contactEmailGrade: 'published_personal', contactEmailSendable: true, contactEmailTier: 1 },
+              { readAt: 'x', contactEmail: 'b@b.com', contactEmailGrade: 'pattern_guess', contactEmailSendable: true, contactEmailTier: 3 },
+              { readAt: 'x', contactEmail: 'c@b.com', contactEmailGrade: 'pattern_guess', contactEmailSendable: false, contactEmailTier: 3, contactEmailBlockReason: 'the owner name was never vouched for' },
+              { readAt: 'x' },
+            ]);
+            if (_bs2.withEmail !== 1 || _bs2.sendable !== 2 || _bs2.sendableOnly !== 1 || _bs2.heldBack !== 1) fails.push('the batch card does not count what can be sent to: ' + JSON.stringify([_bs2.withEmail, _bs2.sendable, _bs2.sendableOnly, _bs2.heldBack]) + ' for confirmed / can send / more we can send to / held back — a run of sendable tier-3 addresses reads as "With email 0"');
           }
           // The credit estimate rides the server's figure, never the spec's 1.5.
           if (M.estimate(37, 5) !== 185 || M.estimate(10, undefined) !== 50 || M.estimate(50, 5) === 75) fails.push('the read button estimates credits from a number typed into the page rather than the server\'s measured per-read figure');
@@ -3304,6 +3331,11 @@ let contactTally = null;
     ["findApi('/api/leads/exported', { ids: rows.map(r => r.id),", " dest: 'csv' });", 'the CSV download no longer stamps the rows it handed out ("i have no clue which ones ive already exported")'],
     ["findApi('/api/find/summary')", "", 'the Find tab never reads the summary, so the count, the badge and the archive line are blind'],
     ["findApi('/api/read-runs/' + encodeURIComponent(id) + '/leads')", "", 'Screen B never loads a batch'],
+    // Round 129: the card prints what can be sent to, and the bulk move offers
+    // that same set. Either one back on the confirmed count is the live defect.
+    ["stats.withEmail + ' confirmed · ' + stats.sendableOnly + ", "' more we can send to · ' + stats.heldBack + ' held back'", 'the batch card does not read the sendable counter, so a run of sendable addresses still reads as no email at all'],
+    ["(latest.sendableEmail > 0) ? btn('research', 'Move ' + latest.sendableEmail", " + ' to Research', () => moveSendableOfRun(latest.id)", 'the Move-to-Research button counts only the confirmed addresses, so it offers nothing on a run whose addresses the engine said we can send to'],
+    ["filter(l => l && queueStateOf(l) === 'read' && emailSendableOf(l))", ".map(l => l.id)", 'the bulk move filters on the confirmed rule again, so the button moves fewer leads than the card counts'],
     ["findApi('/api/find/archive')", "", 'the archive screen never loads'],
     ["const rows = (leads || []).filter(", "exportableContact);", 'the CSV is no longer the call lane, so the rep\'s sheet carries rows nobody is phoning'],
     ["const n = downloadFindContacts(rows,", " csvFull);", 'the CSV button is not wired to the export'],
