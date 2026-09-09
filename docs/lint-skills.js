@@ -37,7 +37,10 @@ for (const name of fs.readdirSync(SK).sort()) {
 if (process.argv.includes('--check-refs')) {
   const os = require('os'), cp = require('child_process');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'refs-'));
-  cp.execSync(`node ${path.join(ROOT, 'docs', 'gen-refs.js')} ${tmp}`, { stdio: 'pipe' });
+  // gen-refs refuses (exit 1, naming the cause) when build.js's layout() refuses src/; that is a
+  // lint verdict, not a crash — print it as a ✗ line and exit 1 instead of an uncaught stack trace
+  try { cp.execSync(`node ${path.join(ROOT, 'docs', 'gen-refs.js')} ${tmp}`, { stdio: 'pipe' }); }
+  catch (e) { const said = String((e && e.stderr) || '').trim().split('\n').filter(Boolean).pop() || String((e && e.message) || e); bad(`gen-refs refused to regenerate, so the reference files could not be checked — ${said}`); console.log(`\n${fails} failure(s)`); process.exit(1); }
   const walk = d => fs.readdirSync(d, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]);
   for (const f of walk(tmp)) {
     const rel = path.relative(tmp, f), live = path.join(SK, rel);

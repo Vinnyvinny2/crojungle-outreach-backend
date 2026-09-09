@@ -53643,23 +53643,35 @@ app.listen(PORT, () => {
   // be this file byte for byte. Every check below reads this file through
   // selfSource(); if a hand edit landed here instead of in src/, or a src/ edit
   // was never rebuilt, all of those checks are reading a file nobody owns.
-  // verify() reads each source file once and compares it with the one copy
-  // selfSource() holds ONE LINE at a time at a moving offset, so the only
-  // transient is a single decoded line, never a second copy of the program —
-  // whatever the manifest lists, one 84,000-line file today or many small ones
-  // after the cut — and this file is not read again: BOOT HEAP CHECK's
-  // one-read rule and its headroom stand. That decoded compare is a byte
-  // compare because build.js refuses a source line that is not valid UTF-8 or
-  // carries a literal U+FFFD (an invalid byte in server.js decodes to U+FFFD,
-  // which no source line can then match). fs and path are called inline here,
-  // never aliased: BOOT HEAP CHECK counts the exact text of the one
-  // selfSource() read, and a read through an alias is one it cannot see.
+  // verify() takes selfSource() — the one copy of this file the boot holds —
+  // and compares each source file with it ONE LINE at a time at a moving
+  // offset. What that costs, measured: each source file is read once as one
+  // off-heap Buffer (5.9MB for src/all.js today) and only one line of it is
+  // decoded at a time, so nothing lands on the V8 heap BOOT HEAP CHECK
+  // measures beyond one line (heapUsed moves by under 2MB), whatever the
+  // manifest lists — one 84,000-line file today or many small ones after the
+  // cut — and this file is not read again: BOOT HEAP CHECK's one-read rule and
+  // its headroom stand. That decoded compare is a byte compare because
+  // build.js refuses a source line that is not valid UTF-8 or carries a
+  // literal U+FFFD (an invalid byte in server.js decodes to U+FFFD, which no
+  // source line can then match).
+  // "Not read again" is guarded here, not asked for in a comment: BOOT HEAP
+  // CHECK counts the exact text of the one selfSource() read, so a read of
+  // this file through an alias (an fs handle held in a variable, a path built
+  // from __dirname) is one it cannot see. The last step below takes this
+  // block's own text out of selfSource() — from the banner line above to the
+  // COULD NOT RUN line — and fails if it carries the spelling of a file read
+  // or of the module's own-path name, each needle assembled from two halves
+  // so the scan cannot find itself. That is why ci-gates.sh is read through
+  // .call and fs and path are called inline, never aliased: the block's text
+  // never carries the spelling the scan refuses.
   // The second half pins the call site (check-writing-traps §2): the FIRST
-  // uncommented gate line in ci-gates.sh must be the same proof, so CI is red
-  // on a mismatch before any gate reads server.js and before any boot. Comment
-  // lines are dropped before the search — a needle a comment can satisfy is no
-  // pin (check-writing-traps §1) — and the needle is assembled from two halves
-  // so this check cannot find itself.
+  // uncommented run line in ci-gates.sh must be the text of this same proof,
+  // so CI is red on a mismatch before any gate reads server.js and before any
+  // boot. Its TEXT is what is pinned, not that it executes; this check at boot
+  // is the backstop. Comment lines are dropped before the search — a needle a
+  // comment can satisfy is no pin (check-writing-traps §1) — and the needle is
+  // assembled from two halves so this check cannot find itself.
   // When src/ is not beside this file (a deploy that shipped server.js alone)
   // the comparison cannot run; that is said plainly and not counted as a pass.
   // The same when ci-gates.sh is absent: a warning line, never a silent pass.
@@ -53672,10 +53684,23 @@ app.listen(PORT, () => {
       console.log('⚠ BUILD CHECK PIN SKIPPED: ci-gates.sh is not beside server.js, so whether CI runs the byte proof as its first gate could not be checked from here. That is a fact about this checkout, not a finding about the code.');
     } else {
       const _needle = ['run node build.js ', '--check'].join('');
-      const _first = require('fs').readFileSync(_gates, 'utf8').split(/\r?\n/).filter(l => !/^\s*#/.test(l)).find(l => /^\s*run\s/.test(l));
+      const _first = require('fs').readFileSync.call(require('fs'), _gates, 'utf8').split(/\r?\n/).filter(l => !/^\s*#/.test(l)).find(l => /^\s*run\s/.test(l));
       if (_first === undefined) _fails.push('ci-gates.sh has no uncommented gate line at all, so CI would merge a server.js that is not what src/ builds');
       else if (_first.trim() !== _needle) _fails.push(`the first uncommented gate in ci-gates.sh is "${_first.trim()}", not "${_needle}", so CI would read server.js before proving it is what src/ builds, or never prove it`);
       else _pinned = true;
+    }
+    // This block's own text, scanned for a second read of this file (see above).
+    const _own = selfSource();
+    const _from = _own.indexOf(['THE FILE EVERY ', 'CHECK READS'].join(''));
+    const _stop = _from === -1 ? -1 : _own.indexOf(['BUILD CHECK COULD ', 'NOT RUN'].join(''), _from);
+    if (_from === -1 || _stop === -1) {
+      _fails.push('BUILD CHECK cannot find its own block in selfSource() (the banner line or the COULD NOT RUN line moved), so whether this block reads this file a second time went unchecked');
+    } else {
+      const _end = _own.indexOf('\n', _stop);
+      const _block = _own.slice(_own.lastIndexOf('\n', _from) + 1, _end === -1 ? _own.length : _end);
+      for (const _bad of [['__file', 'name'].join(''), ['readFile', 'Sync('].join('')]) {
+        if (_block.includes(_bad)) _fails.push(`BUILD CHECK's own block contains ${_bad} — a second read of this file that BOOT HEAP CHECK's exact-text count cannot see; verify() takes selfSource() and nothing else`);
+      }
     }
     if (!require('fs').existsSync(_mf)) {
       console.log('⚠ BUILD CHECK SKIPPED: src/manifest.js is not beside server.js, so the running file was not compared with its sources. That is a fact about this checkout (server.js shipped without src/), not a finding about the code.');
@@ -53686,7 +53711,7 @@ app.listen(PORT, () => {
       if (_fails.length) {
         console.log(`⛔ BUILD CHECK: ${_fails.join(' | ')}.`);
       } else {
-        console.log(`✓ BUILD CHECK: server.js is byte for byte what src/manifest.js builds from ${_r.files} source file${_r.files === 1 ? '' : 's'} (${_r.lines} lines, CRLF), compared one line at a time against the one copy selfSource() holds, so the file every check reads is the file the departments own${_pinned ? ', and the first gate ci-gates.sh runs is the same proof, uncommented' : ' (ci-gates.sh was not beside this file, so whether CI runs the same proof went unchecked)'}.`);
+        console.log(`✓ BUILD CHECK: server.js is byte for byte what src/manifest.js builds from ${_r.files} source file${_r.files === 1 ? '' : 's'} (${_r.lines} lines, CRLF), compared one line at a time against the one copy selfSource() holds, so the file every check reads is the file the departments own, and this block's own text carries no second read of this file${_pinned ? ', and the first uncommented run line in ci-gates.sh is that same proof (its text; this check at boot is the backstop)' : ' (ci-gates.sh was not beside this file, so whether CI runs the same proof went unchecked)'}.`);
       }
     }
   } catch (e) {

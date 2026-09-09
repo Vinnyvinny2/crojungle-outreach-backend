@@ -11,8 +11,11 @@
 const fs = require('fs'), path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const OUT = process.argv[2] ? path.resolve(process.argv[2]) : path.join(ROOT, '.claude', 'skills');
-const S = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8').split(/\r?\n/);
-const H = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8').split(/\r?\n/);
+// Lines, not split pieces: a file that ends with a newline splits into one more element than it
+// has lines (the trailing ''), and the map's line counts were one too high because of it.
+const linesOf_ = text => { const a = text.split(/\r?\n/); if (a.length && a[a.length - 1] === '') a.pop(); return a; };
+const S = linesOf_(fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8'));
+const H = linesOf_(fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'));
 // The built-line → source-file map. build.js exports layout(root) → [{ file: 'src/…', start, end, lines }]
 // in built line numbers (1-based, inclusive) and whereLine(rows, n) → { file, line } | null.
 // src/manifest.js present → both are required and a failure exits 1; absent → plain line numbers.

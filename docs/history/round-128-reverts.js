@@ -10,7 +10,7 @@
 //                                                  folder) as two shell commands, run from the root
 //   mustPrint: '…' | /…/   the guard's own line. The colour comes from the exit code or the
 //                          BOOT VERDICT; this says WHICH guard went red. A run that is red
-//                          without printing it (a sibling refusal, one of 284 other checks)
+//                          without printing it (a sibling refusal, one of the 283 other checks)
 //                          is reported as red for the wrong reason and does not match. Every
 //                          entry here carries one, anchored on the file:line the spec promises
 //                          and the words that name the fault, not on a whole sentence.
@@ -76,7 +76,7 @@ module.exports = [
   // (6) a file without a Goal line: the build refuses, naming the file and the Goal
   { name: '6-no-goal-line', path: 'src/all.js', prove: 'build',
     old: GOAL + '\n', new: GOAL.replace('// Goal:', '// Aim:') + '\n',
-    mustPrint: /src\/all\.js:1: .*Goal/ },
+    mustPrint: /src\/all\.js:1: header has no Goal line/ },   // the Goal guard's own words: "src/all.js:1: .*Goal" also matched the no-header refusal, which names the Goal prefix too
   // (7) src/ moved away: the boot says ⚠ BUILD CHECK SKIPPED and the verdict is unchanged (GREEN); --check is red because the manifest is gone
   { name: '7a-src-moved-away-boot', path: null, prove: 'boot', expect: 'GREEN', mustPrint: '⚠ BUILD CHECK SKIPPED',
     action: 'mv src src.away', undo: 'mv src.away src' },
@@ -99,6 +99,12 @@ module.exports = [
     old: "      const _r = require('./build.js').verify(__dirname, selfSource());\n",      // the live verify call, verbatim (BOOT HEAP CHECK counts the exact text of a read)
     new: "      const _r = require('./build.js').verify(__dirname, require('fs').readFileSync(__filename, 'utf8'));\n",
     mustPrint: /^⛔ BOOT HEAP CHECK: 2 .*reads/m },
+  // (9b) the same second read through an ALIAS (the spelling BOOT HEAP CHECK's exact-text count
+  // cannot see): BUILD CHECK scans its own block's text out of selfSource() and goes red itself
+  { name: '9b-aliased-self-read-in-build-check', path: 'src/all.js', prove: 'boot',
+    old: "      const _r = require('./build.js').verify(__dirname, selfSource());\n",
+    new: "      const _fs = require('fs'); const _r = require('./build.js').verify(__dirname, _fs.readFileSync(__filename, 'utf8'));\n",
+    mustPrint: /^⛔ BUILD CHECK: .*second read of this file/m },
   // (10) the call-site pin (check-writing-traps §2): BUILD CHECK reads ci-gates.sh and demands
   // that the FIRST uncommented gate line be the byte proof — comment that line out and the
   // boot names the gate CI would run instead; move the file away and the boot says so in a
@@ -134,4 +140,17 @@ module.exports = [
   { name: '11f-manifest-lists-itself', path: 'src/manifest.js', prove: 'build',
     old: "module.exports = ['all.js'];\n", new: "module.exports = ['all.js', 'manifest.js'];\n",
     mustPrint: /src\/manifest\.js: entry "manifest\.js" — the manifest may not list itself/ },
+  // (12) two shapes Round 129's cut can produce: a file that ends on a blank line (the refusal
+  // says to MOVE that line to the top of the next file, never delete it — it is a line of
+  // server.js), and a manifest entry that names a directory (refused by name, not Node's bare
+  // EISDIR). The directory is listed FIRST: layout() reads the manifest in order and a second
+  // entry makes the 800-line cap live, so listed second it would be all.js's cap refusal that
+  // fires (naming src/all.js:801), never the line this revert is about
+  { name: '12a-file-ends-on-a-blank-line', path: 'src/all.js', prove: 'build',
+    old: '  res.json(results);\n});\n', new: '  res.json(results);\n});\n\n',
+    mustPrint: /src\/all\.js:\d+: ends on a blank line/ },
+  { name: '12b-manifest-entry-is-a-directory', path: null, prove: 'build',
+    action: "mkdir src/d.js && sed -i \"s/\\['all.js'\\]/['d.js', 'all.js']/\" src/manifest.js",
+    undo: "rmdir src/d.js; sed -i \"s/\\['d.js', 'all.js'\\]/['all.js']/\" src/manifest.js",
+    mustPrint: /src\/d\.js:1: is not a regular file/ },
 ];

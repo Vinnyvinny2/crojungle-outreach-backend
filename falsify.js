@@ -20,7 +20,7 @@
 // `mustPrint` (a string or a RegExp, any proof kind) is the guard's OWN line: the colour
 // still comes from the exit code / verdict, but a run that is red without printing this
 // is reported as red for the WRONG reason and does not match — a mis-edited anchor that
-// trips a sibling refusal, or a boot red on any of 284 other checks, proves nothing about
+// trips a sibling refusal, or a boot red on any of the 283 other checks, proves nothing about
 // the guard the revert names (check-writing-traps §4, §6). For 'boot' the text searched
 // is the boot log; for every other proof it is the command's stdout+stderr. Every revert
 // should carry one. Optional: `rebuild: false` skips `node build.js` after applying an
@@ -31,8 +31,16 @@
 //   - a selection that names no revert (a mistyped NAME, an empty list) stops with exit 2
 //     BEFORE the baseline and says no revert ran; "0 of 0 matched" was once a green exit
 //   - the baseline is proven green first (boot, clientcheck, build-check when build.js
-//     exists, and every proof the list uses); a harness whose baseline is already red
-//     proves reds too cheaply — and a stale server.js stops here, not as a restore failure
+//     exists, and every proof the list uses), and it STOPS at the first kind that is not
+//     green: a harness whose baseline is already red proves reds too cheaply — and a stale
+//     or hand-edited server.js stops at build-check, which runs before 'build' (a proof
+//     that WRITES server.js, so running it after a red build-check would overwrite the
+//     evidence the red is about), never as a restore failure
+//   - FALSIFY_LOG_DIR may not be the repo root or a folder containing it (exit 2 before
+//     anything runs): the boot logs are filtered out of `git status` by their path
+//     relative to the root, and a log dir at or above the root makes that path empty, so
+//     every revert would report RESTORE FAILED on its own logs; a subfolder of the repo
+//     stays allowed and is filtered as before
 //   - every read and write is bytes (latin1 round-trips every byte), so server.js keeps
 //     its CRLF and src/ keeps its LF; anchors are converted to the same encoding
 //   - a revert under src/ rebuilds server.js after applying (the built file is what
@@ -62,6 +70,10 @@ const ONLY = new Set(process.argv.slice(3));
 const unknown = [...ONLY].filter(n => !REVERTS.some(r => r.name === n));
 if (unknown.length) { console.error(`NO REVERT RAN: no revert named ${unknown.join(', ')} in ${listPath}. The names are: ${REVERTS.map(r => r.name).join(', ')}`); process.exit(2); }
 const LOGDIR = process.env.FALSIFY_LOG_DIR ? path.resolve(process.env.FALSIFY_LOG_DIR) : fs.mkdtempSync(path.join(os.tmpdir(), 'falsify-'));
+{ // the log dir may not be the repo root or contain it: the logs are filtered out of git status by their path relative to ROOT, which is '' or '..'-led for either
+  const rel = path.relative(ROOT, LOGDIR);
+  if (rel === '' || (rel.startsWith('..') && !path.relative(LOGDIR, ROOT).startsWith('..'))) { console.error(`FALSIFY_LOG_DIR=${LOGDIR} is the repo root or a folder containing it — the boot logs would land in the tree the restore is measured against and every revert would report RESTORE FAILED on its own logs. Use a folder outside the repo, or a subfolder of it`); process.exit(2); }
+}
 fs.mkdirSync(LOGDIR, { recursive: true });
 let port = Number(process.env.FALSIFY_PORT) || 4920;                        // boots take port+1, port+2, ...; FALSIFY_PORT moves the base off a busy range
 const abs = p => path.isAbsolute(p) ? p : path.join(ROOT, p);
@@ -158,13 +170,17 @@ async function main() {
 
   console.log(`== baseline, proved before anything is reverted (logs: ${LOGDIR}) ==`);
   const kinds = [...new Set(['boot', 'clientcheck', ...(hasBuild ? ['build-check'] : []), ...wanted.map(r => r.prove)])].filter(k => hasBuild || !/^build/.test(k));
+  // 'build-check' sits before 'build' in `kinds` (the fixed prefix above puts it there, and
+  // wanted.map only appends), and the loop stops at the FIRST kind that is not green: 'build'
+  // WRITES server.js, so a hand-edited or stale server.js that build-check reported red must
+  // not be overwritten by the next kind before "Stopping" — that file is the evidence.
   let baseRed = false;
   for (const k of kinds) {
     const res = await PROOFS[k]('baseline');
     console.log(`  ${k.padEnd(12)} ${res.verdict}${res.why ? '  ' + res.why : ''}`);
-    if (res.verdict !== 'GREEN') baseRed = true;
+    if (res.verdict !== 'GREEN') { baseRed = true; break; }
   }
-  if (baseRed) { console.log('BASELINE NOT GREEN — a harness whose baseline is already red proves reds too cheaply. Stopping.'); process.exit(1); }
+  if (baseRed) { console.log('BASELINE NOT GREEN — a harness whose baseline is already red proves reds too cheaply. Stopping here, before any later proof runs (a build would overwrite server.js, the evidence).'); process.exit(1); }
   const base = treeSnapshot();                                           // what every restore is measured against
   console.log(`  tree         ${Object.keys(base.files).length} file(s) fingerprinted${base.git ? `, git status ${base.git.length} line(s)` : ', no git here (hashes alone)'}`);
 

@@ -14,6 +14,16 @@
 //   newline is the CRLF that ended that line in the original, so the built file
 //   is one module scope in manifest order and nothing is injected between pieces.
 //
+// The shape of every source file: header, ONE blank line, body. The header is
+// the leading run of "//" comment lines and ENDS at the first blank line or the
+// first non-comment line (the cutter puts exactly one blank line after its last
+// line, "Guarded by:"); a comment that follows that blank line is the program's
+// own and is not scanned as a header line. The blank line after the header is
+// the monolith's own blank line when the statement boundary had one, and an
+// inserted line otherwise. A file never ENDS on a blank line: when a boundary
+// falls on a blank line, that line belongs to the top of the NEXT file, just
+// after its header — it is a line of server.js and is moved, never deleted.
+//
 // The banner at the top of server.js is the first comment lines of the first
 // source file. Nothing is injected, so the built file is exactly the sum of
 // its sources and `--check` can compare bytes without a special case; the
@@ -22,12 +32,14 @@
 //
 // What it refuses (naming src/file:line):
 //   a CR byte, a UTF-8 BOM, an empty file, a last byte that is not "\n", a
-//   doubled final newline, a line that is not valid UTF-8, a literal U+FFFD
+//   file that ends on a blank line (a doubled final newline — the refusal says
+//   where that line goes), a line that is not valid UTF-8, a literal U+FFFD
 //   (write the escape \uFFFD — see verify() for why), a manifest that does not
 //   load (named with the line Node reports), a manifest entry that is not a
 //   plain src-relative path (a backslash, a leading "/" or "./", a ".." or empty
-//   segment) or is the manifest itself, an entry that does not exist, a
-//   duplicate entry, any src/**/*.js on disk the manifest does not list, a
+//   segment) or is the manifest itself, an entry that does not exist or is not
+//   a regular file (a directory), a duplicate entry, any src/**/*.js on disk
+//   the manifest does not list, a
 //   symbolic link anywhere under src/, a file over MAX_LINES (only once the
 //   manifest lists more than one file — see below), a header without a Goal
 //   line, a first source file that does not open with the GENERATED banner
@@ -48,9 +60,11 @@
 //   node build.js --where N  map built line N (or "server.js:N") to src/file:L.
 //
 // require('./build.js') exports { layout, assemble, verify, whereLine } for BUILD CHECK
-// (the boot's copy of --check: it reads each source file once and compares it
-// with the running source ONE LINE at a time at a moving offset, so the only
-// transient is a single decoded line and never a second copy of the program)
+// (the boot's copy of --check: each source file is read once as one off-heap
+// Buffer — 5.9MB for src/all.js today — and only one line of it is decoded at
+// a time, compared with the running source at a moving offset; so nothing
+// lands on the V8 heap BOOT HEAP CHECK measures beyond one line, and heapUsed
+// moves by under 2MB, measured +1.7MB)
 // and for docs/gen-refs.js, whose every server-side row names the source file
 // through layout() and whereLine(rows, n) — one copy of the line arithmetic.
 // Plain Node, fs and path only, no dependencies.
@@ -62,8 +76,8 @@ const path = require('path');
 // The size cap. A file an agent can hold whole. Applied only once the manifest
 // lists more than one file: Round 128 ships the whole program as the single
 // entry src/all.js (84,000 lines) so the loader can be proven byte-for-byte
-// before anything is cut; Round 129 cuts it, and from the second manifest entry
-// on, every file must fit under this.
+// before anything is cut; Round 129 cuts it, and the moment the manifest lists
+// a second file, EVERY file — the first included — must fit under this.
 const MAX_LINES = 800;
 const GOAL_PREFIX = '// Goal: after reading this file, Claude can';
 // The exact first line of the first source file, and so of server.js. Pinned
@@ -166,6 +180,7 @@ function readSource(root, rel, multi, first) {
   const abs = path.join(srcDir(root), rel);
   const name = 'src/' + rel;
   if (!fs.existsSync(abs)) throw new Error(`${name}:1: listed in src/manifest.js but not on disk`);
+  if (!fs.statSync(abs).isFile()) throw new Error(`${name}:1: is not a regular file — a manifest entry names a file under src/`);
   const buf = fs.readFileSync(abs);
   if (buf.length === 0) throw new Error(`${name}:1: empty file`);
   if (buf.length >= 3 && buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF) throw new Error(`${name}:1: UTF-8 BOM — source files are plain UTF-8, no BOM`);
@@ -185,14 +200,17 @@ function readSource(root, rel, multi, first) {
   }
   const lines = line - 1;
   if (buf[buf.length - 1] !== LF) throw new Error(`${name}:${lines + 1}: last byte is not a newline — every source file ends with exactly one "\\n"`);
-  if (buf.length >= 2 && buf[buf.length - 2] === LF) throw new Error(`${name}:${lines}: doubled final newline — every source file ends with exactly one "\\n"`);
+  if (buf.length >= 2 && buf[buf.length - 2] === LF) throw new Error(`${name}:${lines}: ends on a blank line — every source file ends with exactly one "\\n"; that blank line is a line of server.js, so move it to the top of the NEXT file, just after its header (never delete it)`);
   if (multi && lines > MAX_LINES) throw new Error(`${name}:${MAX_LINES + 1}: ${lines} lines is over the ${MAX_LINES}-line cap — one job per file; cut it`);
   checkHeader(name, buf, first);
   return buf;
 }
 
-// The header: the leading run of "//" lines. It must carry a Goal line and may
-// not carry a forbidden string; in the first source file its first line is the
+// The header: the leading run of "//" lines, ending at the first blank line or
+// the first non-comment line (the cutter puts exactly one blank line after
+// "Guarded by:", so a comment the program carries just below its header is not
+// a header line and is not scanned). It must carry a Goal line and may not
+// carry a forbidden string; in the first source file its first line is the
 // BANNER. Only the header bytes are decoded: a line is a header line while its
 // first two bytes are 0x2F 0x2F, and the cut always sits just after an LF, so
 // no multi-byte character is split and the file itself is never decoded whole.
@@ -209,7 +227,7 @@ function checkHeader(name, buf, first) {
   if (!header.some((l) => l.startsWith(GOAL_PREFIX))) throw new Error(`${name}:1: header has no Goal line — one header line must start "${GOAL_PREFIX}"`);
   header.forEach((l, i) => {
     for (const bad of HEADER_FORBIDDEN) {
-      if (l.includes(bad)) throw new Error(`${name}:${i + 1}: header line contains ${JSON.stringify(bad)} — the counting checks and gen-refs scan the whole file for that string, so a header may not carry it`);
+      if (l.includes(bad)) throw new Error(`${name}:${i + 1}: header line contains ${JSON.stringify(bad)} — the counting checks and gen-refs scan the whole file for that string, so a header may not carry it — if this line is the program's own comment rather than the header, put one blank line after the header's last line`);
     }
   });
 }
@@ -259,9 +277,12 @@ function assemble(root) {
 // The boot's proof. Walks the manifest one file at a time and each file ONE
 // LINE at a time against `text` (the decoded running source, as selfSource()
 // holds it): each source line is decoded on its own, must sit at the moving
-// offset, and must be followed by CRLF. The only transient is one decoded
-// line — never a second copy of the program, whatever the manifest lists (one
-// 84,000-line file in Round 128, small files after the cut) — and the running
+// offset, and must be followed by CRLF. What this costs, measured: each source
+// file is read once as one off-heap Buffer (5.9MB for src/all.js today, held
+// for the walk of that file) and only one line of it is decoded at a time, so
+// nothing lands on the V8 heap BOOT HEAP CHECK measures beyond one line —
+// heapUsed moves by under 2MB (+1.7MB measured), whatever the manifest lists
+// (one 84,000-line file in Round 128, small files after the cut). The running
 // file is never read here at all: BOOT HEAP CHECK's one-read rule stands.
 // Decoded equality is byte equality by the rule readSource enforces (see
 // checkUtf8Line): a running file that decoded with a U+FFFD in it can match no
@@ -300,7 +321,10 @@ function verify(root, text) {
     let extra = 0;
     for (let k = offset; k < text.length; k++) if (text.charCodeAt(k) === LF) extra++;
     const last = list[list.length - 1];
-    return done(false, `the running file has ${extra} line(s) past the end of the last source file`, builtLine, 'src/' + last, null);
+    const why = extra > 0
+      ? `the running file has ${extra} line(s) past the end of the last source file`
+      : `the running file has ${text.length - offset} byte(s) with no newline past the end of the last source file`;
+    return done(false, why, builtLine, 'src/' + last, null);
   }
   return done(true, null, null, null, null);
 }

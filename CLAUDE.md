@@ -79,7 +79,7 @@ valid syntax.
 
 **The verification order, every round, before and after a change:** `node build.js --check` → `GATES=static bash ci-gates.sh` → a boot (`bash verify.sh` runs those three) → falsify each fix alone (`node falsify.js docs/history/round-NNN-reverts.js`) → `bash ci-gates.sh` all stages.
 
-**A source file is one job:** a `Goal:` line the build refuses without, and a header that says what it owns and who guards it (`src/README.md`) — enforced today; from Round 129, when the one file `src/all.js` is cut into departments, also a folder per department and at most about 800 lines (`build.js` applies the cap from the second manifest entry on).
+**A source file is one job:** a header, one blank line, then the body; the build refuses a header without a `Goal:` line and a file that ends on a blank line, while the header's Owns and Guarded-by lines are read by people and by Round 129's header agents, not by the build (`src/README.md`); from Round 129, when the one file `src/all.js` is cut into departments, also a folder per department and at most about 800 lines (`build.js` caps every file, the first included, once the manifest lists more than one).
 
 **Every round report ends with "Needs your eyes"** — only what a machine cannot prove: the merge, the Netlify drag, Render variables and Supabase SQL, anything a rep or a prospect sees, spend, and whether the names read right to you. Everything else is reported as proven, with the command that proved it.
 

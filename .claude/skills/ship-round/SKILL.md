@@ -23,7 +23,7 @@ banner naming both numbers instead of silently reintroducing fixed bugs.
 
 The ruling since [§104](../../../docs/history/round-104.md): **a round that changes `index.html` bumps it**, even when server and client are compatible, because the number is the ONLY staleness signal — three rounds shipped without a bump and a client two builds behind was indistinguishable from an up-to-date one. Format is a date-like integer (e.g. `20260925`), and `clientcheck.js` asserts the two are equal.
 
-Since [§128](../../../docs/history/round-128.md) `CONTRACT_VERSION` lives in `src/` — `src/all.js` until Round 129 cuts the file, then `front-desk/boot-verdict.js` — and reaches `server.js` only through `node build.js`; the paragraph above is kept as written for the split proof. A bump typed into `server.js` is refused by `node build.js --check` (the first static gate) and thrown away by the next build.
+Since [§128](../../../docs/history/round-128.md) `CONTRACT_VERSION` lives in `src/` — today `src/all.js`; from Round 129 the front-desk file that holds the boot verdict — and reaches `server.js` only through `node build.js`; the paragraph above is kept as written for the split proof. A bump typed into `server.js` is refused by `node build.js --check` (the first static gate) and thrown away by the next build.
 
 ## 3. The round note
 
