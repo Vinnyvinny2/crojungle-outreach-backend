@@ -10,8 +10,10 @@ Copied from CLAUDE.md (commit b01d952) lines 93 to 161 (PART 2), with the stale 
 
 ## Stack
 
-- `server.js` — ~79,300 lines, Node/Express, Render, auto-deploys from GitHub
+- `server.js` — ~84,100 lines, Node/Express, Render, auto-deploys from GitHub
   (`Vinnyvinny2/crojungle-outreach-backend`)
+  — since [§128](../../../docs/history/round-128.md) it is GENERATED from `src/` by
+  `build.js`: edit `src/`, never `server.js` (Round 130 rewrites this note around the source folders)
 - `index.html` — ~17,400 lines, compiled React on Netlify. **`React.createElement`
   only, no JSX, no build step**. It IS in this repo (tracked since 2026-08-18) and
   still deploys separately, by hand, into Netlify.
@@ -87,6 +89,8 @@ The text above was copied from CLAUDE.md and these lines were stale; each was co
 > - `server.js` — ~29,800 lines, Node/Express, Render, auto-deploys from GitHub
 
 now: - `server.js` — ~79,300 lines, Node/Express, Render, auto-deploys from GitHub — measured: `wc -l server.js` = 79,292 at Round 106
+
+now (2026-09-09): - `server.js` — ~84,100 lines … GENERATED from `src/` by `build.js` — measured: at Round 128 the built file was 84,160 lines, the same count as `src/all.js` (`node build.js --check` prints the current count)
 
 > - `index.html` — ~10,200 lines, compiled React on Netlify. **`React.createElement`
 >   only, no JSX, no build step**. It deploys separately and is NOT in this repo —

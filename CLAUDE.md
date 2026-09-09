@@ -66,7 +66,7 @@ executed, not written, by `SIZE AND LAYERS CHECK`.
 
 ## Running the checks
 
-The list of checks is `bash ci-gates.sh` and nothing else (`GATES=static` for the fast stage). Reading a red line: skill `gates`. Editing `server.js` or `index.html` at all: skill `editing-server-js` loads by itself — the file is CRLF, the boot checks grep their own source, and the client contract number must be bumped whenever `index.html` changes.
+The list of checks is `bash ci-gates.sh` and nothing else (`GATES=static` for the fast stage). Reading a red line: skill `gates`. Editing `src/` or `index.html` at all: skill `editing-server-js` loads by itself — the built `server.js` is CRLF because the build makes it so, the boot checks grep their own source, and the client contract number must be bumped whenever `index.html` changes.
 
 Every one of these now **exits non-zero on failure**, so they can be chained and
 they can fail a script. That was not true before: `tdz.js` and `dupkeys.js` printed
@@ -74,6 +74,14 @@ a red ✗ and exited 0 for their whole lives.
 
 `node --check` passing means almost nothing. Three live outages in one week were
 valid syntax.
+
+**`server.js` is generated from `src/` (since 2026-09-09).** Edit `src/`, never `server.js`: `node build.js` rebuilds it, `node build.js --check` proves the bytes match, and the boot's `BUILD CHECK` refuses a mismatch.
+
+**The verification order, every round, before and after a change:** `node build.js --check` → `GATES=static bash ci-gates.sh` → a boot (`bash verify.sh` runs those three) → falsify each fix alone (`node falsify.js docs/history/round-NNN-reverts.js`) → `bash ci-gates.sh` all stages.
+
+**A source file is one job:** a header, one blank line, then the body; the build refuses a header without a `Goal:` line and a file that ends on a blank line, while the header's Owns and Guarded-by lines are read by people and by Round 129's header agents, not by the build (`src/README.md`); from Round 129, when the one file `src/all.js` is cut into departments, also a folder per department and at most about 800 lines (`build.js` caps every file, the first included, once the manifest lists more than one).
+
+**Every round report ends with "Needs your eyes"** — only what a machine cannot prove: the merge, the Netlify drag, Render variables and Supabase SQL, anything a rep or a prospect sees, spend, and whether the names read right to you. Everything else is reported as proven, with the command that proved it.
 
 ## index.html IS in this repo now (2026-08-18), and still deploys by hand
 
