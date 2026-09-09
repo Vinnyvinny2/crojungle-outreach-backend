@@ -1,29 +1,38 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // FALSIFY — prove each fix's guard guards, by reverting that fix ALONE against a
-// baseline proven green and demanding the guard go red on its own named line.
+// baseline proven green and demanding the guard go red on its OWN named line.
 //
 //   node falsify.js docs/history/round-128-reverts.js            every revert
 //   node falsify.js docs/history/round-128-reverts.js NAME NAME  only these
 //
-// The reverts module exports an array; each entry is one of two shapes:
+// The reverts module exports a non-empty array; each entry is one of two shapes:
 //   { name, path, old, new, prove }        a text edit: `old` must occur EXACTLY once
 //                                          in the ORIGINAL file (zero or two = NO VERDICT)
 //   { name, path: null, action, undo, prove }  a file-system action as two shell
 //                                          commands (a stray file, a moved folder)
 // `prove` names the proof that must go red once the revert is applied:
-//   'boot'         node --max-old-space-size=256 server.js on a fresh port from 4920,
+//   'boot'         node --max-old-space-size=256 server.js on a fresh port from 4920 (FALSIFY_PORT),
 //                  judged by its BOOT VERDICT line (none printed = NO VERDICT, never a pass)
 //   'build-check'  node build.js --check                    (exit code)
 //   'build'        node build.js                            (exit code: the build itself refuses)
 //   'static'       GATES=static bash ci-gates.sh            (exit code)
 //   'clientcheck'  node clientcheck.js                      (exit code)
-// Optional fields: `rebuild: false` skips `node build.js` after applying an edit under
-// src/ (for "edited src/ but forgot to rebuild"); `expect: 'GREEN'` with `mustPrint`
-// for the rare revert whose proof is that a check is SKIPPED and says so.
+// `mustPrint` (a string or a RegExp, any proof kind) is the guard's OWN line: the colour
+// still comes from the exit code / verdict, but a run that is red without printing this
+// is reported as red for the WRONG reason and does not match — a mis-edited anchor that
+// trips a sibling refusal, or a boot red on any of 284 other checks, proves nothing about
+// the guard the revert names (check-writing-traps §4, §6). For 'boot' the text searched
+// is the boot log; for every other proof it is the command's stdout+stderr. Every revert
+// should carry one. Optional: `rebuild: false` skips `node build.js` after applying an
+// edit under src/ (for "edited src/ but forgot to rebuild"); `expect: 'GREEN'` for the
+// rare revert whose proof is that a check is SKIPPED and says so (with mustPrint).
 //
 // What this file does mechanically, each rule earned by a live failure (skill `falsify`):
-//   - the baseline is proven green first (boot, clientcheck, and every proof the list
-//     uses); a harness whose baseline is already red proves reds too cheaply
+//   - a selection that names no revert (a mistyped NAME, an empty list) stops with exit 2
+//     BEFORE the baseline and says no revert ran; "0 of 0 matched" was once a green exit
+//   - the baseline is proven green first (boot, clientcheck, build-check when build.js
+//     exists, and every proof the list uses); a harness whose baseline is already red
+//     proves reds too cheaply — and a stale server.js stops here, not as a restore failure
 //   - every read and write is bytes (latin1 round-trips every byte), so server.js keeps
 //     its CRLF and src/ keeps its LF; anchors are converted to the same encoding
 //   - a revert under src/ rebuilds server.js after applying (the built file is what
@@ -31,27 +40,39 @@
 //     snapshot byte for byte
 //   - every file touched is restored in a `finally`, byte for byte, even when the proof
 //     throws; NO VERDICT is reported as itself, never as RED
-//   - exit 1 unless every revert matched its expectation (RED by default)
+//   - the restore is VERIFIED, not trusted: a sha1 of server.js and of every file under
+//     src/ (walked, sorted, streamed) plus `git status --porcelain` (when there is a git
+//     tree) is taken once the baseline is green, and compared after every revert and at
+//     the end; an undo that exits non-zero, a rebuild that refuses or differs, a changed,
+//     missing or new path, or a changed git status prints RESTORE FAILED naming it, and
+//     the run exits 1 whatever the verdicts were (an undo that "succeeded" once nested
+//     src/ inside a leftover src.away/; only the bytes can tell)
+//   - exit 1 unless every revert matched its expectation (RED, printing its line, unless
+//     the list says otherwise) AND the tree is what it was; exit 2 for a usage error
 // ═══════════════════════════════════════════════════════════════════════════
 'use strict';
-const fs = require('fs'), path = require('path'), os = require('os'), cp = require('child_process');
+const fs = require('fs'), path = require('path'), os = require('os'), cp = require('child_process'), crypto = require('crypto');
 const ROOT = __dirname;
 const NODE = process.execPath;
 const listPath = process.argv[2];
 if (!listPath) { console.error('usage: node falsify.js <reverts.js> [NAME ...]'); process.exit(2); }
 const REVERTS = require(path.resolve(listPath));
+if (!Array.isArray(REVERTS) || !REVERTS.length) { console.error(`NO REVERT RAN: ${listPath} exports ${Array.isArray(REVERTS) ? 'an empty list' : 'no array'} — there is nothing to falsify, and nothing is not a pass`); process.exit(2); }
 const ONLY = new Set(process.argv.slice(3));
+const unknown = [...ONLY].filter(n => !REVERTS.some(r => r.name === n));
+if (unknown.length) { console.error(`NO REVERT RAN: no revert named ${unknown.join(', ')} in ${listPath}. The names are: ${REVERTS.map(r => r.name).join(', ')}`); process.exit(2); }
 const LOGDIR = process.env.FALSIFY_LOG_DIR ? path.resolve(process.env.FALSIFY_LOG_DIR) : fs.mkdtempSync(path.join(os.tmpdir(), 'falsify-'));
 fs.mkdirSync(LOGDIR, { recursive: true });
-let port = 4920;
+let port = Number(process.env.FALSIFY_PORT) || 4920;                        // boots take port+1, port+2, ...; FALSIFY_PORT moves the base off a busy range
 const abs = p => path.isAbsolute(p) ? p : path.join(ROOT, p);
 const readB = p => fs.readFileSync(abs(p)).toString('latin1');           // bytes, untouched
 const writeB = (p, s) => fs.writeFileSync(abs(p), Buffer.from(s, 'latin1'));
 const toBytes = s => Buffer.from(s, 'utf8').toString('latin1');           // an anchor written in UTF-8 → the file's byte view
 const underSrc = p => p && /^src[\\/]/.test(path.relative(ROOT, abs(p)));
 const clip = s => String(s || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+const show = n => n instanceof RegExp ? String(n) : JSON.stringify(n);
 
-// ── the proofs: each returns { verdict: 'RED'|'GREEN'|'NO VERDICT', why } ──
+// ── the proofs: each returns { verdict: 'RED'|'GREEN'|'NO VERDICT', why, text } ──
 function sh(cmd, args, extraEnv) {
   const r = cp.spawnSync(cmd, args, { cwd: ROOT, encoding: 'utf8', env: { ...process.env, ...(extraEnv || {}) }, maxBuffer: 1 << 26 });
   return { code: r.status, out: (r.stdout || '') + (r.stderr || '') };
@@ -62,8 +83,8 @@ function firstBad(out) {
 }
 function byExit(cmd, args, extraEnv) {
   const { code, out } = sh(cmd, args, extraEnv);
-  if (code === null) return { verdict: 'NO VERDICT', why: `${cmd} ${args.join(' ')} did not exit` };
-  return { verdict: code === 0 ? 'GREEN' : 'RED', why: code === 0 ? '' : clip(firstBad(out)) };
+  if (code === null) return { verdict: 'NO VERDICT', why: `${cmd} ${args.join(' ')} did not exit`, text: out };
+  return { verdict: code === 0 ? 'GREEN' : 'RED', why: code === 0 ? '' : clip(firstBad(out)), text: out };   // text: what mustPrint searches
 }
 function boot(tag) {
   port += 1;
@@ -93,13 +114,50 @@ const PROOFS = {
   clientcheck: () => byExit(NODE, ['clientcheck.js']),
 };
 
+// ── the tree, fingerprinted: server.js + src/** by sha1 (streamed, sorted) + git status ──
+function hashFile(p) {
+  const h = crypto.createHash('sha1'), fd = fs.openSync(p, 'r'), buf = Buffer.allocUnsafe(1 << 20);
+  try { let n; while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) h.update(buf.subarray(0, n)); } finally { fs.closeSync(fd); }
+  return h.digest('hex');
+}
+function treeSnapshot() {
+  const files = {};
+  const walk = (dir, rel) => {
+    if (!fs.existsSync(dir)) return;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const r = rel + '/' + e.name;
+      if (e.isDirectory()) walk(path.join(dir, e.name), r);
+      else if (e.isFile()) files[r] = hashFile(path.join(dir, e.name));
+    }
+  };
+  if (fs.existsSync(abs('server.js'))) files['server.js'] = hashFile(abs('server.js'));
+  walk(abs('src'), 'src');
+  const g = sh('git', ['status', '--porcelain']);                       // no git here (a scratch copy) → null: the hashes alone are the proof
+  const logRel = path.relative(ROOT, LOGDIR);
+  const git = g.code === 0 ? g.out.split('\n').filter(l => l && !(logRel && !logRel.startsWith('..') && l.slice(3).startsWith(logRel))).sort() : null;
+  return { files, git };
+}
+function treeDiff(before, after) {                                       // '' when identical, else the first difference, named
+  for (const p of Object.keys(before.files)) if (!(p in after.files)) return `${p} is missing`;
+  for (const p of Object.keys(after.files)) if (!(p in before.files)) return `${p} is new (not there before)`;
+  for (const p of Object.keys(before.files)) if (before.files[p] !== after.files[p]) return `${p} changed (sha1 differs)`;
+  if (before.git && after.git) {
+    const b = new Set(before.git), a = new Set(after.git);
+    const gone = before.git.find(l => !a.has(l)), came = after.git.find(l => !b.has(l));
+    if (gone || came) return `git status changed: ${came ? '"' + came + '" appeared' : '"' + gone + '" is gone'}`;
+  }
+  return '';
+}
+
 async function main() {
   const wanted = REVERTS.filter(r => !ONLY.size || ONLY.has(r.name));
+  if (!wanted.length) { console.error(`NO REVERT RAN: the selection matched nothing in ${listPath}`); process.exit(2); }
   for (const r of wanted) if (!PROOFS[r.prove]) { console.log(`${r.name}: unknown proof '${r.prove}'`); process.exit(2); }
+  for (const r of wanted) if (r.mustPrint !== undefined && typeof r.mustPrint !== 'string' && !(r.mustPrint instanceof RegExp)) { console.log(`${r.name}: mustPrint must be a string or a RegExp`); process.exit(2); }
   const hasBuild = fs.existsSync(path.join(ROOT, 'build.js'));
 
   console.log(`== baseline, proved before anything is reverted (logs: ${LOGDIR}) ==`);
-  const kinds = [...new Set(['boot', 'clientcheck', ...wanted.map(r => r.prove)])].filter(k => hasBuild || !/^build/.test(k));
+  const kinds = [...new Set(['boot', 'clientcheck', ...(hasBuild ? ['build-check'] : []), ...wanted.map(r => r.prove)])].filter(k => hasBuild || !/^build/.test(k));
   let baseRed = false;
   for (const k of kinds) {
     const res = await PROOFS[k]('baseline');
@@ -107,13 +165,16 @@ async function main() {
     if (res.verdict !== 'GREEN') baseRed = true;
   }
   if (baseRed) { console.log('BASELINE NOT GREEN — a harness whose baseline is already red proves reds too cheaply. Stopping.'); process.exit(1); }
+  const base = treeSnapshot();                                           // what every restore is measured against
+  console.log(`  tree         ${Object.keys(base.files).length} file(s) fingerprinted${base.git ? `, git status ${base.git.length} line(s)` : ', no git here (hashes alone)'}`);
 
-  let ok = 0;
+  let ok = 0, restoreFailed = false;
   for (const r of wanted) {
     const expect = r.expect || 'RED';
     const snap = {};                                                    // path → original bytes, restored in finally
     const serverSnap = readB('server.js');
     let res = { verdict: 'NO VERDICT', why: '' };
+    let actionRan = false, actionOk = false;
     try {
       if (r.path) {
         const src = readB(r.path), old = toBytes(r.old), neu = toBytes(r.new);
@@ -123,9 +184,10 @@ async function main() {
         writeB(r.path, src.replace(old, () => neu));
       } else {
         if (!r.action || !r.undo) { console.log(`${r.name.padEnd(28)} NO VERDICT  path is null but action/undo are not both given`); continue; }
-        snap.__undo = r.undo;
+        actionRan = true;
         const a = sh('bash', ['-c', r.action]);
         if (a.code !== 0) { console.log(`${r.name.padEnd(28)} NO VERDICT  the action failed: ${clip(a.out)}`); continue; }
+        actionOk = true;
       }
       // the built file is what boots: a source edit is rebuilt unless the list says not to,
       // and when the proof is the build itself the rebuild IS the proof
@@ -137,29 +199,39 @@ async function main() {
         }
         if (!res.skip) res = await PROOFS[r.prove](r.name.replace(/[^A-Za-z0-9-]/g, '_'));
       }
-      if (r.mustPrint && res.verdict !== 'NO VERDICT') {
+      // the guard's OWN line: red for another reason is not this guard's red
+      if (r.mustPrint !== undefined && res.verdict !== 'NO VERDICT') {
         const text = res.text || '';
-        if (!text.includes(r.mustPrint)) res = { verdict: res.verdict, why: `the proof did not print "${r.mustPrint}"`, missed: true };
+        const hit = r.mustPrint instanceof RegExp ? new RegExp(r.mustPrint.source, r.mustPrint.flags.replace('g', '')).test(text) : text.includes(r.mustPrint);
+        if (!hit) res = { ...res, why: `${res.verdict} but NOT on the guard's own line — the run did not print ${show(r.mustPrint)}; it printed: ${res.why || clip(firstBad(text)) || '(nothing)'}`, missed: true };
       }
     } catch (e) {
       res = { verdict: 'NO VERDICT', why: 'the harness threw: ' + clip(e && e.message) };
     } finally {
-      for (const p of Object.keys(snap)) if (p !== '__undo') writeB(p, snap[p]);
-      if (snap.__undo) sh('bash', ['-c', snap.__undo]);
+      const problems = [];
+      for (const p of Object.keys(snap)) writeB(p, snap[p]);
+      if (actionRan) {                                                  // undo runs even when the action failed half-way; its exit only counts when the action had succeeded
+        const u = sh('bash', ['-c', r.undo]);
+        if (u.code !== 0 && actionOk) problems.push(`the undo "${r.undo}" exited ${u.code}: ${clip(u.out)}`);
+      }
       writeB('server.js', serverSnap);
       if (hasBuild && (underSrc(r.path) || !r.path)) {
         const b = byExit(NODE, ['build.js']);
-        if (b.verdict !== 'GREEN' || readB('server.js') !== serverSnap) { writeB('server.js', serverSnap); console.log(`  !! restore: rebuilt server.js differed from the snapshot or the build refused (${b.why}); server.js restored from the snapshot — check the tree`); }
+        if (b.verdict !== 'GREEN' || readB('server.js') !== serverSnap) { writeB('server.js', serverSnap); problems.push(b.verdict !== 'GREEN' ? `the rebuild after the restore refused (${b.why}), so src/ is not what it was` : 'the rebuild after the restore did not reproduce the snapshot server.js, so src/ is not what it was'); }
       }
+      const d = treeDiff(base, treeSnapshot());
+      if (d) problems.push(d);
+      if (problems.length) { restoreFailed = true; console.log(`RESTORE FAILED after ${r.name}: ${problems.join(' | ')} — the tree is NOT what it was before this run; put it right by hand (git status, git checkout) before trusting any line below or above`); }
     }
     const matched = res.verdict === expect && !res.missed;
     if (matched) ok += 1;
-    console.log(`${r.name.padEnd(28)} ${res.verdict.padEnd(11)} ${expect !== 'RED' ? `(expected ${expect}${r.mustPrint ? ' + "' + r.mustPrint + '"' : ''}: ${matched ? 'as expected' : 'NOT as expected'}) ` : ''}${res.why || ''}`);
+    const demand = expect !== 'RED' || r.mustPrint !== undefined ? `(expected ${expect}${r.mustPrint !== undefined ? ' printing ' + show(r.mustPrint) : ''}: ${matched ? 'as expected' : 'NOT as expected'}) ` : '';
+    console.log(`${r.name.padEnd(28)} ${res.verdict.padEnd(11)} ${demand}${res.why || ''}`);
   }
   // the tree must be exactly what it was
-  const g = sh('git', ['status', '--porcelain', '--', 'server.js', 'src']);
-  const dirty = g.code === 0 ? g.out.trim() : '';                    // no git here (a scratch copy): the md5 in the caller's hands is the proof
-  console.log(`\n${ok} of ${wanted.length} matched expectation (RED alone unless the list says otherwise).${dirty ? '\n!! git status shows changes under server.js/src after restore:\n' + dirty : ''}`);
-  process.exit(ok === wanted.length ? 0 : 1);
+  const finalDiff = treeDiff(base, treeSnapshot());
+  if (finalDiff) { restoreFailed = true; console.log(`RESTORE FAILED at the end: ${finalDiff}`); }
+  console.log(`\n${ok} of ${wanted.length} matched expectation (RED on its own line unless the list says otherwise).${restoreFailed ? '\n!! RESTORE FAILED — exit 1 regardless of the verdicts above; the tree must be put right by hand' : ' Tree restored: verified byte for byte.'}`);
+  process.exit(ok === wanted.length && !restoreFailed ? 0 : 1);
 }
 main().catch(e => { console.error('falsify.js failed: ' + (e && e.stack || e)); process.exit(2); });

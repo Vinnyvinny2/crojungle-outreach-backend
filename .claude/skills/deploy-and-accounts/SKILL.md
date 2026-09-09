@@ -67,7 +67,7 @@ nothing and touches no lead Vin is calling.
 ## How to tell whether each step is done
 
 - Render health check: `curl -s https://<service>/healthz` answers `{"status":"green", …}` with 200 once booted, and a deploy of a red build does not replace the previous one.
-- GitHub: the `gates` check appears as REQUIRED on a PR, and the merge button is disabled while it is red.
+- GitHub: the `gates` check appears as REQUIRED on a PR, and the merge button is disabled while it is red. **Not done as of 2026-09-09** ([§128](../../../docs/history/round-128.md)): `main` is unprotected, so a red run is a report, not a blocker — and since §128 the generated `server.js` is collapsed in PR review (`linguist-generated`), so that red line is the only signal before Render. It is the first item in Round 128's "Needs your eyes".
 - Netlify: the site's deploy log shows `mkdir -p dist && cp index.html dist/index.html` from `netlify.toml`, and a merge to `main` produces a Netlify deploy without a drag-in.
 - Render keys (§126): the boot log prints `AUTH GATE OFF` until `APP_TOKEN` is set, and `/api/store/settings` (with the code) lists every key as `true` under `serverKeys`.
 - Supabase: `SCHEMA PROBE` in the boot log names nothing missing; `LEAD BENCH` and the query memory report writes, not refusals. Since [§127](../../../docs/history/round-127.md) row-level security is ON everywhere with no anon policy and the server's key is the service_role one (`SUPABASE KEY ROLE: service_role` on the boot log); [§93](../../../docs/history/round-093.md) turned it off only because the server then used the anon key.

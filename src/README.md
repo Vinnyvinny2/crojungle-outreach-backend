@@ -8,7 +8,7 @@ Three rules that do not bend:
 - **The folder is the department.** Plain-English names, from the business: a reader who does not read code can find the job by its folder.
 - **A check reads the whole built program, never one file.** Every boot check, `tdz.js`, `dupkeys.js`, `scopecheck.js` and every sibling tool read `server.js`; a source file is never run or checked alone. Parts of a cut function (`PART n OF N`) do not parse on their own by design.
 
-## The header every file must have (the build refuses a file without it)
+## The header every file must have (the build refuses a file without a Goal line; the rest is the house shape)
 
 ```
 // ═══ DEPARTMENT / JOB ═══
@@ -19,6 +19,8 @@ Three rules that do not bend:
 ```
 
 A part of a cut function adds `// PART n OF N of <function>: does not parse alone; joined in manifest order.` Every file: LF, no BOM, non-empty, ends with exactly one newline, at most about 800 lines, one job. A header may not contain `✓`, `⛔`, `process.env.`, `req.query.`, `readFileSync(`, `__filename` or `Hold();` (the counting checks and `gen-refs` scan comments too). No "last changed" line; `git log` is the record.
+
+What `build.js` actually refuses, naming file:line (its own header is the authority): a CR byte, a BOM, an empty file, a missing or doubled final newline, a line that is not valid UTF-8 or carries a literal U+FFFD, a manifest that does not load or lists a path that is not plain and src-relative, an entry not on disk, a duplicate entry, a `src/**/*.js` the manifest does not list, a symbolic link under `src/`, a file over the cap (once the manifest lists more than one file), a file with no header comment, a header with no `Goal:` line (one starting `// Goal: after reading this file, Claude can`), a first manifest file whose first line is not the exact GENERATED banner, and a forbidden string in a header. The department line and the Owns / Defines for others / Guarded by lines are the house shape, read by a person and by the header-verification agents at the cut — not by the build. A header is a claim; write it from what the code does.
 
 ## The departments (Round 129 fills them; Round 128 has one file)
 
@@ -43,3 +45,5 @@ A part of a cut function adds `// PART n OF N of <function>: does not parse alon
 | Folder | File | Goal |
 |---|---|---|
 | (root) | `all.js` | the whole program as one file — today's `server.js` with its CR bytes stripped and the header above prepended; Round 129 cuts it into the departments |
+
+At the cut (Round 129): `all.js` lines 1 to 3 are the GENERATED banner and become lines 1 to 3 of the first file the manifest lists (line 1 is pinned by the build, which refuses a first file that does not open with the exact banner line; lines 2 and 3 are not); lines 4 to 6 (the "whole program" department header) are deleted, so `server.js` will differ from today's from line 4 on — expected, and the modulo-headers diff proof carries it. Cut by LINE numbers only: `src/all.js:L` is `server.js:L` today (`node build.js --where L` says so), but an acorn offset taken on the CRLF `server.js` counts one CR per preceding line and is NOT an offset into the LF `src/all.js`; a slice taken with such an offset lands early, mid-statement.
