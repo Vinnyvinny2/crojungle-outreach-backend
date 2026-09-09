@@ -498,6 +498,11 @@ const bootServer = (extraEnv) => new Promise((resolve, reject) => {
       // pins that setting.
       FC_CREDIT_WAIT_MS: '4000',
       RESEARCH_CONCURRENCY: '2',
+      // Round 127: the keys are Render's. A key in a request body no longer counts,
+      // so every scenario that spends runs with these; the NOKEY boot clears them.
+      ANTHROPIC_API_KEY: 'sk-servercheck',
+      FIRECRAWL_KEY: 'fc-servercheck',
+      APIFY_TOKEN: 'ap-servercheck',
       // Round 126: the access code and the origin list. Every helper below
       // sends the code; AUTH1 sends none, a wrong one, and reads the public paths.
       APP_TOKEN: SC_TOKEN,
@@ -644,21 +649,6 @@ const runLead = async (b, over, capMs) => {
     ok(R.reviewsRead === REVIEWS.length, `reviewsRead is ${R.reviewsRead}, not the ${REVIEWS.length} reviews the fake returned — the number reported as read has come apart from the number the model was shown`);
     ok(!/FACT CHECK DID NOT RUN/.test(srv.log()), 'the fact-check — the last gate before a prospect — did not run on the golden lead, and the marker-keyed fake fails soft exactly there');
     ok(state.contract.length === 0, `request-contract violations: ${state.contract.join(' | ')}`);
-
-    // ── B: PREFLIGHT, ZERO NETWORK ──────────────────────────────────────
-    console.log('── scenario B: preflight refusal, zero spend');
-    const before = state.requests.length;
-    const B = await runLead(biz('B'), { apiKey: '' }, 30000);
-    ok(/Anthropic/.test(String(B.error || '')), `a lead with no Anthropic key was not refused by name — got: ${String(B.error || '(none)').slice(0, 120)}`);
-    ok(state.requests.length === before, `the preflight refusal still made ${state.requests.length - before} network call(s) — "nothing was spent" is false`);
-    // The SYNCHRONOUS route — the client's fallback when -async 404s — must
-    // clear the same gates. Until 2026-08-22 it was a door around them: a
-    // lead posted here started spending with no preflight and no ceiling.
-    const beforeSync = state.requests.length;
-    const Bsync = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/research`, leadBody(biz('B2'), { apiKey: '' }));
-    ok(Bsync.code === 422 && /Anthropic/.test(String((Bsync.json && Bsync.json.error) || '')),
-      `the synchronous /api/research route admitted a lead the queue refuses (got ${Bsync.code}: ${String((Bsync.json && Bsync.json.error) || '').slice(0, 120)}) — a door around the admission gates`);
-    ok(state.requests.length === beforeSync, `the sync-route refusal still made ${state.requests.length - beforeSync} network call(s)`);
 
     // ── C: DEAD APIFY TOKEN ─────────────────────────────────────────────
     console.log('── scenario C: Apify 403 — the mine is dark, the audit is not');
@@ -905,17 +895,12 @@ const runLead = async (b, over, capMs) => {
     // ── H4: THE ADMISSION GATES ─────────────────────────────────────────
     console.log('── scenario H4: the contact route refuses before it spends');
     const h4 = state.requests.length;
-    const H4a = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
-      company: { name: 'No Key Co', website: 'https://x.example' }, keys: {},
-    });
-    ok(H4a.code === 422 && /Anthropic/.test(String((H4a.json || {}).error || '')),
-      `a contact read with no Anthropic key was not refused by name (got ${H4a.code})`);
     const H4b = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
       company: { name: 'Bad URL Co', website: 'not a url at all' }, keys: { anthropicKey: 'k-test' },
     });
     ok(H4b.code === 422 && /usable website/.test(String((H4b.json || {}).error || '')),
       `a website that cannot be a URL was not refused before spending (got ${H4b.code}: ${String((H4b.json || {}).error || '').slice(0, 120)})`);
-    ok(state.requests.length === h4, `the two refusals still made ${state.requests.length - h4} network call(s) — "nothing was spent" is false`);
+    ok(state.requests.length === h4, `the refusal still made ${state.requests.length - h4} network call(s) — "nothing was spent" is false`);
 
     // == I: THE FIND RUN OUTLIVES ITS REQUEST =============================
     // The whole point of the change, driven rather than read. A full-grid Find
@@ -1240,13 +1225,6 @@ const runLead = async (b, over, capMs) => {
     ok(R3bdone && R3bdone.status === 'partial' && R3bdone.read_count === 1 && R3bdone.failed_count === 1, `a batch with one unreadable row ended ${JSON.stringify(R3bdone && [R3bdone.status, R3bdone.read_count, R3bdone.failed_count])} - expected partial, 1 read, 1 failed`);
     const _badRow = qRowOf(_bad.id);
     ok(_badRow && _badRow.read_failed === true && /JSON/.test(String(_badRow.fail_reason || '')) && _badRow.batch_id === (R3b.json && R3b.json.runId), `the unreadable row reads ${JSON.stringify(_badRow && [_badRow.read_failed, _badRow.fail_reason, _badRow.batch_id])} - it must stay in its batch, failed, with the reason`);
-    // No key in Settings: refused by name before a row is claimed.
-    const _keep = sbTable('user_settings')[0].data;
-    sbTable('user_settings')[0].data = { firecrawlKey: 'fc-test' };
-    const NK = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/read-run`, { count: 1 });
-    ok(NK.code === 422 && /Anthropic/.test(String((NK.json || {}).error || '')), `a run with no Anthropic key in Settings was not refused by name (${NK.code})`);
-    ok(/ANTHROPIC_API_KEY/.test(String((NK.json || {}).error || '')), 'the refusal does not name the Render variable that fixes it');
-    sbTable('user_settings')[0].data = _keep;
     ok(sbTable('read_runs').every(r => r.status !== 'running'), 'a run row is still "running" after every run on this boot ended');
     ok(!state.sbLog.some(h => h.table === 'user_settings' && h.method !== 'GET'), 'the server WROTE the Settings row - a background run may read keys, never store them');
 
@@ -1310,7 +1288,7 @@ const runLead = async (b, over, capMs) => {
       const rowNow = sbTable('user_settings')[0].data || {};
       ok(put.code === 200 && !('apiKey' in rowNow) && !('hunterKey' in rowNow) && rowNow.tone === 'plain' && rowNow.findPaidOwner === false, `the settings PUT answered ${put.code} and the row now holds ${JSON.stringify(rowNow)} - expected the two keys stripped and the two preferences kept`);
       const gs = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/store/settings`);
-      ok(gs.code === 200 && gs.json && gs.json.data && !('apiKey' in gs.json.data) && gs.json.data.tone === 'plain' && gs.json.serverKeys && gs.json.serverKeys.anthropicKey === false && gs.json.envNames && gs.json.envNames.anthropicKey === 'ANTHROPIC_API_KEY', `the settings GET answered ${JSON.stringify(gs.json).slice(0, 200)} - expected no key, the preference, and the server-key booleans naming the Render variable`);
+      ok(gs.code === 200 && gs.json && gs.json.data && !('apiKey' in gs.json.data) && gs.json.data.tone === 'plain' && gs.json.serverKeys && gs.json.serverKeys.anthropicKey === true && gs.json.serverKeys.hunterKey === false && gs.json.envNames && gs.json.envNames.anthropicKey === 'ANTHROPIC_API_KEY', `the settings GET answered ${JSON.stringify(gs.json).slice(0, 200)} - expected no key, the preference, and the server-key booleans naming the Render variable`);
       sbTable('user_settings')[0].data = _keepS;
     }
 
@@ -1386,6 +1364,42 @@ const runLead = async (b, over, capMs) => {
     ok(_lv.status === 'done' && _lv.read_count === 2, `a run interrupted with one lead left ended ${JSON.stringify([_lv.status, _lv.read_count, _lv.error])} after the restart - expected done with both read`);
     ok(!!qRowOf(qRow(R4l2).id).read_at && /Pete Barnes/.test(String((qRowOf(qRow(R4l2).id).extra || {}).contactOwner || '')), 'the lead left unread by the restart was not read on resume');
     ok(/resumed after a restart/.test(srv.log()), 'the resume never printed its own line, so an operator reading the log after a merge cannot tell a resumed run from a new one');
+    srv.child.kill(); await sleep(400);
+
+    // ── NOKEY: NO KEY ON RENDER, ON A FOURTH BOOT ─────────────────────────
+    // Round 127: the request body and the Settings row carry keys here on
+    // purpose, and neither may count. Every paid door refuses by name, names
+    // the Render variable, and spends nothing.
+    console.log('── scenario NOKEY: no key on Render — every paid door refuses by name and nothing is spent');
+    state.mode = 'golden'; state.biz = biz('B');
+    sbTable('user_settings')[0].data = { apiKey: 'k-in-the-row', firecrawlKey: 'fc-in-the-row', findPaidOwner: true };
+    srv = await bootServer({ ANTHROPIC_API_KEY: '', FIRECRAWL_KEY: '', APIFY_TOKEN: '' });
+    // ── B: PREFLIGHT, ZERO NETWORK ──────────────────────────────────────
+    console.log('── scenario B: preflight refusal, zero spend');
+    const before = state.requests.length;
+    const B = await runLead(biz('B'), { apiKey: 'sk-in-the-body' }, 30000);
+    ok(/Anthropic/.test(String(B.error || '')), `a lead with no key on Render (and one in its body) was not refused by name — got: ${String(B.error || '(none)').slice(0, 120)}`);
+    ok(state.requests.length === before, `the preflight refusal still made ${state.requests.length - before} network call(s) — "nothing was spent" is false`);
+    // The SYNCHRONOUS route — the client's fallback when -async 404s — must
+    // clear the same gates. Until 2026-08-22 it was a door around them: a
+    // lead posted here started spending with no preflight and no ceiling.
+    const beforeSync = state.requests.length;
+    const Bsync = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/research`, leadBody(biz('B2'), { apiKey: 'sk-in-the-body' }));
+    ok(Bsync.code === 422 && /Anthropic/.test(String((Bsync.json && Bsync.json.error) || '')),
+      `the synchronous /api/research route admitted a lead the queue refuses (got ${Bsync.code}: ${String((Bsync.json && Bsync.json.error) || '').slice(0, 120)}) — a door around the admission gates`);
+    ok(state.requests.length === beforeSync, `the sync-route refusal still made ${state.requests.length - beforeSync} network call(s)`);
+
+    const h4n = state.requests.length;
+    const H4a = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+      company: { name: 'No Key Co', website: 'https://x.example' }, keys: { anthropicKey: 'k-in-the-body' },
+    });
+    ok(H4a.code === 422 && /Anthropic/.test(String((H4a.json || {}).error || '')),
+      `a contact read with no key on Render (and one in its body) was not refused by name (got ${H4a.code})`);
+    ok(state.requests.length === h4n, `the refusal still made ${state.requests.length - h4n} network call(s) — "nothing was spent" is false`);
+    const NK = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/read-run`, { count: 1 });
+    ok(NK.code === 422 && /ANTHROPIC_API_KEY/.test(String((NK.json || {}).error || '')), `a read run with no key on Render (and one in the Settings row) was not refused naming ANTHROPIC_API_KEY (${NK.code}: ${JSON.stringify(NK.json).slice(0, 120)})`);
+    const NC = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/firecrawl-credits?key=fc-in-the-url`);
+    ok(NC.code === 503 && /FIRECRAWL_KEY/.test(String((NC.json || {}).error || '')), `the credit tester with a key in the URL answered ${NC.code} - expected 503 naming FIRECRAWL_KEY, the URL key ignored`);
 
     if (state.unknown.length) info('endpoints the fake did not know (tolerated by the routes): ' + [...new Set(state.unknown)].slice(0, 6).join(', '));
   } catch (e) {

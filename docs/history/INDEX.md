@@ -138,3 +138,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 124 | 2026-09-08 | The Find stage rebuilt: the queue and the reads move to the server, and a closed tab is no longer a dead batch — 2026-09-08 | Find / Client / Cost | [round-124.md](round-124.md) |
 | 125 | 2026-09-08 | A guess is asked about twice before it is called a guess, and the tag that says so stops hiding — 2026-09-08 | Find / Client | [round-125.md](round-125.md) |
 | 126 | 2026-09-08 | The keys move to Render, the server learns to ask for an access code, and the page gets a door that is not the database — 2026-09-08 | Security / Deploy | [round-126.md](round-126.md) |
+| 127 | 2026-09-09 | The page stops talking to the database, sends the access code, and row-level security goes on — 2026-09-09 | Security / Client / Deploy | [round-127.md](round-127.md) |
