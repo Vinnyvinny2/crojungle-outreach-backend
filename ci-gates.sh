@@ -36,6 +36,8 @@ run() {
 want() { [ "$STAGE" = "all" ] || [ "$STAGE" = "$1" ]; }
 
 if want static; then
+  # server.js is generated from src/ (Round 128): the byte proof runs before any gate reads it.
+  run node build.js --check
   run node --check server.js
   run node tdz.js server.js
   run node dupkeys.js server.js

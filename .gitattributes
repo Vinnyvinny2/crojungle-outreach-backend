@@ -1,0 +1,4 @@
+src/** text eol=lf
+*.sh text eol=lf
+server.js -text linguist-generated=true
+build.js text eol=lf
