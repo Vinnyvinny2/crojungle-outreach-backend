@@ -42,7 +42,7 @@ byte otherwise, and a compare proves it every round.
   `server.js:L`; `node build.js --where LINE` confirms it). Against the
   pre-split `server.js` on `backup/server-monolith` every line moved down
   by six up to the `BUILD CHECK` block and by six plus that block's length
-  after it (A2_NUMBERS at this writing), so a line number quoted in an
+  after it (eighty-seven at this writing), so a line number quoted in an
   earlier round note or an old map is that file's. The
   rule is `node build.js --where N`, never arithmetic — and it stops being
   one number at all once Round 129 cuts the file. Render, CI and every tool
@@ -120,9 +120,9 @@ the numbers are never typed by hand:
 
 prints nothing. `tail -n +7` drops the six header lines, `sed` drops the
 block (its built line numbers less six). At this writing the block is
-server.js:A2_NUMBERS, A2_NUMBERS lines, so the `sed` is `'A2_NUMBERS'`, the
-file is A2_NUMBERS lines against the monolith's 84,061, and the diff is
-A2_NUMBERS insertions — numbers that move whenever the block is edited; the
+server.js:53639-53719, 81 lines, so the `sed` is `'53633,53713d'`, the
+file is 84,148 lines against the monolith's 84,061, and the diff is
+87 insertions — numbers that move whenever the block is edited; the
 recipe does not. The plan's own copy of this compare says `tail -n +6`, which
 leaves header line 6 in and reports a difference at line 1 — use `+7`.
 
@@ -204,9 +204,11 @@ server.js:7 (src/all.js:7)`; a CR byte planted on the same line exits 2 with
 `the build REFUSED a source file`; a clean tree, and an edit outside `src/`
 other than `server.js`, exit 0. After the second review, three more by hand:
 a stale edit on a line of `src/all.js` containing "refus" prints the STALE
-headline, not REFUSED (A2_NUMBERS); an Edit payload naming `./src/all.js` is
-red the same way (A2_NUMBERS); and a hand edit of `server.js:7` exits 2 with
-a headline saying `server.js` is GENERATED (A2_NUMBERS). It sees Edit and
+headline, not REFUSED (exit 2, `first difference at server.js:3
+(src/all.js:3)`); an Edit payload naming `./src/all.js` is
+red the same way (exit 2, the STALE headline); and a hand edit of `server.js:7` exits 2 with
+a headline saying `server.js` is GENERATED (`first difference at server.js:7
+(src/all.js:7)`). It sees Edit and
 Write calls only; an edit made through the Bash tool
 is caught by `node build.js --check` at the first gate and by `BUILD CHECK`
 at boot, not by the hook.
