@@ -164,7 +164,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261008;
+const CONTRACT_VERSION = 20261009;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -5336,6 +5336,30 @@ const sizeMeasured = (s) => {
   if (Number(d.locationsProse) >= 2) return true;
   if (parseStatedRevenue(d.revenueStated)) return true;
   if (Number(d.teamCount) >= scaleCuts(revenuePerEmployeeFor(d.tradeLabel)).core) return true;
+  return false;
+};
+// ══ SETTLED SMALL: WEAKER THAN MEASURED, AND ENOUGH TO STOP SPENDING ═══════
+// Round 129. sizeMeasured is the BAND's rule and stays exactly as it is: a
+// four-name team page is not a headcount, and the rep's sheet must keep saying
+// "guess" until something real measures the business. But the BUY gate was
+// asking that same question, so a practice publishing three, four or five
+// people on its own team page counted as "nothing measured" and bought a
+// four-credit directory search that has no record of an owner-operated
+// practice - 20 of the 30 Firecrawl credits on the 2026-09-09 run, nothing
+// found on five of seven leads, and both hits came back "6 employees from the
+// range 1-10", the tier the free guess already gave.
+//
+// This is the weaker question the SPEND should have been asking: has the lead
+// already told us it is small? Three names is the floor the team-page reader
+// itself uses (Round 116); one or two names is a page layout, not a
+// measurement. Only 'solo' settles a trade by its capacity class - 'mixed'
+// means one truck or twelve and holds Electrical, Plumbing and Dental, so
+// vetoing on it would blind the size gate across half the ICP.
+const sizeSettledSmall = (s) => {
+  const d = s || {};
+  const n = Number(d.teamCount);
+  if (Number.isFinite(n) && n >= 3 && n < scaleCuts(revenuePerEmployeeFor(d.tradeLabel)).core) return true;
+  if (capacityClassFor(d.tradeLabel, d.trade) === 'solo') return true;
   return false;
 };
 // ══ WHICH LANE A LEAD BELONGS TO (Round 111) ════════════════════════════════
@@ -10711,6 +10735,45 @@ const applyPattern = (pattern, fullName, domain) => {
   return c ? c.email : '';
 };
 
+// ══ ONE NAME FOR THE FIRST-NAME MAILBOX ═══════════════════════════════════
+// buildCandidates calls the first-name-only mailbox 'first'. The eponymous
+// branch wrote a brace-wrapped spelling of the same idea instead, and every
+// consumer of it failed in silence: applyPattern found no candidate of that
+// name and returned an empty string, so the house-pattern route returned
+// nothing and said nothing; the learned-pattern filter matched nothing, so the
+// fast path that is supposed to save a verifier call on a domain we already
+// solved never fired; and the name travelled out on `pattern`, into the saved
+// lead row, and back in as priorEmailPattern on the next run. The contact-cache
+// comment further down this file already records where that ends: that is how
+// 'oe@' outlived the regex fix that corrected it.
+//
+// So there is ONE copy of the string and ONE door every stored name comes
+// through. normalizePattern asks the LIVE buildCandidates rather than a retyped
+// list, so a pattern added there is accepted here with no second edit, and
+// anything else - a brace-wrapped spelling saved before this round, a name from
+// a build that no longer exists, a stray - is migrated or dropped, never stored.
+const EPONYMOUS_PATTERN = 'first';
+let _patternNamesCache = null;
+const knownPatternNames = () => (_patternNamesCache
+  || (_patternNamesCache = new Set(buildCandidates('Ada Lovelace', 'example.com').map(x => x.pattern))));
+const normalizePattern = (pattern) => {
+  const raw = String(pattern == null ? '' : pattern).trim().toLowerCase();
+  if (!raw) return '';
+  // Rows written before this round carry the brace-wrapped spelling and nothing
+  // else was ever wrapped. Unwrap first, then ask the real table.
+  const bare = /^\{[a-z._]+\}$/.test(raw) ? raw.slice(1, -1) : raw;
+  return knownPatternNames().has(bare) ? bare : '';
+};
+// Every write into the process-lifetime memory goes through here, so a caller
+// that learns a name this file does not hand out cannot install it and cannot
+// pass it to the next lead on the domain - nor out to the lead row, which is
+// where a bad name would outlive the process.
+const rememberPattern = (domain, pattern) => {
+  const known = normalizePattern(pattern);
+  if (known) domainPatternMemory.set(domain, known);
+  return known;
+};
+
 // ── SMTP VERIFICATION (via free API) ───────────────────────────────────────
 // Render blocks outbound port 25, so we can't do raw SMTP ourselves. We use a
 // free verification API. MyEmailVerifier: 100 free/day, no credit card, credits
@@ -11337,7 +11400,12 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
       // We asked for the right page, paid for it, and discarded the answer. This is
       // the ONE page most likely to carry the owner's address, so it is the last
       // place to be impatient. Same reasoning as the note on firecrawlScrape itself.
-      const md = await firecrawlScrape(fcKey, target, 45000);
+      // Capped, because Round 129 is what makes this line reachable at all.
+      // firecrawlScrapeCapped is the same wrapper the Find page read already
+      // goes through: a lead at its ten-credit ceiling stops here instead of
+      // spending five more guessing contact URLs, and outside a lead ledger
+      // (the audit path) nothing is capped, so that path is unchanged.
+      const md = await firecrawlScrapeCapped(fcKey, target, 45000);
       if (!md || md.length < 100) continue;
       emails = extract(md, false);
       if (emails.length > 0) return { emails, source: 'contact_page' };
@@ -14062,11 +14130,21 @@ const findWebsiteViaSearch = async (companyName, fcKey, location) => {
 // Firecrawl calls in flight). A one-truck shop has no LinkedIn company page;
 // from the medium review band up it often does. Bought below that only when
 // the review count is unknown.
+// Round 129: "unknown" was written as `_rv <= 0`, so a MEASURED zero bought the
+// query too - and a business with zero Google reviews certainly has no LinkedIn
+// company page. The rule is lifted out here so a fixture can execute it, and it
+// asks the RAW value before Number() ever sees it: signals.reviewCount is null
+// when the Find press measured nothing, Number(null) is 0 and 0 is finite, so
+// deleting the clause alone would have laundered "we never looked" into
+// "measured zero" and stood the query down on the leads that most need it.
 const SIZE_SECOND_QUERY_MIN_REVIEWS = 150;
+const sizeSecondQueryWorth = (reviewCount) => {
+  const known = typeof reviewCount === 'number' && Number.isFinite(reviewCount);
+  return !known || reviewCount >= SIZE_SECOND_QUERY_MIN_REVIEWS;
+};
 const findSizeViaSearch = async (companyName, website, fcKey, apiKey, location = '', opts = {}) => {
   if (!companyName || !fcKey || !apiKey) return null;
-  const _rv = Number((opts || {}).reviewCount);
-  const secondWorth = !Number.isFinite(_rv) || _rv <= 0 || _rv >= SIZE_SECOND_QUERY_MIN_REVIEWS;
+  const secondWorth = sizeSecondQueryWorth((opts || {}).reviewCount);
   try {
     const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace('www.', '');
     const loc = cityState(location);
@@ -34780,7 +34858,7 @@ const findEmailFireproof = async (_args) => {
 //
 // Defaults to true so every existing caller behaves exactly as before; only a
 // caller that has a canBuy verdict in hand passes it.
-const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched = true, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, siteIsDown = false, companyName = '', industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '', freePages = [] }) => {
+const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched = true, employees, contacts, fcKey, homepageContent, hunterEmail, hunterName, hunterTitle, verifierKey, hunterKey = '', siteConfirmed = false, siteIsDown = false, companyName = '', industry = '', priorEmail = '', priorEmailTier = null, priorEmailPattern = '', freePages = [], onAddressSource = null }) => {
   const domain = (website || '').replace(/https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '').toLowerCase();
   const name = ceoName || hunterName || '';
   // The company name and their own host travel with every mailboxKind
@@ -34812,7 +34890,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
   if (hunterEmail && hunterName) {
     console.log(`EMAIL [${domain}]: Hunter has ${hunterName} <${hunterEmail}>. Decision-maker we want: ${name || 'unknown'}.`);
     const learned = inferPattern(hunterEmail, hunterName);
-    if (learned) domainPatternMemory.set(domain, learned);
+    if (learned) rememberPattern(domain, learned);
 
     const isSamePerson = !name || sameName(hunterName, name);
     if (isSamePerson) {
@@ -34875,7 +34953,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
               for (const c of buildCandidates(name, domain).filter(x => x.pattern !== learned).slice(0, 4)) {
                 const r2 = await verifyEmailSMTP(c.email, verifierKey);
                 if (r2.valid === true) {
-                  domainPatternMemory.set(domain, c.pattern);
+                  rememberPattern(domain, c.pattern);
                   console.log(`✓ EMAIL [${domain}] T2 CONFIRMED on retry: ${c.email} (${c.pattern})`);
                   return { email: c.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: c.pattern };
                 }
@@ -34950,13 +35028,13 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     if (_still.invalid === true) {
       console.log(`EMAIL [${domain}]: the previously verified address ${priorEmail} is now REFUSED by their mail server. Not reusing it \u2014 the mailbox has been closed or renamed since we last looked.`);
     } else {
-      if (priorEmailPattern) domainPatternMemory.set(domain, priorEmailPattern);
+      rememberPattern(domain, priorEmailPattern);
       console.log(`\u2713 EMAIL [${domain}] REUSING A PROVEN ADDRESS: ${priorEmail} was verified on an earlier run${_still.valid === true ? ' and the mail server confirms it again' : ' and nothing since contradicts it'}. Skipping rediscovery \u2014 re-deriving a solved address is how a lead ends up with a weaker one than it already had.`);
       return {
         email: priorEmail,
         ...(priorEmailTier === 1 ? EMAIL_TIERS.CONFIRMED_SCRAPED : EMAIL_TIERS.SMTP_VERIFIED),
         name: ceoName || hunterName || '',
-        pattern: priorEmailPattern || domainPatternMemory.get(domain) || null,
+        pattern: normalizePattern(priorEmailPattern) || domainPatternMemory.get(domain) || null,
         label: priorEmailTier === 1 ? 'Published on their site (confirmed on an earlier run)' : 'SMTP-verified (mailbox exists, confirmed on an earlier run)',
       };
     }
@@ -34964,6 +35042,13 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
 
   // ── TIER 1: published on their own website ────────────────────────────────
   const scraped = await scrapeEmailsFromSite(website, fcKey, homepageContent, siteConfirmed, siteIsDown, freePages);
+  // Where a published address came from, back to the caller's log line:
+  // homepage, free_page, careers_page, contact_page, or none when their site
+  // publishes nothing we could find. A callback rather than a field on the
+  // result because the answer is about the READ - it is true whether or not
+  // the address it found is the one the waterfall finally ships, and a field
+  // returned and read by nobody is the class this repo records most.
+  if (typeof onAddressSource === 'function') onAddressSource(scraped.source || 'none');
   if (scraped.emails.length > 0) {
     // Learn the company's convention from every address we found.
     //
@@ -34975,7 +35060,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     if (_vouched) {
       for (const e of scraped.emails) {
         const p = inferPattern(e, name);
-        if (p) { domainPatternMemory.set(domain, p); break; }
+        if (p) { rememberPattern(domain, p); break; }
       }
     }
     // Prefer an address matching our decision-maker, then any personal address,
@@ -35022,7 +35107,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
               console.log(`\u21c4 EMAIL [${domain}]: their site publishes only ${best}, a shared inbox. ${_cand} is ${name}'s own mailbox and SMTP confirms it exists, so the email reaches the person it argues with instead of whoever reads enquiries.`);
               best = _cand;
               isGeneric = false;
-              domainPatternMemory.set(domain, _pat);
+              rememberPattern(domain, _pat);
               break;
             }
           }
@@ -35138,7 +35223,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     for (const c of toTry) {
       const res = await verifyEmailSMTP(c.email, verifierKey);
       if (res.valid === true) {
-        domainPatternMemory.set(domain, c.pattern);
+        rememberPattern(domain, c.pattern);
         console.log(`✓ EMAIL [${domain}] T2 SMTP-VERIFIED (mailbox exists): ${c.email} — pattern ${c.pattern}`);
         return { email: c.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: c.pattern };
       }
@@ -35221,9 +35306,9 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
         await new Promise(r => setTimeout(r, 3000));
         const _again = await verifyEmailSMTP(epEmail, verifierKey);
         if (_again.valid === true) {
-          domainPatternMemory.set(domain, '{first}');
+          rememberPattern(domain, EPONYMOUS_PATTERN);
           console.log(`\u2713 EMAIL [${domain}] T2 SMTP-VERIFIED on the second ask: ${epEmail} - the mail server would not say the first time and confirmed the mailbox on retry`);
-          return { email: epEmail, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: '{first}' };
+          return { email: epEmail, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: EPONYMOUS_PATTERN };
         }
         if (_again.invalid === true) { deniedAddresses.add(epEmail.toLowerCase()); console.log(`EMAIL [${domain}]: on the second ask the mail server refused ${epEmail}.`); }
         else console.log(`EMAIL [${domain}]: the mail server would not say twice about ${epEmail} - it stays a guess, and a guess is not sent.`);
@@ -35270,7 +35355,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
           // the question rather than guessing at it.
           email: epEmail, tier: 3, score: 78, sendable: true, name,
           needsVerification: true,
-          pattern: '{first}', inferredEponymous: true,
+          pattern: EPONYMOUS_PATTERN, inferredEponymous: true,
           label: `The business is named after ${name}, so ${epEmail} on their own domain is a strong guess \u2014 but it is a GUESS. Verify it before sending: two of these bounced, and a hard bounce is charged to the sending domain.`,
         };
       }
@@ -35479,7 +35564,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
       return {
         // TIER 3 for the same reason as the other eponymous path: inferred from
         // the domain, never SMTP-confirmed. Strong, sendable, but not proven.
-        email: epEmail, tier: 3, score: 78, sendable: true, name, pattern: '{first}',
+        email: epEmail, tier: 3, score: 78, sendable: true, name, pattern: EPONYMOUS_PATTERN,
         inferredEponymous: true,
         label: `The business is named after ${name} \u2014 a first-name mailbox on their own eponymous domain (inferred, not SMTP-confirmed)`,
       };
@@ -56491,10 +56576,13 @@ app.listen(PORT, () => {
     for (const [_needle, _msg] of [
       [_n("if (leadCapRefuse(tag ? `${tag} search` :", " 'search')) return [];"), 'the paid search door does not consult the ceiling, so the most expensive purchase on the route is uncapped'],
       [_n("if (leadCapRefuse('page read'))", " return '';"), 'the page-buy door does not consult the ceiling - four of American Driveway\'s fourteen credits were interior pages'],
+      // Round 129: the address lookup's own pages. Its buy was unreachable on
+      // the default setting until this round, and it called the uncapped scrape.
+      [_n('const md = await firecrawlScrapeCapped(fcKey, target,', ' 45000);'), 'the address lookup buys its contact pages outside the per-lead ceiling, so a lead that has already spent its limit can still buy a sitemap call and four scrapes'],
       // Round 121: the early stop applied ONLY where pages were free. The
       // saving is worth nothing there and a credit a page where the site
       // refused a plain fetch, so the guard that switched it off is gone.
-      [_n('if (i + _wave < picks.length) {', "\n        const _soFar = pages.filter(rosterEligiblePage)"), 'the "their own pages already name an owner, stop reading" rule is gated on the pages being FREE again - which is backwards: it saves nothing where pages are free and a credit a page where they are not'],
+      [_n('if (i + _wave < picks.length) {', "\n        const _left = picks.slice(i + _wave);"), 'the "their own pages already name an owner, stop reading" rule is gated on the pages being FREE again - which is backwards: it saves nothing where pages are free and a credit a page where they are not'],
       [_n('out.capped = led.capped', '\n    ? {'), 'the ceiling never reaches the row, so the rep cannot tell a lead that ran out of budget from one that had nothing to find'],
     ]) if (!_src.includes(_needle)) _fails.push(_msg);
     if (_fails.length) console.log(`⛔ LEAD CEILING CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
@@ -56563,6 +56651,55 @@ app.listen(PORT, () => {
     else console.log(`✓ ADDRESS ROUTE CHECK: an UNKNOWN catch-all no longer closes the routes that never needed an SMTP verdict. The Hunter email-finder sits below the SMTP-gated block, so a known-good domain still tries every free and probed route first and spends no extra credit, while a domain whose second probe timed out can finally reach the fallback the timeout line has always promised the operator. UNKNOWN is remembered for ${Math.round(CATCHALL_UNKNOWN_TTL_MS / 60000)} minutes - a fact about the probe's moment, not about the domain - instead of being re-bought on every lead in the batch.`);
   } catch (e) {
     console.log(`⛔ ADDRESS ROUTE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ PATTERN NAME CHECK — round 129 ══════════════════════════════════════
+  // buildCandidates names the first-name-only mailbox one thing and the
+  // eponymous branch taught the domain memory another name for the same
+  // mailbox. Every consumer failed without a word: applyPattern found no
+  // candidate of that name and returned an empty string, so the house-pattern
+  // route returned nothing; the learned-pattern filter matched nothing, so a
+  // domain whose convention we had already bought was probed from scratch; and
+  // the name shipped on the lead's saved row and came back on the next run.
+  // Round 129 writes learned patterns to a table, so a name this file cannot
+  // read has to be impossible to write. Driven on the real functions and pinned
+  // at its call sites - no source needle can see two names that disagree.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    const _legacy = _n('{fi', "rst}");
+    if (!buildCandidates('Bob Smith', 'example.com').some(c => c.pattern === EPONYMOUS_PATTERN)) _fails.push('the eponymous branch teaches a pattern name buildCandidates does not know, so the learned-pattern fast path is dead and the bad token is written to the contact cache and, from Round 129, to the domain mail-facts table');
+    if (normalizePattern(_legacy) !== EPONYMOUS_PATTERN) _fails.push('a lead row saved before this round carries the brace-wrapped first-name token and is not migrated on the way in, so a domain we already solved is guessed at from scratch and pays for the probes again');
+    const _built = applyPattern(EPONYMOUS_PATTERN, 'Bob Smith', 'example.com');
+    if (_built !== 'bob@example.com') _fails.push(`applyPattern cannot build the owner's own first-name mailbox from the name the eponymous branch teaches - it answered "${_built}", so the house-pattern route hands back an empty address and says nothing about it`);
+    // The fast path itself, run rather than read: the remembered name must pull
+    // its own candidate to the front of the probe order.
+    const _cands = buildCandidates('Bob Smith', 'example.com');
+    const _ordered = [..._cands.filter(c => c.pattern === EPONYMOUS_PATTERN), ..._cands.filter(c => c.pattern !== EPONYMOUS_PATTERN)];
+    if (!_ordered.length || !_ordered[0] || _ordered[0].pattern !== EPONYMOUS_PATTERN || _ordered.length !== _cands.length) _fails.push('a remembered first-name pattern pulls no candidate to the front of the probe order, so a domain whose convention we already learned is probed in the default order and spends verifier credit it does not need');
+    // The migration door: it must pass every name buildCandidates hands out,
+    // migrate the brace-wrapped spelling, and drop everything else.
+    for (const _p of _cands.map(c => c.pattern)) if (normalizePattern(_p) !== _p) _fails.push(`the migration door refuses "${_p}", a name buildCandidates itself hands out - a real pattern would be dropped on the way in and re-bought at a verifier call on every later lead`);
+    if (normalizePattern(_n('{no', 'tapattern}')) !== '' || normalizePattern('  First.Last  ') !== 'first.last' || normalizePattern(null) !== '') _fails.push('the migration door lets a name buildCandidates cannot read through, or mangles one it can - either way an unusable name is stored and outlives the run that made it');
+    const _dom = 'patternnamecheck.invalid';
+    domainPatternMemory.delete(_dom);
+    rememberPattern(_dom, _legacy);
+    if (domainPatternMemory.get(_dom) !== EPONYMOUS_PATTERN) _fails.push('a brace-wrapped token from an older row is not migrated as it enters the domain memory, so it is handed to the next lead on that domain and fails there too');
+    domainPatternMemory.set(_dom, EPONYMOUS_PATTERN);
+    rememberPattern(_dom, 'not-a-pattern-name');
+    if (domainPatternMemory.get(_dom) !== EPONYMOUS_PATTERN) _fails.push('a name buildCandidates does not hand out overwrites a good remembered pattern, so one bad learn poisons every later lead on the domain');
+    domainPatternMemory.delete(_dom);
+    // And the call sites, not only the functions (check-writing-traps §2).
+    if (_src.indexOf(_n("'{fi", "rst}'")) !== -1) _fails.push('the brace-wrapped pattern name is written somewhere in this file again - it reaches the saved lead row, comes back as the prior pattern, and neither side says a word about it');
+    if (!_src.includes(_n('rememberPattern(domain,', ' EPONYMOUS_PATTERN);'))) _fails.push('the eponymous branch teaches the domain memory a name of its own instead of the one constant, so the two can drift apart again');
+    if (!_src.includes(_n('pattern: EPONYMOUS_PATTERN,', ' inferredEponymous: true,'))) _fails.push('the eponymous guess ships a pattern name of its own instead of the one constant, so the name on the lead row and the name this file reads can disagree again');
+    if (!_src.includes(_n('rememberPattern(domain,', ' priorEmailPattern);'))) _fails.push('a pattern arriving on the request is installed in the domain memory without passing the migration door');
+    if (!_src.includes(_n('normalizePattern(priorEmailPattern)', ' || domainPatternMemory.get(domain)'))) _fails.push('a pattern saved on the lead row is handed straight back out without being migrated, so an old brace-wrapped token is written to the row again and survives this fix');
+    if (_fails.length) console.log(`⛔ PATTERN NAME CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ PATTERN NAME CHECK: the eponymous branch and buildCandidates use ONE name for the owner's own first-name mailbox, proven by running both - buildCandidates hands the name out, applyPattern builds ${_built} from it, and a remembered name pulls its own candidate to the front of the probe order, which is the fast path that saves a verifier call on a domain already solved. Every stored name comes in through one door: the brace-wrapped spelling saved before this round migrates to the real name, a name buildCandidates does not hand out is dropped rather than remembered, and no call site writes the brace-wrapped spelling any more - so nothing that outlives the process can carry a name this file cannot read.`);
+  } catch (e) {
+    console.log(`⛔ PATTERN NAME CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ TRANSPORT TRUTH CHECK — round 121 ═══════════════════════════════════
@@ -60173,7 +60310,7 @@ app.listen(PORT, () => {
     if (!_np2('We are a non-profit organization serving families across the county.').isNonprofit) _fails.push('a business that says it IS a non-profit organization is kept');
     if (!_np2('Hope House is a registered charitable organization dedicated to housing.').isNonprofit) _fails.push('a charity naming itself is kept');
     // 3. A dropped lead buys no size search.
-    if (!_src.includes(_n('if (!sizeMeasured(signals) && website && !_ownerWaveFoundNobody', ' && !out.notIcp) {'))) _fails.push('the size lookup is bought on a lead the read has already dropped (Image360: four credits after its own drop line)');
+    if (!_src.includes(_n('if (!sizeMeasured(signals) && !sizeSettledSmall(signals) && website && !_ownerWaveFoundNobody', ' && !out.notIcp) {'))) _fails.push('the size lookup is bought on a lead the read has already dropped (Image360: four credits after its own drop line)');
     // 4/5. The brand, and the town alone.
     const _im = readOutletTell({ name: 'Image360 Jacksonville-St. Johns Bluff', homeUrl: 'https://image360.com/jacksonville-fl-st-johns-bluff/', city: 'Jacksonville, FL' });
     if (!_im.isOutlet || _im.brand !== 'Image360') _fails.push(`Image360's branch reads brand "${_im.brand}" - the size lookup then searches for a string no directory has`);
@@ -60473,6 +60610,8 @@ app.listen(PORT, () => {
       [_nd('|business_name|hunter|', 'google_review_replies)$/'), 'the OWNER WAVE line forgot the review signatures again, so a free settle reads as a paid win'],
       [_nd('_ownerWaveLectured', ' = true;'), 'the reading guide is back on every lead\'s OWNER WAVE line'],
       [_nd('freePages: pages.map(p => ({ url: p.url, text: p.text,', ' intent: p.intent })),'), 'the page intent is dropped again, so the extractor cannot tell a careers page from a contact page'],
+      [_nd('onAddressSource: (s) => { _addressSource', " = String(s || 'none'); },"), 'the address lookup is never asked where it found the address, so the FIND CONTACT line reports "none" on every lead including the ones that published one'],
+      [_nd('| address source ${_addressSource}', ' | phone ${out.phone'), 'the FIND CONTACT line no longer says where the address came from, so a batch cannot tell an address we read for free from one we bought a contact page for'],
       [_nd('priorLeads:', ' _bench,'), 'the chain detector lost the cross-run memory the bench already holds'],
       [_nd('licenseQualifier:', ' _isQualifier,'), 'the licence search stopped telling a QUALIFIER from an owner - that is the tradesman who holds the company licence, and it used to come back stamped "Owner"'],
       [_nd('const _kind =', ' mailboxKind(best, _mbCtx);'), 'a tier-1 address no longer says who it reaches, so a recruiting inbox ships as "Published on their site" at score 100 again'],
@@ -60771,6 +60910,23 @@ app.listen(PORT, () => {
       if ((estimateScaleBand({ verifiedEmployees: 4, teamCount: 40 }) || {}).band !== 'entry') _fails.push('the team-page floor overrides a VERIFIED headcount - the floor lifts a band off what a business publishes, it does not argue with a filing');
       if ((sizeBand({ verifiedEmployees: 4, teamCount: 40 }) || {}).band !== 'low') _fails.push('the team-page floor overrides a verified headcount on the rep\'s sheet');
     }
+    // ══ ROUND 129: THE CREDITS THAT BOUGHT NOTHING ═══════════════════════
+    // 20 of the 30 Firecrawl credits on the 2026-09-09 run went to the size
+    // search and five of seven leads got back "no record of this business",
+    // every one of them an owner-operated practice. sizeSettledSmall is a
+    // WEAKER predicate beside sizeMeasured, never a widening of it: the band
+    // still refuses to call a four-name team page a measured size.
+    if (sizeSettledSmall({ teamCount: 4, tradeLabel: 'Dental' }) !== true) _fails.push('a lead whose own team page lists four people still buys the four-credit directory search to be told nothing');
+    if (sizeSettledSmall({ teamCount: 12, tradeLabel: 'Dental' }) !== false) _fails.push('a twelve-person team page reads as settled-small, so a lead big enough to be core never has its size measured at all');
+    if (sizeSettledSmall({ teamCount: 2, tradeLabel: 'Dental' }) !== false) _fails.push('a two-name team page stands the size lookup down - two names is a page layout, not a measurement');
+    if (sizeSettledSmall({ tradeLabel: 'Electrical' }) !== false) _fails.push("a 'mixed' trade with nothing measured stands its own size lookup down - mixed is one truck or twelve, and vetoing on it blinds the size gate across half the ICP");
+    if (sizeSettledSmall({ tradeLabel: 'Weight Loss' }) !== true) _fails.push('a one-person trade still buys the directory search that has no company page to find');
+    if (sizeMeasured({ teamCount: 4, tradeLabel: 'Dental' }) !== false) _fails.push('sizeMeasured was widened instead of a weaker predicate being added beside it, so a four-name team page now reports to the rep as a measured size');
+    if (sizeSecondQueryWorth(0) !== false) _fails.push('the second size query is bought on a MEASURED zero review count, which is not an unknown count');
+    if (sizeSecondQueryWorth(null) !== true) _fails.push('an UNMEASURED review count arrives as null, Number(null) is 0 and 0 is finite, so the second size query is stood down on a count nobody measured');
+    if (sizeSecondQueryWorth(undefined) !== true) _fails.push('a lead whose review count never reached the size lookup stands the second query down on nothing');
+    if (sizeSecondQueryWorth(SIZE_SECOND_QUERY_MIN_REVIEWS) !== true) _fails.push('a lead at the review threshold no longer buys the LinkedIn and BBB query');
+    if (sizeSecondQueryWorth(SIZE_SECOND_QUERY_MIN_REVIEWS - 1) !== false) _fails.push('the second size query is bought below the review threshold on a measured count');
     // The call sites and the one floor.
     const _src = selfSourceNoCommentsLF();
     const _n = (a, b) => a + b;
@@ -60781,7 +60937,9 @@ app.listen(PORT, () => {
       [_n('findSizeViaSearch(sizeName, website, fcKey,', ' apiKey, leadLocation, { reviewCount: signals.reviewCount });'), 'the size lookup is never bought, is bought on the outlet name instead of the brand, or cannot see the review count that decides the second query'],
       [_n("const sizeName = (out.chain && out.chain.kind === 'network'", ' && out.chain.brand) ? out.chain.brand : name;'), 'a branch network is measured as one outlet again (ClearChoice, 2026-09-03)'],
       [_n('if ((signals.branchNetwork === true || signals.peOwned === true || signals.nationalOperator === true)', " && _layers.verdict === 'owner') {"), 'a branch network, PE-owned or national lead reads as owner-run off its own page again, so a held-back name reaches the sheet as the owner'],
-      [_n('if (!sizeMeasured(signals) && website', ' && !_ownerWaveFoundNobody && !out.notIcp) {'), 'the size lookup is bought on a lead that measured its size, on one with no website, or on one the owner wave already came back empty on - a size decides the tier and the tier decides the lane, and a lead with no name has no call lane to be sorted into'],
+      [_n('if (!sizeMeasured(signals) && !sizeSettledSmall(signals) && website', ' && !_ownerWaveFoundNobody && !out.notIcp) {'), 'the size lookup is bought on a lead that measured its size, on one whose own team page already settles it as small, on one with no website, or on one the owner wave already came back empty on - a size decides the tier and the tier decides the lane, and a lead with no name has no call lane to be sorted into'],
+      [_n('const secondWorth = sizeSecondQuery', 'Worth((opts || {}).reviewCount);'), 'the second-query rule is derived inline again, where no fixture can execute it - and inline it read a MEASURED zero review count as an unknown one and bought two more credits on a business with no LinkedIn company page'],
+      [_n('SIZE LOOKUP [${name}]: not bought - ${_sizeSettledWhy}', ', and a directory has no record of a business this size'), 'the size search is stood down on a lead whose own team page already settled it and nothing in the log says so - a saving the operator cannot see reads as a broken feature'],
       [_n('const _ownerWaveFoundNobody = _ownerAttempted === true', ' && !(out.owner && out.owner.name);'), 'nothing measures whether the owner wave ran and found nobody, so the size wave cannot be aimed away from those leads'],
       [_n('sizeWord: _size.band, sizeConfidence: _size.confidence,', ' affordBand: signals.affordBand ||'), 'the lane does not read the sheet\'s own guess, so the two can disagree'],
       [_n("signals.scaleBand = (_scale && !_scale.guess) ?", ' _scale.band : null;'), 'a tenure guess decides the tier the lanes read'],
@@ -60824,7 +60982,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ SIZE AND LAYERS CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
     } else {
-      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the ladder and the layers (Darrel in both; TheirStack and product companies email only; layered, a branch network, PE-owned and national on the call sheet LAST under the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap and email over it; an owner-run business over the cap still called under $${ICP_CALL_REACH_CEILING / 1e6}M; nobody named means no email lane; under the floor benched only when likely or sure); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; and the buying floor has one copy.`);
+      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the ladder and the layers (Darrel in both; TheirStack and product companies email only; layered, a branch network, PE-owned and national on the call sheet LAST under the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap and email over it; an owner-run business over the cap still called under $${ICP_CALL_REACH_CEILING / 1e6}M; nobody named means no email lane; under the floor benched only when likely or sure); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; the size search is not bought on a lead whose own team page already lists three to five people, nor on a one-person trade, nor a second directory query on a MEASURED zero review count; and the buying floor has one copy.`);
     }
   } catch (e) {
     console.log(`⛔ SIZE AND LAYERS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -61706,6 +61864,15 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('fcKey: allowBuy ? fcKey :', " '',"))) {
       _fails.push('the email engine is handed a Firecrawl key unconditionally, so FIND_EMAIL_FIRECRAWL no longer bounds what a contact read can spend');
     }
+    // ══ ROUND 129: AND THE MODE THAT PERMITS THE BUY MUST BE ONE THAT CAN PAY ══
+    // 'fallback' permits it only where pages.length is 0 - the same expression
+    // that tells the engine the site is dead, and the engine returns on that
+    // before it reads the key. A mode that permits nothing spends nothing and
+    // reads exactly like a mode that found nothing worth buying, which is why
+    // this is pinned at the expression rather than left to the bill to reveal.
+    if (!_src.includes(_n("(FIND_EMAIL_FIRECRAWL === 'unfound' && pages.length", ' > 0)'))) {
+      _fails.push('the contact-page buy is no longer permitted on a site that answered and published no address for free - so the only mode left that permits it is the one the email engine refuses before it reads the key, and the paid address read is dead again');
+    }
     // ══ THE OWNER SWITCH, ASSERTED AT ITS CALL SITE ══════════════════════
     // This used to pin `callOnly: true` - the paid owner wave hard-coded OFF.
     // That was the right cost decision for a dial-only batch and the wrong one
@@ -62074,7 +62241,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ FIND CONTACT CHECK: ${_fails.join(' | ')}.`);
     } else {
-      console.log(`✓ FIND CONTACT CHECK: the Find tab's contact read is executed end to end — a plain fetch first with Firecrawl only as the fallback, the site's own navigation instead of a paid sitemap call, and the shared owner reader, email engine, roster parser, ad signatures and role classifier rather than second copies of any of them. The score is out of the ${FIND_ICP_TERMS.length} signals it could measure and an unmeasured one leaves the denominator instead of scoring zero — and it is now computed AFTER the owner and address lookups rather than 370 lines before them, so a lead that produced a named buyer and a confirmed address can no longer score the same as one that produced neither. Affordability comes from affordabilityBand, the one derivation the Find card and contactRankFor already read. HONEST SHAPE: no contact read has run against a live business from this build, so the per-lead cost below is bounded by the guards above rather than measured — the first real run's FIND CONTACT line reports what it actually cost. FIND_EMAIL_FIRECRAWL=${FIND_EMAIL_FIRECRAWL} (set it to "always" to let the address lookup buy its own pages, roughly five more credits a lead).`);
+      console.log(`✓ FIND CONTACT CHECK: the Find tab's contact read is executed end to end — a plain fetch first with Firecrawl only as the fallback, the site's own navigation instead of a paid sitemap call, and the shared owner reader, email engine, roster parser, ad signatures and role classifier rather than second copies of any of them. The score is out of the ${FIND_ICP_TERMS.length} signals it could measure and an unmeasured one leaves the denominator instead of scoring zero — and it is now computed AFTER the owner and address lookups rather than 370 lines before them, so a lead that produced a named buyer and a confirmed address can no longer score the same as one that produced neither. Affordability comes from affordabilityBand, the one derivation the Find card and contactRankFor already read. HONEST SHAPE: no contact read has run against a live business from this build, so the per-lead cost below is bounded by the guards above rather than measured — the first real run's FIND CONTACT line reports what it actually cost. FIND_EMAIL_FIRECRAWL=${FIND_EMAIL_FIRECRAWL} — "unfound" lets the address lookup buy their contact page only on a site that answered and published nothing we could find for free; "always" buys on every lead, roughly five more credits each; "fallback" can never buy at all, because the only case it permits is a site the engine has already refused as dead.`);
     }
   } catch (e) {
     console.log(`⛔ FIND CONTACT CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -62114,6 +62281,19 @@ app.listen(PORT, () => {
     if (emailVerifiedRow('a@b.com', 'verifier_down', 'true', '3')) _fails.push('an address the checker never confirmed counts as an email on the batch card');
     if (!emailVerifiedRow('a@b.com', '', 'true', '2')) _fails.push('a sendable tier-2 address from an older read does not count on the batch card');
     if (emailVerifiedRow('', 'published_personal', 'true', '1') || emailVerifiedRow('a@b.com', '', 'true', null)) _fails.push('a row with no address, or no tier, counts as with-email');
+    // 2c. SENDABLE and HELD BACK (Round 129). The engine's own verdict after
+    //     the send guard, which is the number the rep can act on, and the two
+    //     rules must not collapse into one meaning in either direction.
+    if (!emailSendableRow('a@b.com', 'pattern_guess', 'true', '3')) _fails.push('a sendable tier-3 address counts as no email at all on the batch card, so ten addresses read as "With email 0" and the Move-to-Research button offers nothing');
+    if (emailVerifiedRow('a@b.com', 'pattern_guess', 'true', '3')) _fails.push('the verified rule has widened onto a tier-3 guess, so "confirmed" on the card no longer means confirmed and the two counts have collapsed into one number');
+    if (emailSendableRow('', 'pattern_guess', 'true', '3')) _fails.push('a lead with no address at all is counted as one we can send to, so the Move button offers a lead with nothing to write to');
+    if (!emailHeldBackRow('a@b.com', 'pattern_guess', 'false', '3') || emailHeldBackRow('a@b.com', 'pattern_guess', 'true', '3') || emailHeldBackRow('', 'pattern_guess', 'false', '3')) _fails.push('held back on the batch card is not "we found an address and the engine refused it", so the rep cannot tell a refused address from a lead that never had one');
+    if (!_src.includes(_n('if (emailSendableRow(r.email, r.emailGrade, r.emailSendable, r.emailTier)) { b.sendableEmail += 1;', ' if (!_ver) b.sendableOnly += 1; }'))) {
+      _fails.push('the batch route no longer counts the addresses the engine says we can send to, so the card is back to the confirmed count alone and the Move-to-Research button offers nothing');
+    }
+    if (!_src.includes(_n('if (emailHeldBackRow(r.email, r.emailGrade, r.emailSendable, r.emailTier))', ' b.heldBackEmail += 1;'))) {
+      _fails.push('the batch route no longer counts the addresses the engine refused, so a lead we found an address for and cannot use reads on the card as a lead with no address');
+    }
     // 3. THE STALL RULE, at 59 and 61 minutes, and with no clock at all.
     {
       const now = Date.now();
@@ -63119,12 +63299,51 @@ app.listen(PORT, () => {
       if (!_free.length || _free[0].intent !== 'team') {
         _fails.push(`the first page read is "${_free.length ? _free[0].intent : 'none'}" rather than the team/about family - that is the page that names an owner, so reading it later means the early exit never fires and the cap truncates the evidence`);
       }
-      const _careersAt = _free.findIndex(p => p.intent === 'careers');
-      if (_careersAt >= 0 && _careersAt < _free.length - 1) {
-        _fails.push('the careers page is not read last, and a job advert is a name-shaped line followed by a job title - which is what a roster row looks like');
+      // ══ ROUND 129: THE CAREERS PAGE IS LAST IN THE CORPUS, NOT IN THE READ ══
+      // This demanded it be FETCHED last, which is a corpus rule enforced in
+      // the wrong place: the corpus is sorted by FIND_INTENT_RANK where it is
+      // built, so a careers page fetched in wave one still reaches the model
+      // last and still reaches the roster parser not at all. Held as a fetch
+      // rule it cost the contact page its place in wave one, and cost the run
+      // every address that is published on a contact page.
+      if (!Number.isFinite(FIND_INTENT_RANK.careers)
+          || FIND_PAGE_INTENTS.some(t => t.key !== 'careers' && !(FIND_INTENT_RANK[t.key] < FIND_INTENT_RANK.careers))) {
+        _fails.push('the careers page no longer sorts last in the corpus, and a job advert is a name-shaped line followed by a job title - which is what a roster row looks like');
       }
-      if (!Number.isFinite(FIND_INTENT_RANK.team) || !(FIND_INTENT_RANK.team < FIND_INTENT_RANK.careers)) {
-        _fails.push('the intent rank no longer puts the owner-likely pages first, so the corpus sort and the fetch order have stopped agreeing');
+      if (!Number.isFinite(FIND_INTENT_RANK.team) || !(FIND_INTENT_RANK.team < FIND_INTENT_RANK.contact)) {
+        _fails.push('the intent rank no longer leads the corpus with the owner-likely pages, so the cap truncates the evidence the parser and the model were meant to see');
+      }
+      // ══ AND A CONTACT PAGE IS IN THE FIRST WAVE ══════════════════════════
+      // Ten live leads, not one published address: the team intent wants twelve
+      // free pages and the picker drained it before it reached the contact
+      // intent, so the first wave of five was five team pages. Fixture: a site
+      // with 12 team links and 2 contact links, at the free budget.
+      {
+        const _rr = [];
+        for (let i = 0; i < 12; i++) _rr.push(`https://y.com/about-${i}`);
+        _rr.push('https://y.com/contact');
+        _rr.push('https://y.com/contact-us');
+        if (!pickFindPages(_rr, 'https://y.com', 20).slice(0, 5).some(p => p.intent === 'contact')) {
+          _fails.push('pickFindPages drains the team intent before the contact intent, so with a free budget of 20 and a wave of 5 no contact page is in the first wave');
+        }
+      }
+      // ══ AND THE READ DOES NOT STOP ONE PAGE SHORT OF IT ══════════════════
+      // EXECUTED, not read: the owner is named on the page already in hand and
+      // the address sits on a contact page still unfetched.
+      {
+        const _co = 'Hannah Custom Homes';
+        const _named = { url: 'https://y.com/about', intent: 'team', text: '<h4>Dusty Hannah</h4><p>CO-OWNER/CEO</p>' };
+        const _quiet = { url: 'https://y.com/about', intent: 'team', text: '<h4>Our Work</h4><p>We build homes across the county.</p>' };
+        const _contact = { url: 'https://y.com/contact', intent: 'contact', text: 'Call us on 555 0100 or write to us.' };
+        if (findReadDone([_named], [_contact], _co) !== false) {
+          _fails.push('the read stops the moment a roster names an owner, so a site that publishes its address on /contact is never asked for it');
+        }
+        if (findReadDone([_named, _contact], [], _co) !== true) {
+          _fails.push('the free read never stops, so a site that has already given us its owner and its contact page is read to the budget and the wall clock is the only brake');
+        }
+        if (findReadDone([_quiet], [_contact], _co) !== false) {
+          _fails.push('the free read stops with nobody named, so the pages that would have named the owner are skipped and the paid wave is asked to find what was there for nothing');
+        }
       }
     }
     // The call sites: a fixture supplies its own arguments and cannot see a
@@ -63133,7 +63352,7 @@ app.listen(PORT, () => {
                            _n('pickFindPages(links, pages[0].url, viaFirecrawl ? FIND_MAX_PAGES', ' : FIND_MAX_FREE_PAGES)'),
                            _n('if (fp && _seenFp.has(fp)) { _dupPages', ' += 1; return false; }'),
                            _n('if (Date.now() - _readStartedAt >', ' FIND_FREE_READ_MS) {'),
-                           _n('if (parseTeamRoster(_soFar, name).some(r =>', ' r.isOwner)) {')]) {
+                           _n('if (findReadDone(pages, _left,', ' name)) {')]) {
       if (!_src.includes(_needle)) {
         _fails.push('the free page read lost a call site: ' + _needle.slice(0, 46));
       }
@@ -78430,9 +78649,19 @@ const findPlainFetch = async (url, timeoutMs = 12000) => {
 // sopeed it up?" - the right instinct, and the order below is the answer. The
 // team/about family is read FIRST because that is where an owner is named, so
 // the early exit fires on the first wave and a site that says who runs it never
-// buys the other pages OR the ~10-credit paid wave. It also decides what goes
-// into the corpus: the cap binds at about three interior pages, so arrival
-// order was silently deciding which evidence the parser and the model ever saw.
+// buys the other pages OR the ~10-credit paid wave.
+//
+// ══ ROUND 129: THE FETCH ORDER AND THE CORPUS ORDER ARE TWO DECISIONS ═════
+// They were one decision, and that is why a live ten-lead run published not a
+// single address. The first row below wants twelve free pages; the picker
+// drained all twelve before it reached the contact row; the read stopped on
+// wave one because a roster had named an owner - so the page that carries the
+// address was never asked for. What goes into the CORPUS is a separate
+// question, answered where the corpus is built: it is sorted by
+// FIND_INTENT_RANK there, so the pages likeliest to name an owner still reach
+// the model and the parser first however they were fetched. That frees the
+// fetch order to round-robin this table, which puts a contact page in wave one
+// for no extra page and no credit.
 //
 // freeWant is the plain-fetch budget and want is the Firecrawl-fallback budget.
 // They differ because a page is free on one path and a credit on the other.
@@ -78489,25 +78718,72 @@ const pickFindPages = (links, homepageUrl, budget) => {
   const pool = (Array.isArray(links) ? links : []).filter(u => String(u).toLowerCase() !== home && !FIND_ASSET_RE.test(String(u)));
   const out = [];
   const taken = new Set();
-  for (const intent of FIND_PAGE_INTENTS) {
+  // ══ ROUND 129: ONE INTENT AT A TIME, NOT ONE INTENT UNTIL IT IS FULL ═════
+  // This drained an intent before it looked at the next one, and the team row
+  // asks for twelve free pages. With a wave of five that is five team pages in
+  // wave one, no contact page anywhere near it, and the read stopping before
+  // the page that publishes the address is ever asked for: ten live leads, not
+  // one published address. So the free path takes ONE page per intent per pass,
+  // in table order - team, contact, careers, team, contact - which is the same
+  // pages, the same budget, not one extra fetch, and still opens on the page
+  // likeliest to name an owner. The paid path keeps the old drain, because
+  // there a page is a credit and the whole budget is four.
+  const lanes = FIND_PAGE_INTENTS.map((intent) => ({
+    key: intent.key,
     // rankUrlsByIntent is the ranker the audit path already uses, with its
     // recorded fixes: a whole path SEGMENT rather than a substring, so
     // "/blog/how-to-talk-about-infertility" is not read as an about page.
-    const ranked = rankUrlsByIntent(pool, intent.re, free ? 24 : 6);
+    ranked: rankUrlsByIntent(pool, intent.re, free ? 24 : 6),
     // `want` was DECLARED on every row of the table above and read by nobody:
-    // this loop broke after the first hit whatever it said. Honoured now, so
+    // the loop broke after the first hit whatever it said. Honoured now, so
     // the table is the thing that decides how many pages an intent is worth.
-    let got = 0;
-    for (const u of ranked) {
-      if (taken.has(u)) continue;
-      taken.add(u);
-      out.push({ url: u, intent: intent.key });
-      got += 1;
-      if (got >= ((free ? intent.freeWant : intent.want) || 1) || out.length >= cap) break;
+    want: (free ? intent.freeWant : intent.want) || 1,
+    at: 0,
+    got: 0,
+  }));
+  const perPass = free ? 1 : Infinity;
+  for (;;) {
+    let moved = false;
+    for (const lane of lanes) {
+      let n = 0;
+      while (out.length < cap && lane.got < lane.want && n < perPass && lane.at < lane.ranked.length) {
+        const u = lane.ranked[lane.at];
+        lane.at += 1;
+        if (taken.has(u)) continue;
+        taken.add(u);
+        out.push({ url: u, intent: lane.key });
+        lane.got += 1;
+        n += 1;
+        moved = true;
+      }
+      if (out.length >= cap) break;
     }
-    if (out.length >= cap) break;
+    if (!moved || out.length >= cap) break;
   }
   return out;
+};
+
+// ══ WHEN THE FREE READ MAY STOP — AND WHY "WE HAVE A NAME" IS HALF OF IT ═══
+// It stopped the moment parseTeamRoster found an owner. That saves the paid
+// owner wave, which is the right saving, and it starved the ADDRESS: an owner
+// is named on /about and the address is published on /contact, so on a site
+// that names its founder in wave one the contact page was never fetched. A
+// live ten-lead run produced zero published addresses.
+//
+// Both questions, then: their pages name an owner, AND a contact page has been
+// read (or their navigation links none, so there is nothing left to read).
+// Both halves are free - a plain GET and a pure parse - and the paid wave is
+// still skipped on exactly the leads it was skipped on before.
+//
+// A named function rather than four lines inside the loop because a fixture
+// cannot drive a loop body: this is the thing a boot check executes.
+const findReadDone = (pagesRead, picksLeft, name) => {
+  const _read = Array.isArray(pagesRead) ? pagesRead : [];
+  const _left = Array.isArray(picksLeft) ? picksLeft : [];
+  const _isContact = (p) => String((p && p.intent) || '').toLowerCase() === 'contact';
+  const _soFar = _read.filter(rosterEligiblePage).map(p => String(p.text || '')).join('\n');
+  if (!parseTeamRoster(_soFar, name).some(r => r.isOwner)) return false;
+  return _read.some(_isContact) || !_left.some(_isContact);
 };
 
 // ── THE THREE SIGNALS, ALL FREE, ALL OFF MARKUP WE ALREADY HOLD ─────────────
@@ -79988,15 +80264,29 @@ const findIcpScore = (signals) => {
 
 // ── ONE LEAD, READ AS CHEAPLY AS IT CAN HONESTLY BE READ ────────────────────
 // FIND_EMAIL_FIRECRAWL decides whether the email engine may buy its OWN pages
-// when the free ones carried no address. 'fallback' (the default) lets it buy
-// only when the plain read of the site failed outright - which is the case
-// where there is nothing free to search. 'always' restores the audit path's
-// behaviour: a sitemap call plus up to four scrapes, about five credits, for
-// the leads whose address is published somewhere the navigation does not link.
-// A setting rather than a constant because the two are a real trade and the
-// first live run is what should decide it: the response reports which mode ran
-// and what it cost, so the difference is measurable rather than argued.
-const FIND_EMAIL_FIRECRAWL = String(process.env.FIND_EMAIL_FIRECRAWL || 'fallback').toLowerCase();
+// when the free ones carried no address. Three modes:
+//
+//   'unfound'  the default since Round 129. The buy is permitted on a lead
+//              whose site ANSWERED; what stops it on a lead that needs nothing
+//              is the email engine's own control flow, which is cheaper than a
+//              flag because it cannot disagree with itself: pass 1 reads the
+//              homepage we already hold and pass 1.5 reads every free page we
+//              already hold, and each RETURNS on a hit, so the sitemap call
+//              plus up to four scrapes is reached only by a lead that nothing
+//              free has solved.
+//   'fallback' the buy is permitted only when the plain read failed outright.
+//              That mode can never spend: the one case it permits is a site
+//              that answered nothing, and the email engine refuses that lead as
+//              a dead site before it ever reads the key. It is the mode that
+//              was running when ten live leads produced no address at all.
+//   'always'   the audit path's behaviour, on every lead including the ones
+//              already solved for free: about five credits a lead.
+//
+// A setting rather than a constant because the modes are a real trade. The
+// FIND CONTACT line now names where each address came from - homepage,
+// free_page, careers_page, contact_page or none - so the next live run answers
+// what the buy is worth with data rather than with argument.
+const FIND_EMAIL_FIRECRAWL = String(process.env.FIND_EMAIL_FIRECRAWL || 'unfound').toLowerCase();
 // A small ceiling of its own. The client runs a pool, but a second tab or a
 // re-press must not multiply it - and unlike the audit queue there is no job
 // record here to dedupe against, because a contact read is cheap enough to
@@ -80394,10 +80684,15 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       // free - and never on the leads where each one costs a credit. Backwards:
       // the saving is worth nothing when the pages are free and a credit a page
       // when they are not. The roster parse is free and pure either way.
+      //
+      // ══ ROUND 129: AND IT STARVED THE ADDRESS ══════════════════════════
+      // "An owner is named" was the whole test, so a site that names its
+      // founder on /about stopped there and /contact - the page that publishes
+      // the address - was never fetched. findReadDone asks both questions.
       if (i + _wave < picks.length) {
-        const _soFar = pages.filter(rosterEligiblePage).map(p => String(p.text || '')).join('\n');
-        if (parseTeamRoster(_soFar, name).some(r => r.isOwner)) {
-          console.log(`\u{1F50E} FIND READ [${name}]: their own pages name an owner after ${pages.length} page(s), so the remaining ${picks.length - i - _wave} were not read and no paid lookup is needed.`);
+        const _left = picks.slice(i + _wave);
+        if (findReadDone(pages, _left, name)) {
+          console.log(`\u{1F50E} FIND READ [${name}]: their own pages name an owner and ${pages.some(p => String(p.intent || '') === 'contact') ? 'we have read their contact page' : 'their navigation links no contact page'}, so the remaining ${_left.length} were not read and no paid lookup is needed.`);
           break;
         }
       }
@@ -80741,6 +81036,11 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // term scored a lead nobody looked up. Set only after the await returns; a
   // throw leaves it false, because a lookup that died did not measure anything.
   let _ownerAttempted = false, _emailAttempted = false;
+  // Which read produced the address, for the FIND CONTACT line: the free pages
+  // we already held, or a contact page we bought. Grep it across a batch and
+  // "is the paid contact-page read worth it" is a measurement rather than an
+  // argument.
+  let _addressSource = 'none';
   if (apiKey && name && !out.notIcp) {
     try {
       const dm = await findDecisionMaker({
@@ -80828,7 +81128,17 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   if (website && !out.notIcp) {
     try {
       const siteConfirmed = pages.length > 0;
+      // ══ ROUND 129: THE ONLY MODE THAT COULD SPEND WAS THE ONE THAT CANNOT ══
+      // 'fallback' permits the buy only when pages.length is 0 - and that same
+      // expression is handed down as siteIsDown, which the email engine refuses
+      // on before it reads the key. So the paid contact-page read was dead on
+      // every lead, on the default setting, for the whole life of the tab.
+      // 'unfound' permits it where it can actually pay: their site answered, so
+      // asking it for its contact page is worth a credit - and the pages we
+      // already hold are searched first INSIDE the engine, whose passes 1 and
+      // 1.5 return on a hit, so a lead solved for free never reaches the buy.
       const allowBuy = FIND_EMAIL_FIRECRAWL === 'always'
+        || (FIND_EMAIL_FIRECRAWL === 'unfound' && pages.length > 0)
         || (FIND_EMAIL_FIRECRAWL === 'fallback' && pages.length === 0);
       const em = await findEmailFireproof({
         website,
@@ -80850,6 +81160,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         // The INTENT travels. Dropped here, the extractor could not tell that
         // a page fetched on purpose as a careers page was a careers page.
         freePages: pages.map(p => ({ url: p.url, text: p.text, intent: p.intent })),
+        onAddressSource: (s) => { _addressSource = String(s || 'none'); },
       });
       _emailAttempted = true;
       if (em) {
@@ -80989,7 +81300,23 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   if (out.notIcp && !sizeMeasured(signals) && website && !_ownerWaveFoundNobody) {
     console.log(`\u{1F4CF} SIZE LOOKUP [${name}]: not bought - this lead is already out (${out.icpReason || 'not our ICP'}), and a size on a dropped lead decides nothing. ~4 Firecrawl credits saved.`);
   }
-  if (!sizeMeasured(signals) && website && !_ownerWaveFoundNobody && !out.notIcp) {
+  // ══ ROUND 129: THEIR OWN TEAM PAGE ALREADY ANSWERED IT ════════════════
+  // sizeMeasured counts a team page only at the core cut, so a practice
+  // publishing three, four or five people read as "nothing measured" and paid
+  // four credits to be told nothing - while that same page is already good
+  // enough for the ICP score and the affordability band. A saving nobody can
+  // see reads as a broken feature, so the skip says which of the two reasons
+  // stood it down, and the sentence is written once and used twice.
+  const _sizeSettledWhy = (!sizeMeasured(signals) && sizeSettledSmall(signals) && website && !_ownerWaveFoundNobody && !out.notIcp)
+    ? (Number(signals.teamCount) >= 3
+        ? `their own team page lists ${Number(signals.teamCount)} people, which settles them as small`
+        : `${signals.tradeLabel || 'this trade'} is a one-person trade, so a directory has no company page to find`)
+    : '';
+  if (_sizeSettledWhy) {
+    out.sizeLookup = { bought: false, source: '', why: _sizeSettledWhy };
+    console.log(`\u{1F4CF} SIZE LOOKUP [${name}]: not bought - ${_sizeSettledWhy}, and a directory has no record of a business this size. ~4 Firecrawl credits saved.`);
+  }
+  if (!sizeMeasured(signals) && !sizeSettledSmall(signals) && website && !_ownerWaveFoundNobody && !out.notIcp) {
     out.sizeLookup = { bought: true, source: '', why: 'nothing measured about their size' };
     try {
       const _capi = (companiesApiKey && website) ? await enrichViaCompaniesAPI(website, companiesApiKey) : null;
@@ -81176,7 +81503,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan. The searches: line names WHICH paid search ran, so the next round cuts on evidence rather than on a hunch.'));
     _ownerWaveLectured = true;
   }
-  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerHeadOffice === true ? 'FREE STAGE ONLY (a branch of a bigger operation - the signer is at head office)' : out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
+  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | address source ${_addressSource} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerHeadOffice === true ? 'FREE STAGE ONLY (a branch of a bigger operation - the signer is at head office)' : out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
   return out;
 };
 
@@ -81862,6 +82189,16 @@ const _queueStateOf = (r) => r.moved_to_research_at ? 'moved' : r.ruled_out_at ?
 const EMAIL_GRADE_VERIFIED = ['published_personal', 'smtp_confirmed'];
 const emailVerifiedRow = (email, grade, sendable, tier) => !!email
   && (EMAIL_GRADE_VERIFIED.includes(String(grade || '')) || (String(sendable) === 'true' && Number(tier) >= 1 && Number(tier) <= 2));
+// Round 129: VERIFIED is not SENDABLE, and the card was reading only the
+// first. A tier-3 address the engine itself marked sendable cleared
+// _unvouchedSendGuard, which is the engine's own verdict that a rep may
+// write to it; the letter rule above counted it as nothing, so the card on
+// the ten-lead run of 2026-09-09 read "With email 0" while several of those
+// addresses were sendable, and the Move-to-Research button offered none of
+// them. These two read that verdict instead. HELD BACK is the third state:
+// we found an address and the engine refused it, and the row carries why.
+const emailSendableRow = (email, grade, sendable, tier) => !!email && String(sendable) === 'true';
+const emailHeldBackRow = (email, grade, sendable, tier) => !!email && String(sendable) !== 'true';
 
 // ── the store the page reads and writes through this server ─────────────────
 // Until 2026-09-08 the page spoke to Supabase directly with a publishable key
@@ -81944,12 +82281,20 @@ app.get('/api/read-runs', async (req, res) => {
   // The per-batch counts the cards read, off the rows themselves.
   const ids = runs.map(r => r.id);
   const rows = ids.length ? await rqSelect('batch_id,read_at,read_failed,ruled_out_at,moved_to_research_at,emailGrade:extra->>contactEmailGrade,emailSendable:extra->>contactEmailSendable,emailTier:extra->>contactEmailTier,email:extra->>contactEmail', 'batch_id=in.' + _qInList(ids)) : [];
-  const by = new Map(ids.map(id => [id, { withEmail: 0, inResearch: 0, ruledOut: 0 }]));
+  const by = new Map(ids.map(id => [id, { withEmail: 0, sendableEmail: 0, sendableOnly: 0, heldBackEmail: 0, inResearch: 0, ruledOut: 0 }]));
   for (const r of (rows || [])) {
     const b = by.get(r.batch_id); if (!b) continue;
     if (r.moved_to_research_at) b.inResearch += 1;
     if (r.ruled_out_at) b.ruledOut += 1;
-    if (r.read_at && emailVerifiedRow(r.email, r.emailGrade, r.emailSendable, r.emailTier)) b.withEmail += 1;
+    if (!r.read_at) continue;
+    // withEmail is the confirmed count and means exactly what it meant before.
+    // sendableEmail is every address the engine says we may write to (the number
+    // the Move button offers); sendableOnly is the rest of that set once the
+    // confirmed ones are named; heldBackEmail is an address we found and cannot use.
+    const _ver = emailVerifiedRow(r.email, r.emailGrade, r.emailSendable, r.emailTier);
+    if (_ver) b.withEmail += 1;
+    if (emailSendableRow(r.email, r.emailGrade, r.emailSendable, r.emailTier)) { b.sendableEmail += 1; if (!_ver) b.sendableOnly += 1; }
+    if (emailHeldBackRow(r.email, r.emailGrade, r.emailSendable, r.emailTier)) b.heldBackEmail += 1;
   }
   res.json(runs.map(r => Object.assign({}, r, by.get(r.id) || {}, { live: _readRuns.has(r.id) })));
 });

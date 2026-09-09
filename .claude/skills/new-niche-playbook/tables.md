@@ -7,68 +7,68 @@ Counts now: **55 declared categories** (`GP_CATEGORIES`; a tier-C one is benched
 | Constant | Where | Meaning | Check |
 |---|---|---|---|
 | `PRODUCT_FAMILY` | `src/all.js:1631` (server.js:1631) | product family a diagnosis implies | GROWTH ARRIVAL CHECK |
-| `LSA_ELIGIBLE` | `src/all.js:5684` (server.js:5684) | trades eligible for Local Services Ads | LSA TRADE CHECK (own fixtures, not per category) |
-| `LSA_TRADE_ALIASES` | `src/all.js:5722` (server.js:5722) | aliases for LSA trade text | LSA TRADE CHECK |
-| `TRADE_WORD` | `src/all.js:5846` (server.js:5846) | trade nouns a business name may end on | — |
-| `CATEGORY_TIER` | `src/all.js:5976` (server.js:5976) | A/B/C: does the retainer maths work | TRADE TABLE COVERAGE CHECK |
+| `LSA_ELIGIBLE` | `src/all.js:5708` (server.js:5708) | trades eligible for Local Services Ads | LSA TRADE CHECK (own fixtures, not per category) |
+| `LSA_TRADE_ALIASES` | `src/all.js:5746` (server.js:5746) | aliases for LSA trade text | LSA TRADE CHECK |
+| `TRADE_WORD` | `src/all.js:5870` (server.js:5870) | trade nouns a business name may end on | — |
+| `CATEGORY_TIER` | `src/all.js:6000` (server.js:6000) | A/B/C: does the retainer maths work | TRADE TABLE COVERAGE CHECK |
 | `ICP_REVENUE_BAND` | `src/all.js:5256` (server.js:5256) | the ICP ladder: floor / core / upper / ceiling in dollars; every size cut derives from it | SIZE AND LAYERS CHECK |
 | `ICP_REVENUE_PER_EMPLOYEE_BY_TRADE` | `src/all.js:5262` (server.js:5262) | revenue per head per trade (source + date per row); the default is ICP_REVENUE_PER_EMPLOYEE | SIZE AND LAYERS CHECK |
-| `GP_CATEGORIES` | `src/all.js:6074` (server.js:6074) | the Places queries + labels (the searched trades) | TRADE TABLE COVERAGE, NICHE BRIEF COVERAGE |
-| `GP_FREE_BUILDER` | `src/all.js:6072` (server.js:6072) | free site-builder domains | ICP FILTER CHECK |
-| `HIGH_VOLUME_LOW_TICKET` | `src/all.js:6198` (server.js:6198) | review-floor RAISE set | ICP FILTER CHECK (sets, not categories) |
-| `LOW_VOLUME_HIGH_TICKET` | `src/all.js:6226` (server.js:6226) | review-floor LOWER set (floor 5) | ICP FILTER CHECK (sets, not categories) |
-| `reviewFloorFor` | `src/all.js:6233` (server.js:6233) | the trade-aware review floor | ICP FILTER CHECK |
-| `TRADE_CAPACITY_CLASS` | `src/all.js:6264` (server.js:6264) | solo / mixed / crewed | TRADE TABLE COVERAGE CHECK |
-| `SOLO_TRADE_RE` | `src/all.js:6300` (server.js:6300) | text fallback for a solo trade | TRADE TABLE COVERAGE CHECK |
-| `GP_CITY_COORDS` | `src/all.js:6513` (server.js:6513) | coordinates of every searched metro (its keys ARE the searched set) | COVERAGE RADIUS CHECK (moves with GP_CITIES) |
-| `GP_CITIES` | `src/all.js:6555` (server.js:6555) | the searched metros | COVERAGE RADIUS CHECK |
-| `GP_FRANCHISE` | `src/all.js:6575` (server.js:6575) | the only unconditional name-delete | ICP FILTER CHECK |
-| `PRACTICE_STAFF_RE` | `src/all.js:13053` (server.js:13053) | practice staff titles that are not the owner | OWNER TRUTH CHECK |
-| `RECURRING_OFFER_RE` | `src/all.js:14861` (server.js:14861) | maintenance-plan offer text | RECURRING REVENUE CHECK |
-| `RECURRING_NORMAL_TRADES` | `src/all.js:14898` (server.js:14898) | trades where a plan is normal | STEM MATCH, SIGNAL TRUTH |
-| `MONEY_PILLARS` | `src/all.js:15887` (server.js:15887) | the seven loss buckets | MONEY PILLAR CHECK |
-| `REVENUE_BENCHMARKS` | `src/all.js:16153` (server.js:16153) | cited segment figures with source and date | MONEY PILLAR CHECK |
-| `REFERRAL_TRADES` | `src/all.js:19694` (server.js:19694) | referral-driven trades | REFERRAL CHECK |
-| `REFERRAL_ADJUST` | `src/all.js:19698` (server.js:19698) | ladder adjust for referral trades | REFERRAL CHECK |
-| `EMERGENCY_TRADES` | `src/all.js:19745` (server.js:19745) | bought under duress | URGENCY CHECK |
-| `CONSIDERED_TRADES` | `src/all.js:19770` (server.js:19770) | bought slowly | URGENCY CHECK |
-| `TRADE_URGENCY_MIXED` | `src/all.js:19786` (server.js:19786) | declared to have no honest urgency profile | TRADE TABLE COVERAGE CHECK |
-| `URGENCY_ADJUST` | `src/all.js:19805` (server.js:19805) | reorders findings by purchase urgency | URGENCY, KNOWABILITY, TRADE TABLE COVERAGE |
-| `OUR_PRICE_FIGURES` | `src/all.js:24870` (server.js:24870) | the only $ figures our catalogue may print | AUDIT MONEY CHECK |
-| `PRODUCT_PRICE_LINE` | `src/all.js:24875` (server.js:24875) | our price string per product | AUDIT MONEY CHECK |
-| `TRADE_JOB_VALUE` | `src/all.js:24888` (server.js:24888) | "a job in this trade runs about" rows | TRADE TABLE COVERAGE, TRADE ANCHOR, LIVE EMAIL |
-| `NICHE_BRIEFS` | `src/all.js:25156` (server.js:25156) | the brief library | NICHE BRIEF CHECK |
-| `BRIEF_MODEL_DISQUALIFIERS` | `src/all.js:25525` (server.js:25525) | shared "this is a retailer" disqualifier | NICHE BRIEF COVERAGE CHECK |
-| `NICHE_BRIEF_EXPECT` | `src/all.js:25542` (server.js:25542) | every searched category → its brief or null | NICHE BRIEF COVERAGE CHECK |
-| `NICHE_BRIEF_LIVE_CASES` | `src/all.js:25627` (server.js:25627) | real trade strings and the brief each must resolve to | NICHE BRIEF COVERAGE CHECK |
-| `NICHE_MONEY_UNITS` | `src/all.js:25730` (server.js:25730) | money units from the brief library | NICHE BRIEF CHECK |
-| `TRADE_MONEY_UNITS` | `src/all.js:25739` (server.js:25739) | money units from the trade table | NICHE BRIEF CHECK |
-| `OUR_PRODUCT_WORDS` | `src/all.js:25758` (server.js:25758) | words that mark a sentence as about OUR product | AUDIT MONEY CHECK |
-| `OUR_CATALOGUE_FIELD` | `src/all.js:25774` (server.js:25774) | the JSON fields allowed to carry our price | AUDIT MONEY CHECK |
-| `TRADE_MONEY_EXEMPT` | `src/all.js:26628` (server.js:26628) | trades with no honest single job value | TRADE TABLE COVERAGE CHECK |
-| `FINANCING_RE` | `src/all.js:26645` (server.js:26645) | consumer-financing vendors and offer text | SIGNAL TRUTH CHECK |
-| `BIG_TICKET_TRADE_RE` | `src/all.js:26666` (server.js:26666) | trades where missing financing is a gap | MONEY SIGNAL CHECK |
-| `ICP_STAFFING` | `src/all.js:38170` (server.js:38170) | staffing / recruiting — not our ICP | ICP FILTER, STEM MATCH |
-| `ICP_INSTITUTION` | `src/all.js:38171` (server.js:38171) | institutions — blocked | ICP FILTER, STEM MATCH |
-| `ICP_SMALL_PRACTICE` | `src/all.js:38182` (server.js:38182) | the small-practice escape from the health block | ICP FILTER, STEM MATCH |
-| `ICP_BIG_HEALTH` | `src/all.js:38186` (server.js:38186) | hospitals / health systems — blocked | ICP FILTER, STEM MATCH |
-| `STEM_COMPLETE_WORDS` | `src/all.js:38214` (server.js:38214) | every bare stem a list may end on | STEM MATCH CHECK |
-| `BRAND_LEGAL_SUFFIX_RE` | `src/all.js:38240` (server.js:38240) | legal suffixes stripped before a brand compare | ICP FILTER CHECK |
-| `BLOCKED_COMPANIES` | `src/all.js:38268` (server.js:38268) | brand set 1 (whole-name match) | ICP FILTER CHECK |
-| `STAFFING_BRANDS` | `src/all.js:38334` (server.js:38334) | brand set 2 | ICP FILTER CHECK |
-| `ENTERPRISE_BRANDS` | `src/all.js:38347` (server.js:38347) | brand set 3 | ICP FILTER CHECK |
-| `NATIONAL_BRANDS` | `src/all.js:38357` (server.js:38357) | brand set 4 | ICP FILTER CHECK |
-| `TRADE_WORDS` | `src/all.js:40481` (server.js:40481) | word → trade lookup | — |
-| `TRADE_MODIFIERS` | `src/all.js:41055` (server.js:41055) | specialisms that narrow a search | TRADE PHRASE CHECK |
-| `TRADE_SYNONYM_GROUPS` | `src/all.js:41485` (server.js:41485) | trade words that count as the same word | — |
-| `SLUG_PRODUCT_LINE` | `src/all.js:42303` (server.js:42303) | product-line URL slugs | page checks |
-| `CHAIN_ROLE_RE` | `src/all.js:78579` (server.js:78579) | franchisee role titles on their own pages | CHAIN OUTLET CHECK |
-| `CHAIN_SELF_RE` | `src/all.js:78580` (server.js:78580) | franchise self-description | CHAIN OUTLET CHECK |
-| `CHAIN_DENIAL_RE` | `src/all.js:78582` (server.js:78582) | "locally owned, not a franchise" — never fires the drop | CHAIN OUTLET CHECK |
-| `FIND_ICP_TERMS` | `src/all.js:79616` (server.js:79616) | the contact-list FIT score terms | FIND ICP GATE CHECK |
-| `FIND_ICP_MIN_TERMS` | `src/all.js:79871` (server.js:79871) | below this many measured terms a lead is "not scored" | FIND ICP GATE CHECK |
+| `GP_CATEGORIES` | `src/all.js:6098` (server.js:6098) | the Places queries + labels (the searched trades) | TRADE TABLE COVERAGE, NICHE BRIEF COVERAGE |
+| `GP_FREE_BUILDER` | `src/all.js:6096` (server.js:6096) | free site-builder domains | ICP FILTER CHECK |
+| `HIGH_VOLUME_LOW_TICKET` | `src/all.js:6222` (server.js:6222) | review-floor RAISE set | ICP FILTER CHECK (sets, not categories) |
+| `LOW_VOLUME_HIGH_TICKET` | `src/all.js:6250` (server.js:6250) | review-floor LOWER set (floor 5) | ICP FILTER CHECK (sets, not categories) |
+| `reviewFloorFor` | `src/all.js:6257` (server.js:6257) | the trade-aware review floor | ICP FILTER CHECK |
+| `TRADE_CAPACITY_CLASS` | `src/all.js:6288` (server.js:6288) | solo / mixed / crewed | TRADE TABLE COVERAGE CHECK |
+| `SOLO_TRADE_RE` | `src/all.js:6324` (server.js:6324) | text fallback for a solo trade | TRADE TABLE COVERAGE CHECK |
+| `GP_CITY_COORDS` | `src/all.js:6537` (server.js:6537) | coordinates of every searched metro (its keys ARE the searched set) | COVERAGE RADIUS CHECK (moves with GP_CITIES) |
+| `GP_CITIES` | `src/all.js:6579` (server.js:6579) | the searched metros | COVERAGE RADIUS CHECK |
+| `GP_FRANCHISE` | `src/all.js:6599` (server.js:6599) | the only unconditional name-delete | ICP FILTER CHECK |
+| `PRACTICE_STAFF_RE` | `src/all.js:13121` (server.js:13121) | practice staff titles that are not the owner | OWNER TRUTH CHECK |
+| `RECURRING_OFFER_RE` | `src/all.js:14939` (server.js:14939) | maintenance-plan offer text | RECURRING REVENUE CHECK |
+| `RECURRING_NORMAL_TRADES` | `src/all.js:14976` (server.js:14976) | trades where a plan is normal | STEM MATCH, SIGNAL TRUTH |
+| `MONEY_PILLARS` | `src/all.js:15965` (server.js:15965) | the seven loss buckets | MONEY PILLAR CHECK |
+| `REVENUE_BENCHMARKS` | `src/all.js:16231` (server.js:16231) | cited segment figures with source and date | MONEY PILLAR CHECK |
+| `REFERRAL_TRADES` | `src/all.js:19772` (server.js:19772) | referral-driven trades | REFERRAL CHECK |
+| `REFERRAL_ADJUST` | `src/all.js:19776` (server.js:19776) | ladder adjust for referral trades | REFERRAL CHECK |
+| `EMERGENCY_TRADES` | `src/all.js:19823` (server.js:19823) | bought under duress | URGENCY CHECK |
+| `CONSIDERED_TRADES` | `src/all.js:19848` (server.js:19848) | bought slowly | URGENCY CHECK |
+| `TRADE_URGENCY_MIXED` | `src/all.js:19864` (server.js:19864) | declared to have no honest urgency profile | TRADE TABLE COVERAGE CHECK |
+| `URGENCY_ADJUST` | `src/all.js:19883` (server.js:19883) | reorders findings by purchase urgency | URGENCY, KNOWABILITY, TRADE TABLE COVERAGE |
+| `OUR_PRICE_FIGURES` | `src/all.js:24948` (server.js:24948) | the only $ figures our catalogue may print | AUDIT MONEY CHECK |
+| `PRODUCT_PRICE_LINE` | `src/all.js:24953` (server.js:24953) | our price string per product | AUDIT MONEY CHECK |
+| `TRADE_JOB_VALUE` | `src/all.js:24966` (server.js:24966) | "a job in this trade runs about" rows | TRADE TABLE COVERAGE, TRADE ANCHOR, LIVE EMAIL |
+| `NICHE_BRIEFS` | `src/all.js:25234` (server.js:25234) | the brief library | NICHE BRIEF CHECK |
+| `BRIEF_MODEL_DISQUALIFIERS` | `src/all.js:25603` (server.js:25603) | shared "this is a retailer" disqualifier | NICHE BRIEF COVERAGE CHECK |
+| `NICHE_BRIEF_EXPECT` | `src/all.js:25620` (server.js:25620) | every searched category → its brief or null | NICHE BRIEF COVERAGE CHECK |
+| `NICHE_BRIEF_LIVE_CASES` | `src/all.js:25705` (server.js:25705) | real trade strings and the brief each must resolve to | NICHE BRIEF COVERAGE CHECK |
+| `NICHE_MONEY_UNITS` | `src/all.js:25808` (server.js:25808) | money units from the brief library | NICHE BRIEF CHECK |
+| `TRADE_MONEY_UNITS` | `src/all.js:25817` (server.js:25817) | money units from the trade table | NICHE BRIEF CHECK |
+| `OUR_PRODUCT_WORDS` | `src/all.js:25836` (server.js:25836) | words that mark a sentence as about OUR product | AUDIT MONEY CHECK |
+| `OUR_CATALOGUE_FIELD` | `src/all.js:25852` (server.js:25852) | the JSON fields allowed to carry our price | AUDIT MONEY CHECK |
+| `TRADE_MONEY_EXEMPT` | `src/all.js:26706` (server.js:26706) | trades with no honest single job value | TRADE TABLE COVERAGE CHECK |
+| `FINANCING_RE` | `src/all.js:26723` (server.js:26723) | consumer-financing vendors and offer text | SIGNAL TRUTH CHECK |
+| `BIG_TICKET_TRADE_RE` | `src/all.js:26744` (server.js:26744) | trades where missing financing is a gap | MONEY SIGNAL CHECK |
+| `ICP_STAFFING` | `src/all.js:38255` (server.js:38255) | staffing / recruiting — not our ICP | ICP FILTER, STEM MATCH |
+| `ICP_INSTITUTION` | `src/all.js:38256` (server.js:38256) | institutions — blocked | ICP FILTER, STEM MATCH |
+| `ICP_SMALL_PRACTICE` | `src/all.js:38267` (server.js:38267) | the small-practice escape from the health block | ICP FILTER, STEM MATCH |
+| `ICP_BIG_HEALTH` | `src/all.js:38271` (server.js:38271) | hospitals / health systems — blocked | ICP FILTER, STEM MATCH |
+| `STEM_COMPLETE_WORDS` | `src/all.js:38299` (server.js:38299) | every bare stem a list may end on | STEM MATCH CHECK |
+| `BRAND_LEGAL_SUFFIX_RE` | `src/all.js:38325` (server.js:38325) | legal suffixes stripped before a brand compare | ICP FILTER CHECK |
+| `BLOCKED_COMPANIES` | `src/all.js:38353` (server.js:38353) | brand set 1 (whole-name match) | ICP FILTER CHECK |
+| `STAFFING_BRANDS` | `src/all.js:38419` (server.js:38419) | brand set 2 | ICP FILTER CHECK |
+| `ENTERPRISE_BRANDS` | `src/all.js:38432` (server.js:38432) | brand set 3 | ICP FILTER CHECK |
+| `NATIONAL_BRANDS` | `src/all.js:38442` (server.js:38442) | brand set 4 | ICP FILTER CHECK |
+| `TRADE_WORDS` | `src/all.js:40566` (server.js:40566) | word → trade lookup | — |
+| `TRADE_MODIFIERS` | `src/all.js:41140` (server.js:41140) | specialisms that narrow a search | TRADE PHRASE CHECK |
+| `TRADE_SYNONYM_GROUPS` | `src/all.js:41570` (server.js:41570) | trade words that count as the same word | — |
+| `SLUG_PRODUCT_LINE` | `src/all.js:42388` (server.js:42388) | product-line URL slugs | page checks |
+| `CHAIN_ROLE_RE` | `src/all.js:78855` (server.js:78855) | franchisee role titles on their own pages | CHAIN OUTLET CHECK |
+| `CHAIN_SELF_RE` | `src/all.js:78856` (server.js:78856) | franchise self-description | CHAIN OUTLET CHECK |
+| `CHAIN_DENIAL_RE` | `src/all.js:78858` (server.js:78858) | "locally owned, not a franchise" — never fires the drop | CHAIN OUTLET CHECK |
+| `FIND_ICP_TERMS` | `src/all.js:79892` (server.js:79892) | the contact-list FIT score terms | FIND ICP GATE CHECK |
+| `FIND_ICP_MIN_TERMS` | `src/all.js:80147` (server.js:80147) | below this many measured terms a lead is "not scored" | FIND ICP GATE CHECK |
 
 ## Company identity (what a full company swap would touch)
 
-- server.js: "CROJungle" appears 55 times (first at built lines 1285, 1357, 1476, 3416, 4427, 4453, 4479, 4626 …; `node build.js --where N` maps one); the audit system prompt `BRAIN_STATIC` is declared at `src/all.js:8294` (server.js:8294); `$800k` at built lines 5238, 5298, 5944, 5953, 5957, 6040, 6053, 6076, 6181, 39649, 44066, 60679 …; `$15M` at built lines 15487, 17498, 74857, 79280, 79611; the 200-employee gate at built lines 37341, 37342, 39237; the sending user agent `crojungleteam.com` at `src/all.js:4427` (server.js:4427); the Hunter sequence id comes from Settings, read in the send route (first `sequenceId` after `/api/send-to-hunter`, `src/all.js:82397` (server.js:82397)).
-- index.html: "CROJungle" appears 12 times (lines 6, 3994, 4133, 4176, 4371, 5022, 5085, 7654, 9178, 12015, 14552, 15182); `PILLAR_PRODUCT` at line 2871, `LAYER_PLAIN` at line 2838; the never-cold-email-from-CROJungle.com warning at line 14552.
+- server.js: "CROJungle" appears 55 times (first at built lines 1285, 1357, 1476, 3416, 4427, 4453, 4479, 4626 …; `node build.js --where N` maps one); the audit system prompt `BRAIN_STATIC` is declared at `src/all.js:8318` (server.js:8318); `$800k` at built lines 5238, 5298, 5968, 5977, 5981, 6064, 6077, 6100, 6205, 39734, 44151, 60818 …; `$15M` at built lines 15565, 17576, 75076, 79556, 79887; the 200-employee gate at built lines 37426, 37427, 39322; the sending user agent `crojungleteam.com` at `src/all.js:4427` (server.js:4427); the Hunter sequence id comes from Settings, read in the send route (first `sequenceId` after `/api/send-to-hunter`, `src/all.js:82742` (server.js:82742)).
+- index.html: "CROJungle" appears 12 times (lines 6, 3994, 4133, 4176, 4371, 5022, 5085, 7678, 9202, 12039, 14576, 15206); `PILLAR_PRODUCT` at line 2871, `LAYER_PLAIN` at line 2838; the never-cold-email-from-CROJungle.com warning at line 14576.

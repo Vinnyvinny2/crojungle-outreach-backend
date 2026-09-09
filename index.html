@@ -1341,7 +1341,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261008;
+const CLIENT_CONTRACT = 20261009;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -6338,6 +6338,15 @@ const emailStatusOf = (c) => {
   if (c.contactEmailSendable === true && typeof t === 'number' && t >= 1 && t <= 2) return 'verified';
   return 'unverified';
 };
+// Round 129: SENDABLE is the engine's own verdict (contactEmailSendable, set
+// after the send guard) and it is the one the rep can act on - a tier-3
+// address the engine cleared is a lead we can write to, and counting it as
+// nothing is what made the card read "With email 0" on the ten-lead run of
+// 2026-09-09. HELD BACK is an address we found and may not use; the reason is
+// on the row as contactEmailBlockReason. The flag arrives as a boolean from
+// the page's own store and as text from PostgREST, so both are read as text.
+const emailSendableOf = (c) => !!(c && c.contactEmail) && String(c.contactEmailSendable) === 'true';
+const emailHeldBackOf = (c) => !!(c && c.contactEmail) && String(c.contactEmailSendable) !== 'true';
 // A batch lead as the server hands it back: the company object with the row's
 // stamps merged on. The export stamp arrives as one string; the cells expect a list.
 const companyFromBatchLead = (l) => {
@@ -6348,7 +6357,7 @@ const companyFromBatchLead = (l) => {
   return out;
 };
 const batchCardStats = (leads) => {
-  const s = { total: 0, read: 0, failed: 0, withEmail: 0, inResearch: 0, ruledOut: 0, actionable: 0 };
+  const s = { total: 0, read: 0, failed: 0, withEmail: 0, sendable: 0, sendableOnly: 0, heldBack: 0, inResearch: 0, ruledOut: 0, actionable: 0 };
   for (const l of (Array.isArray(leads) ? leads : [])) {
     if (!l) continue;
     s.total += 1;
@@ -6358,6 +6367,8 @@ const batchCardStats = (leads) => {
     else if (st === 'failed') s.failed += 1;
     if (l.readAt) s.read += 1;
     if (st === 'read' && emailStatusOf(l) === 'verified') s.withEmail += 1;
+    if (st === 'read' && emailSendableOf(l)) { s.sendable += 1; if (emailStatusOf(l) !== 'verified') s.sendableOnly += 1; }
+    if (st === 'read' && emailHeldBackOf(l)) s.heldBack += 1;
     if (st === 'read' || st === 'failed') s.actionable += 1;
   }
   return s;
@@ -6585,11 +6596,14 @@ function FindView({
     try { const b = await findApi('/api/read-runs/' + encodeURIComponent(runId) + '/leads'); await exportCsv((b.leads || []).map(companyFromBatchLead)); }
     catch (e) { fail(e); } finally { setBusy(''); }
   };
-  const moveVerifiedOfRun = async (runId) => {
+  // Round 129: the bulk move offers every address the engine says we can send
+  // to, not only the confirmed ones - the button was offering nothing on a run
+  // whose addresses were sendable.
+  const moveSendableOfRun = async (runId) => {
     setBusy('move');
     try {
       const b = await findApi('/api/read-runs/' + encodeURIComponent(runId) + '/leads');
-      const ids = (b.leads || []).map(companyFromBatchLead).filter(l => l && queueStateOf(l) === 'read' && emailStatusOf(l) === 'verified').map(l => l.id);
+      const ids = (b.leads || []).map(companyFromBatchLead).filter(l => l && queueStateOf(l) === 'read' && emailSendableOf(l)).map(l => l.id);
       setBusy('');
       await moveIds(ids);
     } catch (e) { fail(e); setBusy(''); }
@@ -6691,6 +6705,8 @@ function FindView({
   function visibleOf(leads, chipKey, sort) {
     const live = (leads || []).filter(l => l && queueStateOf(l) !== 'ruled_out');
     const pick = chipKey === 'email' ? live.filter(l => queueStateOf(l) === 'read' && emailStatusOf(l) === 'verified')
+      : chipKey === 'sendable' ? live.filter(l => queueStateOf(l) === 'read' && emailSendableOf(l))
+      : chipKey === 'held' ? live.filter(l => queueStateOf(l) === 'read' && emailHeldBackOf(l))
       : chipKey === 'noemail' ? live.filter(l => !(queueStateOf(l) === 'read' && emailStatusOf(l) === 'verified'))
       : chipKey === 'fit' ? live.filter(l => typeof l.contactIcp === 'number' && l.contactIcp >= 70)
       : live;
@@ -6708,7 +6724,7 @@ function FindView({
     const leads = batch.leads || [];
     const stats = batchCardStats(leads);
     const live = leads.filter(l => queueStateOf(l) !== 'ruled_out');
-    const counts = { email: visibleOf(leads, 'email', 'fit').length, all: live.length, noemail: visibleOf(leads, 'noemail', 'fit').length, fit: visibleOf(leads, 'fit', 'fit').length };
+    const counts = { email: visibleOf(leads, 'email', 'fit').length, sendable: visibleOf(leads, 'sendable', 'fit').length, held: visibleOf(leads, 'held', 'fit').length, all: live.length, noemail: visibleOf(leads, 'noemail', 'fit').length, fit: visibleOf(leads, 'fit', 'fit').length };
     const rows = visibleOf(leads, chip, sortBy);
     const selectable = rows.filter(l => queueStateOf(l) === 'read' || queueStateOf(l) === 'failed');
     const sel = new Set(Array.from(picked).filter(id => selectable.some(l => l.id === id)));
@@ -6739,18 +6755,21 @@ function FindView({
       const where = shortLocation(l.location);
       // Two honest marks the old card carried and the sheet still does: a name
       // the read could not confirm, and pages that name a different business.
+      const held = emailHeldBackOf(l);
       const flags = [];
+      if (held) flags.push('held back: ' + (l.contactEmailBlockReason || 'the engine refused this address and gave no reason'));
       if (l.contactOwner && l.contactOwnerGrade === 'unconfirmed') flags.push('unconfirmed');
       if (l.contactNameNotOnSite === true) flags.push('their pages name another business');
       const nameColor = st === 'failed' ? T.text3 : st === 'moved' ? T.text3 : es === 'verified' ? T.text : T.textDim;
       const emailCell = st === 'failed' ? h('span', { style: { color: T.amber } }, 'failed to read')
         : es === 'none' ? h('span', { style: { color: T.text3 } }, '— none found')
         : es === 'verified' ? h('span', { style: { color: T.text2 } }, l.contactEmail)
+        : held ? h('span', { style: { color: T.text3 } }, h('span', { style: { color: T.amberDim } }, 'held '), l.contactEmail)
         // The tag goes FIRST: the cell truncates, and on a long address the tag
         // at the end was the part that vanished, so a guess read as a good address.
         : h('span', { style: { color: T.text3 } }, h('span', { style: { color: T.amberBorder } }, 'unverif '), l.contactEmail);
       const action = st === 'moved' ? h('span', { style: { fontSize: 10, color: T.text3 } }, 'in Rsch')
-        : es === 'verified' && st === 'read'
+        : emailSendableOf(l) && st === 'read'
           ? h('button', { onClick: () => moveIds([l.id]), style: { fontFamily: 'Inter,sans-serif', fontSize: 10, borderRadius: 4, padding: '3px 6px', background: 'none', color: T.text2, border: '1px solid ' + T.border, cursor: 'pointer', whiteSpace: 'nowrap' } }, '→ Rsch')
           : h('button', { onClick: () => ruleOut([l.id], 'skipped in review'), style: { fontFamily: 'Inter,sans-serif', fontSize: 10, borderRadius: 4, padding: '3px 6px', background: 'none', color: T.text3, border: '1px solid ' + T.borderSubtle, cursor: 'pointer', whiteSpace: 'nowrap' } }, 'skip');
       return h('div', { key: l.id, style: Object.assign({}, grid, { padding: '9px 16px', borderBottom: '1px solid ' + T.rowDivider, fontSize: 12, background: on ? T.rowSel : 'transparent', height: 46 }) },
@@ -6769,10 +6788,15 @@ function FindView({
           h('div', { style: { fontSize: 14, fontWeight: 500 } }, h('a', { href: '#/find', style: { color: T.purple, textDecoration: 'none', marginRight: 8 } }, '←'), readRunTitle(run)),
           h('div', { style: { fontSize: 11, color: T.text2, marginTop: 3 } },
             stats.read + ' read · ' + Math.round(Number(run.credits_used) || 0) + ' credits · ' + stats.inResearch + ' in Research'
-            + (stats.failed ? ' · ' + stats.failed + ' failed to read' : ''))),
+            + (stats.failed ? ' · ' + stats.failed + ' failed to read' : '')),
+          // Round 129: what the rep can actually act on. "Confirmed" is the
+          // letter rule; the middle number is every other address the engine
+          // said we may send to; the last is the ones it refused.
+          h('div', { style: { fontSize: 11, color: T.text2, marginTop: 2 } },
+            stats.withEmail + ' confirmed · ' + stats.sendableOnly + ' more we can send to · ' + stats.heldBack + ' held back')),
         h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } }, columnsToggle, btn('tertiary', 'CSV', () => exportCsv(rows), { disabled: !exportable.length || busy === 'csv' }))),
       h('div', { style: { padding: '11px 16px', borderBottom: '1px solid ' + T.borderSubtle, display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center', fontSize: 11 } },
-        chipEl('email', 'With email', counts.email), chipEl('all', 'All', counts.all), chipEl('noemail', 'No email', counts.noemail), chipEl('fit', 'Fit 70+', counts.fit),
+        chipEl('email', 'Confirmed', counts.email), chipEl('sendable', 'Can send', counts.sendable), chipEl('held', 'Held back', counts.held), chipEl('all', 'All', counts.all), chipEl('noemail', 'No email', counts.noemail), chipEl('fit', 'Fit 70+', counts.fit),
         h('div', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 } },
           h('span', { style: { color: T.text2 } }, 'Sort'),
           h('select', { value: sortBy, onChange: e => setSortBy(e.target.value),
@@ -6873,11 +6897,11 @@ function FindView({
   const latestCard = !latest ? null : h('div', { style: { background: T.surface, border: '1px solid ' + T.borderStrong, borderRadius: 10, padding: '14px 16px 12px', marginBottom: 8 } },
     h('div', { style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12, gap: 10 } },
       h('div', { style: { fontSize: 13, fontWeight: 500 } }, readRunTitle(latest)),
-      h('div', { style: { fontSize: 11, color: T.text2 } }, statsLine(latest)[0], ' · ' + (latest.withEmail || 0) + ' with email · ', inResearchSpan(latest.inResearch || 0), ' in Research')),
+      h('div', { style: { fontSize: 11, color: T.text2 } }, statsLine(latest)[0], ' · ' + (latest.withEmail || 0) + ' confirmed · ' + (latest.sendableOnly || 0) + ' more we can send to · ' + (latest.heldBackEmail || 0) + ' held back · ', inResearchSpan(latest.inResearch || 0), ' in Research')),
     latest.status === 'failed' && latest.error ? h('div', { style: { fontSize: 11, color: T.amber, marginBottom: 10 } }, latest.error) : null,
     h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
       btn('primary', 'Review ' + (Number(latest.read_count) || 0), () => go('#/find/batch/' + encodeURIComponent(latest.id))),
-      (latest.withEmail > 0) ? btn('research', 'Move ' + latest.withEmail + ' to Research', () => moveVerifiedOfRun(latest.id), { disabled: busy === 'move' }) : null,
+      (latest.sendableEmail > 0) ? btn('research', 'Move ' + latest.sendableEmail + ' to Research', () => moveSendableOfRun(latest.id), { disabled: busy === 'move' }) : null,
       btn('secondary', 'Move all ' + (Number(latest.read_count) || 0), () => moveAllOfRun(latest.id), { disabled: busy === 'move' || !latest.read_count }),
       btn('tertiary', 'CSV', () => csvForRun(latest.id), { disabled: busy === 'csv' }),
       columnsToggle,

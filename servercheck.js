@@ -229,10 +229,14 @@ const FIND_HOME_HTML = (b) => `<!doctype html><html><head><title>${b.company}</t
 const FIND_STRANGER_HTML = () => `<!doctype html><html><head><title>Zeta Widgets Supply</title></head><body><h1>Zeta Widgets Supply</h1>`
   + `<p>${'Industrial widgets, flanges and fittings for the trade, shipped same day from our Dallas warehouse. '.repeat(8)}</p>`
   + `<footer>&copy; 2026 Zeta Widgets Supply</footer></body></html>`;
+// Round 129: the roster SIZE is a dial. Three names on their own team page is
+// "settled small" - the page answers the question the four-credit directory
+// search asks, so the search is not bought - and a scenario that needs the BUY
+// path exercised turns it down to two, which is a page layout and not a
+// measurement. The default is three, so every other scenario reads as before.
+const FIND_TEAM_PEOPLE = [['Pete Barnes', 'Owner'], ['Dana Willis', 'Operations Manager'], ['Ray Alonzo', 'Lead Estimator']];
 const FIND_TEAM_HTML = (b) => `<!doctype html><html><body><h1>Our Team</h1>`
-  + `<div><h3>Pete Barnes</h3><p>Owner</p></div>`
-  + `<div><h3>Dana Willis</h3><p>Operations Manager</p></div>`
-  + `<div><h3>Ray Alonzo</h3><p>Lead Estimator</p></div>`
+  + FIND_TEAM_PEOPLE.slice(0, Number(state.teamSize) > 0 ? Number(state.teamSize) : 3).map(([n, t]) => `<div><h3>${n}</h3><p>${t}</p></div>`).join('')
   + `<p>${'The crew has worked together for years and it shows on every roof. '.repeat(10)}</p>`
   + `</body></html>`;
 const FIND_CONTACT_HTML = (b) => `<!doctype html><html><body><h1>Contact</h1>`
@@ -733,6 +737,7 @@ const runLead = async (b, over, capMs) => {
     const hBiz = state.biz;
     const h0 = fcCalls();
     const hReq0 = state.requests.length;   // Round 112: an INDEX into the request log, not a count
+    const hLog0 = srv.log().length;        // Round 129: and one into the log, for the not-bought line
     // Scoped to THIS lead's window. state.requests accumulates across every
     // scenario and the golden lead legitimately buys a review pull, so an
     // absolute count here measures somebody else's spend - a harness that
@@ -761,8 +766,31 @@ const runLead = async (b, over, capMs) => {
     // the read has quietly gone back to buying pages it could have had free,
     // and the "under $100 a month" arithmetic goes with it.
     ok(hFcFree === 0, `the contact read made ${hFcFree} Firecrawl call(s) beyond the size lookup on a site that answers a plain fetch — the free read is not the door any more`);
-    ok(hFcSize >= 1 && hFcSize <= 2, `the size lookup bought ${hFcSize} search(es) on a lead that published no size - it should buy one, and a second only on a miss`);
-    ok(HJ.sizeLookup && HJ.sizeLookup.bought === true, 'the size lookup was not bought on a lead whose pages published no size, so the sheet guesses off the review count');
+    // Round 129: their own team page lists three people. That settles them as
+    // small, and a directory has no record of a three-person roofer - 20 of the
+    // 30 Firecrawl credits on the 2026-09-09 run went to exactly this search and
+    // five of seven leads got back "no record of this business". So on THIS lead
+    // the size lookup must buy nothing, and must say which reason stood it down.
+    ok(hFcSize === 0, `the size lookup bought ${hFcSize} search(es) on a lead whose own team page lists three people - that page already answers the question the directory search asks`);
+    ok(HJ.sizeLookup && HJ.sizeLookup.bought === false && /team page lists 3 people/.test(String(HJ.sizeLookup.why || '')), `the size lookup on a three-person team page reads ${JSON.stringify(HJ.sizeLookup)} - it must be not bought, and name the reason`);
+    ok(/SIZE LOOKUP \[[^\]]*\]: not bought - their own team page lists 3 people/.test(srv.log().slice(hLog0)), 'the size search was stood down and no line says why - a saving the operator cannot see reads as a broken feature');
+    // The BUY path still has to be DRIVEN, or a source needle is all that is
+    // left proving it. Two names on a team page is a layout, not a measurement:
+    // this lead is neither measured nor settled, so it must buy.
+    state.teamSize = 2;
+    const hbBiz = bizReg('Hb');
+    const hbReq0 = state.requests.length;
+    const Hbuy = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+      company: { name: hbBiz.company, website: `https://${hbBiz.host}`, phone: '(214) 555-0188',
+                 location: 'Dallas, TX', industry: 'roofer', reviewCount: 180, rating: 4.6 },
+      keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test', verifierKey: '' },
+    });
+    state.teamSize = 3;
+    const hbSize = state.requests.slice(hbReq0).filter(q => q.host === 'api.firecrawl.dev' && _isSizeQ(q.query)).length;
+    const HbuyJ = Hbuy.json || {};
+    ok(Hbuy.code === 200, `the second contact read answered ${Hbuy.code}: ${String(HbuyJ.error || '').slice(0, 160)}`);
+    ok(hbSize >= 1 && hbSize <= 2, `the size lookup bought ${hbSize} search(es) on a lead that published no size and whose two-name team page settles nothing - it should buy one, and a second only on a miss`);
+    ok(HbuyJ.sizeLookup && HbuyJ.sizeLookup.bought === true, 'the size lookup was not bought on a lead whose pages published no size and whose team page names two people, so the sheet guesses off the review count');
     ok((HJ.spend || {}).firecrawl === hFcSize * 2, `the contact read reports ${(HJ.spend || {}).firecrawl} Firecrawl credit(s) on a plainly readable site where the size lookup bought ${hFcSize} search(es) at 2 each - a page was bought, or the ledger missed the lookup`);
     ok(/plain fetch/.test(String(HJ.readVia || '')), `readVia says "${HJ.readVia}" rather than naming the free read`);
     // Their own navigation, not a paid sitemap: the team, contact and careers
@@ -1132,7 +1160,13 @@ const runLead = async (b, over, capMs) => {
     const r1Free = state.requests.slice(r1Req0).filter(q => q.host === 'api.firecrawl.dev' && _r1Mine(q) && !_isSizeQ(q.query));
     const r1Size = state.requests.slice(r1Req0).filter(q => q.host === 'api.firecrawl.dev' && _r1Mine(q) && _isSizeQ(q.query)).length;
     ok(r1Free.length === 0, `the background read made ${r1Free.length} Firecrawl call(s) beyond the size lookup on sites that answer a plain fetch: ${[...new Set(r1Free.map(q => q.path + (q.query ? ' "' + q.query.slice(0, 60) + '"' : '')))].slice(0, 6).join(' | ')} - FC PAID lines: ${(srv.log().slice(r1Log0).match(/FC PAID[^\n]{0,120}/g) || []).slice(0, 6).join(' || ')}`);
-    ok(R1done && typeof R1done.credits_used === 'number' && R1done.credits_used > 0 && R1done.credits_used === r1Size * 2, `credits_used is ${R1done && R1done.credits_used} against ${r1Size} size search(es) at 2 each - the run's meter and the ledger disagree`);
+    // Round 129: these three leads publish a three-person team page, so none of
+    // them buys a size search at all and the run's Firecrawl meter is zero. The
+    // meter must still EQUAL the ledger - that is the assertion - and the run
+    // has to be able to say zero rather than insisting something was bought.
+    ok(R1done && typeof R1done.credits_used === 'number' && R1done.credits_used === r1Size * 2, `credits_used is ${R1done && R1done.credits_used} against ${r1Size} size search(es) at 2 each - the run's meter and the ledger disagree`);
+    ok(r1Size === 0, `the run bought ${r1Size} size search(es) on leads whose own team page lists three people - the four-credit directory search has no record of a three-person roofer`);
+    ok(/SIZE LOOKUP \[[^\]]*\]: not bought - their own team page lists 3 people/.test(srv.log().slice(r1Log0)), 'the read run stood the size search down on every lead and no line says why - a saving the operator cannot see reads as a broken feature');
     ok(R1done && R1done.withEmail === 3 && R1done.live === false && R1done.finished_at, `the run card reads ${JSON.stringify(R1done && [R1done.withEmail, R1done.live, !!R1done.finished_at])} for with-email/live/finished on three leads whose contact page publishes the owner's address`);
     const L1 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/read-runs/${r1id}/leads`);
     const L1r = (L1.json && L1.json.leads) || [];
