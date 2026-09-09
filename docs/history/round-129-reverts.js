@@ -113,8 +113,11 @@ module.exports = [
   // (3) the setter stops being a door: any name a caller learns is installed in
   //     the process-lifetime memory and handed to the next lead on the domain
   { name: 'p0-3-domain-memory-ungated', path: 'src/all.js', prove: 'boot',
-    old: '  const known = normalizePattern(pattern);\n  if (known) domainPatternMemory.set(domain, known);\n  return known;\n',
-    new: '  domainPatternMemory.set(domain, pattern);\n  return pattern;\n',
+    // Round 129 wave two moved this: P1 made rememberPattern the ONE door that also
+    // writes the table, so the gate became a block. The premise reverted is unchanged -
+    // ungate normalizePattern and a name buildCandidates does not hand out is remembered.
+    old: '  const known = normalizePattern(pattern);\n',
+    new: '  const known = pattern;\n',
     mustPrint: 'a name buildCandidates does not hand out overwrites a good remembered pattern' },
   // (4) the pattern that arrives on the request is installed without the door
   { name: 'p0-4-prior-pattern-installed-unmigrated', path: 'src/all.js', prove: 'boot',
@@ -244,4 +247,261 @@ module.exports = [
     old: "    console.log(`\\u{1F4CF} SIZE LOOKUP [${name}]: not bought - ${_sizeSettledWhy}, and a directory has no record of a business this size. ~4 Firecrawl credits saved.`);\n",
     new: "",
     mustPrint: /⛔ SIZE AND LAYERS CHECK:.*nothing in the log says so/ },
+
+  // ── ROUND 129 / P3: the false blocks ─────────────────────────────────────
+  // ── (a) THE TITLE WORD CAP ────────────────────────────────────────────────
+
+  // (A-1) the cap counts the whole title again, credential and all. This is the
+  // live defect: seven tokens, refused, and the caller's filter takes the whole
+  // person with the title.
+  { name: 'p3-a-cap-counts-the-credential-again', path: 'src/all.js', prove: 'boot',
+    old: "    if (_head.split(/\\s+/).length > 6) return false;     // a line of copy\n",
+    new: "    if (s.split(/\\s+/).length > 6) return false;     // a line of copy\n",
+    mustPrint: /TITLE CREDENTIAL CHECK: the roster row for an owner whose title carries a spelled-out credential is DELETED/ },
+
+  // (A-2) the OTHER direction, and the change this fix was told not to make:
+  // the cap is simply raised until the real title fits. Eight words of
+  // marketing copy standing where a title stands is then a job title again.
+  { name: 'p3-a-cap-raised-instead-of-aimed', path: 'src/all.js', prove: 'boot',
+    old: "    if (_head.split(/\\s+/).length > 6) return false;     // a line of copy\n",
+    new: "    if (s.split(/\\s+/).length > 8) return false;     // a line of copy\n",
+    mustPrint: /a line of marketing copy \("Gain a partner and keep your practice today"\) is read as a job title/ },
+
+  // (A-3) the strip eats the whole title rather than a trailing credential, so
+  // a practitioner row whose title IS the credential loses it.
+  { name: 'p3-a-credential-strip-eats-the-first-segment', path: 'src/all.js', prove: 'boot',
+    old: "  while (parts.length > 1) {\n    const last = parts[parts.length - 1];\n",
+    new: "  while (parts.length > 0) {\n    const last = parts[parts.length - 1];\n",
+    mustPrint: /a title that is ONLY a credential is emptied/ },
+
+  // ── (b) ONE EPONYMOUS RULE, AND IT SAYS WHICH ARM ─────────────────────────
+
+  // (B-1) the settle widens onto the weak arm: a domain that merely carries the
+  // owner's FIRST name now stands the paid owner sources down. None of the five
+  // older isEponymousOwnerRule fixtures beside it can see this, which is why
+  // this guard had to be written.
+  { name: 'p3-b-settle-widens-onto-the-first-name-arm', path: 'src/all.js', prove: 'boot',
+    old: "const isEponymousOwnerRule = (personName, coName, siteUrl) => eponymousMatch(personName, coName, siteUrl).match === 'surname';\n",
+    new: "const isEponymousOwnerRule = (personName, coName, siteUrl) => eponymousMatch(personName, coName, siteUrl).match !== null;\n",
+    mustPrint: /the eponymous SETTLE now fires on the first-name arm/ },
+
+  // (B-2) the rule still knows the arm and the line stops saying it — which is
+  // exactly the log that could not be used to tell the two apart.
+  { name: 'p3-b-address-line-stops-naming-the-arm', path: 'src/all.js', prove: 'boot',
+    old: "      console.log(`✓ EMAIL [${domain}] EPONYMOUS (${_epArm.arm}): ${EPONYM_ARM_SAY[_epArm.arm]}, so ${epEmail} on their own domain is ${name}'s mailbox`);\n",
+    new: "      console.log(`✓ EMAIL [${domain}] EPONYMOUS: the company is named after ${name}, so ${epEmail} on their own domain is the owner's mailbox`);\n",
+    mustPrint: /the eponymous address line does not name the arm it matched on \(1 of the 2 eponymous branches\)/ },
+
+  // (B-3) the arm is named and the words for it go back to the strong claim, so
+  // naming the arm buys nothing at all.
+  { name: 'p3-b-weak-arm-stops-saying-it-is-weak', path: 'src/all.js', prove: 'boot',
+    old: "  'first-name': 'their first name is the domain, and the business name does NOT carry their surname \\u2014 weaker evidence, which is why this line says which',\n",
+    new: "  'first-name': 'the business is named after them',\n",
+    mustPrint: /the weak arm no longer says it is the weak one/ },
+
+  // (B-4) the labels are rewritten around the arm and the word the research
+  // route reads them for goes with it. That route downgrades a CACHED tier-2
+  // row whose label says it came from this shortcut, and its only other handle
+  // is a flag that rows cached before it do not carry.
+  { name: 'p3-b-label-drops-the-word-the-cache-downgrade-reads', path: 'src/all.js', prove: 'boot',
+    old: "        label: `${name}: ${EPONYM_ARM_SAY[_epArm.arm]} \\u2014 a first-name mailbox on their own eponymous domain (inferred, not SMTP-confirmed)`,\n",
+    new: "        label: `${name}: ${EPONYM_ARM_SAY[_epArm.arm]} \\u2014 a first-name mailbox on their own domain (inferred, not SMTP-confirmed)`,\n",
+    mustPrint: /the inferred label on the second branch no longer carries the word the research route reads it for/ },
+
+  // ── (c) OFFERED ONE CHECK, NOT DELETED ────────────────────────────────────
+
+  // (C-1) the guard goes back to deleting the population. Neither hard bounce
+  // on record came through it, and it refuses every constructed address on an
+  // unvouched name.
+  { name: 'p3-c-guard-deletes-the-population-again', path: 'src/all.js', prove: 'boot',
+    old: "  return Object.assign({}, r, {\n    verifyToSend: true,\n",
+    new: "  return Object.assign({}, r, {\n    sendable: false,\n",
+    mustPrint: /a tier-3 address built from a held-back name is refused outright rather than offered one check/ },
+
+  // (C-2) the send route stops asking, so the mark is decoration and an
+  // `unknown` answer sends an unproven person's mailbox exactly as before.
+  { name: 'p3-c-send-route-stops-asking', path: 'src/all.js', prove: 'boot',
+    old: "      let _mustProve = sendUnknownIsNotAYes(lead)\n        ? `${lead.email} was built from a name the owner ladder would not vouch for, and nothing has confirmed the mailbox`\n        : '';\n",
+    new: "      let _mustProve = '';\n",
+    mustPrint: /the send route never asks whether an unknown answer counts for this row/ },
+
+  // (C-3) the other direction: the rule widens onto every unproven address, so
+  // every catch-all domain in the pipeline stops sending on no evidence. That
+  // is the blunt version the send boundary was built to avoid.
+  { name: 'p3-c-unknown-refused-for-every-lead', path: 'src/all.js', prove: 'boot',
+    old: "const sendUnknownIsNotAYes = (lead) => {\n  const l = lead || {};\n  if (!sendNeedsVerify(l)) return false;\n  return (l.emailResult && l.emailResult.verifyToSend === true) || l.verifyToSend === true;\n};\n",
+    new: "const sendUnknownIsNotAYes = (lead) => sendNeedsVerify(lead || {});\n",
+    mustPrint: /an ordinary tier-3 address is now refused on an unknown answer/ },
+
+  // (C-4) the check is bought and its answer thrown away: a yes no longer
+  // clears the hold, so the address the mail server confirmed is refused too.
+  { name: 'p3-c-a-yes-no-longer-clears-the-hold', path: 'src/all.js', prove: 'boot',
+    old: "              _verified = true;\n              _mustProve = '';\n",
+    new: "              _verified = true;\n",
+    mustPrint: /a valid answer no longer clears the hold/ },
+
+  // ── ROUND 129 / P1: the verifier budget ──────────────────────────────────
+  // ── MAIL FACTS CHECK ──────────────────────────────────────────────────────
+  // (1) The clock comes off the house pattern. Until this round the Render
+  // restart was the only thing that had ever cleaned a poisoned pattern, so a
+  // stored one with no clock is a permanent wrong address for that domain.
+  { name: '129-p1-a-pattern-never-expires', path: 'src/all.js', prove: 'boot',
+    old: '  if (mailFactFresh(row.pattern_at, PATTERN_FACT_TTL_MS, nowMs)) out.pattern = normalizePattern(row.pattern);\n',
+    new: '  out.pattern = normalizePattern(row.pattern);\n',
+    mustPrint: /a house pattern two hundred days old is still read as a measurement/ },
+
+  // (2) The catch-all clock, the dangerous direction: a stale `false` keeps the
+  // SMTP path open and ships "mailbox exists" about a domain that now accepts
+  // everything.
+  { name: '129-p1-b-catch-all-verdict-never-expires', path: 'src/all.js', prove: 'boot',
+    old: "  if (typeof row.catch_all === 'boolean' && mailFactFresh(row.catch_all_at, CATCHALL_FACT_TTL_MS, nowMs)) out.catchAll = row.catch_all;\n",
+    new: "  if (typeof row.catch_all === 'boolean') out.catchAll = row.catch_all;\n",
+    mustPrint: /a catch-all verdict two hundred days old is still read as a measurement/ },
+
+  // (3) The type test becomes a presence test: a column that is not a boolean is
+  // read as a verdict, which is the unmeasured-treated-as-zero class in boolean
+  // clothes.
+  { name: '129-p1-c-catch-all-column-coerced', path: 'src/all.js', prove: 'boot',
+    old: "  if (typeof row.catch_all === 'boolean' && mailFactFresh(row.catch_all_at",
+    new: "  if (row.catch_all !== undefined && mailFactFresh(row.catch_all_at",
+    mustPrint: /a catch-all column that is not a boolean is coerced into one/ },
+
+  // (4) The pattern write leaves the one door it must go through — the door that
+  // has already run normalizePattern and sits inside the vouched guard.
+  { name: '129-p1-d-pattern-write-leaves-the-one-door', path: 'src/all.js', prove: 'boot',
+    old: "    saveDomainMailFact(domain, { pattern: known, pattern_at: new Date().toISOString() });\n",
+    new: "",
+    mustPrint: /the house pattern is written to the table from somewhere other than the one door/ },
+
+  // (5) The UNKNOWN catch-all verdict reaches the table. It is a fact about the
+  // probe's moment; a stored one shuts the SMTP path on that domain for ninety days.
+  { name: '129-p1-e-unknown-verdict-persisted', path: 'src/all.js', prove: 'boot',
+    old: "      catchAllCache.set(domain, null);\n",
+    new: "      catchAllCache.set(domain, null);\n      saveDomainMailFact(domain, { catch_all: null, catch_all_at: new Date().toISOString() });\n",
+    mustPrint: /place\(s\) write a catch-all verdict to the table and there must be exactly one/ },
+
+  // (6) Nothing hydrates: every restart starts the day over and re-buys facts we
+  // already hold, which is the whole round.
+  { name: '129-p1-f-engine-never-hydrates', path: 'src/all.js', prove: 'boot',
+    old: "  await primeDomainMailFacts((_args && _args.website) || '');\n",
+    new: "",
+    mustPrint: /the engine no longer hydrates what we know about the domain before it runs/ },
+
+  // (7) A boot fixture's made-up domain writes a row a later lead reads back as a
+  // fact about a real business.
+  { name: '129-p1-g-fixture-domains-write-rows', path: 'src/all.js', prove: 'boot',
+    old: "const _fixtureDomain = (d) => /(^|\\.)example\\.(com|net|org)$|\\.(invalid|test|example|localhost)$/.test(String(d || '').trim().toLowerCase());\n",
+    new: "const _fixtureDomain = () => false;\n",
+    mustPrint: /it now reaches the table, so every boot writes fixture rows/ },
+
+  // ── VERIFIER DAY CHECK ────────────────────────────────────────────────────
+  // (8) The counter stops being a brake: it refuses only AFTER the allowance is
+  // over, which is what the latch already did by walking into the wall.
+  { name: '129-p1-h-day-counter-is-off-by-one', path: 'src/all.js', prove: 'boot',
+    old: "  if (_used + _want <= _cap) return null;\n",
+    new: "  if (_used <= _cap) return null;\n",
+    mustPrint: /the hundred-and-first check is allowed, so the counter is a report and not a brake/ },
+
+  // (9) The other direction: a count nobody could seed is read as "all spent",
+  // which stops the day rather than running it.
+  { name: '129-p1-i-unseeded-count-refuses-everything', path: 'src/all.js', prove: 'boot',
+    old: "  if (!Number.isFinite(_used)) return null;\n",
+    new: "",
+    mustPrint: /a count that was never seeded refuses every call/ },
+
+  // (10) The one door stops counting the check it spends, so the day counter is
+  // decorative.
+  { name: '129-p1-j-verifier-door-stops-counting', path: 'src/all.js', prove: 'boot',
+    old: "    noteVerifierCall();\n    const url = `https://client.myemailverifier.com",
+    new: "    const url = `https://client.myemailverifier.com",
+    mustPrint: /the one door to the verifier no longer counts the check it is about to spend/ },
+
+  // (11) The gate every caller asks goes back to reading only the latch — the
+  // latch that is set by hitting the wall and cleared by every restart.
+  { name: '129-p1-k-gate-reads-only-the-latch', path: 'src/all.js', prove: 'boot',
+    old: "  if (!verifierMaySpend(1)) return false;\n  if (!verifierBlocked()) return true;\n",
+    new: "  if (!verifierBlocked()) return true;\n",
+    mustPrint: /still reads only the latch/ },
+
+  // (12) The day count is never seeded, so an instance that slept resumes at zero
+  // and spends the free hundred a second time.
+  { name: '129-p1-l-day-count-never-seeded', path: 'src/all.js', prove: 'boot',
+    old: "      seedVerifierDay().catch(() => {});\n",
+    new: "",
+    mustPrint: /the day count is never seeded from the table/ },
+
+  // (13) The line claims a seed it never had: "0 of 100 used" off an unseeded
+  // counter is the unmeasured-treated-as-zero class pointed at the operator.
+  { name: '129-p1-m-unseeded-count-printed-as-todays-total', path: 'src/all.js', prove: 'boot',
+    old: "  const _seedSay = VERIFIER_DAY_SEEDED === r.day\n",
+    new: "  const _seedSay = true\n",
+    mustPrint: /is printed as though it were today's total/ },
+
+  // (14) The external allowance becomes a route ceiling, so a lead that would
+  // still have returned an owner, a phone and a website is not read at all.
+  { name: '129-p1-n-allowance-becomes-a-route-ceiling', path: 'src/all.js', prove: 'boot',
+    old: "  const list = (Array.isArray(needs) && needs.length) ? needs : spendAdmissionServices();\n",
+    new: "  const list = (Array.isArray(needs) && needs.length) ? needs : Object.keys(SPEND_NAMES);\n",
+    mustPrint: /refuses a route that spends no mailbox checks at all/ },
+
+  // (14b) And the declaration behind it: the allowance rejoins the default
+  // admission list, so the same refusal is reached the other way round.
+  { name: '129-p1-w-allowance-rejoins-the-admission-list', path: 'src/all.js', prove: 'boot',
+    old: "const SPEND_NOT_ADMISSION = new Set(['verifier']);\n",
+    new: "const SPEND_NOT_ADMISSION = new Set([]);\n",
+    mustPrint: /refuses a whole route at admission/ },
+
+  // ── CHECK BUDGET CHECK ────────────────────────────────────────────────────
+  // (15) The verdict is bought up front on every lead again, before a single
+  // question has been put to the mail server.
+  { name: '129-p1-o-verdict-bought-up-front-again', path: 'src/all.js', prove: 'boot',
+    old: "  let catchAll = catchAllKnown(domain);\n",
+    new: "  let catchAll = await isCatchAllDomain(domain, verifierKey);\n",
+    mustPrint: /the catch-all verdict is bought up front on every lead again/ },
+
+  // (16) The lazy purchase goes, so an acceptance on a server that accepts every
+  // address would ship as "SMTP-verified (mailbox exists)".
+  { name: '129-p1-p-lazy-purchase-removed', path: 'src/all.js', prove: 'boot',
+    old: "        if (catchAll === undefined) catchAll = await isCatchAllDomain(domain, verifierKey);\n",
+    new: "",
+    mustPrint: /the verdict is no longer bought at the moment a candidate is accepted/ },
+
+  // (17) Back to four or five blind guesses at a mailbox per lead.
+  { name: '129-p1-q-waterfall-cap-widens', path: 'src/all.js', prove: 'boot',
+    old: "    const toTry = ordered.slice(0, 2);\n",
+    new: "    const toTry = ordered.slice(0, learnedFirst ? 5 : 4);\n",
+    mustPrint: /the pattern waterfall is back to four or five blind guesses a lead/ },
+
+  // (18) The shared-inbox upgrade guesses again on a domain whose convention we
+  // do not know — on a lead that already has an address.
+  { name: '129-p1-r-shared-inbox-guesses-again', path: 'src/all.js', prove: 'boot',
+    old: "        const _tryPatterns = _learned ? [_learned] : [];\n",
+    new: "        const _tryPatterns = _learned ? [_learned] : ['first', 'firstlast', 'f.last', 'first.last'];\n",
+    mustPrint: /the shared-inbox upgrade guesses at four mailboxes again/ },
+
+  // (19) And buys the two-probe verdict for a lead that already has one.
+  { name: '129-p1-s-shared-inbox-buys-the-probe-again', path: 'src/all.js', prove: 'boot',
+    old: "        const _catchAll = _tryPatterns.length ? catchAllKnown(domain) : undefined;\n",
+    new: "        const _catchAll = await isCatchAllDomain(domain, verifierKey);\n",
+    mustPrint: /buys the two-probe catch-all verdict again/ },
+
+  // (20) The probe is spent on a host that stalls address probes by design.
+  { name: '129-p1-t-probe-spent-on-a-stalling-host', path: 'src/all.js', prove: 'boot',
+    old: "  if (mailProviderStalls(domain)) {\n    console.log(`Catch-all probe [${domain}]: NOT RUN",
+    new: "  if (false) {\n    console.log(`Catch-all probe [${domain}]: NOT RUN",
+    mustPrint: /the catch-all probe is spent on a host that stalls address probes by design/ },
+
+  // (21) A lookup that returned nothing is given a mail host anyway, so "we never
+  // looked" becomes a measurement.
+  { name: '129-p1-u-empty-mx-invents-a-host', path: 'src/all.js', prove: 'boot',
+    old: "  if (!hosts.length) return '';\n",
+    new: "  if (!hosts.length) return 'other';\n",
+    mustPrint: /is given a mail host anyway/ },
+
+  // (22) A host that answers probes perfectly well joins the stall list, which
+  // would switch the free SMTP route off across a large share of this ICP.
+  { name: '129-p1-v-stall-list-swallows-a-host-that-answers', path: 'src/all.js', prove: 'boot',
+    old: "const MAIL_PROVIDERS_THAT_STALL = ['microsoft365'];\n",
+    new: "const MAIL_PROVIDERS_THAT_STALL = ['microsoft365', 'google'];\n",
+    mustPrint: /is on the stall list, so the free SMTP route is switched off/ },
 ];
