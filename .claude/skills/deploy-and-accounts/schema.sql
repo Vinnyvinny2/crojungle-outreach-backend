@@ -77,7 +77,39 @@ update discovered_queue set extra = (extra #>> '{}')::jsonb where jsonb_typeof(e
 -- queue on every action. Nothing on the server deletes a queue row, so:
 revoke delete on discovered_queue from anon, authenticated;
 
+-- §129 — what we have learned about a domain's mail, so a
+-- sleeping free instance stops re-buying it every morning. The two process-lifetime Maps
+-- (catchAllCache, domainPatternMemory) stay in front as the hot-path cache; this is their
+-- backing store. RUN THIS BEFORE THE ROUND 129 SERVER DEPLOYS: PostgREST refuses a whole
+-- row on one unknown column, so every fact learned before it runs is lost.
+-- NULL means "we have no measurement", never "we measured no". The UNKNOWN catch-all
+-- verdict is deliberately never written here: it is a fact about the probe's moment.
+create table if not exists domain_mail_facts (
+  domain text primary key,
+  catch_all boolean,
+  catch_all_at timestamptz,
+  pattern text,
+  pattern_at timestamptz,
+  pattern_source text,
+  mail_provider text,
+  mail_provider_at timestamptz,
+  updated_at timestamptz default now());
+alter table domain_mail_facts enable row level security;
+
+-- §129 — the free-100 mailbox-verifier allowance, seeded at boot so an instance that
+-- slept resumes the day instead of starting it again. Best-effort, not accounting: the
+-- vendor's own refusal (the VERIFIER_EXHAUSTED latch) remains the authority. `service` is
+-- a column and not a table, so a second metered allowance needs no new SQL.
+create table if not exists api_day_spend (
+  day date not null,
+  service text not null,
+  used real not null default 0,
+  updated_at timestamptz default now(),
+  primary key (day, service));
+alter table api_day_spend enable row level security;
+
 -- §127 (docs/history/round-127.md) — row-level security ON, the browser locked out.
+
 -- Run ONLY after the Round 127 index.html is live on Netlify and APP_TOKEN is set
 -- on Render: from that build the page never talks to Supabase, and the server
 -- holds the service_role (sb_secret_) key, which bypasses these policies.
