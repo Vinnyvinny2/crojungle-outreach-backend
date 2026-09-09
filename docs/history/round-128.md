@@ -160,8 +160,8 @@ falsify.js docs/history/round-128-reverts.js` on this tree after the review
 fixes below: the baseline proven green first (boot, clientcheck, `--check`,
 the build), then each revert alone, each file restored and the restore
 verified by a sha1 of `server.js` and `src/**` and by `git status`.
-**A2_NUMBERS** (the run's own summary line: how many matched, the tree
-restored byte for byte, the exit code). The
+**29 of 29 matched expectation, tree restored and verified byte for byte,
+exit 0** (the run's own summary line, from the real tree on 2026-09-09). The
 last column is the guard's own line, demanded by `mustPrint`; a red that did
 not print it would not have counted.
 
