@@ -82217,7 +82217,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     out.sizeLookup = { bought: false, source: '', why: _sizeSettledWhy };
     console.log(`\u{1F4CF} SIZE LOOKUP [${name}]: not bought - ${_sizeSettledWhy}, and a directory has no record of a business this size. ~4 Firecrawl credits saved.`);
   }
-  if (!sizeMeasured(signals) && website && !_ownerWaveFoundNobody && !out.notIcp) {
+  if (!sizeMeasured(signals) && !sizeSettledSmall(signals) && website && !_ownerWaveFoundNobody && !out.notIcp) {
     out.sizeLookup = { bought: true, source: '', why: 'nothing measured about their size' };
     try {
       const _capi = (companiesApiKey && website) ? await enrichViaCompaniesAPI(website, companiesApiKey) : null;
