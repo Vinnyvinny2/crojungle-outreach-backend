@@ -314,8 +314,11 @@ module.exports = [
 
   // (10) index.html changed and the contract number did not — the only staleness
   // signal there is, and the standing ruling since round 104.
+  // Re-anchored in Round 131: this entry pins a contract number and every round bumps it,
+  // so it breaks on each ship. The premise is unchanged - the two halves of the handshake
+  // must move together. Round 131's own suite carries 131-c-l for the same rule.
   { name: '130-e-j-contract-not-bumped', path: 'index.html', prove: 'clientcheck',
-    old: "const CLIENT_CONTRACT = 20261010;\n",
-    new: "const CLIENT_CONTRACT = 20261009;\n",
+    old: "const CLIENT_CONTRACT = 20261011;\n",
+    new: "const CLIENT_CONTRACT = 20261010;\n",
     mustPrint: /the handshake constants differ in the repo/ },
 ];

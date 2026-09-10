@@ -164,7 +164,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261010;
+const CONTRACT_VERSION = 20261011;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -11877,11 +11877,21 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
   _free.sort((a, b) => (_isCareers(a) ? 1 : 0) - (_isCareers(b) ? 1 : 0));
   for (const p of _free) {
     const body = p && (p.text || p.html);
-    if (!body || String(body).length < 100) continue;
-    const got = extract(String(body), false);
+    // The mailto: targets harvested from this page's markup, appended in their
+    // href form so the extractor's existing mailto scan reads them. They go
+    // through the SAME extractor with the SAME same-domain strictness as the
+    // page text, so an address on somebody else's host is refused here exactly
+    // as it is refused when it is printed in the words.
+    const _hrefs = (p && Array.isArray(p.mailtos)) ? p.mailtos : [];
+    if ((!body || String(body).length < 100) && !_hrefs.length) continue;
+    const got = extract(String(body || '') + (_hrefs.length ? '\n' + _hrefs.map(a => 'mailto:' + a).join('\n') : ''), false);
     if (got.length > 0) {
       const _careers = _isCareers(p);
-      console.log(`EMAIL free [${domain}]: found ${got.length} address(es) on ${p.url || 'a page already in hand'}${_careers ? ' \u2014 their CAREERS page, so this is a recruiting inbox and the row says so' : ''} \u2014 no Firecrawl credit spent.`);
+      // leadDiag, not console.log: this says what was found about ONE lead, and
+      // the boot check below runs this exact function on a fixture. A lead line
+      // in the boot log is the shape §51 records - the reader cannot tell a
+      // fixture from a business. It prints normally on a real read.
+      leadDiag(`EMAIL free [${domain}]: found ${got.length} address(es) on ${p.url || 'a page already in hand'}${_careers ? ' \u2014 their CAREERS page, so this is a recruiting inbox and the row says so' : ''} \u2014 no Firecrawl credit spent.`);
       return { emails: got, source: _careers ? 'careers_page' : 'free_page', offDomain: offDomainUsed, fromCareers: _careers };
     }
   }
@@ -34996,7 +35006,35 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
       console.log(`DM [${companyName}]: ROSTER SETTLES IT \u2014 their own team page states ${ranked.name} is "${brainHit.title}". That is the company naming its owner on a page it maintains, which no paid search can outrank. Skipping the web, licence and registry lookups (~12 Firecrawl credits saved).`);
     }
     if (eponymousConfident && !(corroborated || ownSiteConfident || rosterConfident)) {
-      console.log(`DM [${companyName}]: EPONYMOUS \u2014 the business is named after ${ranked.name}, confirmed high-confidence by their own site, and the business name itself is the corroboration. Evidence floor met without paid lookups (~8 Firecrawl credits saved).`);
+      // ══ ROUND 131: A BUSINESS NAME CANNOT CORROBORATE ITSELF ══════════
+      // This line made two claims on every eponymous settle and neither was
+      // always earned on the brain arm.
+      //
+      // "confirmed high-confidence by their own site": for a candidate with
+      // no title that confidence is the model's own word for itself, and
+      // this same file rules that inadmissible where findOwnerViaBusinessName
+      // refuses to let it switch off the place-name defence.
+      //
+      // "the business name itself is the corroboration": nameCorroborated,
+      // the gate the brain arm passes, CONCATENATES the company name into its
+      // haystack. So a name that appears nowhere in their site copy clears
+      // that gate on the business name - and this sentence then offered the
+      // business name a second time as the corroboration. One artifact
+      // counted twice, which is the exact double count independentSourceCount
+      // exists to prevent, printed as prose.
+      //
+      // The settle is untouched, deliberately: the eponymous grade is a
+      // structural fact and Vin ruled it unchanged, which includes which
+      // leads reach the sheet. Only the sentence changes, and it now says
+      // which of the two artifacts we actually saw. The absence is stated
+      // about the copy WE READ, never about their site: a page we never
+      // fetched may well name him.
+      const _epoCopy = [String(homepageContent || '')].concat(
+        Array.isArray(preFetchedPages) ? preFetchedPages.map(p => String((p && p.text) || '')) : []).join(' ');
+      const _epoInCopy = nameCorroborated(ranked.name, '', _epoCopy);
+      console.log(`DM [${companyName}]: EPONYMOUS \u2014 the business is named after ${ranked.name}, and ${_epoInCopy
+        ? 'their site copy names them as well, so two things they wrote themselves say the same thing'
+        : 'we could not find that name anywhere in the site copy we read, so the business name is the only evidence there is and a name cannot corroborate itself'}. Evidence floor met without paid lookups (~8 Firecrawl credits saved).`);
     }
     _settleWhy = `${ranked.name || 'nobody'} (${ranked.sources.join('+')}) authority=${ranked.authority} independent=${independent}`
       + ` | corroborated=${corroborated} ownSite=${ownSiteConfident} eponymous=${eponymousConfident} roster=${rosterConfident}`
@@ -35408,17 +35446,29 @@ const _unvouchedSendGuard = (r, args) => {
   const _tier = Number(r.tier);
   if (!(_tier >= 3)) return r;                 // T1/T2 are measurements, not guesses
   if (r.smtpVerified === true) return r;       // proven by the mailbox itself
-  if (r.sendable !== true) return r;           // already not sendable; say nothing twice
-  // leadDiag, not console.log: this is a diagnostic about a LEAD, and the boot
-  // checks run the guard over fixtures. Section 51 records the same class - a clean
-  // boot printing real diagnostics about imaginary businesses - and the glyph
-  // would also be counted by the verdict recorder as a failed check.
-  leadDiag(`\u26a0 EMAIL [${r.email}]: built from ${r.name || 'a name'}, whom the authority gate HELD BACK. Kept on the row and offered ONE check at the send boundary \u2014 it goes out only if the mail server says the mailbox exists, and "cannot say" is a no on this row, because the person is unproven as well as the mailbox.`);
-  return Object.assign({}, r, {
-    verifyToSend: true,
-    blockReason: r.blockReason
-      || `built from ${r.name || 'a name'}, who was held back by the authority gate \u2014 it is checked against their mail server before it can be sent, and an unconfirmed answer stops it`,
-  });
+  // ══ ROUND 131: VIN REVERSED THIS, KNOWINGLY ═══════════════════════════
+  // Round 129 chose to KEEP the constructed address and offer it one check at
+  // the send boundary, on the argument written above: neither hard bounce on
+  // record came through this guard, and a guard that eats good data is the
+  // more expensive failure. Vin ruled the other way on 2026-09-10, twice and
+  // in terms - a name the buying floor held back builds NO address at all.
+  //
+  // What he kept: the NAME still goes on the sheet, so a rep can ask for the
+  // person by it, and owner_confidence carries the doubt. What stops is this
+  // pipeline inventing a mailbox for somebody nobody vouched for.
+  //
+  // The 'already not sendable' early return is gone with it. A tier-4 guess
+  // is not sendable and was still shown on the row as this person's address,
+  // which is the half the ruling is about.
+  //
+  // The refusal returns the SAME shape a lead with no address returns
+  // (EMAIL_TIERS.NONE, tier 5, the empty string), so the row, the CSV and the
+  // card have ONE vocabulary for "no address" instead of a second one that
+  // only this path can produce. The reason rides with it.
+  leadDiag(`\u26a0 EMAIL [${r.email}]: built from ${r.name || 'a name'}, whom the authority gate HELD BACK. No address goes on this row \u2014 it was constructed out of a person we cannot vouch for, and the name alone is what the rep asks for.`);
+  return { email: '', ...EMAIL_TIERS.NONE, name: r.name || '', pattern: null,
+    lookupBlocked: r.lookupBlocked || null,
+    blockReason: `no address was built: ${r.name || 'the only name we found'} was held back by the authority gate, and a mailbox is never constructed out of a person nobody vouched for` };
 };
 // == HOW SURE ARE WE THAT THIS ADDRESS REACHES HIM ==========================
 //
@@ -61817,7 +61867,7 @@ app.listen(PORT, () => {
       [_nd('out.email.sendable ? out.email.address :', ' `${out.email.address} (BLOCKED:'), 'the FIND CONTACT line prints an address the sheet will never send to, with nothing saying so'],
       [_nd('|business_name|hunter|', 'google_review_replies)$/'), 'the OWNER WAVE line forgot the review signatures again, so a free settle reads as a paid win'],
       [_nd('_ownerWaveLectured', ' = true;'), 'the reading guide is back on every lead\'s OWNER WAVE line'],
-      [_nd('freePages: pages.map(p => ({ url: p.url, text: p.text,', ' intent: p.intent })),'), 'the page intent is dropped again, so the extractor cannot tell a careers page from a contact page'],
+      [_nd('freePages: pages.map(p => ({ url: p.url, text: p.text, intent: p.intent,', ' mailtos: mailtoLinksFromHtml(p.html) })),'), 'the page intent is dropped again, so the extractor cannot tell a careers page from a contact page - or the mailto: targets are dropped, and an address published only in an href is invisible to every free pass'],
       [_nd('onAddressSource: (s) => { _addressSource', " = String(s || 'none'); },"), 'the address lookup is never asked where it found the address, so the FIND CONTACT line reports "none" on every lead including the ones that published one'],
       [_nd('| address source ${_addressSource}', ' | phone ${out.phone'), 'the FIND CONTACT line no longer says where the address came from, so a batch cannot tell an address we read for free from one we bought a contact page for'],
       [_nd('priorLeads:', ' _bench,'), 'the chain detector lost the cross-run memory the bench already holds'],
@@ -62315,7 +62365,50 @@ app.listen(PORT, () => {
     const _spa = { url: 'https://spa.com/', intent: 'home', text: '',
       html: '<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width"><title>App</title></head><body><div id="root"></div><script>'
         + 'var x=1;'.repeat(3000) + '</script><a href="/a">a</a><a href="/b">b</a><a href="/c">c</a></body></html>' };
+    // ══ ROUND 131: THE SHAPE THE 12,000-CHARACTER FLOOR COULD NOT SEE ═════
+    // _spa above is 24KB, so it clears the JavaScript-shell floor and the old
+    // gate held on it. A real React/Next/Vue build ships two to four kilobytes
+    // and an empty root div: UNDER that floor, so the gate opened and the form
+    // and phone absences ran against markup with under a hundred readable
+    // characters in it. A mechanism no fixture could reach.
+    const _shell = { url: 'https://shell.com/', intent: 'home', text: '',
+      html: '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+        + '<title>Apex Roofing | Dallas TX</title><link rel="stylesheet" href="/_next/static/css/a1b2c3.css">'
+        + '</head><body><div id="__next"></div>'
+        + '<script src="/_next/static/chunks/webpack-9c1.js" defer></script>'
+        + '<script src="/_next/static/chunks/framework-2b8.js" defer></script>'
+        + '<script id="__NEXT_DATA__" type="application/json">{"props":{"pageProps":{}},"page":"/","buildId":"'
+        + 'k3j2h1g0f9'.repeat(40) + '"}</script>'
+        + '<a href="/services">Services</a><a href="/about">About</a><a href="/contact">Contact</a>'
+        + '<noscript>You need to enable JavaScript to run this app.</noscript></body></html>' };
+    // A MAINTAINED WordPress build that is old only where nobody looks: schema,
+    // a form, a tappable phone, alt text on every image, this year's copyright
+    // - and a keywords meta tag beside a slider plugin's jQuery 1.x, which is
+    // the whole of what "dated" needs.
+    const _wpFresh = { url: 'https://freshwp.com/', intent: 'home', text: _body,
+      html: '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+        + '<title>Roof Repair in Dallas | Fresh Roofing Co</title><meta name="keywords" content="roofing, dallas">'
+        + '<script type="application/ld+json">{"@type":"RoofingContractor","name":"Fresh Roofing Co","telephone":"214-555-0111","address":{"@type":"PostalAddress","addressLocality":"Dallas"}}</script>'
+        + '<script src="/wp-content/plugins/slider/js/jquery-1.12.4.min.js"></script></head>'
+        + '<body><a href="tel:2145550111">Call</a><a href="/about">About</a><a href="/contact">Contact</a>'
+        + '<form action="/enquire"><input name="email"></form>'
+        + '<img src="a.jpg" alt="a new roof"><img src="b.jpg" alt="a crew at work">'
+        + '<img src="c.jpg" alt="shingles close up"><img src="d.jpg" alt="a finished job">'
+        + '<p>' + _body + '</p><p>&copy; ' + new Date().getFullYear() + ' Fresh Roofing Co</p></body></html>' };
+    // The same page with and without a live-chat embed, so the suppression can
+    // only be credited for the chat and never for something else on the page.
+    const _chatHtml = (withChat) => '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
+      + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+      + '<title>Emergency Plumbing in Dallas | Chat Co</title>'
+      + '<script type="application/ld+json">{"@type":"Plumber","name":"Chat Co","telephone":"214-555-0122","address":{"@type":"PostalAddress","addressLocality":"Dallas"}}</script>'
+      + '</head><body><a href="tel:2145550122">Call us</a><a href="/about">About</a><a href="/contact">Contact</a>'
+      + '<img src="a.jpg" alt="a plumber"><img src="b.jpg" alt="a repaired pipe">'
+      + '<img src="c.jpg" alt="our van"><img src="d.jpg" alt="a finished job">'
+      + '<p>' + _body + '</p>'
+      + (withChat ? '<script src="https://embed.tawk.to/5f2a1b/default" async></script>' : '')
+      + '</body></html>';
     const _sb = (pages, extra) => readSiteBuild(Object.assign({ pages, website: pages[0] && pages[0].url, companyName: 'Co', city: 'Dallas, TX', trade: 'Roofing' }, extra || {}));
+    const _contactPage = (host) => ({ url: 'https://' + host + '/contact', intent: 'contact', text: _body, html: '<html><body>' + _body + '</body></html>' });
 
     // 1. A good site: measured, no faults, and it scores NOTHING rather than
     //    being marked down (Vin's ruling, 2026-09-04).
@@ -62378,6 +62471,42 @@ app.listen(PORT, () => {
     if (!_spaMix.faults.some(f => f.id === 'jsOnly')) _fails.push('a JS-painted home page beside a readable contact page loses the JavaScript fault');
     if (_spaMix.faults.some(f => f.id === 'noForm' || f.id === 'noClickToCall')) _fails.push('a JavaScript-painted page is charged with having no form - the form may be drawn by the script we did not run, so that is a false sentence about a real business');
 
+    // ── 4b. ROUND 131: AND THE SAME SHELL UNDER THE 12,000-CHARACTER FLOOR ─
+    // The contact page beside it is deliberate: it clears the text floor, so
+    // every absence term is LIVE and the only thing that can stop the form and
+    // phone claims is the gate this fixture exists to test.
+    const _shellMix = _sb([_shell, _contactPage('shell.com')], { robots: '' });
+    if (_shell.html.length >= 12000) _fails.push(`the modern-build fixture has grown to ${_shell.html.length} characters and now clears the JavaScript-shell floor, so it no longer stands for the build the old gate was blind to`);
+    if (rawReadableChars(_shell.html) >= 500) _fails.push('the modern-build fixture now carries readable text, so it no longer stands for a page painted by its bundle');
+    if (_shellMix.termsMeasured < 3) _fails.push('the modern-build fixture measures almost nothing, so the form and phone gates are not what these assertions are testing');
+    if (_shellMix.faults.some(f => f.id === 'noForm')) _fails.push('a two-kilobyte React build is told there is no enquiry form anywhere we read - its form is drawn by the bundle a plain fetch never runs, and the owner disproves the sentence by opening his own page');
+    if (_shellMix.faults.some(f => f.id === 'noClickToCall')) _fails.push('a two-kilobyte React build is told its phone number is not tappable, asserted off markup carrying under a hundred readable characters');
+
+    // ── 4c. ROUND 131: DATED WHERE NOBODY LOOKS IS NOT A SENTENCE ─────────
+    const _wpAge = readSiteAge({ rawHtml: _wpFresh.html, hasViewport: true, isHttps: true, copyrightYear: new Date().getFullYear() });
+    if (_wpAge.dated !== true || _wpAge.visibleCount !== 0) _fails.push(`the source-only-dated fixture now reads dated=${_wpAge.dated} with ${_wpAge.visibleCount} visible marker(s), so it no longer stands for a build that is old only where a customer never looks and the gate below is being tested on nothing`);
+    const _wp = _sb([_wpFresh, _contactPage('freshwp.com')], { robots: '' });
+    if (_wp.faults.some(f => f.id === 'datedBuild')) _fails.push('a maintained site with schema, a form, a tappable phone and alt text is told its build is years out of date on two markers nobody can see, and the sentence ships with no evidence beside it');
+    if (_wp.faults.some(f => f.id === 'datedBuild') && !_wp.agedSay.length) _fails.push('the dated-build fault reaches the row with agedSay empty, which is the fault firing with nothing a person could go and check');
+    if (!_o.faults.some(f => f.id === 'datedBuild')) _fails.push('a genuine 2016 table-layout build no longer reports a dated build, so the visible-marker gate has silenced a true finding as well as a false one');
+
+    // ── 4d. ROUND 131: A CHAT WIDGET IS A ROUTE IN ───────────────────────
+    const _chatOn = _sb([{ url: 'https://chatco.com/', intent: 'home', text: _body, html: _chatHtml(true) }, _contactPage('chatco.com')], { robots: '' });
+    const _chatOff = _sb([{ url: 'https://chatco.com/', intent: 'home', text: _body, html: _chatHtml(false) }, _contactPage('chatco.com')], { robots: '' });
+    if (_chatOn.faults.some(f => f.id === 'noForm')) _fails.push('a site whose corner carries a live-chat bubble is told there is no enquiry form anywhere we read - a chat box is a way in, and a faster one than a form');
+    if (!_chatOff.faults.some(f => f.id === 'noForm')) _fails.push('the same page WITHOUT the chat embed reports no missing form either, so the chat suppression is being credited for something else on the page entirely');
+
+    // ── 4e. ROUND 131: PLAIN HTTP IS ABOUT WHERE WE LANDED ───────────────
+    // Nearly every live site redirects http to https. The claim was read off
+    // the address we were HANDED, so a listing holding http:// made us tell an
+    // owner that browsers warn people away from a site with a padlock on it.
+    const _saidHttp = (r) => (r.agedSay || []).some(s => /plain http/i.test(s));
+    const _httpRead = (finalUrl) => _sb([Object.assign({}, _wpFresh, { url: 'http://freshwp.com/' }, finalUrl ? { finalUrl } : {}),
+      { url: 'http://freshwp.com/contact', intent: 'contact', text: _body, html: '<html><body>' + _body + '</body></html>' }], { robots: '' });
+    if (_saidHttp(_httpRead(''))) _fails.push('a listing holding an http:// address has us telling the owner his site is still on plain http, without our ever having established where the request landed - the easiest sentence in the set for him to disprove');
+    if (_saidHttp(_httpRead('https://freshwp.com/'))) _fails.push('a site we asked for over http and LANDED on over https is still called plain http');
+    if (!_saidHttp(_httpRead('http://freshwp.com/'))) _fails.push('a site we actually landed on over plain http no longer says so, so the fix has silenced a true finding as well as a false one');
+
     // 5. The robots.txt parser, per agent, because "Disallow: /" under one
     //    agent says nothing about another.
     const _rb = (t) => robotsBlocksAi(t);
@@ -62418,6 +62547,71 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`\u26d4 WEBSITE BUILD CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
+
+  // ══ ROUND 131: THE ADDRESS THAT IS ONLY EVER IN AN href ══════════════════
+  // Disclosed in Round 130 as a yield risk and left open. The free pages carry
+  // TEXT, and the tags are gone by then, so a business whose only published
+  // address sits behind the words "Email us" hands us nothing - and the lead
+  // either buys a contact page for markup it already holds or comes off the
+  // sheet with nobody on it. Executed end to end with no Firecrawl key, so the
+  // engine cannot buy anything and the answer can only come from pages in hand.
+  bootHold();
+  (async () => {
+  try {
+    const _fails = [];
+    const _body131 = 'Contact our office for a free estimate on your roof and we will call you back the same day. '.repeat(20);
+    const _page131 = (addr) => '<html><body><p>' + _body131 + '</p><a href="mailto:' + addr + '">Email us</a></body></html>';
+
+    // 1. The harvest itself, on the shape that beat every free pass.
+    const _got = mailtoLinksFromHtml(_page131('joe@selftestco.com'));
+    if (_got.length !== 1 || _got[0] !== 'joe@selftestco.com') _fails.push(`the mailto harvest read ${JSON.stringify(_got)} off a page whose only address sits in an href behind the words "Email us"`);
+    if (mailtoLinksFromHtml('<a href="mailto:%20joe@selftestco.com">x</a>')[0] !== 'joe@selftestco.com') _fails.push('the harvest keeps the URL-encoded space, so a page carrying an encoded mailto ships an address that cannot exist and the bounce is charged to our sending domain');
+    if (mailtoLinksFromHtml('<p>' + _body131 + '</p>').length) _fails.push('the harvest invents an address on a page that publishes none');
+    // And this is the whole reason it exists: the text pass cannot see it.
+    if (plainTextFromHtml(_page131('joe@selftestco.com')).indexOf('joe@selftestco.com') >= 0) _fails.push('the page text already carries the address, so this harvest is being credited for something the existing free pass would have found on its own');
+
+    // 2. It reaches the extractor, and the extractor still owns whose it is.
+    const _run131 = (mailtos) => scrapeEmailsFromSite('https://selftestco.com', '', '', false, false,
+      [{ url: 'https://selftestco.com/contact', intent: 'contact', text: plainTextFromHtml(_page131('joe@selftestco.com')), mailtos }]);
+    const _mine = await _run131(['joe@selftestco.com']);
+    if (!((_mine && _mine.emails) || []).includes('joe@selftestco.com')) _fails.push('an address published in a mailto: link on their own contact page is still invisible to the free passes, so the lead pays for a page we are already holding - or reaches the sheet with nobody on it');
+    if (_mine && _mine.source !== 'free_page') _fails.push(`an address found on a page in hand is reported as coming from "${_mine.source}" rather than a free page, so the row cannot tell a free read from a bought one`);
+    // 3. AND AN ADDRESS ON SOMEBODY ELSE'S HOST IS NEVER THEIRS. This is the
+    // webdev's inbox, and it is how an agency or an insurance broker ends up
+    // on a call sheet as the owner's address.
+    const _notTheirs = await _run131(['bob@somewebdevshop.com']);
+    if (((_notTheirs && _notTheirs.emails) || []).length) _fails.push(`a mailto: link pointing at a host that is not their own domain is taken as theirs (${((_notTheirs && _notTheirs.emails) || []).join(', ')}) - that is a webdev's or a broker's inbox arriving on a call sheet as the owner`);
+
+    // AND THE STRICT FLAG IS LOAD-BEARING ON ITS OWN. bob@somewebdevshop.com is
+    // refused twice over - by the strict flag AND by the shared-chunk test - so
+    // a second case only the flag can refuse: a personal address on a free
+    // provider, which the HOMEPAGE pass accepts and this pass must not.
+    const _freeProv = await _run131(['bobsmith@gmail.com']);
+    if (((_freeProv && _freeProv.emails) || []).length) _fails.push(`a personal address on a free mail provider, published in a mailto: link on a page nobody paid for, is taken as the business's own (${((_freeProv && _freeProv.emails) || []).join(', ')}) - pass 1.5 is the strict pass and the mailto route must not become a way around it`);
+
+    // 4. THE ADDRESS WE LANDED ON, ON ITS OWN. The host check is the whole of
+    // it: a request that finishes somewhere else says nothing about their site.
+    if (landedUrl('http://theirs.com/', { url: 'https://www.theirs.com/' }) !== 'https://www.theirs.com/') _fails.push('a plain http-to-https redirect on their own host is not read as the address we landed on, so a site that redirects like nearly every live site does is never credited with the padlock it has');
+    if (landedUrl('http://theirs.com/', { url: 'http://someoneelse.com/' })) _fails.push("a request that finished on somebody else's host is taken as this business's own address, so a parked domain or a hosting redirect decides what we say about their site");
+    if (landedUrl('http://theirs.com/', {})) _fails.push('a response that reports no address at all still yields a landed address, so a claim about their site is made off something we never established');
+
+    // 4. THE CALL SITES. A fixture supplies its own arguments, so it cannot see
+    // whether the harvest is wired to either lookup.
+    const _s131 = selfSourceNoCommentsLF();
+    const _n131 = (a, b) => a + b;
+    const _wire131 = _n131('freePages: pages.map(p => ({ url: p.url, text: p.text, intent: p.intent,', ' mailtos: mailtoLinksFromHtml(p.html) })),');
+    const _wired = _s131.split(_wire131).length - 1;
+    if (_wired < 2) _fails.push(`only ${_wired} of the two address lookups is handed the mailto: targets, so on the other one an address published in an href is still invisible - the owner's lookup and the marketing lead's lookup are separate call sites and half an edit ships`);
+    if (!_s131.includes(_n131('const _hrefs = (p && Array.isArray(p.mailtos))', ' ? p.mailtos : [];'))) _fails.push('the free pass no longer reads the harvested mailto: targets, so they are collected and thrown away - computed-but-not-passed');
+    if (!_s131.includes(_n131('const finalUrl = landedUrl(url,', ' r);'))) _fails.push('the plain fetch no longer records the address it actually landed on, so the plain-http claim is back on the URL we were handed');
+    if (!_s131.includes(_n131("pages.push({ url: home.url, intent: 'home', html: home.html, text: home.text,", " finalUrl: home.finalUrl || '' });"))) _fails.push('the landed address is measured and never travels with the home page, so the website read cannot tell where the request finished');
+
+    if (_fails.length) console.log(`⛔ FIND MAILTO HARVEST CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
+    else console.log('✓ FIND MAILTO HARVEST CHECK: an address a business publishes only as a mailto: link - the words on the page say "Email us" and the address is in the href - is harvested from markup the free read already holds, handed to BOTH address lookups, and read by the same extractor with the same same-domain strictness as an address printed in the words, so a webdev\'s inbox on another host is refused exactly as it always was. Encoded targets are decoded before matching, a page publishing no address yields none, and the plain fetch now records the address it actually landed on so nothing claims a site is on plain http without our having established where the request finished.');
+  } catch (e) {
+    console.log(`⛔ FIND MAILTO HARVEST CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  } finally { bootRelease(); }
+  })();
 
   // ---- THE SHEET EXPORT TAKES ITS DESTINATION FROM THE REQUEST ----------
   // Which makes it the one endpoint here that would post a rep's contact list
@@ -63166,9 +63360,14 @@ app.listen(PORT, () => {
       const _guess = (t) => ({ email: 'dana@x.com', tier: t, sendable: true, name: 'Dana Brooks' });
       for (const _t of [3, 4]) {
         const _r = _unvouchedSendGuard(_guess(_t), _un);
-        if (_r.verifyToSend !== true) _fails.push(`a tier-${_t} address CONSTRUCTED from a held-back name is not marked verify-to-send, so the send boundary cannot tell it from an ordinary guess and an unknown answer sends an unproven person's mailbox`);
-        if (!_r.blockReason) _fails.push(`a tier-${_t} address built on a held-back name carries no reason on the row, so the rep cannot tell why it needs a check`);
-        if (_r.email !== 'dana@x.com') _fails.push('the guard is DELETING the address rather than flagging it - a rep can still use it on a call, and eating good data is the more expensive failure');
+        // ROUND 131 REVERSES ROUND 129 HERE, on Vin's ruling of 2026-09-10:
+        // a name the buying floor held back builds NO address at all. The
+        // three assertions that pinned "kept and marked" are replaced by the
+        // three that pin "not built", and the NAME is asserted to survive,
+        // because that half of his ruling is the one a blunt fix would lose.
+        if (_r.email !== '') _fails.push(`a tier-${_t} address CONSTRUCTED from a held-back name still rides the row, so this pipeline is inventing a mailbox for a person nobody vouched for`);
+        if (!_r.blockReason) _fails.push(`a tier-${_t} address built on a held-back name carries no reason on the row, so the rep cannot tell why the lead has no address`);
+        if (_r.name !== 'Dana Brooks') _fails.push('the refusal took the NAME off the row as well as the address - the name still goes on the sheet at grade D, and only the address and the score change');
       }
       // The three that must pass through untouched.
       if (_unvouchedSendGuard(_guess(1), _un).sendable !== true) _fails.push('a published address is being refused because the owner name was held back - the address was read off their own site and has nothing to do with the name');
@@ -65477,8 +65676,13 @@ app.listen(PORT, () => {
     const _guessV = (t) => ({ email: 'dana@x.com', tier: t, sendable: true, name: 'Dana Brooks' });
     for (const _t of [3, 4]) {
       const _r = _unvouchedSendGuard(_guessV(_t), _unV);
-      if (_r.sendable !== true) _fails.push(`a tier-${_t} address built from a held-back name is refused outright rather than offered one check - that deletes a population nothing on record was ever charged to, because neither bounce came through this guard`);
-      if (_r.verifyToSend !== true) _fails.push(`a tier-${_t} address built from a held-back name carries no verify-to-send mark, so the send boundary reads it as an ordinary guess and an unknown answer sends it`);
+      // ROUND 131: Vin reversed the Round 129 answer. The guard no longer
+      // marks a constructed address built on a held-back name - it refuses to
+      // build one - so what is asserted here is the refusal, and that the
+      // refusal returns the ordinary no-address shape rather than a second
+      // vocabulary only this path can produce.
+      if (_r.email !== '') _fails.push(`a tier-${_t} address built from a held-back name is still on the row, so the pipeline is back to constructing a mailbox for a person the owner ladder would not vouch for`);
+      if (_r.sendable !== false || Number(_r.tier) !== 5) _fails.push(`the refused tier-${_t} row does not read as an ordinary no-address lead, so the card and the CSV need a second vocabulary for one fact`);
     }
     // The vouched case is untouched, in both directions.
     const _v3 = _unvouchedSendGuard(_guessV(3), { ceoVouched: true });
@@ -65506,18 +65710,232 @@ app.listen(PORT, () => {
         '\n        ? '), 'the send route never asks whether an unknown answer counts for this row, so the mark is decoration and the row sends on an unknown exactly as before'],
       [_nV('if (_mustProve) {',
         '\n        console.log('), 'the send route works the answer out and pushes the lead anyway - computed-but-not-passed, on the one gate that protects the sending domain'],
-      [_nV('verifyToSend:',
-        ' true,'), 'the held-back guard no longer writes the mark at all, so nothing downstream can tell this row from an ordinary guess'],
+      // ROUND 131 REMOVED THE ONLY PRODUCER OF THE MARK, so the needle that
+      // pinned it is gone: it would now name code this round deleted on
+      // purpose. sendUnknownIsNotAYes and its send-route wiring below are
+      // KEPT and still asserted, and they are honestly UNREACHABLE from any
+      // caller today - the audit path passes no verdict and is treated as
+      // vouched, and the find route's held-back name no longer produces an
+      // address to mark. That is recorded here rather than left to be
+      // rediscovered: it is a branch no fixture can reach, and this file's
+      // rule for those is to delete them, which is a decision for the owner
+      // of the send boundary and not for this edit.
       [_nV('_mustProve = ',
         "'';"), 'a valid answer no longer clears the hold, so an address the mail server confirmed is refused anyway and the check is bought for nothing'],
     ]) if (!_srcV.includes(_needle)) _fails.push(_msg);
     if (_fails.length) {
       console.log(`\u26d4 VERIFY TO SEND CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
     } else {
-      console.log(`\u2713 VERIFY TO SEND CHECK: an address built for a person the owner ladder would not vouch for is no longer deleted on no evidence - neither bounce on record came through that guard. It is kept, it is offered ONE check at the send boundary, and it goes out only on a yes: unknown, a thrown request and a missing verifier key all stop it, because the person is unproven there as well as the mailbox. A vouched owner's address is untouched, so catch-all domains still send on unknown as they did.`);
+      console.log(`\u2713 VERIFY TO SEND CHECK: on Vin's ruling of 2026-09-10 an address CONSTRUCTED for a person the owner ladder would not vouch for is not built at all - the row carries the name and no address, in the same shape a lead with no address carries. A published address, an SMTP-confirmed one and a vouched owner's are all untouched. The send boundary's own rule is still asserted below and nothing can set its mark today, which is recorded beside it rather than left to be rediscovered.`);
     }
   } catch (e) {
     console.log(`\u26d4 VERIFY TO SEND CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ OWNER GRADE SCORE CHECK - round 131 ══════════════════════════════════
+  // Three kinds of owner reached the Find score as ONE boolean. ownerCanBuy is
+  // all any term ever read, so a name the buying floor HELD BACK scored like a
+  // lead with no owner at all - and worse, on leads identical but for the
+  // owner it out-scored an eponymous owner, 86 against 83, because its founder
+  // term went unmeasured and left the DENOMINATOR while the eponymous lead's
+  // scored 10 out of 25. The grade was computed, printed on the sheet as A to
+  // D, and never handed to the number the rep sorts by.
+  //
+  // Vin's ruling is narrow and this check is written to hold him to it in BOTH
+  // directions: grade D moves, and C, B and A do not move at all. The cheap
+  // way to "tidy" this is to widen the grade test onto every name that is not
+  // confirmed, which would demote every eponymous lead in the ICP - most of
+  // the addresses this tab produces come from exactly those.
+  try {
+    const _fails = [];
+    const _srcG = selfSourceNoCommentsLF();
+    const _nG = (a, b) => a + b;
+    // Enough measured terms on every variant to clear FIND_ICP_MIN_TERMS, so
+    // no assertion below is really measuring the not-scored floor.
+    const _leadG = { teamCount: 6, rating: 4.6, reviewCount: 140, hiringAny: false,
+      liveChat: false, scheduler: false, callTracking: false, analytics: true,
+      tagManager: false, adsCode: false, affordBand: 'premium',
+      tradeLabel: 'Roofing contractor', readable: true, siteMeasured: true,
+      siteGap: 0, reachMeasured: true,
+      // What readFindContact actually produces on a readable site: FALSE, not
+      // null and never absent. Leaving it out here would make every fixture
+      // below measure the no-website lane instead of the lane this round is
+      // about, and the founder assertions would pass on the wrong lead.
+      founderPhrase: false, execTitles: [] };
+    const _D = (x) => Object.assign({}, _leadG, { ownerCanBuy: false, ownerNamedOnSite: null,
+      ownerAnswersReviews: null, emailTier: null, ownerGrade: 'unconfirmed' }, x || {});
+    const _C = (x) => Object.assign({}, _leadG, { ownerCanBuy: true, ownerNamedOnSite: true,
+      ownerAnswersReviews: null, emailTier: 3, ownerGrade: 'inferred' }, x || {});
+    const _A = (x) => Object.assign({}, _leadG, { ownerCanBuy: true, ownerNamedOnSite: true,
+      ownerAnswersReviews: true, emailTier: 2, ownerGrade: 'confirmed' }, x || {});
+    const _N = (x) => Object.assign({}, _leadG, { ownerCanBuy: false, ownerNamedOnSite: null,
+      ownerAnswersReviews: null, emailTier: null, ownerGrade: 'none' }, x || {});
+    const _term = (s, id) => ((findIcpScore(s).terms) || []).find(t => t.id === id) || {};
+    const _score = (s) => findIcpScore(s).score;
+
+    // 1. THE REACH TERM, EXECUTED. With no address built any more, a held-back
+    // name sits strictly between the 1 a read that produced NOTHING scores and
+    // the 7 a name that CLEARS the buying floor with no address scores - and
+    // strictly below the 4 the same lead scored while a pattern address was
+    // still being built for it.
+    const _dReach = _term(_D(), 'reach');
+    if (_dReach.points !== 2) {
+      _fails.push(`a lead whose only name the buying floor held back scores ${_dReach.points} on the reach term instead of 2 - below it is a read that produced neither a name nor an address, above it is the pattern address this ruling stopped building`);
+    }
+    // AND THE NUMBER THE REP SORTS BY ACTUALLY MOVED. The same lead as it was
+    // before this round: no grade in the signals, and the pattern address the
+    // engine used to build for it. A term-level change that rounds away in the
+    // ratio is a change nobody can see.
+    if (!(_score(_D()) < _score(_D({ emailTier: 3, ownerGrade: '' })))) {
+      _fails.push('a held-back name scores the same FIT as it did when the engine still built it a pattern address, so the ruling took the address off the row and left the list sorting exactly as before');
+    }
+    // A published or SMTP-confirmed address is a measurement of their site or
+    // of their mail server. It is not docked for a doubt about a name it has
+    // nothing to do with.
+    if (_term(_D({ emailTier: 1 }), 'reach').points !== 8) {
+      _fails.push('an address published on their own site is being docked because the owner name was held back - that charges a measurement of their site for a doubt about something else');
+    }
+
+    // 2. THE FOUNDER TERM IS DELIBERATELY NOT GRADED, and both halves of that
+    // decision are asserted because the obvious 'symmetry' fix breaks one of
+    // them. On a readable lead founderPhrase is FALSE and never null, so the
+    // term is already MEASURED for a held-back name and already scores it at
+    // the floor - there is nothing there to fix. The only leads where it goes
+    // unmeasured are ones whose pages we could not read at all, and scoring
+    // who runs the place off a page we never read is an absence claimed off
+    // nothing (§106) - the same thing the readable gate beside it refuses.
+    const _dF = _term(_D(), 'founder');
+    if (_dF.measured !== true || _dF.points !== 3) {
+      _fails.push('a readable lead whose only name was held back no longer scores the founder term at its floor, so the term the score reads for who runs the place has changed under a held-back name');
+    }
+    if (_term(_D({ founderPhrase: null, readable: false }), 'founder').points != null) {
+      _fails.push('the founder term now scores a held-back name on a site we could not read, which claims who runs the place off a page nobody looked at');
+    }
+    // And the other tells still speak. The owner signing his own Google review
+    // replies is evidence about who runs the place, and nothing to do with the
+    // title we could not find.
+    if (_term(_D({ ownerAnswersReviews: true }), 'founder').points !== 7) {
+      _fails.push('a held-back name now silences the owner answering his own Google reviews, which is evidence about who runs the place and has nothing to do with the missing title');
+    }
+
+    // 3. THE WHOLE SCORE, in the direction Vin ruled.
+    const _sD = _score(_D()), _sC = _score(_C()), _sA = _score(_A());
+    if (!(_sD < _sC)) {
+      _fails.push(`a held-back name scores ${_sD} and an eponymous owner ${_sC} on leads identical but for the owner, so the buying floor's refusal costs the lead nothing`);
+    }
+    if (!(_sD < _sA)) {
+      _fails.push(`a held-back name scores ${_sD} and a confirmed owner ${_sA} on leads identical but for the owner, so a guess is worth what the truth is worth`);
+    }
+    // And it stays ABOVE a lead we found nobody on. A name at the front desk
+    // is worth more than no name, and the refusal must not turn finding
+    // somebody into a penalty for having looked.
+    const _sN = _score(_N());
+    if (!(_sD > _sN)) {
+      _fails.push(`a held-back name scores ${_sD} and a lead with nobody named at all scores ${_sN}, so finding a person the buying floor would not vouch for is worth less than finding nobody`);
+    }
+
+    // 4. AND NOTHING ELSE MOVED. Each grade is scored against the SAME lead
+    // with no grade at all, which is exactly what it scored before the grade
+    // reached this route. Widen the test in part 1 or 2 onto anything but the
+    // held-back grade and these go red.
+    for (const [_who, _mk] of [['an eponymous owner', _C], ['a confirmed owner', _A], ['a lead with no owner at all', _N]]) {
+      if (_score(_mk()) !== _score(_mk({ ownerGrade: '' }))) {
+        _fails.push(`${_who} now scores differently because of the grade - the ruling moves grade D and nothing else, and most of the addresses this tab produces come from the eponymous lane`);
+      }
+    }
+
+    // 5. THE ADDRESS HALF, EXECUTED ON THE REAL GUARD. A constructed address
+    // is not built at all from a held-back name, and the name survives.
+    const _heldG = { ceoVouched: false };
+    const _addr = (t, x) => Object.assign({ email: 'dana@x.com', tier: t, sendable: true, name: 'Dana Brooks' }, x || {});
+    for (const _t of [3, 4]) {
+      const _g = _unvouchedSendGuard(_addr(_t), _heldG);
+      if (_g.email !== '') _fails.push(`a tier-${_t} address constructed from a held-back name is still on the row, so the pipeline is inventing a mailbox for a person nobody vouched for`);
+      if (_g.name !== 'Dana Brooks') _fails.push(`the tier-${_t} refusal took the NAME off the row as well - the name still goes on the sheet, and only the address and the score change`);
+    }
+    // Not sendable is not a reason to keep it: a tier-4 guess sat on the row
+    // as this person's address, which is the half the ruling is about.
+    if (_unvouchedSendGuard(_addr(4, { sendable: false }), _heldG).email !== '') {
+      _fails.push('an unsendable tier-4 guess still rides the row as this person address, so the rep is shown a mailbox built out of a name the ladder refused');
+    }
+    // The three measurements and the two vouched cases, untouched.
+    for (const [_why, _r, _args] of [
+      ['a published address is being deleted because the owner name was held back - it was read off their own site and has nothing to do with the name', _addr(1), _heldG],
+      ['an SMTP-confirmed address is being deleted on a held-back name - the mailbox answering is the strongest proof the name was right', _addr(2), _heldG],
+      ['a tier-3 address the mail server confirmed anyway is being deleted - it was tested, not assumed', _addr(3, { smtpVerified: true }), _heldG],
+      ['a vouched owner can no longer produce an address at all, so the refusal has widened onto every lead in the pipeline', _addr(3), { ceoVouched: true }],
+      ['a caller that passes no verdict is treated as held back, so the audit path silently stops producing addresses', _addr(3), {}],
+    ]) if (_unvouchedSendGuard(_r, _args).email !== 'dana@x.com') _fails.push(_why);
+
+    // 6. THE CALL SITES. Every fixture above supplies its own arguments, so
+    // each of them would pass while the route handed the terms nothing - which
+    // is exactly the defect this check exists for.
+    for (const [_needle, _msg] of [
+      [_nG('  signals.ownerGrade = (out.owner &&',
+        " out.owner.grade) || '';"), 'the contact read no longer carries the owner GRADE into the score, so every term is back to reading one boolean and a held-back name scores like a name three sources agree on'],
+      [_nG("      if (s.ownerGrade === '",
+        "unconfirmed') {"), 'the reach term no longer reads the grade, so a held-back name falls back into the lines that say nobody could be named as the buyer'],
+    ]) if (!_srcG.includes(_needle)) _fails.push(_msg);
+
+    if (_fails.length) {
+      console.log(`\u26d4 OWNER GRADE SCORE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 OWNER GRADE SCORE CHECK: a name the buying floor held back now scores ${_sD} where an eponymous owner scores ${_sC}, a confirmed one ${_sA} and a lead with nobody named ${_sN}, on leads identical but for the owner. No address is constructed from a held-back name at all, the name itself still goes on the sheet, and the founder term is left exactly as it was because it already measures that lead on a readable site and must not on an unreadable one. The eponymous, confirmed and no-owner leads score exactly what they scored before the grade reached this route. Executed on the real terms and the real guard, with two call-site needles.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 OWNER GRADE SCORE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ EPONYMOUS SENTENCE CHECK - round 131 ═════════════════════════════════
+  // The EPONYMOUS settle line told the reader two things: that their own site
+  // confirmed the name at high confidence, and that the business name was the
+  // corroboration. On the brain arm neither is guaranteed. nameCorroborated
+  // CONCATENATES the company name into its haystack, so a name that appears
+  // nowhere in their site copy clears it on the business name alone - and the
+  // sentence then offered that same business name back as the corroboration.
+  // One artifact counted twice, which is what independentSourceCount exists to
+  // stop, printed as prose instead of scored.
+  //
+  // This is the SENTENCE, not the settle: Vin ruled the eponymous grade
+  // unchanged, and that includes which leads reach the sheet.
+  try {
+    const _fails = [];
+    const _srcE = selfSourceNoCommentsLF();
+    const _nE = (a, b) => a + b;
+    // The two live shapes. The first is the practice recorded in this file at
+    // the brain's own gate: the business is named for the surgeon and the
+    // staff pages list nurses, so his name is in the COMPANY NAME and nowhere
+    // in the copy. The second states the doctor in a sentence of its own copy.
+    const _copyNoName = 'Our practice has served this area for twenty years. Our nurses and front desk staff are here to help you.';
+    const _copyNamed = 'Dr. Olatomide (Tomi) Familusi is a board-certified physician who founded the practice in 2011.';
+    if (nameCorroborated('Chad Robbins', '', _copyNoName) !== false) {
+      _fails.push('the site-copy test passes on copy that never uses the name, so the EPONYMOUS line still claims their own site confirms a name that appears nowhere in it');
+    }
+    if (nameCorroborated('Chad Robbins', 'Dr. Chad Robbins', _copyNoName) !== true) {
+      _fails.push('the gate the brain arm actually passes no longer clears on the business name, so this check is no longer measuring the double count it was written for');
+    }
+    if (nameCorroborated('Olatomide Familusi', '', _copyNamed) !== true) {
+      _fails.push('the site-copy test cannot see a name their own copy states in a sentence, so every eponymous settle would print the weaker line and nothing here is measuring anything');
+    }
+    // AND THE CALL SITE. The discriminator is worth nothing if the sentence
+    // does not read it - computed-but-not-passed, on a line whose whole job is
+    // to say where a decision-maker came from.
+    for (const [_needle, _msg] of [
+      [_nE('      const _epoInCopy = nameCorroborated(ranked.name,',
+        " '', _epoCopy);"), 'the eponymous line no longer asks whether their own site copy names the person, so it is back to claiming their site confirms a name that may appear only in the business name'],
+      [_nE('the business is named after ${ranked.name}, and $',
+        '{_epoInCopy'), 'the eponymous line no longer prints what the copy test found, so the answer is computed and thrown away and the sentence says the same thing on every lead'],
+      [_nE('      const _epoCopy = [String(homepageContent || ',
+        "'')].concat("), 'the copy the eponymous test reads is no longer their homepage, so the test answers about a corpus nobody supplied and every settle prints the same line'],
+    ]) if (!_srcE.includes(_needle)) _fails.push(_msg);
+
+    if (_fails.length) {
+      console.log(`\u26d4 EPONYMOUS SENTENCE CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    } else {
+      console.log('\u2713 EPONYMOUS SENTENCE CHECK: the EPONYMOUS settle line says which artifact it actually saw. When their own copy names the person it says so; when the name is in the business name alone it says we could not find it in the copy we read and that a name cannot corroborate itself. Executed on both live shapes, with two call-site needles. Which leads settle is unchanged.');
+    }
+  } catch (e) {
+    console.log(`\u26d4 EPONYMOUS SENTENCE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ══ THREE LEADS MUST NOT GET ONE SUBJECT LINE ════════════════════════════
@@ -79995,21 +80413,67 @@ const sameHostLinks = (html, baseUrl) => {
   return out;
 };
 
+// ══ A mailto: LINK WHOSE ANCHOR TEXT IS NOT THE ADDRESS ═════════════════════
+// Disclosed in Round 130 and not fixed there. The free pages we hand the
+// address extractor carry `text`, and plainTextFromHtml throws the tags away,
+// so this shape:
+//     <a href="mailto:joe@theirdomain.com">Email us</a>
+// reaches every free pass as the two words "Email us". The one address the
+// business publishes is invisible, the lead buys a contact page to look for
+// what it is already holding, and often comes off the sheet with nobody on it.
+// The markup is in hand; this reads the hrefs out of it before the tags go.
+//
+// It deliberately does NOT filter by host. The extractor already refuses an
+// off-domain address on a free page, and a second hand-kept copy of "is this
+// their domain?" is the disease this file records most - so the harvest hands
+// over what the page says and the one existing rule decides whose it is.
+const mailtoLinksFromHtml = (html) => {
+  const out = [];
+  const seen = new Set();
+  for (const h of String(html || '').match(/href\s*=\s*["']\s*mailto:[^"']{3,300}["']/gi) || []) {
+    const a = addressFromMailto(h.replace(/^href\s*=\s*["']\s*/i, '').replace(/["']\s*$/, '').trim());
+    if (!a || seen.has(a)) continue;
+    seen.add(a);
+    out.push(a);
+    if (out.length >= 20) break;
+  }
+  return out;
+};
+// ══ THE URL WE ASKED FOR IS NOT THE URL WE LANDED ON ════════════════════════
+// fetch follows redirects, and nearly every live site redirects http to https.
+// The website read took the protocol off the address we TYPED, so a listing
+// holding http://theirsite.com produced "it is still on plain http, so browsers
+// warn people away from it" about a site with a padlock on it - the easiest
+// sentence in the whole set for an owner to disprove, by opening one tab.
+//
+// Empty string means we could not establish it, and then nothing is claimed in
+// either direction. A landing on a DIFFERENT host is a different company's page
+// and proves nothing about theirs, so that is empty too.
+const landedUrl = (asked, res) => {
+  const got = String((res && res.url) || '');
+  if (!got) return '';
+  try {
+    const a = new URL(String(asked)).host.replace(/^www\./i, '').toLowerCase();
+    const b = new URL(got).host.replace(/^www\./i, '').toLowerCase();
+    return (a && a === b) ? got : '';
+  } catch (e) { void e; return ''; }
+};
 // A page read that costs nothing. Everything it can go wrong with is reported
 // by NAME rather than as an empty string, because "we read nothing" and "they
 // refused us" are different facts and only one of them is about the business.
 const findPlainFetch = async (url, timeoutMs = 12000) => {
   try {
     const r = await fetchT(url, { headers: { 'User-Agent': FIND_UA, 'Accept': 'text/html,application/xhtml+xml' } }, timeoutMs);
+    const finalUrl = landedUrl(url, r);
     const html = await safeText(r);
     const why = _blockedPageReason(r && r.status, html);
-    if (why) return { url, html: '', text: '', ok: false, why };
-    if (!html || html.length < 500) return { url, html: '', text: '', ok: false, why: `only ${(html || '').length} characters came back` };
+    if (why) return { url, finalUrl, html: '', text: '', ok: false, why };
+    if (!html || html.length < 500) return { url, finalUrl, html: '', text: '', ok: false, why: `only ${(html || '').length} characters came back` };
     const text = plainTextFromHtml(html);
-    if (text.length < 200) return { url, html, text, ok: false, why: 'the markup carries almost no readable text, which is what a JavaScript-only site looks like to a plain fetch' };
-    return { url, html, text, ok: true, why: '' };
+    if (text.length < 200) return { url, finalUrl, html, text, ok: false, why: 'the markup carries almost no readable text, which is what a JavaScript-only site looks like to a plain fetch' };
+    return { url, finalUrl, html, text, ok: true, why: '' };
   } catch (e) {
-    return { url, html: '', text: '', ok: false, why: (e && e.message) || 'the request failed' };
+    return { url, finalUrl: '', html: '', text: '', ok: false, why: (e && e.message) || 'the request failed' };
   }
 };
 
@@ -80710,11 +81174,21 @@ const readSiteBuild = ({ pages, links, website, companyName, city, trade, robots
   const contactRead = read.some(p => p && p.intent === 'contact' && (String(p.html || '').length >= 500 || String(p.text || '').length >= 200));
   const navRead = homeRead && (homeHtml.match(/<a\s/gi) || []).length >= 3;
   const allHtml = read.map(p => String(p.html || '')).join('\n');
+  // Where the home page's response actually came from, when the fetch told us.
+  const landed = String((home && home.finalUrl) || '');
   const seo = markupRead ? readSeoSignals(homeHtml, { companyName, city, trade }) : { checked: false };
   const age = markupRead ? readSiteAge({
     rawHtml: homeHtml,
     hasViewport: /<meta[^>]+name=["']viewport["'][^>]*>/i.test(homeHtml),
-    isHttps: /^https:/i.test(String((home && home.url) || website || '')),
+    // This read the protocol off the URL we were HANDED, and a stored http://
+    // address for a site that redirects to https - which is most of them - had
+    // us telling the owner his site warns visitors away. Read it off the
+    // address we landed on, and when we do not know that, say NOTHING:
+    // undefined rather than false, because readSiteAge marks the page only on
+    // an explicit false. Same rule the audit path already applies out loud at
+    // its HTTPS line - absence of evidence from our side is never evidence of
+    // absence on theirs.
+    isHttps: landed ? /^https:/i.test(landed) : undefined,
     copyrightYear: copyrightYearFrom(String((home && home.text) || '') || homeHtml),
   }) : { checked: false, markers: [] };
   const platform = markupRead ? detectPlatform(homeHtml) : { platform: '', confidence: 'unreadable', isDiy: null, builder: '' };
@@ -80723,6 +81197,32 @@ const readSiteBuild = ({ pages, links, website, companyName, city, trade, robots
   // rendered the page for us the text is present and this cannot fire, which
   // is the safe direction: it under-claims rather than inventing a fault.
   const jsOnly = markupRead && homeHtml.length >= 12000 && rawReadableChars(homeHtml) < 500;
+  // ══ 12,000 CHARACTERS IS NOT WHAT A MODERN BUILD SHIPS ═══════════════════
+  // The form and phone absences below were gated on the jsOnly flag above, and
+  // that flag will not even look at a page under twelve thousand characters of
+  // markup. A React, Vue or Next static build ships two to four kilobytes and
+  // an empty root div, so it falls UNDER that floor, the gate opens, and the
+  // two most checkable claims we make - "there is no enquiry form anywhere we
+  // read" and "the phone number is not tappable on a phone" - are asserted
+  // about a page carrying under a hundred readable characters, whose form and
+  // phone are drawn by the bundle a plain fetch never runs. Executed on a
+  // 926-character Next build: gap 12 of 25, grade 6, both sentences shipped.
+  // The shell fixture guarding this was 24KB and cleared the floor, so no
+  // fixture could reach the mechanism - the class this repo records as its
+  // own trap.
+  // The gate now asks the question directly: is there markup here a PERSON
+  // could read? Same five hundred readable characters jsOnly already measures
+  // against, so there is one number rather than a second one to disagree with
+  // it, and it is strictly stronger - five hundred readable characters cannot
+  // be a JavaScript shell.
+  const homeMarkupRead = rawReadableChars(homeHtml) >= 500;
+  // ══ A CHAT WIDGET IS A ROUTE IN, AND A BETTER ONE THAN A FORM ════════════
+  // "there is no enquiry form anywhere we read" on a site whose corner carries
+  // a live-chat bubble is a sentence the owner disproves by looking at his own
+  // page. CHAT_SIGNATURES is the host-anchored list this file already keeps for
+  // exactly this suppression on the audit path, where a false positive silences
+  // a true phone-only finding. One declaration, read here rather than copied.
+  const hasChat = CHAT_SIGNATURES.test(allHtml);
   const hasForm = /<form\b/i.test(allHtml) || FORM_BUILDER_RE.test(allHtml);
   const hasTel = /href=["']\s*tel:/i.test(allHtml);
   const hits = {
@@ -80730,14 +81230,29 @@ const readSiteBuild = ({ pages, links, website, companyName, city, trade, robots
     noSchema: seo.checked ? (seo.businessSchema !== true) : null,
     jsOnly: markupRead ? jsOnly : null,
     blocksAi: rb.checked ? (rb.blocked.length > 0 || rb.all) : null,
-    datedBuild: age.checked ? age.dated === true : null,
+    // ══ DATED IN THE SOURCE, MODERN ON THE SCREEN ══════════════════════════
+    // `dated` is two markers of ten, and two of those markers are INVISIBLE: a
+    // keywords meta tag, and a slider plugin shipping jQuery 1.x. A maintained
+    // WordPress build with business schema, a form, a tappable phone, alt text
+    // on every image and this year's copyright cleared the bar on those two
+    // alone and was charged "the build is years out of date" with agedSay
+    // EMPTY - the fault fired and not one word of evidence travelled with it.
+    // The ladder's own credibility rung has demanded a visible marker since
+    // Round 100 for exactly this reason; the rep's row never got the same gate.
+    // Dated-but-invisible is NOT MEASURED here rather than false: the build
+    // really may be old, we simply hold nothing about it a person could check.
+    datedBuild: !age.checked ? null
+      : age.dated !== true ? false
+      : (age.markers || []).some(m => m && m.visible === true) ? true : null,
     diyBuilder: platform.confidence === 'unreadable' ? null : platform.isDiy === true,
-    // NOT measured on a JS-painted page: the form and the tel: link may be
-    // drawn by the JavaScript we did not run, and "there is no enquiry form"
-    // would then be a false sentence about a real business. The GEO faults
-    // above still stand - a crawler that does not run JS sees none of it either.
-    noForm: (!jsOnly && (contactRead || navRead)) ? !hasForm : null,
-    noClickToCall: (!jsOnly && navRead) ? !hasTel : null,
+    // NOT measured unless the home page itself carries markup a person could
+    // read: the form and the tel: link may be drawn by the JavaScript we did
+    // not run, and "there is no enquiry form" would then be a false sentence
+    // about a real business. The GEO faults above still stand - a crawler that
+    // does not run JS sees none of it either. And a live-chat embed IS a route
+    // in, so it clears the form fault the same way a form does.
+    noForm: (homeMarkupRead && (contactRead || navRead)) ? !(hasForm || hasChat) : null,
+    noClickToCall: (homeMarkupRead && navRead) ? !hasTel : null,
     weakTitle: seo.checked ? (!seo.title || seo.titleIsDefault === true) : null,
     thinAlt: (seo.checked && seo.imgCount >= 4) ? (seo.imgAltCount / seo.imgCount) < 0.5 : null,
   };
@@ -81493,6 +82008,39 @@ const FIND_ICP_TERMS = [
       if (s.ownerCanBuy === true && solid) return { points: 15, say: 'a named decision-maker who clears the buying floor, and an address that is published or mailbox-confirmed' };
       if (s.ownerCanBuy === true && anyAddr) return { points: 10, say: 'a named decision-maker who clears the buying floor, but the address is pattern-built rather than confirmed' };
       if (s.ownerCanBuy === true) return { points: 7, say: 'a named decision-maker who clears the buying floor, but no address at all' };
+      // ══ ROUND 131: A HELD-BACK NAME IS ITS OWN ANSWER ═════════
+      // Vin, 2026-09-10: a name the buying floor held back builds no address,
+      // and the lead scores lower for it. Both halves land here.
+      //
+      // Grade D never reaches the three branches above - the grade IS
+      // 'unconfirmed' precisely because canBuy is false - so it fell into the
+      // two lines below, which are written about a lead where NOBODY could be
+      // named. That sentence is not true of this lead: we can name somebody,
+      // we simply cannot vouch for them, and the rep can still ask for them
+      // by name at the front desk.
+      //
+      // With no address constructed any more, an ordinary grade-D lead now
+      // arrives here with the no-address tier and would land on the last line
+      // at 1 point, level with a read that produced nothing at all. It is not
+      // nothing: it is a name.
+      if (s.ownerGrade === 'unconfirmed') {
+        // A published or SMTP-confirmed address is a measurement of their own
+        // site or of their mail server. It has nothing to do with the name, so
+        // it keeps the 8 points it has always been worth - docking it would
+        // charge a measurement for a doubt about something else.
+        if (solid) return { points: 8, say: 'a published or mailbox-confirmed address, and a name to ask for that the buying floor held back' };
+        // TWO, and the number was measured rather than argued. It has to be
+        // strictly above the 1 a read that produced NEITHER a name nor an
+        // address scores, because a name the rep can ask for at the front desk
+        // is worth more than nothing. It has to be strictly below the 4 this
+        // same lead scored while we were still building it a pattern address,
+        // because that address is now gone and the score is what says so. And
+        // it has to move the number the rep actually SORTS BY: over an
+        // eight-term denominator, 3 rounds to the same FIT as 4 (73.55 against
+        // 74.19, both 74) and says nothing at all. 2 is the only value in the
+        // gap that does.
+        return { points: 2, say: 'a name the rep can ask for, but the buying floor held it back, so no address is built from it' };
+      }
       if (solid) return { points: 8, say: 'a published or mailbox-confirmed address, but nobody we can name as the buyer' };
       if (anyAddr) return { points: 4, say: 'a pattern-built address and nobody we can name as the buyer' };
       return { points: 1, say: 'the read produced neither a decision-maker we can name nor an address' };
@@ -81969,7 +82517,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     const home = await findPlainFetch(website);
     if (home.ok) {
       out.readVia = 'a plain fetch (free)';
-      pages.push({ url: home.url, intent: 'home', html: home.html, text: home.text });
+      pages.push({ url: home.url, intent: 'home', html: home.html, text: home.text, finalUrl: home.finalUrl || '' });
     } else if (fcKey && !fcCreditsBlocked()) {
       // The fallback, and ONLY the fallback. shot:false because this read wants
       // the markup and never the picture - the render is the most expensive
@@ -82537,8 +83085,10 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         // The pages we already hold, scanned by the same extractor with the
         // same same-domain strictness before a single credit can be spent.
         // The INTENT travels. Dropped here, the extractor could not tell that
-        // a page fetched on purpose as a careers page was a careers page.
-        freePages: pages.map(p => ({ url: p.url, text: p.text, intent: p.intent })),
+        // a page fetched on purpose as a careers page was a careers page. And
+        // so does every mailto: target in the markup, which the page TEXT
+        // cannot carry.
+        freePages: pages.map(p => ({ url: p.url, text: p.text, intent: p.intent, mailtos: mailtoLinksFromHtml(p.html) })),
         onAddressSource: (s) => { _addressSource = String(s || 'none'); },
       });
       _emailAttempted = true;
@@ -82627,6 +83177,18 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   signals.outsideBand = (company && company.outsideBand) === true;
   signals.aboveSizeCeiling = (company && company.aboveSizeCeiling) === true;
   signals.ownerCanBuy = !!(out.owner && out.owner.canBuy === true);
+  // ══ ROUND 131: THE GRADE, NOT JUST THE BOOLEAN ════════════════════════
+  // ownerEvidenceGrade has graded every owner since it was written - five
+  // tokens, and the CSV prints them as A to D - and NOT ONE scoring term
+  // could see it. Every term read ownerCanBuy alone, so a name the buying
+  // floor HELD BACK looked to the score exactly like a lead with no owner at
+  // all, and on a lead identical but for the owner it out-scored an
+  // eponymous owner: 86 against 83, measured 2026-09-10. Computed and not
+  // passed, on the number the rep sorts his list by.
+  //
+  // Read from out.owner.grade, which is the resolver's ONE derivation. No
+  // second copy of "how sure are we" is made here.
+  signals.ownerGrade = (out.owner && out.owner.grade) || '';
   signals.emailTier = (out.email && typeof out.email.tier === 'number') ? out.email.tier : null;
   // Round 108: is the owner we named visibly running the place? Named on
   // their own pages (both name parts in text we read), or signing the review
@@ -82777,7 +83339,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         fcKey: '', homepageContent: homeText, verifierKey, siteConfirmed: pages.length > 0, siteIsDown: pages.length === 0,
         hunterEmail: out.marketingLead.email || '', hunterName: out.marketingLead.name, hunterTitle: out.marketingLead.title,
         industry: (company && company.industry) || '',
-        freePages: pages.map(p => ({ url: p.url, text: p.text, intent: p.intent })),
+        freePages: pages.map(p => ({ url: p.url, text: p.text, intent: p.intent, mailtos: mailtoLinksFromHtml(p.html) })),
       });
       if (_mem && _mem.email) {
         out.marketingLead.email = _mem.email; out.marketingLead.emailTier = _mem.tier ?? null;

@@ -97,11 +97,23 @@ w('new-niche-playbook/tables.md', tab);
 const html = H.join('\n');
 const colBlock = /const FIND_CSV_COLUMNS = \[([\s\S]*?)\n\];/.exec(html); if (!colBlock) throw new Error('FIND_CSV_COLUMNS not found');
 const cols = [...colBlock[1].matchAll(/\['([a-zA-Z]+)', '((?:[^'\\]|\\.)*)'\]/g)].map(m => [m[1], m[2].replace(/\\'/g, "'")]);
-const leanBlock = /const FIND_CSV_ESSENTIAL = \[([\s\S]*?)\];/.exec(html); if (!leanBlock) throw new Error('FIND_CSV_ESSENTIAL not found');
-const lean = [...leanBlock[1].matchAll(/'([a-zA-Z]+)'/g)].map(m => m[1]);
-let csv = `# The contact-list CSV columns\n\n${GEN}\n\nFrom \`index.html\`'s own \`FIND_CSV_COLUMNS\` and \`FIND_CSV_ESSENTIAL\`. **Default export = the ${lean.length} lean columns** (in the order below); the full ${cols.length} are one tick box away. The Google Sheet export uses the same column choice.\n\n| # | key | heading in the file | lean (default)? |\n|---|---|---|---|\n`;
-cols.forEach(([k, label], i) => { csv += `| ${i + 1} | \`${k}\` | ${label} | ${lean.includes(k) ? '**yes**' : ''} |\n`; });
-csv += `\nLean set, in order: ${lean.map(k => '`' + k + '`').join(', ')}.\n`;
+const prefixBlock = /const FIND_CSV_PREFIX = \[([\s\S]*?)\];/.exec(html); if (!prefixBlock) throw new Error('FIND_CSV_PREFIX not found');
+const leanBlock = /const FIND_CSV_ESSENTIAL = ([\s\S]*?);\n/.exec(html); if (!leanBlock) throw new Error('FIND_CSV_ESSENTIAL not found');
+const pickBlock = /const findCsvColumns = \(full\) => \{[\s\S]*?\n\};/.exec(html); if (!pickBlock) throw new Error('findCsvColumns not found');
+// ══ THE EMITTED ORDER, EXECUTED ═══════════════════════════════════════════
+// Until Round 131 this file printed FIND_CSV_ESSENTIAL's DECLARATION order as
+// "Lean set, in order". It never was: findCsvColumns filters FIND_CSV_COLUMNS,
+// so the emitted order followed the table, not the key list - and the one
+// reference somebody would open before editing the columns said otherwise. It
+// runs the real chooser now, so the order below is the order in the file.
+const emitted = new Function(colBlock[0] + '\n' + prefixBlock[0] + '\n' + leanBlock[0] + '\n' + pickBlock[0]
+  + '\nreturn { lean: findCsvColumns(false), full: findCsvColumns(true), prefix: FIND_CSV_PREFIX };')();
+const lean = emitted.lean.map(c => c[0]);
+const inPrefix = new Set(emitted.prefix);
+let csv = `# The contact-list CSV columns\n\n${GEN}\n\nFrom \`index.html\`'s own \`FIND_CSV_COLUMNS\`, \`FIND_CSV_PREFIX\` and \`FIND_CSV_ESSENTIAL\`, **executed**: the two orders at the bottom are what \`findCsvColumns\` emits, not what a declaration lists.\n\n**Every export opens on the same ${emitted.prefix.length} columns, in the same order, whichever way the tick box is set** (Round 131). The tick box only decides what is appended after them: **${emitted.lean.length} columns by default**, **${emitted.full.length} in full**. There is one exporter — the Find tab's; the Research tab's second CSV and the Google Sheet push are both retired (§124, §131).\n\nThe table below is the DECLARED table, which is the order of the columns that follow the fixed ${emitted.prefix.length}.\n\n| # | key | heading in the file | in the fixed ${emitted.prefix.length}? | lean (default)? |\n|---|---|---|---|---|\n`;
+cols.forEach(([k, label], i) => { csv += `| ${i + 1} | \`${k}\` | ${label} | ${inPrefix.has(k) ? '**fixed**' : ''} | ${lean.includes(k) ? '**yes**' : ''} |\n`; });
+csv += `\nThe fixed ${emitted.prefix.length}, as the headings appear in every file: ${emitted.prefix.map(k => '`' + ((cols.find(c => c[0] === k) || [k, k])[1]) + '`').join(', ')}.\n`;
+csv += `\nLean set, as EMITTED (executed, not transcribed): ${lean.map(k => '`' + k + '`').join(', ')}.\n`;
 w('find-and-contact-list/csv-columns.md', csv);
 
 // ─── 4. env vars ────────────────────────────────────────────────────────
