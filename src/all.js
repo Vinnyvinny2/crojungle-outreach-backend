@@ -61630,15 +61630,26 @@ app.listen(PORT, () => {
     // between it and the sheet. Nobody is settled on here rather than skipping
     // to the next line, deliberately: a page whose layout we cannot read is a
     // page to fall through to the model on, not one to guess at.
-    if (pickRosterOwner(parseTeamRoster('<p>owner</p><p>Functional Finished Basements</p><p>Colby Lindsey</p>', 'The Basement Sanctuary')))
-      _fails.push('the line directly below an ownership title is taken as the person without being validated, so a strapline under the word "owner" is the name a rep dials for');
+    // Asserted on the RAW roster and not on the ranked pick: rankRosterOwners
+    // re-applies the same three filters, so a defect here is invisible through
+    // pickRosterOwner. Falsification is what showed that - the revert of this
+    // guard came back GREEN through the pick and red only through the rows.
+    // The rows are what the "Also listed" log line prints, and what every other
+    // consumer of parseTeamRoster reads.
+    const _belowJunk = parseTeamRoster('<p>owner</p><p>Functional Finished Basements</p><p>Colby Lindsey</p>', 'The Basement Sanctuary');
+    if (_belowJunk.some(r => /Functional Finished Basements/i.test(String(r.name || ''))))
+      _fails.push('the line directly below an ownership title is taken as the person without being validated, so a strapline under the word "owner" becomes one of their people');
     // 2c. AND THE BOUND HOLDS. The title-first pass runs ONLY when the main
     // pass found nobody. Unbounded, this page gives Karen Fowler the title
     // "Owner" from the line above her - a shorter title than the real owner's,
     // which wins the ranking tiebreak outright. That is the phantom-row shape
     // Globe Iron produced live, where the right owner won by luck.
-    const _phantom = pickRosterOwner(parseTeamRoster('<p>Josh Dembicki</p><p>Co-Founder, President</p><p>Owner</p><p>Karen Fowler</p>', 'Bellwether Windows'));
-    if (!_phantom || _phantom.name !== 'Josh Dembicki') _fails.push(`the title-first pass runs on a page that already named an owner and invents a second one: it settles on ${JSON.stringify(_phantom && _phantom.name)} instead of Josh Dembicki`);
+    // Counted, not ranked, for the same reason: whether the phantom WINS
+    // depends on two authority scores, and a page where it loses proves
+    // nothing about the bound. Whether it EXISTS does.
+    const _phantomRows = parseTeamRoster('<p>Josh Dembicki</p><p>Co-Founder, President</p><p>Owner</p><p>Karen Fowler</p>', 'Bellwether Windows').filter(r => r.isOwner);
+    if (_phantomRows.length !== 1 || _phantomRows[0].name !== 'Josh Dembicki')
+      _fails.push(`the title-first pass runs on a page that already named an owner and invents a second one: ${JSON.stringify(_phantomRows.map(r => r.name))} instead of Josh Dembicki alone`);
     // 3. AND THE ORDINARY LAYOUT IS UNTOUCHED. Name first, title below - which
     // is every other roster on the run, so a fix for one shape must not cost
     // the other.

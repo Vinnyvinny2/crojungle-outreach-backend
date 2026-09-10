@@ -93,14 +93,14 @@ module.exports = [
   { name: '132-c-lookup-token-never-reaches-the-row', path: 'src/all.js', prove: 'clientcheck',
     old: "    contactEmailLookupBlocked: em.lookupBlocked || '',\n",
     new: "",
-    mustPrint: /contactEmailLookupBlocked|research merge/ },
+    mustPrint: /the server stops sending the token that says the address lookup was unavailable/ },
 
   // (C-2) the client goes back to calling an outage an absence. This is the row
   // Bellwether got while its own log line said the opposite.
   { name: '132-c-outage-called-none-again', path: 'index.html', prove: 'clientcheck',
     old: "  if (!c || !c.contactEmail) return emailLookupUnavailable(c) ? 'unreadable' : 'none';\n",
     new: "  if (!c || !c.contactEmail) return 'none';\n",
-    mustPrint: /could not check|unreadable/ },
+    mustPrint: /which claims an absence about a question we never got to ask/ },
 
   // (C-3) the chip disappears, so the rows exist in a bucket nothing on the
   // screen counts and the numbers stop adding up.
@@ -116,14 +116,14 @@ module.exports = [
   { name: '132-c-refusal-counted-as-an-outage', path: 'index.html', prove: 'clientcheck',
     old: "  && (c.contactEmailVerifierDown === true || !!String(c.contactEmailLookupBlocked || ''));\n",
     new: "  && (c.contactEmailVerifierDown === true || !!String(c.contactEmailBlockReason || ''));\n",
-    mustPrint: /could not check|unreadable|bucket/ },
+    mustPrint: /is filed as an outage - we could have asked and chose not to/ },
 
   // (C-5) the two tokens stop being persisted on a promoted lead, so a row that
   // was honest in Find goes back to saying "none found" in the pipeline.
   { name: '132-c-tokens-not-persisted-on-promotion', path: 'index.html', prove: 'clientcheck',
     old: "      contactEmailVerifierDown: company.contactEmailVerifierDown === true,\n      contactEmailLookupBlocked: company.contactEmailLookupBlocked || '',\n",
     new: "",
-    mustPrint: /research merge|contactEmailLookupBlocked|could not check/ },
+    mustPrint: /are dropped on promotion, so a row that honestly said "could not check" in Find/ },
 
   // (C-6) the handshake number does not move on a round that changed
   // index.html, which is the only staleness signal there is (ruling since §104).

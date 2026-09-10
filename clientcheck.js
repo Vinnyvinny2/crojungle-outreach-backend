@@ -2748,6 +2748,12 @@ let contactTally = null;
             // could have asked and chose not to, which is a decision and not an
             // outage. That is why the rule reads the supplier TOKENS and never
             // the block-reason sentence.
+            // The token has to LEAVE THE SERVER. Every fixture below builds its
+            // own row, so all of them would pass while the wire dropped the
+            // field - which is the computed-but-not-passed shape this whole
+            // state exists to fix. contactFieldsFrom is the server's own row
+            // builder, lifted from server.js.
+            if (M.fields({ email: { address: '', lookupBlocked: 'hunter_out_of_credits' } }).contactEmailLookupBlocked !== 'hunter_out_of_credits') fails.push('the server stops sending the token that says the address lookup was unavailable, so the page has only an English sentence to tell an outage from a refusal and the row goes back to claiming "none found"');
             const _down = { contactEmail: '', contactEmailVerifierDown: true };
             const _blocked = { contactEmail: '', contactEmailLookupBlocked: 'hunter_out_of_credits' };
             const _heldName = { contactEmail: '', contactEmailBlockReason: 'no address was built: Dana Brooks was held back by the authority gate' };
