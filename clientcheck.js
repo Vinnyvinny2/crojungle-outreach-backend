@@ -2431,7 +2431,12 @@ let contactTally = null;
     _lift(/const readRunOptsFrom = \(settingsData\) => \{[\s\S]*?\n\};/, 'readRunOptsFrom'),
     _lift(/const queueIdOf = [^\n]+\n/, 'queueIdOf'),
     _lift(/const EMAIL_GRADE_VERIFIED = [^\n]+\n/, 'EMAIL_GRADE_VERIFIED'),
-    _lift(/const emailVerifiedRow = [\s\S]*?\)\);\n/, 'emailVerifiedRow'),
+    // Round 133 re-aimed this lift. emailVerifiedRow became a block-bodied
+    // function when an explicit grade was allowed to beat the tier fallback,
+    // so the old `));` terminator stopped matching and the lift silently
+    // truncated - which reads as "the contact list no longer compiles", not as
+    // "the rule this check exists for changed shape".
+    _lift(/const emailVerifiedRow = [\s\S]*?\n\};\n/, 'emailVerifiedRow'),
     _lift(/const emailSendableRow = [^\n]+\n/, 'emailSendableRow'),
     _lift(/const emailHeldBackRow = [^\n]+\n/, 'emailHeldBackRow'),
   ].join('\n');
@@ -2738,6 +2743,31 @@ let contactTally = null;
             if (M.emailStatus(_shapes[0]) !== 'verified' || M.emailStatus(_shapes[1]) !== 'verified') fails.push('a published personal or SMTP-confirmed address is not "verified" on the review screen');
             if (M.emailStatus(_shapes[2]) !== 'unverified') fails.push('an address the checker never confirmed shows as verified - the unmeasured-as-measured class, on the one column the rep moves on');
             if (M.emailStatus(_shapes[6]) !== 'none') fails.push('a row with no address does not read "none"');
+            // ══ ROUND 133: "CONFIRMED" MEANS THE OWNER'S OWN MAILBOX ═══════
+            // Live 2026-09-10: the review screen said "5 confirmed" and every
+            // one of the five was a shared mailbox - info@thebasementsanctuary,
+            // info@ckflaw, contact@globeironroofing, info@rossandwitmer and one
+            // personal-looking address on somebody else's domain. Zero were the
+            // owner. The rep reads that 5 and believes he has five owners.
+            // The grade was on the row the whole time and the chip read the
+            // tier instead: published_role is the server's own verdict that
+            // somebody other than the owner reads it first.
+            const _own = { contactEmail: 'darrel@rossandwitmer.example', contactEmailGrade: 'published_personal', contactEmailSendable: true, contactEmailTier: 1 };
+            const _role = { contactEmail: 'info@rossandwitmer.example', contactEmailGrade: 'published_role', contactEmailSendable: true, contactEmailTier: 1 };
+            // The off-domain case reaches the page as the SAME grade - a
+            // personal-looking name on a domain that is not theirs is still
+            // "not the owner's own mailbox", and the page must not try to tell
+            // the two apart by reading the address text.
+            const _offDomain = { contactEmail: 'jsmith@some-other-domain.example', contactEmailGrade: 'published_role', contactEmailSendable: true, contactEmailTier: 1 };
+            if (M.emailStatus(_own) !== 'verified') fails.push('the owner\'s own published mailbox no longer counts as confirmed, so the one column the rep moves on has lost the addresses that are actually worth calling');
+            if (M.emailStatus(_role) === 'verified') fails.push('a shared mailbox like info@ is counted as confirmed, so the screen tells the rep he has the owner\'s address when the person who opens that mail is a receptionist');
+            if (M.emailStatus(_role) !== 'shared') fails.push('a published shared mailbox is filed as something other than a shared inbox, so the rep cannot see which of his addresses reach the owner');
+            if (M.emailStatus(_offDomain) !== 'shared') fails.push('a personal-looking address on a domain that is not theirs is shown as the owner\'s own mailbox');
+            // VOLUME MUST NOT FALL. A shared inbox is a lead we still write to
+            // and still hand the rep - only the word above it changed.
+            if (!M.sendableOf(_role)) fails.push('a shared inbox stopped being an address we can send to, so renaming a chip has quietly cut the number of leads that leave the screen');
+            if (M.heldOf(_role)) fails.push('a shared inbox is being shown as an address the engine refused, which it is not');
+            if (!M.exportableContact(Object.assign({ name: 'Ross and Witmer', contactReadOk: true, contactOwner: 'Darrel Ross', contactOwnerTitle: 'Owner', contactPhone: '555-0100', contactLanes: { call: true, email: false, noname: false } }, _role))) fails.push('a shared inbox drops off the rep\'s exported call sheet, so the chip rename cost him leads');
             // ══ ROUND 132: "COULD NOT ASK" IS NOT "NONE" ═══════════════════
             // Live 2026-09-10: the mailbox verifier ran out of credits mid-run,
             // Bellwether's own log line said "This is NOT proof that no mailbox
@@ -2769,6 +2799,17 @@ let contactTally = null;
             // And it survives promotion: a row honest in Find must not go back
             // to lying once the lead is in the pipeline.
             for (const c of _shapes) {
+              // Round 133: the page and the server now split the same way. The
+              // server's emailVerifiedRow lets an EXPLICIT grade beat its tier
+              // fallback, so a published_role address is no longer "verified"
+              // on either side - which is the point of the round, because the
+              // card read 5 confirmed on a batch with no owner mailbox in it.
+              //
+              // This is a plain equality on purpose. It was briefly written as
+              // the UNION of verified and shared while only the page had been
+              // split, and a union would have passed just as happily with the
+              // server still calling every info@ confirmed - which is the state
+              // this whole round exists to end.
               const page = M.emailStatus(c) === 'verified';
               // PostgREST hands the flag and the tier back as text, which is how the server reads them.
               const srv = M.verifiedRow(c.contactEmail, c.contactEmailGrade, String(c.contactEmailSendable), c.contactEmailTier === null ? null : String(c.contactEmailTier));
@@ -2844,9 +2885,10 @@ let contactTally = null;
             }
             if (_c.held !== 0) fails.push('the "Held back" chip counts ' + _c.held + ' on a run where the engine refused nothing');
             if (_c.all !== 9) fails.push('the "All" chip counts ' + _c.all + ' of nine live leads');
-            if (_c.email + _c.sendable + _c.held + _c.noemail !== 9) {
-              fails.push('the four chips add up to ' + (_c.email + _c.sendable + _c.held + _c.noemail) + ' on a nine-lead batch where every lead was read, so the chips overlap and the screen is telling the operator about more leads than exist');
+            if (_c.email + _c.shared + _c.sendable + _c.held + _c.noemail + _c.unreadable !== 9) {
+              fails.push('the chips add up to ' + (_c.email + _c.shared + _c.sendable + _c.held + _c.noemail + _c.unreadable) + ' on a nine-lead batch where every lead was read, so the chips overlap and the screen is telling the operator about more leads than exist');
             }
+            if (_c.shared !== 0) fails.push('the "Shared inbox" chip counts ' + _c.shared + ' on a run with no shared mailbox in it');
             // The partition itself, lead by lead - the assertion that cannot be
             // satisfied by two chips that happen to sum right on one fixture.
             // The shapes here are the ones the buckets have to keep apart: a
@@ -2902,12 +2944,42 @@ let contactTally = null;
             // back on the chips five pixels below it.
             for (const [_what, _batch, _n] of [['the nine leads of the live run', _run, _c], ['a batch carrying every state at once', _edge, M.chipCounts(_edge)]]) {
               const _cs = M.cardStats(_batch);
-              if (_cs.withEmail !== _n.email || _cs.sendableOnly !== _n.sendable || _cs.heldBack !== _n.held) {
-                fails.push('the batch card and the chips above it disagree about ' + _what + ': card ' + JSON.stringify([_cs.withEmail, _cs.sendableOnly, _cs.heldBack]) + ' vs chips ' + JSON.stringify([_n.email, _n.sendable, _n.held]) + ' for confirmed / unconfirmed / held back');
+              if (_cs.withEmail !== _n.email || _cs.sharedInbox !== _n.shared || _cs.sendableOnly !== _n.sendable || _cs.heldBack !== _n.held) {
+                fails.push('the batch card and the chips above it disagree about ' + _what + ': card ' + JSON.stringify([_cs.withEmail, _cs.sharedInbox, _cs.sendableOnly, _cs.heldBack]) + ' vs chips ' + JSON.stringify([_n.email, _n.shared, _n.sendable, _n.held]) + ' for confirmed / shared inbox / unconfirmed / held back');
               }
             }
             if (M.cardStats(_edge).sendable !== 6) {
               fails.push('the card\'s sendable total is no longer every address the engine cleared, so it stops matching the "Move N to Research" button the rep presses');
+            }
+            // ══ ROUND 133: THE RUN OF 2026-09-10, COUNTED ═════════════════
+            // The screen said "5 confirmed" and the rep believed he had five
+            // owner addresses. He had none: four published shared mailboxes
+            // and one personal-looking address on somebody else's domain. The
+            // whole batch is counted here, because a chip label is only worth
+            // what the number beside it is.
+            const _shared = (n, e) => _mk(n, { contactEmail: e, contactEmailGrade: 'published_role', contactEmailSendable: true, contactEmailTier: 1 });
+            const _live10 = [
+              _shared('The Basement Sanctuary', 'info@thebasementsanctuary.example'),
+              _shared('CKF Law', 'info@ckflaw.example'),
+              _shared('Globe Iron Roofing', 'contact@globeironroofing.example'),
+              _shared('Ross and Witmer', 'info@rossandwitmer.example'),
+              _shared('Off Domain Findings', 'jsmith@some-other-domain.example'),
+              _clear('Sharma Oral Surgery', 'rsharma@sharmaoral.example'),
+              _clear('Kelly Window and Door', 'jkelly@kellywindow.example'),
+              _bare('Gentle Dental Care'), _bare('Harbor HVAC'),
+            ];
+            const _lc = M.chipCounts(_live10);
+            if (_lc.email !== 0) {
+              fails.push('the "Confirmed" chip says ' + _lc.email + ' on the run of 2026-09-10, where not one address was the owner\'s own mailbox - the rep reads that number and starts writing to receptionists believing he is writing to owners');
+            }
+            if (_lc.shared !== 5) fails.push('the "Shared inbox" chip says ' + _lc.shared + ' where five addresses are read by somebody other than the owner');
+            if (_lc.sendable !== 2 || _lc.noemail !== 2) fails.push('the rest of the 2026-09-10 run has moved buckets: ' + JSON.stringify([_lc.sendable, _lc.noemail]) + ' for unconfirmed / no address, where it should be 2 and 2');
+            const _lsum = M.buckets.reduce((a, k) => a + _lc[k], 0);
+            if (_lsum !== 9) fails.push('the chips cover ' + _lsum + ' of the nine leads of the 2026-09-10 run, so splitting Confirmed has either lost leads off the screen or double-counted them');
+            // Volume: every address the engine cleared is still one the rep
+            // can be handed, five of them shared. Nothing left the batch.
+            if (M.cardStats(_live10).sendable !== 7) {
+              fails.push('only ' + M.cardStats(_live10).sendable + ' of the seven addresses the engine cleared on 2026-09-10 are still offered to the rep, so calling five of them shared inboxes has cost him leads instead of telling him who reads them');
             }
           }
           // The credit estimate rides the server's figure, never the spec's 1.5.
@@ -3587,7 +3659,7 @@ let contactTally = null;
     ["findApi('/api/read-runs/' + encodeURIComponent(id) + '/leads')", "", 'Screen B never loads a batch'],
     // Round 129: the card prints what can be sent to, and the bulk move offers
     // that same set. Either one back on the confirmed count is the live defect.
-    ["stats.withEmail + ' confirmed · ' + stats.sendableOnly + ", "' more we can send to · ' + stats.heldBack + ' held back'", 'the batch card does not read the sendable counter, so a run of sendable addresses still reads as no email at all'],
+    ["stats.withEmail + ' confirmed · ' + stats.sharedInbox + ", "' shared inbox · ' + stats.sendableOnly + ' more we can send to · ' + stats.heldBack + ' held back'", 'the batch card does not print the four counters the chips below it show, so a run of sendable or shared addresses still reads as no email at all'],
     ["(latest.sendableEmail > 0) ? btn('research', 'Move ' + latest.sendableEmail", " + ' to Research', () => moveSendableOfRun(latest.id)", 'the Move-to-Research button counts only the confirmed addresses, so it offers nothing on a run whose addresses the engine said we can send to'],
     ["filter(l => l && queueStateOf(l) === 'read' && emailSendableOf(l))", ".map(l => l.id)", 'the bulk move filters on the confirmed rule again, so the button moves fewer leads than the card counts'],
     ["findApi('/api/find/archive')", "", 'the archive screen never loads'],
@@ -3621,7 +3693,11 @@ let contactTally = null;
     // Round 132: FIVE buckets. "Could not check" is its own chip because a
     // supplier that was down is not an address that does not exist, and the
     // rep works the two differently: one is a dead end, the other is a re-run.
-    ["chipEl('noemail', 'No email',", " counts.noemail), chipEl('unreadable', 'Could not check', counts.unreadable), chipEl('all', 'All', counts.all)", 'the five buckets are no longer together with All after them, so nothing on the screen shows the operator that the five numbers add up'],
+    // Round 133: SIX buckets. "Shared inbox" sits between Confirmed and
+    // Unconfirmed because that is what it is - a real published address that
+    // is not the owner's mailbox.
+    ["chipEl('email', 'Confirmed', counts.email),", " chipEl('shared', 'Shared inbox', counts.shared), chipEl('sendable', 'Unconfirmed', counts.sendable)", 'the "Shared inbox" chip is not sitting between Confirmed and Unconfirmed, so a run of info@ addresses is being handed to the rep as owner addresses again'],
+    ["chipEl('noemail', 'No email',", " counts.noemail), chipEl('unreadable', 'Could not check', counts.unreadable), chipEl('all', 'All', counts.all)", 'the six buckets are no longer together with All after them, so nothing on the screen shows the operator that the six numbers add up'],
     ["chipEl('sendable', 'Unconfirmed',", " counts.sendable)", 'the unconfirmed chip is labelled "Can send" again while Screen A offers "Move N to Research" on a bigger number - one screen contradicting itself about how many leads the rep can write to'],
   ]) {
     if ((b === '' ? html : _findView).indexOf(b === '' ? a : _nn(a, b)) < 0) fails.push(why);
