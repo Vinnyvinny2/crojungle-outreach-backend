@@ -117,11 +117,46 @@ lead whose name the buying floor held back also has no address, and it belongs i
 a client that regexed the English sentence would file it wrong — and would be the
 fourth hand-kept copy of a rule that already had three.
 
+### Three falsification runs, and what the first two caught
+
+Worth recording in full, because the code was green and gated after run one and
+**six of the fifteen guards did not guard.**
+
+```
+run 1:   9 of 15 matched
+run 2:  11 of 15 matched
+run 3:  15 of 15 matched, tree restored byte for byte
+```
+
+**Run 1 — two fixtures could not reach their own defect, and Part C had no test at
+all.** The roster fixture put the real person on the line below the title, so deleting
+the validation changed nothing about it. And the client behaviour had been changed with
+nothing asserting it: the `unreadable` state, its chip, its cell and its persistence
+were all shipped untested.
+
+**Run 2 — three sharper reasons, each general enough to keep:**
+
+- The parse-time roster guard is **invisible through `pickRosterOwner`**, because
+  `rankRosterOwners` re-applies the same three filters. It is visible only in the ROWS,
+  which is what the "Also listed" log line prints and what every other consumer of
+  `parseTeamRoster` reads. Assertion moved onto the rows.
+- Whether a phantom co-owner **wins** depends on two authority scores, so a page where
+  it loses proves nothing about the bound. Whether it **exists** does. Counted, not
+  ranked.
+- **Every client fixture built its own row by hand**, so all of them would have passed
+  while the new field never left the server — the exact computed-but-not-passed shape
+  this state exists to fix. Now asserted through `contactFieldsFrom`, the server's own
+  row builder.
+
+The general lesson, which is not new here but earned a third instance: **a guard proved
+through a caller that re-applies the same rule is not proved at all.**
+
 ### Verification
 
 `node build.js --check` byte-exact → `GATES=static` → boot → 15 falsifications →
 `bash ci-gates.sh` all stages.
 
+**15 of 15 reverts red on their own named line, tree restored byte for byte.**
 `BOOT VERDICT: GREEN — 299 checks passed` (297 at the end of Round 131), two new named
 checks, `clientcheck` green, servercheck's 205 assertions, a 500-lead fuzz.
 `CONTRACT_VERSION` and `CLIENT_CONTRACT` both **20261012**.
