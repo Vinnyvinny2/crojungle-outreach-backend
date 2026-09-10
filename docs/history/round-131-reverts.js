@@ -51,11 +51,24 @@ module.exports = [
     mustPrint: /a lead whose only name the buying floor held back scores 3 on the reach term instead of 2/ },
 
   // (A1-5) the other direction, and the one Vin ruled against explicitly: the
-  // grade test widens off 'unconfirmed' onto every name that is not confirmed,
-  // which demotes the eponymous lane - most of the addresses this tab produces.
-  { name: '131-a1-grade-test-widens-onto-the-eponymous-lane', path: 'src/all.js', prove: 'boot',
+  // grade test widens off 'unconfirmed' onto every name that is not confirmed.
+  // The lane it reaches from HERE is the no-owner one - grade 'none' is truthy
+  // and not confirmed - so a lead we found nobody on is demoted like a name the
+  // floor held back, and having looked stops being worth anything.
+  { name: '131-a1-grade-test-widens-onto-the-no-owner-lane', path: 'src/all.js', prove: 'boot',
     old: "      if (s.ownerGrade === 'unconfirmed') {\n        // A published or SMTP-confirmed address",
     new: "      if (s.ownerGrade && s.ownerGrade !== 'confirmed') {\n        // A published or SMTP-confirmed address",
+    mustPrint: /a lead with no owner at all now scores differently because of the grade/ },
+
+  // (A1-5b) the same widening aimed at the lane it CAN reach. An eponymous
+  // owner clears the buying floor, so canBuy is true and the three branches
+  // above the grade test return before it - the eponymous lane cannot be
+  // demoted from there at all. It can be demoted HERE, which is the branch an
+  // eponymous lead with a pattern address actually takes, and Vin's ruling
+  // that grade C does not move is only guarded if this goes red.
+  { name: '131-a1-eponymous-lane-docked-for-the-grade', path: 'src/all.js', prove: 'boot',
+    old: "      if (s.ownerCanBuy === true && anyAddr) return { points: 10,",
+    new: "      if (s.ownerCanBuy === true && anyAddr) return { points: s.ownerGrade === 'confirmed' ? 10 : 6,",
     mustPrint: /an eponymous owner now scores differently because of the grade/ },
 
   // (A1-6) a published address is docked for a doubt about the name, which

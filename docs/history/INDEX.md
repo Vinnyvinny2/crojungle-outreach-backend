@@ -142,3 +142,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 128 | 2026-09-09 | server.js becomes a generated file: one source folder, a build that proves the bytes, and the verification order every round follows — 2026-09-09 | Build / Docs | [round-128.md](round-128.md) |
 | 129 | 2026-09-09 | the contact list produces addresses you can actually send to — 2026-09-09 | Contact / Cost / Truth | [round-129.md](round-129.md) |
 | 130 | 2026-09-10 | stop paying twice, stop losing the owner — 2026-09-10 | Cost / Truth / Contact | [round-130.md](round-130.md) |
+| 131 | 2026-09-10 | a guess stops outranking the truth — 2026-09-10 | Contact / Truth / Client | [round-131.md](round-131.md) |
