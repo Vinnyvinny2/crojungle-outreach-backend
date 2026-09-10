@@ -2384,7 +2384,12 @@ let contactTally = null;
                  // The column CHOICE. Twenty-one columns were being deleted by
                  // hand after every paste, so the lean set is the default and
                  // the full set is a tick box.
-                 'FIND_CSV_ESSENTIAL', 'findCsvColumns',
+                 // Round 131: the fixed prefix is lifted BEFORE the essential
+                 // set, because FIND_CSV_ESSENTIAL is built from it.
+                 'FIND_CSV_PREFIX', 'FIND_CSV_ESSENTIAL', 'findCsvColumns',
+                 // Round 131: the city parsed out of the street address, and the
+                 // rule that stops one row being handed out twice.
+                 'CSV_STATE_ABBR', 'cityStateCell', 'exportSplit', 'exportWithheldSay',
                  // Round 105: the view state, the export stamp and the
                  // resolved-domain provenance are pure so they can be executed here.
                  'FIND_VIEW_DEFAULTS', 'mergeFindView', 'stampExportedRows', 'exportedCell', 'websiteProvenanceCell',
@@ -2444,7 +2449,8 @@ let contactTally = null;
     try {
       M = new Function(SERVER_LIFT + '\n' + NEED2.map(k => got2[k]).join('\n')
         + '\nreturn { tabOf: contactTabOf, tabs: CONTACT_TABS, cell: findCsvCell, cols: FIND_CSV_COLUMNS, rows: findContactRows, csv: findContactCsv,'
-        + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns,'
+        + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns, prefix: FIND_CSV_PREFIX,'
+        + ' cityState: cityStateCell, split: exportSplit, withheldSay: exportWithheldSay,'
         + ' mergeView: mergeFindView, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
         + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, siteCell, targetCell, targetWhyCell, shortCell, SHORT_CELL_MAX, laneOf, laneChip, exportableContact, laneHas, laneKey, laneTabs: LANE_TABS, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
         + ' fields: contactFieldsFrom, failureFields: contactFailureFields,'
@@ -2511,6 +2517,94 @@ let contactTally = null;
         const _co = [{ contactReadOk: true, name: 'A Co', contactOwner: 'Jo Blogs', contactEmail: 'a@a.com' }];
         const _h = (M.csv(_co, false).replace(/^\uFEFF/, '').split('\r\n')[0].match(/","/g) || []).length + 1;
         if (_h !== _lean.length) fails.push(`the lean CSV wrote ${_h} column(s) where the chooser says ${_lean.length} - findContactCsv is not reading the chooser`);
+      }
+
+      // ══ ROUND 131: THE TWENTY-THREE THAT NEVER MOVE ════════════════════
+      // Two files came out of this app under two layouts, so which column held
+      // the phone number depended on a tick box, and pressing CSV twice on one
+      // batch handed the rep the same businesses again. Both are executed here
+      // on a real fixture, both toggle settings, header AND cells - reading
+      // the declaration would pass while the emitted file was wrong, which is
+      // the whole reason this file exists.
+      {
+        const WANT23 = ['batch_id', 'exported_date', 'company', 'decision_maker', 'title', 'owner_confidence',
+          'email', 'email_confidence', 'phone', 'best_time', 'size', 'city_state', 'trade', 'website',
+          'google_rating', 'google_reviews', 'already_paying_for_ads', 'hiring_for_marketing',
+          'last_contact', 'convo_had', 'direct_phone_obtained', 'direct_email_obtained', 'notes'];
+        const _cells = (line) => String(line || '').split('","').map(s => s.replace(/^"/, '').replace(/"$/, ''));
+        const _file = (co, full) => M.csv(co, full).replace(/^\uFEFF/, '').split('\r\n');
+
+        // A prefix key with no row in the table would export a blank column
+        // under no heading at all, and nothing else in this file would notice.
+        if (M.prefix.length !== WANT23.length) fails.push(`the fixed CSV prefix is ${M.prefix.length} column(s), not ${WANT23.length}`);
+        const _orphan = M.prefix.filter(k => !M.cols.some(c => c[0] === k));
+        if (_orphan.length) fails.push(`the fixed CSV prefix names ${_orphan.join(', ')}, which has no row in FIND_CSV_COLUMNS - that column exports blank under no heading`);
+
+        const _fix = [{
+          contactReadOk: true, name: 'Fixed Co', batchId: 'b1b2c3d4-77ff-4a00-9e11-000000000001',
+          contactOwner: 'Jo Blogs', contactOwnerTitle: 'Owner', contactOwnerGrade: 'confirmed',
+          contactEmail: 'jo@fixedco.com', contactEmailGrade: 'published_personal', contactEmailSendable: true,
+          contactPhone: '+1 555 0100', contactCallWindowShort: 'from 7am',
+          location: '4521 W Bell Rd Suite 12, Phoenix, AZ 85308, USA', industry: 'Roofing',
+          website: 'https://fixedco.com', rating: 4.4, reviewCount: 51,
+          contactAdsCode: true, contactHiringMarketing: false, contactIcp: 71,
+        }];
+        for (const _full of [false, true]) {
+          const _head = _cells(_file(_fix, _full)[0]).slice(0, WANT23.length);
+          if (_head.join('|') !== WANT23.join('|')) {
+            fails.push(`the ${_full ? 'full' : 'lean'} CSV does not open on the fixed 23 columns - it opens on ${_head.join(', ')}`);
+          }
+        }
+        // The VALUES, on the lean file. A heading with nothing under it is the
+        // same defect one row lower down.
+        const _row = _cells(_file(_fix, false)[1]);
+        const at = (name) => _row[WANT23.indexOf(name)];
+        if (at('batch_id') !== 'b1b2c3d4-77ff-4a00-9e11-000000000001') fails.push('the CSV carries no batch_id, so a rep holding a duplicate cannot say which file it is already in');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(at('exported_date'))) fails.push(`exported_date is "${at('exported_date')}" and not the date the file was made`);
+        if (at('owner_confidence') !== 'A') fails.push(`owner_confidence is "${at('owner_confidence')}" for a confirmed owner and should be the letter A`);
+        if (at('email_confidence') !== 'A') fails.push(`email_confidence is "${at('email_confidence')}" for a published personal mailbox and should be the letter A - a sentence there is what Round 131 replaced`);
+        if (at('city_state') !== 'Phoenix, AZ') fails.push(`city_state is "${at('city_state')}" and not the city parsed out of the street address`);
+        if (at('trade') !== 'Roofing') fails.push('the trade the press searched them under never reaches the rep file');
+        if (at('google_rating') !== '4.4' || at('google_reviews') !== '51') fails.push('the Google rating and review count are not in the lean file, so a rep cannot see the pain the whole pitch opens on');
+        if (at('already_paying_for_ads') !== 'yes') fails.push('already_paying_for_ads is not carrying the measured answer');
+        for (const _k of ['last_contact', 'convo_had', 'direct_phone_obtained', 'direct_email_obtained', 'notes']) {
+          if (at(_k) !== '') fails.push(`the rep column ${_k} was filled in by us ("${at(_k)}") - these five are his to type and anything we put there is a claim nobody measured`);
+        }
+        // AN EMPTY GRADE IS THE HONEST ONE. A lead with nobody named must not
+        // carry a letter: a D there reads as "we checked and he cannot sign".
+        // The live shape: the server GRADED the name it found and then held it
+        // back at the buying floor, so the grade token is on the row and there
+        // is no name. A letter here would read as "we checked and he cannot
+        // sign" about a person the file does not name.
+        const _noOwner = [{ contactReadOk: true, name: 'No Owner Co', contactPhone: '+1 555 0101', contactEmail: 'info@noowner.com', contactOwnerGrade: 'unconfirmed' }];
+        const _nRow = _cells(_file(_noOwner, false)[1]);
+        if (_nRow[WANT23.indexOf('owner_confidence')] !== '') {
+          fails.push(`a lead with nobody named exports owner_confidence "${_nRow[WANT23.indexOf('owner_confidence')]}" - the honest cell is empty`);
+        }
+
+        // ══ A ROW GOES OUT ONCE ══════════════════════════════════════════
+        // Round 128 stamped exported_at and Round 105 showed it, and nothing
+        // ever filtered on it: two presses on one batch, same businesses.
+        const _fresh = { id: 'f1', contactReadOk: true, name: 'Fresh Co', contactOwner: 'A Person', contactPhone: '+1 555 0102' };
+        const _gone = { id: 'g1', contactReadOk: true, name: 'Gone Co', contactOwner: 'B Person', contactPhone: '+1 555 0103',
+          exportedAt: '2026-09-08T10:00:00.000Z', batchId: 'aaaabbbb-1111-4222-8333-444444444444' };
+        const _s1 = M.split([_fresh, _gone], false);
+        if (_s1.rows.length !== 1 || (_s1.rows[0] || {}).name !== 'Fresh Co') {
+          fails.push(`a second CSV press on one batch still hands out ${_s1.rows.length} row(s) - a row that already went out must be withheld`);
+        }
+        if (_s1.already.length !== 1) fails.push('the export does not count the rows it withheld, so the message cannot name them');
+        const _sayLine = M.withheldSay(_s1.already);
+        if (!/aaaabbbb/.test(_sayLine) || !/2026-09-08/.test(_sayLine)) {
+          fails.push(`the export does not say which batch the withheld rows went out in: "${_sayLine}"`);
+        }
+        if (M.withheldSay([]) !== '') fails.push('the export announces withheld rows when it withheld none');
+        const _s2 = M.split([_fresh, _gone], true);
+        if (_s2.rows.length !== 2) fails.push('the override no longer re-exports a row that already went out, so there is no way to send a file twice on purpose');
+        // A ruled-out lead is withheld by the lane rule, not by the stamp -
+        // the two filters must not have been collapsed into one.
+        if (M.split([{ id: 'x', contactReadOk: true, contactNotFit: true, name: 'Chain Co', contactPhone: '+1 555 0104' }], true).rows.length) {
+          fails.push('the export override also re-admits a lead the server ruled out');
+        }
       }
 
       // ══ ONE LEAD, ONE TAB ═════════════════════════════════════════════
@@ -2933,8 +3027,15 @@ let contactTally = null;
         // Round 110, Vin: the grade letters leave the export. The lean file
         // carries size, the target and the marketing decision-maker instead,
         // and neither grade nor the sentence comes back.
-        for (const k of ['ownerGrade', 'emailGrade', 'emailSafeToSend', 'ownerHowSure', 'emailConfidence']) {
-          if (M.lean.indexOf(k) >= 0) fails.push(`the lean file carries "${k}" again - the grades and the sentences left the export on 2026-09-02`);
+        // Round 131, Vin's fixed sheet: the two A-D LETTERS are back and are
+        // part of the immovable prefix; the SENTENCES they replaced stay one
+        // tick away. Both directions, because a lean set that quietly grew a
+        // sentence back is the busy file Round 106 exists to end.
+        for (const k of ['emailSafeToSend', 'ownerHowSure', 'emailConfidence']) {
+          if (M.lean.indexOf(k) >= 0) fails.push(`the lean file carries "${k}" again - the sentences left the export on 2026-09-02`);
+        }
+        for (const k of ['ownerGrade', 'emailGrade']) {
+          if (M.prefix.indexOf(k) < 0) fails.push(`the fixed CSV prefix lost "${k}" - Round 131 put the A-D letter back in every file, under one heading, in one place`);
         }
         // Round 118: the website read is on the sheet, and it says nothing at
         // all on a lead whose site we could not read.
@@ -2962,14 +3063,28 @@ let contactTally = null;
         {
           const _keys = M.cols.map(c => c[0]);
           if (_keys[_keys.indexOf('website') + 1] !== 'siteGrade') fails.push('the website grade is not the column immediately right of the website, which is where Vin asked for it');
-          if (M.lean.indexOf('siteGrade') !== M.lean.indexOf('website') + 1) fails.push('the website grade is not beside the website in the lean file the rep actually opens');
+          // Round 131: `website` is column 14 of the fixed prefix and
+          // `google_rating` is column 15, so the grade can no longer sit
+          // immediately right of the website in the FILE - those seats are
+          // decided by the prefix now. The declared table still keeps the pair
+          // together (asserted immediately above) and the grade is still in
+          // the lean file, which is what the rep opens.
+          if (M.lean.indexOf('siteGrade') < 0) fails.push('the website grade is not in the lean file the rep actually opens');
         }
         if (M.siteCell({ name: 'Never Read Co', contactSiteMeasured: true, contactSiteShort: 'poor' }) !== '') fails.push('a lead that was never read gets a website verdict');
         if (M.lean.indexOf('siteWhy') >= 0) fails.push('the long website sentence is back in the lean file');
         for (const k of ['size', 'site', 'target', 'marketingLead', 'marketingLeadEmail']) {
           if (M.lean.indexOf(k) < 0) fails.push(`the lean file does not carry "${k}" - the rep asked for size and who to go to`);
         }
-        if (M.cols.some(c => c[0] === 'ownerGrade' || c[0] === 'emailGrade' || c[0] === 'emailSafeToSend')) fails.push('a grade column is back in the declared table');
+        if (M.cols.some(c => c[0] === 'emailSafeToSend')) fails.push('a Safe-to-send column is back in the declared table - Round 110 put that answer inside the address cell itself');
+        // Round 131: and the two grade columns must exist, under the exact
+        // headings Vin's sheet reads. A column present under the wrong name is
+        // a column he has to re-map on every paste.
+        for (const [_k, _want] of [['ownerGrade', 'owner_confidence'], ['emailGrade', 'email_confidence']]) {
+          const _gr = M.cols.find(c => c[0] === _k);
+          if (!_gr) fails.push(`the ${_k} column is not in the declared table, so the fixed prefix cannot emit it`);
+          else if (_gr[1] !== _want) fails.push(`the ${_k} column is headed "${_gr[1]}" and Vin's sheet reads "${_want}"`);
+        }
         if (!/ask who is/.test(String(_rows[0].ownerHowSure || ''))) fails.push('the held-back owner lost the ask-rather-than-assert sentence in the full export');
         // The two new cells, executed.
         const _dar = M.rows([{ contactReadOk: true, name: 'Darrel Co', contactOwner: 'Darrel Jones', contactSize: 'high', contactSizeConfidence: 'sure', contactTarget: 'owner', contactLayers: 'owner' }])[0];
@@ -3417,7 +3532,7 @@ let contactTally = null;
           fails.push('a blank When-to-call cell still reaches the rep with no explanation, which reads as a bug in the file');
         }
       }
-      contactStat = { cols: M.cols.length, lean: M.pick(false).length };
+      contactStat = { cols: M.pick(true).length, lean: M.pick(false).length, prefix: M.prefix.length };
     }
   }
 
@@ -3446,7 +3561,10 @@ let contactTally = null;
     ["(latest.sendableEmail > 0) ? btn('research', 'Move ' + latest.sendableEmail", " + ' to Research', () => moveSendableOfRun(latest.id)", 'the Move-to-Research button counts only the confirmed addresses, so it offers nothing on a run whose addresses the engine said we can send to'],
     ["filter(l => l && queueStateOf(l) === 'read' && emailSendableOf(l))", ".map(l => l.id)", 'the bulk move filters on the confirmed rule again, so the button moves fewer leads than the card counts'],
     ["findApi('/api/find/archive')", "", 'the archive screen never loads'],
-    ["const rows = (leads || []).filter(", "exportableContact);", 'the CSV is no longer the call lane, so the rep\'s sheet carries rows nobody is phoning'],
+    // Round 131: the export goes through exportSplit, which applies BOTH
+    // rules - the call lane and the once-only stamp - so the rows in the file
+    // and the count in the message can never be two different sets.
+    ["const split = exportSplit(leads,", " csvAgain);", 'the CSV export no longer goes through exportSplit, so a row that already went out is handed to the rep a second time and the call-lane filter is off the press'],
     ["const n = downloadFindContacts(rows,", " csvFull);", 'the CSV button is not wired to the export'],
     ['setReadCount(Math.max(1, Math.min(FIND_READ_MAX,', ' Number(e.target.value) || 1)))', 'the count box no longer clamps to the ceiling'],
     ["setCsvFull(v =>", " !v)", 'the columns toggle is gone'],
@@ -3709,6 +3827,6 @@ Promise.all(PENDING).then(() => {
   notes.forEach(n => console.log(n));
   if (findStat) console.log(`\u2713 index.html: the Find run's clock and card were EXECUTED, not read \u2014 the browser's wall sits above the server's own sweep so a healthy run is never killed by the wrong file, the submit goes through the poller and exactly one call site still touches the synchronous door as the old-server fallback, the trigger lanes are a Settings switch that is off by default and sent explicitly, and a lead we have actually read stops showing the name-based guess beside the owner, email and phone we measured. A demoted lead now says why it was sorted last: "Find score 74/100 \u00b7 owner findable 31/40, a guess until we read them \u00b7 sorted last: outside the star band we mine reviews in". And the card answers what a business can afford instead of inventing a revenue band from its review count: "Find score 74/100 \u00b7 Premium fit".`);
   if (contactTally) console.log(`\u2713 index.html: the contact run TALLY was executed \u2014 the first thing in this project that has ever counted whether the owner resolver and the email engine work. Rates are over leads actually READ, the email tier split is reported rather than one "found" number because a published address and a guess are not the same thing, a run under twelve reads says its numbers are counts and not rates, and a run made while the verifier was down says so. On the fixture queue: ${contactTally}`);
-  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 the CSV writes the ${contactStat.lean} columns a rep dials and sends from, with all ${contactStat.cols} one tick away (the Google Sheet push is retired: CSV only, Vin 2026-09-08). It neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, writes the lean file as GRADES with every sentence one tick away, and reports an unmeasured signal as "not checked" rather than as a definite no. Round 124: the fields a read stamps on a row are the SERVER's contactFieldsFrom now, lifted from server.js and run through the same fixtures, and the request the driver builds is its readRunCompanyFrom, so a field dropped on either side of the wire fails here. The two Find screens decide with pure functions executed here (lead state, the one verified-email rule on both sides, the batch card stats, the credit estimate off the server's figure, the route parser, the pipeline additions, the spec's tokens), and every call site is pinned: start, cancel, review, move, rule out, restore and the export stamp go through the routes, the page never touches discovered_queue, never reads a lead itself, and the Research batch cannot reach any of it.`);
+  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 every file opens on the same ${contactStat.prefix} columns in the same order whichever way the tick box is set (Round 131), with ${contactStat.lean} columns by default and all ${contactStat.cols} one tick away (the Google Sheet push is retired: CSV only, Vin 2026-09-08). A row that already went out is withheld and the message says which batch it went out in, and the override re-admits it. It neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, writes the lean file as GRADES with every sentence one tick away, and reports an unmeasured signal as "not checked" rather than as a definite no. Round 124: the fields a read stamps on a row are the SERVER's contactFieldsFrom now, lifted from server.js and run through the same fixtures, and the request the driver builds is its readRunCompanyFrom, so a field dropped on either side of the wire fails here. The two Find screens decide with pure functions executed here (lead state, the one verified-email rule on both sides, the batch card stats, the credit estimate off the server's figure, the route parser, the pipeline additions, the spec's tokens), and every call site is pinned: start, cancel, review, move, rule out, restore and the export stamp go through the routes, the page never touches discovered_queue, never reads a lead itself, and the Research batch cannot reach any of it.`);
   if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
 }).catch((e) => { console.log('\n\u2717 index.html: the checks could not finish \u2014 ' + (e && e.message)); process.exit(1); });

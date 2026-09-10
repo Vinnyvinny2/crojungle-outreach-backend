@@ -89,8 +89,11 @@ module.exports = [
 
   // (P5-9) the page's own card counters stop separating the three numbers.
   { name: '129-p5-i-card-stats-stop-counting-sendable', path: 'index.html', prove: 'clientcheck',
-    old: "    if (st === 'read' && emailSendableOf(l)) { s.sendable += 1; if (emailStatusOf(l) !== 'verified') s.sendableOnly += 1; }\n",
-    new: "    if (st === 'read' && emailStatusOf(l) === 'verified') { s.sendable += 1; }\n",
+    // Re-aimed in Round 131: Part C moved the three-way split into batchBucketOf, so the
+    // old compound line no longer exists. The premise is unchanged - stop counting what
+    // can be sent to and the card is back to the binary the round was built to kill.
+    old: "    if (st === 'read' && emailSendableOf(l)) s.sendable += 1;\n",
+    new: "    if (st === 'read' && emailStatusOf(l) === 'verified') s.sendable += 1;\n",
     mustPrint: /the batch card does not count what can be sent to/ },
 
   // ── P0: one name for the first-name mailbox ──────────────────────────────
@@ -313,11 +316,10 @@ module.exports = [
   // (C-1) the guard goes back to deleting the population. Neither hard bounce
   // on record came through it, and it refuses every constructed address on an
   // unvouched name.
-  { name: 'p3-c-guard-deletes-the-population-again', path: 'src/all.js', prove: 'boot',
-    old: "  return Object.assign({}, r, {\n    verifyToSend: true,\n",
-    new: "  return Object.assign({}, r, {\n    sendable: false,\n",
-    mustPrint: /a tier-3 address built from a held-back name is refused outright rather than offered one check/ },
-
+  // RETIRED in Round 131. Its premise - that the guard should mark a held-back name's
+  // address rather than refuse it - is the behaviour Vin reversed on 2026-09-10: a grade-D
+  // name now builds no address at all. The entry is unfalsifiable (its anchor occurs zero
+  // times) and is replaced from the other direction by 131-a2-guard-marks-instead-of-refusing.
   // (C-2) the send route stops asking, so the mark is decoration and an
   // `unknown` answer sends an unproven person's mailbox exactly as before.
   { name: 'p3-c-send-route-stops-asking', path: 'src/all.js', prove: 'boot',

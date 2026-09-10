@@ -1341,7 +1341,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261010;
+const CLIENT_CONTRACT = 20261011;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -4244,6 +4244,20 @@ const contactConfidence = (lead) => {
   return { tier: tier, sendable: sendable, say: say, blockReason: (er && er.blockedReason) || '' };
 };
 
+// ══ ROUND 131: NOTHING PRESSES THIS ANY MORE ══════════════════════════════
+// contactListRows / CONTACT_CSV_COLUMNS / contactListCsv / downloadContactList
+// were a SECOND CSV writer over a second column table, and the two tables
+// disagreed about the name of every field they shared - "Decision maker"
+// against "Decision-maker", "City" against "Location" - with `trade` on one
+// and not the other. Two exporters cannot both open on the same fixed
+// twenty-three unless somebody keeps them in step by hand every time, and the
+// copy that rots is always the one nobody presses. Its button is gone; the
+// rep's file comes off the Find tab, which is the stage in daily use.
+// The code below is kept unreached on purpose for one round: clientcheck
+// EXECUTES it for the formula-injection guard, the email-tier sentences and
+// the free-page-builder warning, and deleting it here would delete that
+// coverage in the same change. Deleting both together is its own round.
+//
 // contactListRows - the file, ordered. Ranked by contactRank, which is the
 // system's own answer to "can we put this in front of the decision-maker" and
 // NOT a Google position: this codebase uses "rank" for search position almost
@@ -5684,6 +5698,38 @@ const bestTimeCell = (c) => {
   return m ? ('from ' + m[1].replace(/\s+/g, '')) : '';
 };
 const exportedDateCell = (c) => (c && c.exportedAt) ? String(c.exportedAt).slice(0, 10) : '';
+// ══ ROUND 131: THE CITY, NOT THE STREET ═════════════════════════════════
+// `location` is Google's own formattedAddress - "4521 W Bell Rd Suite 12,
+// Phoenix, AZ 85308, USA" - and a rep cannot sort a sheet by patch on a
+// street number. The server has had cityState() and parseCityState() since
+// Round 112 and neither had ever been shipped to the browser, so the file
+// had no city column at all. This is a PORT of cityState(), not a second
+// rule: the same three shapes it handles - "Phoenix AZ" with no comma, a
+// full state name, and a state+ZIP part - with the comma a spreadsheet
+// column wants ("Phoenix, AZ"). An address we cannot parse gets an EMPTY
+// cell, never the street: an unparsed address is something we did not
+// measure, and a street in a city column is the bug this was ported for.
+//
+// Client-side on purpose. Deriving it on the server would leave the column
+// blank on every lead already read, and the fix would go half-live - the
+// server half deploys on merge and this file deploys by hand.
+const CSV_STATE_ABBR = { alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA', colorado: 'CO', connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA', hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA', kansas: 'KS', kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD', massachusetts: 'MA', michigan: 'MI', minnesota: 'MN', mississippi: 'MS', missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV', 'new hampshire': 'NH', 'new jersey': 'NJ', 'new mexico': 'NM', 'new york': 'NY', 'north carolina': 'NC', 'north dakota': 'ND', ohio: 'OH', oklahoma: 'OK', oregon: 'OR', pennsylvania: 'PA', 'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT', virginia: 'VA', washington: 'WA', 'west virginia': 'WV', wisconsin: 'WI', wyoming: 'WY', 'district of columbia': 'DC' };
+const cityStateCell = (c) => {
+  const parts = String((c && c.location) || '').split(',').map(s => s.trim()).filter(Boolean)
+    .filter(p => !/^(usa|u\.s\.a\.|united states|us)$/i.test(p))
+    .map(p => CSV_STATE_ABBR[p.toLowerCase()] || p);
+  if (!parts.length) return '';
+  if (parts.length === 1) {
+    const m = parts[0].match(/^(.+?)\s+([A-Z]{2})$/);
+    return (m && m[1] && !/\d/.test(m[1])) ? (m[1].trim() + ', ' + m[2]) : '';
+  }
+  let idx = parts.findIndex(p => /\b[A-Z]{2}\b\s*\d{5}/.test(p));
+  let st = '';
+  if (idx >= 0) st = (parts[idx].match(/\b([A-Z]{2})\b/) || [])[1] || '';
+  else { idx = parts.findIndex(p => /^[A-Z]{2}$/.test(p)); if (idx >= 0) st = parts[idx]; }
+  const city = idx > 0 ? parts[idx - 1] : '';
+  return [city, st].filter(Boolean).join(', ');
+};
 
 // Three states, said in words, because "yes/no" about a thing we never looked at
 // is the unmeasured-as-zero failure wearing a tick box.
@@ -5750,12 +5796,21 @@ const contactTabOf = (c) => {
   if (c.contactReadOk === true) return 'read';
   return 'unread';
 };
+// ══ ROUND 131: TWENTY-THREE HEADINGS THAT NEVER MOVE ══════════════════════
+// Two files came out of this app under two column layouts - lean and full -
+// and neither of them opened on the same thing, so a rep pasting into his own
+// sheet had to re-map the columns depending on which tick box was set. The
+// headings of the fixed twenty-three below are written the way HIS sheet reads
+// them (batch_id, decision_maker, city_state), because a heading that has to
+// be translated on every paste is the same defect wearing a friendlier word.
+// The columns that follow them keep their sentences: nobody re-maps a column
+// he only reads.
 const FIND_CSV_COLUMNS = [
   ['icp', 'Fit /100 (not a Google position)'],
   ['icpWhy', 'What that score was measured on'],
-  ['company', 'Company'],
+  ['company', 'company'],
   // Round 110: what the rep asked for - how big, and who to go to.
-  ['size', 'Size (low / medium / high)'],
+  ['size', 'size'],
   ['sizeConfidence', 'How sure we are of the size'],
   // Round 118: how much of the website work we sell is missing.
   ['site', 'Their website (strong / fair / weak / poor)'],
@@ -5763,45 +5818,75 @@ const FIND_CSV_COLUMNS = [
   ['target', 'Who to go to'],
   // Round 117: the sentence the short cell replaced. Full file only.
   ['targetWhy', 'Why that person, in full'],
-  ['owner', 'Decision-maker'],
-  ['ownerTitle', 'Their title'],
+  ['owner', 'decision_maker'],
+  ['ownerTitle', 'title'],
   ['ownerHowSure', 'How sure we are it is him, and what to ask'],
   ['ownerCanBuy', 'Can they authorise a purchase'],
   ['ownerFrom', 'Where we found them'],
   ['marketingLead', 'Marketing decision-maker (layered businesses)'],
   ['marketingLeadTitle', 'Their title'],
   ['marketingLeadEmail', 'Their email'],
-  ['email', 'Email'],
-  ['emailConfidence', 'How confident we are in that address'],
+  ['email', 'email'],
+  // Round 131: the LETTER moved to its own fixed column (emailGrade). What is
+  // left here is the sentence behind it, and the heading now says so.
+  ['emailConfidence', 'How confident we are in that address, in full'],
   ['emailWhyUnconfirmed', 'If it is unconfirmed, why'],
   ['emailGoesTo', 'Who opens it'],
-  ['phone', 'Phone'],
+  ['phone', 'phone'],
   ['phoneOnSite', 'Does their own site print this number'],
   ['callWindow', 'When to call'],
-  ['bestTime', 'Best time'],
-  ['exported', 'Exported (date)'],
+  ['bestTime', 'best_time'],
+  ['exported', 'Exported before (date)'],
   ['exportedTo', 'Exported to'],
   ['affordTier', 'What they can afford'],
-  ['payingForAds', 'Already paying for ads'],
+  ['payingForAds', 'already_paying_for_ads'],
   ['adsWhy', 'What we saw on their site'],
   ['teamSize', 'People on their team page (a floor, not a headcount)'],
-  ['hiringMarketing', 'Hiring for marketing'],
+  ['hiringMarketing', 'hiring_for_marketing'],
   ['hiringRoles', 'Roles they are hiring for'],
   // The CLOCK. A marketing role posted eleven days ago is the strongest cold
   // opening this pipeline can produce, and it never left the server.
   ['hiringPosted', 'When that role was posted'],
-  ['website', 'Website'],
+  ['website', 'website'],
   // Vin, 2026-09-04: "a grade on the website 1-10, lower being worse, in a
   // column to the right of the website name". Here, literally.
   ['siteGrade', 'Website grade (10 best, 1 worst)'],
-  ['location', 'Location'],
-  ['reviews', 'Google reviews'],
-  ['rating', 'Google rating'],
+  // Round 131: the full street address Google sent. city_state is parsed out
+  // of it and is the one in the fixed prefix; this stays for the rep who needs
+  // to post something.
+  ['location', 'Their full street address'],
+  ['reviews', 'google_reviews'],
+  ['rating', 'google_rating'],
   ['readVia', 'How their site was read'],
   ['notFit', 'Not a fit, and why'],
   ['demotedWhy', 'Why this lead was marked down'],
   ['independence', 'Independent, or a branch of something bigger'],
   ['notes', 'What we could not do'],
+  // ══ THE ELEVEN THE FIXED PREFIX WAS MISSING (Round 131) ═════════════════
+  // Five were already computed and rendered nowhere: the batch a row came out
+  // of, the date the file was made, the two A-D grades that were columns until
+  // Round 110, and the trade the Find press searched under. One needed real
+  // work - the city parsed out of the street address. Five are the rep's own:
+  // exported EMPTY, every run, because they are his to fill in and a value we
+  // invented for them would be a claim nobody measured.
+  ['batchId', 'batch_id'],
+  ['exportedDate', 'exported_date'],
+  // Owner: A two independent sources agree; B their own site says so; C likely;
+  // D the buying-floor gate held the name back. EMPTY when nobody was named -
+  // that is the honest "we do not know" and it must stay empty.
+  ['ownerGrade', 'owner_confidence'],
+  // Email: A confirmed or published as a person's; B a published shared
+  // mailbox; C a catch-all domain; D a guess, or our checker was down.
+  ['emailGrade', 'email_confidence'],
+  ['cityState', 'city_state'],
+  ['trade', 'trade'],
+  // ── THE REP'S FIVE. Typed by hand, never by us. ────────────────────────
+  ['lastContact', 'last_contact'],
+  ['convoHad', 'convo_had'],
+  ['directPhoneObtained', 'direct_phone_obtained'],
+  ['directEmailObtained', 'direct_email_obtained'],
+  // NOT the key `notes`: that one is ours ("What we could not do"). This is his.
+  ['repNotes', 'notes'],
 ];
 // ══ TWENTY-ONE COLUMNS, MOST OF THEM DELETED BY HAND EVERY TIME ═══════════
 // Vin, 2026-08-28: "we are getting coloumns that are not needed when pasting to
@@ -5831,13 +5916,49 @@ const FIND_CSV_COLUMNS = [
 // more" - the grade letters leave the export (the card and the send gate
 // still use them); the rep gets size, who to go to, and the marketing
 // decision-maker beside the owner.
-const FIND_CSV_ESSENTIAL = ['icp', 'company', 'website', 'siteGrade', 'size', 'sizeConfidence', 'site', 'target', 'owner', 'ownerTitle',
-  'marketingLead', 'marketingLeadTitle', 'email', 'marketingLeadEmail', 'phone', 'bestTime', 'payingForAds', 'hiringMarketing',
+// ══ ROUND 131: THE HEAD OF THE FILE IS IMMOVABLE ═══════════════════════════
+// Before this, the toggle chose the whole layout: nineteen columns in one
+// order or forty-four in another, so which column held the phone number
+// depended on a tick box. These twenty-three are emitted first, in this order,
+// on EVERY run, and the toggle only decides what is appended after them.
+//
+// The order is Vin's sheet, left to right: where the row came from, who to
+// call and how sure we are of him, how to reach him, who and where they are,
+// what we already know about their marketing - then the five the rep fills in
+// himself. Every key here must have a row in the table above; clientcheck
+// refuses the build if one does not, because a prefix key with no row would
+// export a blank column under no heading at all.
+const FIND_CSV_PREFIX = ['batchId', 'exportedDate', 'company', 'owner', 'ownerTitle', 'ownerGrade',
+  'email', 'emailGrade', 'phone', 'bestTime', 'size', 'cityState', 'trade', 'website',
+  'rating', 'reviews', 'payingForAds', 'hiringMarketing',
+  // The rep's own five, exported empty every run.
+  'lastContact', 'convoHad', 'directPhoneObtained', 'directEmailObtained', 'repNotes'];
+// ══ TWENTY-ONE COLUMNS, MOST OF THEM DELETED BY HAND EVERY TIME ═══════════
+// Vin, 2026-08-28: "we are getting coloumns that are not needed when pasting to
+// cvs we dont need all of that for now just the most improtnnat info i have to
+// dekete a bunch of coloumns everytime i paste stuff in."
+//
+// Nothing here is DELETED - the full set is one tick box away. What this
+// decides is which columns a press produces by default. Round 131: the fixed
+// prefix is part of the lean set by construction (it is the first line below),
+// and what follows is the nine extra columns the lean file carries - so the
+// declaration order below IS the emitted order, and the generated reference
+// executes findCsvColumns rather than transcribing either list.
+const FIND_CSV_ESSENTIAL = FIND_CSV_PREFIX.concat([
+  'icp', 'sizeConfidence', 'site', 'target', 'marketingLead', 'marketingLeadTitle',
+  'marketingLeadEmail', 'siteGrade',
   // exported is lean because it answers the one question the file could not:
   // has this row already been handed out.
-  'exported'];
-const findCsvColumns = (full) => (full === true ? FIND_CSV_COLUMNS
-  : FIND_CSV_COLUMNS.filter(c => FIND_CSV_ESSENTIAL.indexOf(c[0]) >= 0));
+  'exported']);
+const findCsvColumns = (full) => {
+  const _byKey = new Map(FIND_CSV_COLUMNS.map(c => [c[0], c]));
+  // Deliberately unguarded: a prefix key with no row throws here rather than
+  // emitting a nameless blank column that nobody would notice in a file.
+  const head = FIND_CSV_PREFIX.map(k => _byKey.get(k));
+  const tail = FIND_CSV_COLUMNS.filter(c => FIND_CSV_PREFIX.indexOf(c[0]) < 0
+    && (full === true || FIND_CSV_ESSENTIAL.indexOf(c[0]) >= 0));
+  return head.concat(tail);
+};
 // ══ THE FIRST MEASUREMENT OF WHETHER ANY OF THIS WORKS ══════════════════════
 // Vin, 2026-08-28: "i want u to double check on how well decision maker finding
 // is and how well our email finding is because we have been running without
@@ -6019,6 +6140,9 @@ const findContactRows = (companies) => {
   // these should make the call sheet at all, email only").
   const list = lastRowsLast((Array.isArray(companies) ? companies : [])
     .filter(c => exportableContact(c)));
+  // One clock for the whole file: every row of one export carries the same
+  // export date, and a run that straddles midnight cannot split it.
+  const _csvToday = today();
   const rows = list.map(c => ({
     icp: (typeof c.contactIcp === 'number') ? c.contactIcp : null,
     icpWhy: c.contactIcpWhy || '',
@@ -6153,6 +6277,34 @@ const findContactRows = (companies) => {
     website: websiteCell(c),
     siteGrade: siteGradeCell(c),
     exported: exportedDateCell(c),
+    // ══ THE FIXED TWENTY-THREE (Round 131) ═══════════════════════════════
+    // The batch a row came out of, so a rep looking at a duplicate can say
+    // which file he already has it in.
+    batchId: c.batchId || '',
+    // The date THIS file was made - the same expression the filename uses.
+    // Not the old stamp: a row that already went out is withheld now, so
+    // every row in a file is going out today.
+    exportedDate: _csvToday,
+    // The two A-D grades. They were columns until Round 110 and the tokens
+    // never stopped being computed; both are EMPTY when there is nothing to
+    // grade, which is the honest cell and the reason they can be trusted.
+    // ownerGradeRating, NOT ownerGradeCell: the cell appends provenance prose
+    // and this column is a letter.
+    ownerGrade: ownerGradeRating(c),
+    emailGrade: emailGradeRating(c),
+    cityState: cityStateCell(c),
+    // The trade the Find press searched them under, carried on the lead since
+    // discovery and read by the Research exporter for a year without ever
+    // reaching the rep's own file.
+    trade: c.industry || c.category || '',
+    // ── THE REP'S FIVE, EXPORTED EMPTY ───────────────────────────────────
+    // He types these. They are here so the column exists in the same place in
+    // every file he pastes, which is the whole point of the fixed prefix.
+    lastContact: '',
+    convoHad: '',
+    directPhoneObtained: '',
+    directEmailObtained: '',
+    repNotes: '',
     _last: laneOf(c).last === true,   // Round 115: the hedge's rows sort last; not a column
     exportedTo: (c.exportedTo || []).join(' and '),
     location: c.location || '',
@@ -6193,6 +6345,40 @@ const downloadFindContacts = (companies, full) => {
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   return rows.length;
+};
+
+// ══ ROUND 131: A ROW GOES OUT ONCE ═════════════════════════════════════════
+// Round 128 stamped exported_at on the row and Round 105 put the date in a
+// column, and then nothing ever FILTERED on it: pressing CSV twice on one
+// batch handed the rep the same businesses a second time, with no way to tell
+// which of them he had already worked. The stamp is the filter now.
+//
+// Pure and at module scope so the check can execute it, and one function so
+// the count on the message and the rows in the file can never be two
+// different sets - that split is what put a ruled-out chain outlet in a live
+// file on 2026-09-01.
+const exportSplit = (leads, again) => {
+  const all = (Array.isArray(leads) ? leads : []).filter(c => exportableContact(c));
+  const already = all.filter(c => !!(c && c.exportedAt));
+  return { all, already, rows: again === true ? all : all.filter(c => !(c && c.exportedAt)) };
+};
+// What was left out, and WHERE IT WENT - a count on its own reads as a bug in
+// the file. The batch is named because it is the thing the rep can open.
+const exportWithheldSay = (already) => {
+  const list = (Array.isArray(already) ? already : []).filter(Boolean);
+  if (!list.length) return '';
+  const where = [];
+  for (const c of list) {
+    const b = c.batchId ? ('batch ' + String(c.batchId).slice(0, 8)) : 'an earlier batch';
+    const d = exportedDateCell(c);
+    const s = b + (d ? ' on ' + d : '');
+    if (where.indexOf(s) < 0) where.push(s);
+  }
+  const shown = where.length > 3
+    ? (where.slice(0, 3).join(', ') + ' and ' + (where.length - 3) + ' more')
+    : where.join(', ');
+  return list.length + ' row(s) were left out because they already went out in ' + shown
+    + '. Tick "include exported" to send them again.';
 };
 
 const leadFromCompany = (company) => {
@@ -6482,6 +6668,10 @@ function FindView({
   const [runs, setRuns] = React.useState(null);
   const [readCount, setReadCount] = React.useState(Number(_fv.readCount) || 50);
   const [csvFull, setCsvFull] = React.useState(_fv.csvFull === true);
+  // Round 131: the override on "a row goes out once". Deliberately NOT saved
+  // with the rest of the view - a switch that hands out businesses a second
+  // time must be pressed on purpose each time, not remembered from last week.
+  const [csvAgain, setCsvAgain] = React.useState(false);
   const [showAll, setShowAll] = React.useState(false);
   const [note, setNote] = React.useState('');
   const [error, setError] = React.useState('');
@@ -6621,12 +6811,21 @@ function FindView({
   // sheet has always used (the call lane, the 44 or 19 columns); the server
   // only records that it went out.
   const exportCsv = async (leads) => {
-    const rows = (leads || []).filter(exportableContact);
-    if (!rows.length) return;
+    const split = exportSplit(leads, csvAgain);
+    const rows = split.rows;
+    if (!rows.length) {
+      // A press that produces no file must say why. "Nothing happened" is how
+      // a working refusal reads as a broken button.
+      say(split.already.length
+        ? ('Nothing new to export. ' + exportWithheldSay(split.already))
+        : 'No rows to export: nothing here has been read into the call lane yet.');
+      return;
+    }
     const n = downloadFindContacts(rows, csvFull);
     if (!n) return;
     try { await findApi('/api/leads/exported', { ids: rows.map(r => r.id), dest: 'csv' }); } catch (e) { console.log('export stamp failed:', e.message); }
-    say(n + ' row(s) in the file.');
+    say(n + ' row(s) in the file.'
+      + ((split.already.length && csvAgain !== true) ? (' ' + exportWithheldSay(split.already)) : ''));
     if (batch && batch.run) loadBatch(batch.run.id, true);
   };
   const csvForRun = async (runId) => {
@@ -6726,10 +6925,17 @@ function FindView({
     return h('button', { onClick: disabled ? undefined : onClick, disabled, style: Object.assign(base, look, opt.style || {}) }, label);
   };
   const sectionLabel = (s) => h('div', { style: { fontSize: 10, letterSpacing: '.09em', textTransform: 'uppercase', color: T.text3, marginBottom: 8 } }, s);
-  const columnsToggle = h('button', {
-    onClick: () => setCsvFull(v => !v),
-    style: { fontFamily: 'Inter,sans-serif', fontSize: 10, color: T.text3, background: 'none', border: '1px solid ' + T.border, borderRadius: 5, padding: '5px 8px', cursor: 'pointer', whiteSpace: 'nowrap' },
-  }, findCsvColumns(csvFull).length + ' columns ▾');
+  const _toggleStyle = { fontFamily: 'Inter,sans-serif', fontSize: 10, color: T.text3, background: 'none', border: '1px solid ' + T.border, borderRadius: 5, padding: '5px 8px', cursor: 'pointer', whiteSpace: 'nowrap' };
+  // One element, used at both CSV buttons, so the two presses can never be
+  // governed by two different switches.
+  const columnsToggle = h(React.Fragment, null,
+    h('button', { onClick: () => setCsvFull(v => !v), style: _toggleStyle,
+      title: 'The first 23 columns are the same in both files. This decides what follows them.',
+    }, findCsvColumns(csvFull).length + ' columns ▾'),
+    h('button', { onClick: () => setCsvAgain(v => !v),
+      style: Object.assign({}, _toggleStyle, csvAgain ? { color: T.amber, borderColor: T.amber } : null),
+      title: 'A row that already went out is left out of the file. Turn this on to send it again.',
+    }, (csvAgain ? '☑' : '☐') + ' include exported'));
   const frame = (kids) => h('div', { style: { maxWidth: 880 } },
     (note || error || summaryErr) ? h('div', { style: { marginBottom: 10, fontSize: 12, color: error || summaryErr ? T.amber : T.text2 } }, error || summaryErr || note) : null,
     h('div', { style: { background: T.bg, border: '1px solid ' + T.border, borderRadius: 12, overflow: 'hidden', color: T.text, fontFamily: 'Inter,sans-serif' } }, kids));
@@ -8934,44 +9140,16 @@ function ResearchView({
               style: { fontSize: 11, color: 'var(--m2)', marginTop: 4, lineHeight: 1.45 },
             }, 'A contact run leaves any audit already on a lead untouched, and does not mark the lead as audited \u2014 so a lead can be listed today and audited later without paying twice.'));
         })(),
-        // ── THE FILE ITSELF ───────────────────────────────────────────────
-        // A CSV, deliberately, where the audit export is deliberately not one:
-        // a contact list IS a table and a spreadsheet is what a rep sorts and
-        // dials from. Ranked highest first, with the email's tier, whether it
-        // is safe to send, and why it was refused as their OWN columns rather
-        // than one guessed caption.
-        (() => {
-          // Anything we could actually put in front of a person: an address,
-          // a dialable number, or a named owner. NOT "went through a contact
-          // run" - that made the file about which code path a lead took rather
-          // than about what we know, and on a 189-lead pipeline it matched
-          // nothing at all while 128 audited leads sat there with resolved
-          // owners, addresses and phones.
-          const listed = allLeads.filter(x => x && (
-            String(x.email || '').trim()
-            || String(x.phone || x.phoneDisplay || '').replace(/\D/g, '')
-            || (x.decisionMaker && x.decisionMaker.name) || x.verifiedCEO));
-          if (batchRunning || !listed.length) return null;
-          const _withEmail = listed.filter(x => String(x.email || '').trim()).length;
-          return React.createElement(React.Fragment, null,
-            React.createElement('button', {
-              className: 'btn btn-sm btn-g',
-              style: { marginTop: 6, width: '100%' },
-              title: 'Every lead with an address, a phone number or a named owner - ranked, as a CSV.',
-              onClick: () => { const n = downloadContactList(listed); if (!n) setResearchError('No contact rows to export yet.'); },
-            }, 'Download contact list (' + listed.length + ')'),
-            // The count on the button is what is IN the file. This line is what
-            // is in the file that you can actually email, which is a different
-            // number and the one that decides whether a contact run is worth
-            // pressing. Saying only the first would let a file of phone-only
-            // rows read as fifty addresses.
-            React.createElement('div', {
-              style: { fontSize: 11, color: 'var(--m2)', marginTop: 4, lineHeight: 1.45 },
-            }, _withEmail + ' of them have an email address'
-               + (_withEmail < listed.length
-                   ? '. The rest are phone and company only \u2014 a contact run resolves their owner and address.'
-                   : '.')));
-        })(),
+        // ── THE SECOND EXPORTER IS RETIRED (Round 131) ───────────────────
+        // "Download contact list" wrote a nineteen-column file of its own out
+        // of CONTACT_CSV_COLUMNS - a second hand-kept copy of one rule, with
+        // its own names for the same fields ("Decision maker" against
+        // "Decision-maker", "City" against "Location") and one field the Find
+        // file did not carry at all. Two exporters cannot both open on the
+        // same fixed twenty-three unless somebody keeps them in step by hand
+        // every time, and the copy that rots is always the one nobody presses.
+        // The rep's file comes off the Find tab, which is the stage in daily
+        // use; this button and everything behind it are gone.
         // ── GETTING FIFTY AUDITS OUT ──────────────────────────────────────
         // Fifty audits on screen and no way to hand them to anybody. Exports
         // every lead that HAS an audit, in the order shown, as one self-contained
