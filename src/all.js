@@ -164,7 +164,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261009;
+const CONTRACT_VERSION = 20261010;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -10882,6 +10882,14 @@ let VERIFIER_DAY_SEEDED = '';
 // looked this domain up in this process - for the mail-facts table further down
 // and for the rate on the day line, so there is one of it rather than two.
 const _mailFactsLoaded = new Set();
+// Round 130. The domains whose stored facts could NOT be read. A separate set
+// on purpose: the one above answers "have we opened this domain in this
+// process", which is the denominator of the per-lead rate on the day line, and
+// emptying it on a failed read would make that rate overstate itself. This one
+// answers "is it worth asking again", so a domain in it is let through the
+// guard a second time instead of staying marked as looked-up, for the life of
+// the process, by a read that never happened.
+const _mailFactsUnread = new Set();
 const verifierSpendToday = () => {
   const _r = runSpendToday();
   // A process already running when the day rolled has counted the new day from
@@ -10910,21 +10918,77 @@ let _verifierDayWritten = -1;
 // Said once a day, not once a lead: a fact about our account, printed as though
 // it were about the business, is the shape a rep learns to scroll past.
 let _verifierDaySaid = '';
+// ══ ROUND 130. A WRITE THAT SAYS NOTHING LOOKS LIKE ONE THAT NEVER RAN ══════
+// Both durable writes on this page are fire and forget with the result thrown
+// away, and nothing else - so on the ten-lead read of 2026-09-09 the MAIL HOST
+// line printed twice, two rows were posted, and no line in the log could say
+// whether either of them landed. A row that did not land is not a small loss:
+// the next lead on that domain buys again what we already measured, which is
+// the entire reason the table exists.
+//
+// WHAT IS ALREADY VISIBLE, AND SO IS NOT SAID A SECOND TIME HERE: sbRest
+// returns null instead of throwing, and before it does it prints the status and
+// the cause it read out of the response body, naming the table. The CAUSE of a
+// failure is therefore already in the log. What is NOT in the log is which row
+// went missing - one table carries every lead, and the caller never sees the
+// result - and whether anything landed at all. So a failure here names the row
+// and points at the cause instead of guessing at a second one, which is the
+// recorded cost of a message naming the wrong cause.
+//
+// SUCCESS IS SAID ONCE per key per process: a normal outcome recorded on every
+// lead is a warning nobody reads. FAILURE IS SAID EVERY TIME, because a failure
+// that repeats is a failure that is still happening.
+//
+// Still non-blocking. This reports from the promise's SETTLEMENT and nothing
+// awaits it, so the waterfall never waits for a write - the property the
+// fire-and-forget shape was chosen for in the first place.
+//
+// null is sbRest's failure value; an EMPTY BODY from a return=minimal write is
+// its distinct success value, and those two were the SAME value until the round
+// that separated them, which is why the question is asked in one place here
+// rather than by letting each caller invent its own truthiness test.
+const sbWriteLanded = (res) => !(res === null || res === undefined);
+const _writeLandedSaid = new Set();
+const noteDurableWrite = (res, onceKey, landedSay, lostSay) => {
+  try {
+    if (!sbWriteLanded(res)) { console.log(lostSay); return false; }
+    if (_writeLandedSaid.has(onceKey)) return true;
+    _writeLandedSaid.add(onceKey);
+    console.log(landedSay);
+    return true;
+  } catch (e) { void e; }
+  return false;
+};
 const saveVerifierDaySpend = (force) => {
   try {
     const r = verifierSpendToday();
     if (!SB_URL || !SB_KEY) return;
     if (!force && (r.verifier - _verifierDayWritten) < 5) return;
     _verifierDayWritten = r.verifier;
+    // Snapshotted: the count this write CARRIES, not whatever the count has
+    // reached by the time the row settles a second later.
+    const _used = Math.round(Number(r.verifier) || 0);
     sbRest('/api_day_spend?on_conflict=day,service', {
       method: 'POST',
       prefer: 'resolution=merge-duplicates,return=minimal',
       body: JSON.stringify([{ day: r.day, service: 'verifier', used: r.verifier, updated_at: new Date().toISOString() }]),
-    }).catch(() => {});
+    }).then((_res) => noteDurableWrite(_res, `api_day_spend:${r.day}`,
+      `DAY SPEND SAVED: today's mailbox count (${_used} check(s), UTC ${r.day}) is in the day table, so an instance that restarts resumes the day instead of spending the free allowance a second time. Said once a day per process; a later write of the same day is silent unless it fails.`,
+      `\u26a0 DAY SPEND NOT SAVED: today's mailbox count (${_used} check(s), UTC ${r.day}) did NOT reach the day table, so a restart resumes at zero and can spend the free allowance twice over. The Supabase REST line for api_day_spend in this log says why. Every check is still counted inside this process.`)).catch(() => {});
   } catch (e) { void e; }
 };
 const noteVerifierCall = () => {
   noteRunSpend('verifier', 1, 'verifier-check');
+  // Round 130. The SAME check, counted a second time against THIS LEAD.
+  // runSpendToday is one module-level ledger for the whole UTC day: it can
+  // answer "how much of the free hundred is gone" and it can never answer "what
+  // did this contact read cost" - and the per-lead figure is the one a rep
+  // reads off a row, and the only one that can be compared between leads.
+  // FC_LEDGER is the per-request store the Firecrawl, model and Apify meters
+  // already use; it survives every await and dies with the request. This is the
+  // ONE door a check passes through, so a single increment here cannot
+  // double-count and cannot drift from the day counter above it.
+  try { const _l = FC_LEDGER.getStore(); if (_l) _l.verifier = (_l.verifier || 0) + 1; } catch (e) { void e; }
   saveVerifierDaySpend(false);
 };
 const verifierDayLine = () => {
@@ -10940,6 +11004,38 @@ const verifierDayLine = () => {
     ? 'Seeded from the day table at boot, so an instance that slept resumes today instead of starting it again.'
     : 'NOT SEEDED: this is checks made since this process started, not checks made today, so a restart can spend the allowance twice.';
   return `VERIFIER DAY (UTC ${r.day}): ${Math.round(r.verifier)} mailbox check(s) spent ${_capSay}, ${_rateSay}. ${_seedSay}`;
+};
+// ══ ROUND 130. THE DAY LINE WENT ON THE ROUTE THAT WAS NOT THE PROBLEM ══════
+// The line above has exactly one emitter: the /api/research footer. The read
+// that burned the mailbox checks on 2026-09-09 was a FIND CONTACT read, which
+// never reaches it - so the round that started counting the free hundred put
+// the count where the operator does not look.
+//
+// TWO numbers, because they answer two questions and neither substitutes for
+// the other: what THIS read cost, which is the figure a rep reads off a row,
+// and how much of the free hundred is gone, which is the figure with the hard
+// wall behind it. The per-lead half comes from the request's own ledger; the day
+// half from the process ledger, which is what runSpendToday is and all it can
+// ever be.
+//
+// A ZERO HERE IS A MEASUREMENT. The contact read always runs inside a ledger
+// frame, so "0 mailbox check(s) on this lead" means we counted and it cost
+// nothing - which is exactly what the whole ten-lead run of 2026-09-09 did.
+// Outside a frame there is no per-lead number to have, and this says so rather
+// than printing a zero it cannot stand behind: Number(null) is 0 and 0 is
+// finite, which is this file's most-recorded way of turning "we never looked"
+// into "we measured none".
+const verifierLeadSpendSay = (leadCount) => {
+  const r = verifierSpendToday();
+  const cap = SPEND_BUDGETS.verifier;
+  const _lead = (typeof leadCount === 'number' && Number.isFinite(leadCount)) ? Math.round(leadCount) : null;
+  const _leadSay = _lead === null
+    ? 'mailbox checks not measured on this lead (it ran outside a per-lead ledger)'
+    : `${_lead} mailbox check(s) on this lead`;
+  const _capSay = cap === Infinity ? 'with the ceiling switched off (VERIFIER_DAILY_BUDGET is 0)' : `of the ${cap} free ones`;
+  return VERIFIER_DAY_SEEDED === r.day
+    ? `${_leadSay}, ${Math.round(r.verifier)} ${_capSay} today`
+    : `${_leadSay}, ${Math.round(r.verifier)} ${_capSay} since this process started rather than today (the day table was not read at boot)`;
 };
 // ONE read at boot, beside the schema probe - not a read per verify call.
 const seedVerifierDay = async () => {
@@ -11199,24 +11295,54 @@ const hydrateDomainMailFacts = (row, nowMs) => {
   if (mailFactFresh(row.mail_provider_at, MAIL_PROVIDER_TTL_MS, nowMs)) out.provider = String(row.mail_provider || '').trim().toLowerCase();
   return out;
 };
+// Round 130. WHAT the row carried, in the operator's words rather than the
+// column's, because three different doors write this row with three different
+// facts in it and "the write failed" without naming which fact is a sentence
+// nobody can act on. The clock columns are not facts about the business; they
+// are when the fact was measured, so they are not named.
+const mailFactSay = (patch) => {
+  const _k = Object.keys(patch || {}).filter(k => !/_at$/.test(k) && k !== 'domain' && k !== 'updated_at');
+  const _w = { catch_all: 'whether their mail server accepts every address', pattern: 'how they build addresses', pattern_source: 'where that pattern came from', mail_provider: 'who hosts their mail' };
+  return _k.length ? _k.map(k => _w[k] || k).join(' and ') : 'an empty row';
+};
 const saveDomainMailFact = (domain, patch) => {
   try {
     const d = String(domain || '').trim().toLowerCase();
     if (!d || !patch || !SB_URL || !SB_KEY || _fixtureDomain(d)) return;
+    const _say = mailFactSay(patch);
     sbRest('/domain_mail_facts?on_conflict=domain', {
       method: 'POST',
       prefer: 'resolution=merge-duplicates,return=minimal',
       body: JSON.stringify([Object.assign({ domain: d, updated_at: new Date().toISOString() }, patch)]),
-    }).catch(() => {});
+    }).then((_res) => noteDurableWrite(_res, `domain_mail_facts:${d}`,
+      `MAIL FACTS SAVED [${d}]: ${_say} is in the table, so the next lead on this domain reads it instead of buying it again. Said once per domain per process; a later write for this domain is silent unless it fails.`,
+      `\u26a0 MAIL FACTS NOT SAVED [${d}]: ${_say} did NOT reach the table, so the next lead on this domain measures it again and pays for it again. The Supabase REST line for domain_mail_facts in this log says why.`)).catch(() => {});
   } catch (e) { void e; }
 };
 const loadDomainMailFacts = async (domain) => {
   const d = String(domain || '').trim().toLowerCase();
-  if (!d || _mailFactsLoaded.has(d)) return;
+  // Round 130. The add STAYS ABOVE THE READ, deliberately: it is the
+  // re-entrancy guard for an awaited read two leads can enter at once, and it
+  // is the denominator of the per-lead rate on the day line, so a domain we
+  // opened counts as opened whatever the table answered. What was missing was
+  // the RETRY - a failed read left the domain marked as looked up for the life
+  // of the process, and said nothing at all - so the failure is RECORDED beside
+  // it, and a domain in that set is let through here again.
+  if (!d || (_mailFactsLoaded.has(d) && !_mailFactsUnread.has(d))) return;
   _mailFactsLoaded.add(d);
   if (!SB_URL || !SB_KEY) return;
   const rows = await sbRest(`/domain_mail_facts?domain=eq.${encodeURIComponent(d)}&select=*`, { method: 'GET', prefer: 'return=representation' });
-  const row = Array.isArray(rows) ? rows[0] : null;
+  // An ARRAY is the table ANSWERING, and an empty one is a measured "we have
+  // stored nothing about this domain". A null is the table not answering at all
+  // - a different fact, and until this round the two were the same silence and
+  // the domain was never asked again. The same shape as the boot seed above.
+  if (!Array.isArray(rows)) {
+    _mailFactsUnread.add(d);
+    console.log(`\u26a0 MAIL FACTS [${d}]: what we already measured about this domain could NOT be read back, so this lead treats the domain as unmeasured and may spend a check it did not need. The Supabase REST line for domain_mail_facts in this log says why; the next lead on this domain tries the read again.`);
+    return;
+  }
+  _mailFactsUnread.delete(d);
+  const row = rows[0] || null;
   if (!row) return;
   const f = hydrateDomainMailFacts(row);
   const said = [];
@@ -11525,6 +11651,43 @@ const mailboxKind = (addressOrLocal, ctx = null) => {
   return 'person';
 };
 
+// ══ ROUND 130: FOUR PAGES BOUGHT THAT WERE ALREADY IN HAND ═══════════════
+// Live 2026-09-09, Kelly Window and Door: the free read fetched six pages for
+// nothing — including /contact — and the address lookup below then bought a
+// sitemap call plus /about, /contact, /about/financing and /about/our-warranties
+// from Firecrawl. Five credits to re-read markup sitting in memory, on a lead
+// whose own log line said "53 same-host link(s) came off their own navigation,
+// so no sitemap call was bought".
+//
+// Two pure rules, executed by the boot check rather than described to it:
+//   - a target whose page a free fetch already returned in READABLE size is
+//     never bought again (the extractor is the same extractor, so buying it
+//     back cannot produce an address the free pass did not already see);
+//   - a site whose own navigation we hold does not need a map bought to find
+//     its contact page — the same trade the owner reader has made since §129.
+// The floor is on TEXT, not markup: a free fetch that came back nearly empty
+// (a JS-rendered page) is NOT a page we read, and buying it is still worth a
+// credit. That is the case /about/financing stands for in the check.
+const ADDRESS_PAGE_RE = /(contact|about|team|our-?story|get-?in-?touch|reach-?us|staff|people)/i;
+const ADDRESS_FREE_TEXT_FLOOR = 800;
+const ADDRESS_NAV_FLOOR = 5;
+const _addrKey = (u) => String(u == null ? '' : u).trim().toLowerCase()
+  .replace(/[?#].*$/, '').replace(/^https?:\/\//, '').replace(/^www\./, '').replace(/\/+$/, '');
+const addressPagesAlreadyRead = (freePages) => {
+  const held = new Set();
+  for (const p of (Array.isArray(freePages) ? freePages : [])) {
+    if (!p || !p.url) continue;
+    if (String((p.text || p.html) || '').length < ADDRESS_FREE_TEXT_FLOOR) continue;
+    held.add(_addrKey(p.url));
+  }
+  return held;
+};
+const addressTargetsToBuy = (targets, freePages) => {
+  const held = addressPagesAlreadyRead(freePages);
+  return (Array.isArray(targets) ? targets : []).filter(t => !held.has(_addrKey(t)));
+};
+const addressMapWorthBuying = (knownLinks) => !(Array.isArray(knownLinks) && knownLinks.length >= ADDRESS_NAV_FLOOR);
+
 // ── WEBSITE EMAIL SCRAPER — Tier 1 evidence ────────────────────────────────
 // An address published on their own site is the strongest evidence there is.
 // Also harvests EVERY address found, which feeds the pattern-learning corpus.
@@ -11735,15 +11898,36 @@ const scrapeEmailsFromSite = async (website, fcKey, homepageContent, siteConfirm
   // no address — and Firecrawl bills a 404 as a successful fetch. It also missed
   // real pages that simply live somewhere else (/about/contact-us, /get-in-touch).
   let targets = [];
-  try {
-    const urls = await firecrawlMap(fcKey, website);
-    targets = rankUrlsByIntent(urls, /(contact|about|team|our-?story|get-?in-?touch|reach-?us|staff|people)/i, 4);
-    // FREE GATE: if the map came back healthy and contains nothing contact-shaped,
-    // the site has no such page. Guessing would buy 404s to learn what we know.
-    if (!targets.length && Array.isArray(urls) && urls.length >= 1) return out;
-  } catch { /* map unavailable — fall through to guesses */ }
+  // The links we already hold, free: the Find read harvests the homepage's own
+  // navigation and remembers it per host, and cachedSiteMap returns it without
+  // ever reaching the network. Five links is a navigation; fewer is a page we
+  // could not read, and there the map is still worth its credit.
+  const _known = cachedSiteMap(website);
+  if (!addressMapWorthBuying(_known)) {
+    targets = rankUrlsByIntent(_known, ADDRESS_PAGE_RE, 4);
+    console.log(`EMAIL nav [${domain}]: ${_known.length} link(s) off their own navigation, so no sitemap call was bought for the address lookup.`);
+    if (!targets.length) return out;
+  } else {
+    try {
+      const urls = await firecrawlMap(fcKey, website);
+      targets = rankUrlsByIntent(urls, ADDRESS_PAGE_RE, 4);
+      // FREE GATE: if the map came back healthy and contains nothing contact-shaped,
+      // the site has no such page. Guessing would buy 404s to learn what we know.
+      if (!targets.length && Array.isArray(urls) && urls.length >= 1) return out;
+    } catch { /* map unavailable — fall through to guesses */ }
+  }
 
   if (!targets.length) targets = ['/contact', '/contact-us', '/about', '/about-us', '/team', '/our-team'].map(p => base + p);
+
+  // The last gate before a credit moves: a page a free fetch already returned
+  // in readable size is not bought back. Passes 1 and 1.5 read those same pages
+  // with this same extractor a moment ago.
+  const _wanted = targets.length;
+  targets = addressTargetsToBuy(targets, freePages);
+  if (targets.length < _wanted) {
+    console.log(`EMAIL free [${domain}]: ${_wanted - targets.length} of ${_wanted} contact page(s) were already fetched for nothing and read above, so they are not bought again \u2014 ${_wanted - targets.length} Firecrawl credit(s) not spent.`);
+  }
+  if (!targets.length) return out;
 
   for (const target of targets) {
     try {
@@ -34539,13 +34723,13 @@ const HEADLINE_WORD_RE = /^(?:busting|breaking|choosing|finding|avoiding|underst
 // as a FIRST name are refused here; they are vanishingly rare as first names
 // and the commonest heads of a region.
 const PLACE_HEAD_RE = /^(?:greater|metro|metropolitan|downtown|uptown|midtown|central|north|south|east|west|northern|southern|eastern|western|northeast|northwest|southeast|southwest|upper|lower|coastal|inland|family|locally|serving)$/i;
-const ownerNameDoor = (name, companyName = '') => {
+const ownerNameDoor = (name, companyName = '', allowOrgWord = false) => {
   const s = String(name || '').trim();
   if (!s) return 'empty';
   const toks = s.split(/[\s\/\-]+/).filter(Boolean);
   if (toks.some(t => NAV_WORD_RE.test(t))) return 'not-a-name';
   if (toks.some(t => HEADLINE_WORD_RE.test(t.replace(/[.,:]$/, '')))) return 'not-a-name';
-  if (toks.some(t => ORG_TOKEN_RE.test(t.replace(/[.,]$/, '')))) return 'not-a-name';
+  if (!allowOrgWord && toks.some(t => ORG_TOKEN_RE.test(t.replace(/[.,]$/, '')))) return 'not-a-name';
   if (toks.every(t => OWNER_WORD_RE.test(t) || ROLE_WORDS.has(t.toLowerCase()))) return 'title';
   if (allRoleWords(s)) return 'title';
   const _flat = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').replace(/^the /, '').trim();
@@ -34555,6 +34739,43 @@ const ownerNameDoor = (name, companyName = '') => {
   if (toks.length >= 2 && !looksLikeRealName(s)) return 'not-a-name';
   return null;
 };
+// ══ AN EPONYMOUS BUSINESS LICENSES ITS OWNER'S NAME ════════════════
+// Live 2026-09-09. The licence records named "David B. Brothers (MD / Owner)"
+// at "David B. Brothers, MD - Plastic Surgery Centre of Atlanta", and the name
+// door refused him, because "brothers" is one of the organisation words that
+// keep "Atlanta Journal-Constitution" off the sheet. The lead paid six credits
+// for that name and left the call sheet with nobody on it. The stronger the
+// evidence, the harder the door refused: his surname IS the business.
+//
+// Three things must all be true before a name walks past that refusal, and
+// each of them is evidence rather than shape:
+//   1. the business carries his SURNAME - the strong arm of the one eponymous
+//      rule. A first name inside the domain is the weak arm; it licenses no
+//      settle and it licenses nothing here either, which is why the company
+//      name is asked and the site is not passed at all.
+//   2. a source that names real people states his name WITH a title.
+//   3. the name carries a marker no collective carries: a middle initial, or
+//      the professional suffix of a licensed individual.
+// The third is what keeps "Smith Brothers" of Smith Brothers Roofing and
+// "Larsen Family" of Larsen Masonry out. Those are eponymous too and neither
+// is a person. DISCLOSED COST: a real "Mike Brothers" with no initial and no
+// suffix anywhere is still refused, and that is the safer direction.
+const EPONYM_DOOR_SOURCE = new Set(['license_or_chamber', 'bbb_profile', 'own_website_brain', 'business_name', 'opencorporates']);
+const PERSON_INITIAL_RE = /(?:^|\s)[A-Za-z]\.(?:\s|$)/;
+const PERSON_SUFFIX_RE = /(?:^|[\s,(])(?:MD|DDS|DMD|DVM|PhD|Esq|Jr|Sr|II|III|IV|CPA)\b/;
+const eponymousDoorLicence = (f, companyName, door) => {
+  if (door !== 'not-a-name') return null;
+  const name = String((f && f.name) || '').trim();
+  const title = String((f && f.title) || '').trim();
+  const source = String((f && f.source) || '');
+  if (!name || !title || !EPONYM_DOOR_SOURCE.has(source)) return null;
+  // The COMPANY NAME only. The weak arm needs a site to fire and never gets one.
+  if (!isEponymousOwnerRule(name, companyName, '')) return null;
+  if (!PERSON_INITIAL_RE.test(name) && !PERSON_SUFFIX_RE.test(name + ' ' + String(companyName || ''))) return null;
+  // Every other reason the door had is still a refusal.
+  if (ownerNameDoor(name, companyName, true)) return null;
+  return { source, title };
+};
 const rankOwnerCandidates = (found, companyName = '') => {
   if (!found || !found.length) return null;
   const clusters = [];
@@ -34563,7 +34784,15 @@ const rankOwnerCandidates = (found, companyName = '') => {
     // Round 116: a retired title is refused whatever the source said.
     if (f.title && RETIRED_RE.test(String(f.title))) { console.log(`DM/door [${companyName || '?'}]: "${f.name}" (${f.title}) is retired - refused before ranking`); continue; }
     const _door = ownerNameDoor(f.name, companyName);
-    if (_door) {
+    const _lic = _door ? eponymousDoorLicence(f, companyName, _door) : null;
+    if (_lic) {
+      const _lk = 'lic|' + f.source + '|' + f.name;
+      if (!_ownerDoorSaid.has(_lk)) {
+        _ownerDoorSaid.add(_lk);
+        if (_ownerDoorSaid.size > 5000) _ownerDoorSaid.clear();
+        console.log(`DM/door [${companyName || '?'}]: "${f.name}" (${_lic.title}) is KEPT - the business is named after him: the company name carries his surname, ${_lic.source} states his name with that title, and his name carries an initial or a professional suffix that a family or brothers signature never carries. A first name inside the domain would not have been enough.`);
+      }
+    } else if (_door) {
       const _k = f.source + '|' + f.name;
       if (!_ownerDoorSaid.has(_k)) {
         _ownerDoorSaid.add(_k);
@@ -57222,6 +57451,75 @@ app.listen(PORT, () => {
     console.log(`\u26d4 EPONYMOUS ARM CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ══ EPONYMOUS DOOR CHECK - round 130 ════════════════════════
+  // Live 2026-09-09: the licence records named David B. Brothers, MD / Owner,
+  // of "David B. Brothers, MD - Plastic Surgery Centre of Atlanta". The name
+  // door read "brothers" as an organisation word and refused him, the lead had
+  // no decision-maker after ranking, and six credits had already been spent.
+  //
+  // Executed through the real ranker, both directions: the eponymous owner has
+  // to reach the sheet, and every case the door was built to refuse has to stay
+  // refused - including the ones that are eponymous and still not people.
+  try {
+    const _fails = [];
+    const _srcD = selfSourceNoCommentsLF();
+    const _nD = (a, b) => a + b;
+    const _mkD = (name, source, title) => ({ name, source, title: title || null });
+    const _BRO_CO = 'David B. Brothers, MD - Plastic Surgery Centre of Atlanta';
+    const _live = rankOwnerCandidates([_mkD('David B. Brothers', 'license_or_chamber', 'MD / Owner')], _BRO_CO);
+    if (!_live || _live.name !== 'David B. Brothers') {
+      _fails.push('the live case is still refused: a plastic surgeon whose licence names him as the owner of the practice that carries his name reaches the sheet with nobody on it, after the wave has been bought');
+    }
+    // ONLY the person marker refuses this one. A brothers signature on a
+    // business named after the brothers is eponymous and is not a person.
+    if (rankOwnerCandidates([_mkD('Smith Brothers', 'license_or_chamber', 'Owner')], 'Smith Brothers Roofing')) {
+      _fails.push('"Smith Brothers" is ranked as the decision-maker of Smith Brothers Roofing - a family signature is licensed as a person because the business is named after it');
+    }
+    // ONLY the eponymous arm refuses this one: the marker, the source and the
+    // title are all there, and the business is not named after her.
+    if (rankOwnerCandidates([_mkD('Karen J. Partners', 'license_or_chamber', 'Owner')], 'Bright Path Dental')) {
+      _fails.push('an organisation word walks through the door on a business that is NOT named after the person - the licence no longer asks whether the company carries the surname');
+    }
+    // ONLY the title requirement refuses this one.
+    if (rankOwnerCandidates([_mkD('David B. Brothers', 'license_or_chamber', null)], _BRO_CO)) {
+      _fails.push('a name with no title at all is licensed, so the door stopped asking that a real source state the name WITH a title');
+    }
+    // ONLY the source list refuses this one.
+    if (rankOwnerCandidates([_mkD('David B. Brothers', 'hunter', 'Owner')], _BRO_CO)) {
+      _fails.push('a LinkedIn-biased source licenses an organisation word, so the evidence the rule stands on is no longer a source that names real people');
+    }
+    // ONLY the re-asked door refuses this one: a business tail is not a surname,
+    // and every other reason the door had must survive the licence.
+    if (rankOwnerCandidates([_mkD('Weber A. Associates', 'license_or_chamber', 'Owner')], 'Weber A. Associates Group')) {
+      _fails.push('a firm name that happens to carry an initial is licensed as a person - the licence stopped re-asking every other reason the door had, so a business tail is a surname again');
+    }
+    // The general rule is untouched: a company name is still not a person.
+    if (rankOwnerCandidates([_mkD('Precision Paving Group', 'own_website_brain', 'Founder')], 'Precision Paving Group')) {
+      _fails.push('the company\'s own name is ranked as its decision-maker again - the eponymous licence widened what counts as a person for every lead');
+    }
+    if (ownerNameDoor('Colliers International', 'Whitco Roofing, Inc.') !== 'not-a-name'
+      || ownerNameDoor('David B. Brothers', _BRO_CO) !== 'not-a-name') {
+      _fails.push('the name door itself changed its answer - the licence belongs to the ranker, and the door still refuses an organisation word on its own');
+    }
+    // The weak arm cannot reach this rule at all: no site is passed to it.
+    if (!_srcD.includes(_nD('if (!isEponymousOwnerRule(name,',
+      " companyName, '')) return null;"))) {
+      _fails.push('the licence no longer asks the surname arm against the company name alone, so a domain carrying somebody\'s first name could license a name the door refused');
+    }
+    // AND THE RANKER CALLS IT. A rule nothing calls is the refusal we had.
+    if (!_srcD.includes(_nD('const _lic = _door ? eponymousDoorLicence(f,',
+      ' companyName, _door) : null;'))) {
+      _fails.push('the ranker no longer consults the eponymous licence, so the fixtures above prove a function that never runs on a lead');
+    }
+    if (_fails.length) {
+      console.log(`\u26d4 EPONYMOUS DOOR CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    } else {
+      console.log(`\u2713 EPONYMOUS DOOR CHECK: a business demonstrably named after its owner keeps that owner. David B. Brothers, MD, whose licence names him as the owner of the practice that carries his name, reaches the sheet instead of being refused as an organisation word; "Smith Brothers" of Smith Brothers Roofing and a company's own name are still refused, the name door on its own is unchanged, only the surname arm licenses anything, and the ranker actually calls the rule.`);
+    }
+  } catch (e) {
+    console.log(`\u26d4 EPONYMOUS DOOR CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ══ ADDRESS ROUTE CHECK — round 121 ═════════════════════════════════════
   // Premier Home Pros, 2026-09-04: a real owner, a real domain, and the address
   // shipped as a BLOCKED guess. The catch-all probe's second sample timed out,
@@ -57430,6 +57728,138 @@ app.listen(PORT, () => {
     else console.log(`✓ VERIFIER DAY CHECK: the free ${SPEND_BUDGETS.verifier === Infinity ? 'mailbox' : SPEND_BUDGETS.verifier} mailbox checks a day are COUNTED rather than discovered by hitting the wall - proven on a synthetic count and a synthetic ceiling, in both directions and at the boundary. The count is seeded from the day table at boot so an instance that slept resumes the day, an unseeded count says so in the line rather than printing a zero as a measurement, and a count we do not have never refuses a call. The allowance is named and settable (VERIFIER_DAILY_BUDGET) but is deliberately NOT part of route admission: running out of mailbox checks costs the address, not the lead, and a contact read still returns an owner, a phone and a website. Pinned at the one door that spends a check, at the gate every caller asks first, and at the boot seed.`);
   } catch (e) {
     console.log(`⛔ VERIFIER DAY CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ CONTACT READ SPEND CHECK — round 130 ════════════════════════════════
+  // Round 129 started counting the free hundred mailbox checks and printed the
+  // count in the /api/research footer. The read that burned them on 2026-09-09
+  // was a FIND CONTACT read, which never reaches that footer - so the number
+  // existed and the operator could not see it. This drives the sentence the
+  // contact footer prints, in both directions and at the boundary, then pins
+  // the three places it depends on: the footer that prints it, the frame
+  // capture that tells a lead which spent nothing from a call with no ledger at
+  // all, and the ONE door that counts a check against the lead.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    // The live ledger and the live seed flag are put back in the finally: a
+    // boot check that left the day counter moved would spend a check of the
+    // operator's own allowance on every restart.
+    const _sv = [RUN_SPEND.day, RUN_SPEND.verifier, VERIFIER_DAY_SEEDED, _verifierDayWritten];
+    try {
+      RUN_SPEND.day = _spendDayNow(); RUN_SPEND.verifier = 41;
+      VERIFIER_DAY_SEEDED = RUN_SPEND.day;
+      const _zero = verifierLeadSpendSay(0);
+      if (!/^0 mailbox check/.test(_zero)) _fails.push('a lead that spent no mailbox checks does not report a zero, so the read of 2026-09-09 - which spent none across ten leads - prints nothing where the figure belongs, and a missing figure reads as an unmeasured one');
+      if (_zero.indexOf('41') === -1) _fails.push('the contact footer does not say how much of the free hundred is already gone, which is the one allowance with a hard wall and no invoice to settle it afterwards');
+      if (_zero.indexOf(String(SPEND_BUDGETS.verifier)) === -1 && SPEND_BUDGETS.verifier !== Infinity) _fails.push('the day figure is reported without the ceiling it is spent against, so 41 could be a third of the day or nothing at all');
+      const _three = verifierLeadSpendSay(3);
+      if (!/^3 mailbox check/.test(_three)) _fails.push('the per-lead count is not reported, so the footer answers "how much is left today" and never "what did THIS read cost" - and the per-lead figure is the only one that can be compared between leads');
+      const _none = verifierLeadSpendSay(null);
+      if (/^0 mailbox check/.test(_none) || _none.indexOf('not measured') === -1) _fails.push('a read with no per-lead ledger at all reports 0 checks rather than saying it was not measured - Number(null) is 0 and 0 is finite, which is how "we never looked" ships as "we measured none"');
+      if (verifierLeadSpendSay(undefined).indexOf('not measured') === -1) _fails.push('an absent count is reported as a measurement');
+      VERIFIER_DAY_SEEDED = '';
+      if (verifierLeadSpendSay(0).indexOf('since this process started') === -1) _fails.push('a day count that was never read out of the day table is printed as though it were today\u2019s total, so a restarted instance tells the operator the allowance is untouched when it may already be spent');
+      VERIFIER_DAY_SEEDED = RUN_SPEND.day;
+      // The real door, driven inside a real per-lead frame. The write inside it
+      // cannot reach Supabase: the debounce is armed at the current count, so
+      // the call returns before sbRest and a boot can never post a row.
+      _verifierDayWritten = RUN_SPEND.verifier;
+      const _before = RUN_SPEND.verifier;
+      let _leadCount = null;
+      FC_LEDGER.run({ spent: 0, saved: 0, ops: 0 }, () => {
+        noteVerifierCall();
+        noteVerifierCall();
+        const _l = FC_LEDGER.getStore();
+        _leadCount = _l ? _l.verifier : null;
+      });
+      if (_leadCount !== 2) _fails.push(`two checks through the one verifier door counted ${_leadCount} against the lead, so the per-lead figure on the contact row is either dark or double-counted`);
+      if (RUN_SPEND.verifier - _before !== 2) _fails.push('those same two checks no longer move the day count, so a per-lead figure has been bought at the cost of the one with the hard wall behind it');
+      let _outside = 'threw';
+      try { noteVerifierCall(); _outside = 'ok'; } catch (e) { void e; }
+      if (_outside !== 'ok') _fails.push('a check spent outside a per-lead ledger throws, so the send route and every path without a request frame dies on the counter');
+    } finally {
+      RUN_SPEND.day = _sv[0]; RUN_SPEND.verifier = _sv[1]; VERIFIER_DAY_SEEDED = _sv[2]; _verifierDayWritten = _sv[3];
+    }
+    const _incNeedle = _n('_l.verifier = (_l.verifier', ' || 0) + 1');
+    const _incs = _src.split(_incNeedle).length - 1;
+    if (_incs !== 1) _fails.push(`${_incs} place(s) count a mailbox check against the lead and there must be exactly one - the door that spends the check - because a second one is a double count nobody can see and a zeroth is a dark figure`);
+    for (const [_needle, _msg] of [
+      [_n(' of model, ${verifierLeadSpendSay(_ledFrame ?', ' (Number(_ledFrame.verifier) || 0) : null)},'), 'the contact footer no longer says what the read spent on mailbox checks, so the round that counted the free hundred is back to printing the count only on the route that never burned any'],
+      [_n('const _ledFrame = FC_LEDGER.getStore();\n  const led = _ledFrame', ' || {};'), 'the contact read no longer holds the ledger FRAME, so a call made outside a per-lead ledger reports zero spend as though it were a measurement'],
+      [_n('if (_l) _l.verifier = (_l.verifier |', '| 0) + 1; } catch (e) { void e; }\n  saveVerifierDaySpend(false);'), 'the per-lead count is no longer taken at the one door that spends a check, so it is either counted somewhere a caller can skip or counted twice'],
+    ]) if (!_src.includes(_needle)) _fails.push(_msg);
+    if (_fails.length) console.log(`⛔ CONTACT READ SPEND CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ CONTACT READ SPEND CHECK: a Find contact read now reports its own mailbox spend in its own footer - what THIS lead cost and how much of the free ${SPEND_BUDGETS.verifier === Infinity ? 'allowance' : SPEND_BUDGETS.verifier} is gone - proven by driving the real door twice inside a real per-lead ledger and watching both counters move by two. A zero reads as a measurement, which is what the ten-lead read of 2026-09-09 actually spent; a read with no ledger says "not measured" rather than laundering null into 0; and a day count that was never seeded from the day table says so instead of reporting a restarted process's tally as today's. Exactly one place in the file counts a check against a lead, so it cannot double-count, and the footer, the frame capture and the door are each pinned where they run.`);
+  } catch (e) {
+    console.log(`⛔ CONTACT READ SPEND CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ WRITE LANDED CHECK — round 130 ══════════════════════════════════════
+  // Both durable writes on the mail page were fire and forget with the result
+  // discarded, so a row that landed and a row that never arrived produced the
+  // same log: nothing. sbRest already prints the STATUS and the CAUSE per
+  // table, which is why nothing here prints a second diagnosis - what was
+  // missing is whether anything landed, and WHICH row went missing when it did
+  // not. Driven on the real reporter with the console captured, then pinned at
+  // both write doors and at the read that could never be retried.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+    if (sbWriteLanded(null) !== false) _fails.push('a write that came back null - which is what sbRest returns for every refused status, every error and every request that never arrived - is read as a row that landed');
+    if (sbWriteLanded(undefined) !== false) _fails.push('a write with no result at all is read as a row that landed');
+    if (sbWriteLanded({ ok: true, emptyBody: true }) !== true) _fails.push('the empty body of a SUCCESSFUL return=minimal write is read as a failure, which is the live shape that reported 91 written rows as "the write failed" and made the night\u2019s one fixed problem read as the night\u2019s one remaining problem');
+    if (sbWriteLanded([]) !== true) _fails.push('a write answered with an empty array is read as a failure');
+    {
+      // A boot check is not a lead: the reporter prints real lines and the boot
+      // recorder counts glyphs, so they are captured rather than silenced and
+      // WHAT they say is asserted too.
+      const _realLog = console.log; const _said = [];
+      console.log = function () { _said.push(Array.prototype.map.call(arguments, String).join(' ')); };
+      let _r1, _r2, _r3, _r4, _r5;
+      try {
+        _r1 = noteDurableWrite(null, 'writelandedcheck:a', 'LANDED-A', 'LOST-A');
+        _r2 = noteDurableWrite(null, 'writelandedcheck:a', 'LANDED-A', 'LOST-A');
+        _r3 = noteDurableWrite({ ok: true, emptyBody: true }, 'writelandedcheck:a', 'LANDED-A', 'LOST-A');
+        _r4 = noteDurableWrite({ ok: true, emptyBody: true }, 'writelandedcheck:a', 'LANDED-A', 'LOST-A');
+        _r5 = noteDurableWrite({ ok: true, emptyBody: true }, 'writelandedcheck:b', 'LANDED-B', 'LOST-B');
+      } finally {
+        console.log = _realLog;
+        // A fixture that leaves its key behind would silence the first real
+        // write of a domain that happened to be spelled the same way.
+        _writeLandedSaid.delete('writelandedcheck:a'); _writeLandedSaid.delete('writelandedcheck:b');
+      }
+      if (_r1 !== false || _r2 !== false) _fails.push('a write that did NOT land reports that it did, so both the caller and the log say the row is safe');
+      if (_r3 !== true || _r5 !== true) _fails.push('a write that landed reports that it did not');
+      const _lostA = _said.filter(s => s.indexOf('LOST-A') !== -1).length;
+      if (_lostA !== 2) _fails.push(`two failed writes of the same row said so ${_lostA} time(s) and must say so twice - a failure that repeats is a failure that is still happening, and de-duplicating it is how a broken table goes quiet`);
+      const _landedA = _said.filter(s => s.indexOf('LANDED-A') !== -1).length;
+      if (_landedA !== 1) _fails.push(`two successful writes of the same row said so ${_landedA} time(s) and must say so once - a normal outcome recorded on every lead is a warning nobody reads`);
+      if (_r4 !== true) _fails.push('a second successful write of the same row reports failure because it was not printed, so the caller cannot tell silence from loss');
+      if (_said.filter(s => s.indexOf('LANDED-B') !== -1).length !== 1) _fails.push('a different row is silenced by the first one, so one domain saving its facts hides every other domain');
+    }
+    if (!/accepts every address/.test(mailFactSay({ catch_all: false, catch_all_at: 'now' }))) _fails.push('a failed mail-facts write cannot say WHICH fact went missing, and one table carries three different facts written by three different doors');
+    if (/_at/.test(mailFactSay({ catch_all: false, catch_all_at: 'now' }))) _fails.push('the clock column is named as though it were a fact about the business');
+    if (mailFactSay({}) !== 'an empty row' || mailFactSay(null) !== 'an empty row') _fails.push('a write carrying nothing is described as though it carried a measurement');
+    if (mailFactSay({ pattern: 'first' }).indexOf('how they build addresses') === -1) _fails.push('the house pattern is reported by its column name rather than by what it is, and the operator reading this log does not read code');
+    if (_mailFactsUnread === _mailFactsLoaded) _fails.push('the retry set and the opened set are one set, so a failed read either stops counting as a lead on the day line\u2019s rate or is never retried');
+    const _reporters = _src.split(_n('noteDurableWrite(_res,', ' ')).length - 1;
+    if (_reporters !== 2) _fails.push(`${_reporters} of the two durable writes on the mail page report whether they landed, and both must - the other one is dark exactly as both were before this round`);
+    for (const [_needle, _msg] of [
+      [_n('}).then((_res) => noteDurableWrite(_res,', ' `domain_mail_facts:${d}`,'), 'the mail-facts write is back to discarding its result, so a row that never landed and a row that did produce the same log line: none'],
+      [_n('}).then((_res) => noteDurableWrite(_res,', ' `api_day_spend:${r.day}`,'), 'the day-spend write is back to discarding its result, so an instance that restarts can resume at zero with nothing in the log to say the count was never saved'],
+      [_n('if (!Array.isArray(rows)) {\n    _mailFactsUnread.add(d);', '\n'), 'a mail-facts read that FAILED is silent again and indistinguishable from one that found nothing, and the domain is never asked again in this process'],
+      [_n('if (!d || (_mailFactsLoaded.has(d) && !_mailFactsUnread', '.has(d))) return;'), 'a domain whose read failed is refused a second attempt for the life of the process, so one bad moment costs every later lead on that domain the facts we already own'],
+      [_n('_mailFactsUnread.delete(d);\n  const row = rows[0]', ' || null;'), 'a read that succeeded does not clear the retry mark, so the guard is re-entered on every lead for a domain that is perfectly readable'],
+      [_n('_mailFactsLoaded.add(d);\n  if (!SB_URL', ' || !SB_KEY) return;'), 'the domain is no longer marked as opened BEFORE the awaited read, so two leads on one domain both issue it and the per-lead rate on the day line loses its denominator'],
+      [_n('const leads = _mailFactsLoaded', '.size;'), 'the day line\u2019s per-lead rate no longer counts the domains this process opened, so the rate that decides whether the free hundred carries a day is computed against nothing'],
+    ]) if (!_src.includes(_needle)) _fails.push(_msg);
+    if (_fails.length) console.log(`⛔ WRITE LANDED CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ WRITE LANDED CHECK: every durable write on the mail page now says whether it landed - proven by driving the real reporter with the console captured, on a null, on the empty body that IS a successful return=minimal write, and on a repeat. Success is said once per row per process, because a normal outcome recorded on every lead is noise; a failure is said EVERY time, names which domain and which fact went missing, and deliberately does NOT restate the cause, because sbRest already prints the status and the reason it read out of the response body and a second guess at a cause is worth less than none. A mail-facts read that could not be READ BACK now says so and is tried again by the next lead on that domain, while the domain still counts as opened the moment the read starts - so the rate on the day line keeps its denominator and two leads cannot both issue the same read.`);
+  } catch (e) {
+    console.log(`⛔ WRITE LANDED CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ CHECK BUDGET CHECK — round 129 ══════════════════════════════════════
@@ -62635,6 +63065,49 @@ app.listen(PORT, () => {
     }
     if (!_src.includes(_n('scrapeEmailsFromSite(website, fcKey, homepageContent, siteConfirmed, siteIsDown,', ' freePages)'))) {
       _fails.push('the email engine is no longer handed the pages we already hold, so a contact page in memory is bought again from Firecrawl');
+    }
+    // ══ ROUND 130 — A PAGE IN HAND IS NEVER BOUGHT, A KNOWN NAV NEVER MAPPED ══
+    // The live shape of 2026-09-09 (Kelly Window and Door): six pages fetched
+    // free, then a paid map plus paid scrapes of four of those same pages. The
+    // two rules are EXECUTED here on that exact shape, then their call sites
+    // are pinned, because a fixture cannot see a caller.
+    const _r130Free = [
+      { url: 'https://kellywindowanddoor.com/contact', intent: 'contact', text: 'a'.repeat(2400) },
+      { url: 'https://kellywindowanddoor.com/about/', intent: 'team', text: 'b'.repeat(2400) },
+      { url: 'https://kellywindowanddoor.com/about/financing', intent: 'team', text: 'c'.repeat(120) },
+    ];
+    const _r130Buy = addressTargetsToBuy([
+      'https://kellywindowanddoor.com/about',
+      'https://kellywindowanddoor.com/contact',
+      'https://kellywindowanddoor.com/about/financing',
+      'https://kellywindowanddoor.com/about/our-warranties',
+    ], _r130Free);
+    if (_r130Buy.some(u => /\/contact$/.test(u))) {
+      _fails.push('the address lookup buys their contact page again on a lead whose free read already fetched and read it - the live 2026-09-09 shape, five credits for markup already in memory');
+    }
+    if (_r130Buy.some(u => /\/about$/.test(u))) {
+      _fails.push('a trailing slash hides a page we already hold from the no-re-buy rule, so /about/ read for free is bought back as /about');
+    }
+    if (!_r130Buy.some(u => /our-warranties/.test(u))) {
+      _fails.push('a contact-shaped page nobody has read is refused as already held, so the address lookup can no longer buy the one page that might carry the address');
+    }
+    if (!_r130Buy.some(u => /financing/.test(u))) {
+      _fails.push('a free fetch that came back nearly empty counts as a page we read, so a JS-rendered contact page is never bought and the absence of an address rests on markup nobody could read');
+    }
+    if (addressMapWorthBuying(new Array(53).fill('https://kellywindowanddoor.com/p'))) {
+      _fails.push('a sitemap call is still bought on a site whose own navigation we already harvested - the 53 links Kelly Window and Door handed us for free on 2026-09-09');
+    }
+    if (!addressMapWorthBuying([])) {
+      _fails.push('the map is refused on a lead whose navigation we could NOT read, so a site we hold no links for gets no contact page bought at all');
+    }
+    if (!_src.includes(_n('targets = addressTargetsToBuy(targets,', ' freePages);'))) {
+      _fails.push('the no-re-buy rule is declared and never called, so the address lookup pays for pages the free read already holds');
+    }
+    if (!_src.includes(_n('if (!addressMapWorthBuying(_known))', ' {'))) {
+      _fails.push('the address lookup maps the site unconditionally again, so a lead whose navigation we already hold still buys a sitemap call');
+    }
+    if (!_src.includes(_n('try { rememberHtmlLinks(pages[0].html, pages[0].url,', ' null); } catch (e) { void e; }'))) {
+      _fails.push('the Find read no longer remembers the navigation it harvested, so cachedSiteMap is empty and the address lookup buys the map anyway');
     }
     if (!_src.includes(_n('const md = await firecrawlScrapeCapped(fcKey, website, 40000, FC_CACHE_MS, { shot: false,', ' capture: (h) => { _html = h || \'\'; } });'))) {
       _fails.push('the Find fallback scrape is asking for a full-page render again — the most expensive thing on the menu, on a read that never looks at a picture');
@@ -81523,6 +81996,11 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   let links = [];
   if (pages.length) {
     links = sameHostLinks(pages[0].html, pages[0].url);
+    // The same links, into the per-host store every later reader consults, so
+    // the address lookup downstream reads this navigation instead of buying a
+    // sitemap call for a list we are holding. Quiet: the FIND READ line below
+    // already reports the count to the operator.
+    try { rememberHtmlLinks(pages[0].html, pages[0].url, null); } catch (e) { void e; }
     const viaFirecrawl = out.readVia.indexOf('Firecrawl') === 0;
     // The free path reads deep; the Firecrawl fallback keeps the small budget,
     // because there every page is a credit.
@@ -82331,7 +82809,11 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   signals.siteWhy = (out.site && out.site.why) || '';
   out.icp = findIcpScore(signals);
 
-  const led = FC_LEDGER.getStore() || {};
+  // Round 130: the FRAME, not only its contents. `|| {}` cannot tell a lead
+  // that spent nothing from a call made outside a ledger, and reading the
+  // second as "0" is this file's own unmeasured-treated-as-zero class.
+  const _ledFrame = FC_LEDGER.getStore();
+  const led = _ledFrame || {};
   out.spend = {
     firecrawl: Math.round((led.spent || 0) * 100) / 100,
     anthropicUsd: Math.round((led.anthropicUsd || 0) * 10000) / 10000,
@@ -82404,7 +82886,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan. The searches: line names WHICH paid search ran, so the next round cuts on evidence rather than on a hunch.'));
     _ownerWaveLectured = true;
   }
-  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | address source ${_addressSource} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerHeadOffice === true ? 'FREE STAGE ONLY (a branch of a bigger operation - the signer is at head office)' : out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
+  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | address source ${_addressSource} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${verifierLeadSpendSay(_ledFrame ? (Number(_ledFrame.verifier) || 0) : null)}, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerHeadOffice === true ? 'FREE STAGE ONLY (a branch of a bigger operation - the signer is at head office)' : out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
   return out;
 };
 

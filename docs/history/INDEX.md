@@ -141,3 +141,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 127 | 2026-09-09 | The page stops talking to the database, sends the access code, and row-level security goes on — 2026-09-09 | Security / Client / Deploy | [round-127.md](round-127.md) |
 | 128 | 2026-09-09 | server.js becomes a generated file: one source folder, a build that proves the bytes, and the verification order every round follows — 2026-09-09 | Build / Docs | [round-128.md](round-128.md) |
 | 129 | 2026-09-09 | the contact list produces addresses you can actually send to — 2026-09-09 | Contact / Cost / Truth | [round-129.md](round-129.md) |
+| 130 | 2026-09-10 | stop paying twice, stop losing the owner — 2026-09-10 | Cost / Truth / Contact | [round-130.md](round-130.md) |
