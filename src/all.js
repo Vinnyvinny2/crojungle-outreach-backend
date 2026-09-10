@@ -61958,10 +61958,29 @@ app.listen(PORT, () => {
         _fails.push(`two configured checkers do not come back in order - got ${JSON.stringify(_two.map(p => p.id))}`);
       verifierLatch('exhausted', 'myemailverifier');
       if (verifierMayTry(undefined, 'myemailverifier')) _fails.push('a checker that just said "out of credits" is asked again immediately');
-      if (!verifierMayTry(undefined, 'reoon')) _fails.push('ONE checker running out stands the OTHER one down as well - which is the 2026-09-10 defect exactly: the run stopped producing owner mailboxes on lead one');
+      // ══ THE UNLATCHED ONE IS NOT RATIONED ══════════════════════════════
+      // Falsification found the obvious assertion could not reach the defect.
+      // A globally-latched read still lets the OTHER provider past mayTry,
+      // because its own latchedAt is 0 and the cooldown arithmetic is
+      // trivially satisfied. What a global latch actually does is turn every
+      // call into the RECOVERY PROBE - one per ten minutes for the whole run.
+      // So the test is that the unlatched checker opens its gate TWICE in a
+      // row. A rationed one cannot, and that is the live defect: nine leads
+      // sharing a single probe instead of a checker that simply works.
+      if (!verifierGate(undefined, 'reoon') || !verifierGate(undefined, 'reoon'))
+        _fails.push('ONE checker running out stands the OTHER one down as well - the second checker is rationed to one recovery probe per cooldown instead of just answering, which is the 2026-09-10 defect exactly: the run stopped producing owner mailboxes on lead one');
       if (!verifierAnyAvailable()) _fails.push('with a spent primary and a live secondary the run reports that no checker is available, so every remaining lead is told "could not check" while a checker was sitting there answering');
       verifierAnswered('myemailverifier');
       if (!verifierMayTry(undefined, 'myemailverifier')) _fails.push('a checker that answered again is still stood down');
+      // 4b. THE DOOR WALKS THE WHOLE LIST. Every assertion above exercises
+      // the pure functions, and the loop inside verifyEmailSMTP drives a
+      // NETWORK call that no fixture here can stand up - so the iteration is
+      // pinned on the live function's own text rather than left unchecked.
+      // Falsification proved that was needed: slicing the loop to one provider
+      // left every assertion above passing.
+      const _doorSrc = String(verifyEmailSMTP);
+      if (!/for\s*\(const _p of _providers\)/.test(_doorSrc))
+        _fails.push('the door no longer walks every configured checker - a spent primary ends the attempt and the secondary is never asked, which is the fallback existing on paper only');
       // 5. AND NO CHECKER AVAILABLE IS STILL REPORTED HONESTLY.
       verifierLatch('exhausted', 'myemailverifier'); verifierLatch('dead', 'reoon');
       if (verifierAnyAvailable()) _fails.push('every configured checker is stood down and the run still reports one available, so a lead gets a verdict nothing produced');

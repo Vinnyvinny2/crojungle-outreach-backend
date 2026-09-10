@@ -28,7 +28,7 @@ module.exports = [
   { name: '133-a-door-stops-walking-the-list', path: 'src/all.js', prove: 'boot',
     old: "  for (const _p of _providers) {\n    if (!verifierGate(undefined, _p.id)) continue;\n",
     new: "  for (const _p of _providers.slice(0, 1)) {\n    if (!verifierGate(undefined, _p.id)) continue;\n",
-    mustPrint: /two configured checkers do not come back in order|ONE checker running out stands the OTHER one down/ },
+    mustPrint: /the door no longer walks every configured checker/ },
 
   // (A-3) a checker with no key counts as configured, so a server with no keys
   // at all reports it can check mailboxes - and a lead is told its mailbox does
