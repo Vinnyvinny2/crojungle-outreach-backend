@@ -164,7 +164,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261012;
+const CONTRACT_VERSION = 20261013;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -11037,6 +11037,45 @@ const verifierLeadSpendSay = (leadCount) => {
     ? `${_leadSay}, ${Math.round(r.verifier)} ${_capSay} today`
     : `${_leadSay}, ${Math.round(r.verifier)} ${_capSay} since this process started rather than today (the day table was not read at boot)`;
 };
+// ══ ROUND 133: A DEAD KEY IS KNOWN AT BOOT, NOT ON LEAD ONE ════════════════
+// On 2026-09-10 the checker answered "out of credits" on the FIRST lead of a
+// ten-lead run, latched, and the nine leads after it silently lost the branch
+// that turns info@ into the owner's own mailbox. Nobody could have known until
+// the log was read afterwards.
+//
+// Hunter has never had a probe at all, and it is the OTHER source that produces
+// a decision-maker address - so the one thing we could not see was the state of
+// the two things this tab depends on.
+//
+// This spends nothing it does not have to: no key means no call, and the line
+// says "not configured" rather than pretending to have checked.
+const probeContactKeys = async () => {
+  try {
+    const _providers = verifierProviders();
+    if (!_providers.length) {
+      console.log('MAILBOX CHECKER: no checker is configured (VERIFIER_PROVIDER names one of ' + Object.keys(EMAIL_VERIFIERS).join(', ') + ', and its key env var must be set). Every pattern-built address will stay a guess and no shared inbox can be upgraded to the owner\'s own mailbox.');
+    } else {
+      console.log(`MAILBOX CHECKER: ${_providers.map(p => p.def.label).join(' then ')} configured${_providers.length > 1 ? ' - the second is tried on a lead where the first is spent, so one empty account no longer stands the whole run down' : ' (no fallback: set VERIFIER_PROVIDER_2 and its key, or a spent account costs the rest of the run its owner mailboxes)'}.`);
+    }
+  } catch (e) {
+    console.log(`MAILBOX CHECKER: could not be described (${(e && e.message) || e}).`);
+  }
+  try {
+    const _hk = String(process.env.HUNTER_KEY || '').trim();
+    if (!_hk) {
+      console.log('HUNTER PROBE: no HUNTER_KEY on this instance, so the one source that looks a decision-maker address up by name never runs. Addresses come only from what a site publishes - which in this ICP is mostly a shared inbox.');
+      return;
+    }
+    const r = await fetchT(`https://api.hunter.io/v2/account?api_key=${encodeURIComponent(_hk)}`, {}, 15000);
+    const d = await safeJson(r);
+    if (r && r.status === 401) { console.log('\u26a0 HUNTER PROBE: the key was REJECTED. Until it is fixed, no lead gets a decision-maker address looked up by name.'); return; }
+    const left = d && d.data && d.data.requests && d.data.requests.searches;
+    console.log(`HUNTER PROBE: the key answers${left && typeof left.used === 'number' && typeof left.available === 'number' ? ` - ${left.used} of ${left.available} searches used this period` : ''}. This is the source that finds a mailbox for a named person, so its ceiling is the ceiling on decision-maker addresses.`);
+  } catch (e) {
+    console.log(`\u26a0 HUNTER PROBE: no answer (${(e && e.message) || e}). That is OUR reachability, not a fact about any prospect - but until it answers, decision-maker addresses come only from what a site publishes.`);
+  }
+};
+
 // ONE read at boot, beside the schema probe - not a read per verify call.
 const seedVerifierDay = async () => {
   try {
@@ -11059,24 +11098,133 @@ const seedVerifierDay = async () => {
 };
 const VERIFIER_COOLDOWN_MS = Number(process.env.VERIFIER_COOLDOWN_MS || 10 * 60 * 1000);
 
-let VERIFIER_LATCHED_AT = 0;
-let VERIFIER_PROBE_AT = 0;
+// ══ ROUND 133: ONE DOOR, ANY CHECKER ═══════════════════════════════════════
+// Live 2026-09-10: the checker answered "out of credits" on lead ONE, latched,
+// and the ten-lead run then made zero further checks. That is not a small loss.
+// The branch at the shared-inbox upgrade below is what turns info@ into the
+// owner's own mailbox, and it is gated on a check - so a checker that dies on
+// the first lead silently costs every remaining lead its decision-maker
+// address. The run ended with five shared inboxes and no owner mailboxes.
+//
+// Vin, 2026-09-10: "whatever is better than myemailverifier and is free",
+// "Reoon's free tier now, then pay $30-60/month based on results". So the
+// vendor is a SETTING, and a spent primary falls through to a secondary rather
+// than taking the run down with it.
+//
+// Each provider declares three things and nothing else: where to ask, how to
+// read the answer, and which env var holds its key. Adding a vendor is a row.
+//
+// ══ AND AN UNKNOWN TOKEN IS NEVER GUESSED AT ═══════════════════════════
+// Reoon's own documentation is not reachable from this network (the egress
+// proxy blocks reoon.com), so the token lists below are the best evidence
+// available and are NOT asserted as complete. That is exactly why `read`
+// returns the raw token: anything not in either list comes back UNKNOWN and
+// the door logs the token verbatim, so the first live call tells us the
+// vocabulary instead of a wrong guess quietly grading a real mailbox as dead.
+// A mapping invented here would be indistinguishable from a working one.
+const EMAIL_VERIFIERS = {
+  myemailverifier: {
+    label: 'MyEmailVerifier',
+    keyEnv: 'MYEMAILVERIFIER_KEY',
+    url: (email, key) => `https://client.myemailverifier.com/verifier/validate_single/${encodeURIComponent(email)}/${encodeURIComponent(key)}`,
+    read: (d) => {
+      const token = String((d && (d.Status || d.status)) || '').toLowerCase();
+      if (!token) return { token: '', valid: null, invalid: null, catchAll: null };
+      return {
+        token,
+        valid: token === 'valid',
+        invalid: token === 'invalid',
+        catchAll: /true|yes/i.test(String((d && (d.Catch_All_Status ?? d.catch_all)) ?? '')),
+      };
+    },
+  },
+  reoon: {
+    label: 'Reoon',
+    keyEnv: 'REOON_KEY',
+    url: (email, key) => `https://emailverifier.reoon.com/api/v1/verify?email=${encodeURIComponent(email)}&key=${encodeURIComponent(key)}&mode=power`,
+    read: (d) => {
+      const token = String((d && (d.status || d.Status)) || '').toLowerCase();
+      const catchAll = (d && (d.is_catch_all === true || d.catch_all === true))
+        || /catch[_-]?all|accept[_-]?all/.test(token);
+      // The explicit boolean is preferred over the token when the payload
+      // carries it: a vendor may add a token but will not quietly redefine a
+      // field named "is this safe to send".
+      if (d && typeof d.is_safe_to_send === 'boolean') {
+        return { token: token || 'is_safe_to_send', valid: d.is_safe_to_send === true, invalid: d.is_safe_to_send === false, catchAll };
+      }
+      if (!token) return { token: '', valid: null, invalid: null, catchAll: null };
+      // Deliberately conservative on the invalid side: a spam trap or a
+      // disposable box is not a mailbox we may write to, and calling it
+      // anything but do-not-send is how a sending domain gets burned.
+      const VALID = ['safe', 'valid', 'deliverable'];
+      const INVALID = ['invalid', 'undeliverable', 'disabled', 'spamtrap', 'spam_trap', 'disposable', 'inbox_full', 'role_account'];
+      if (VALID.includes(token)) return { token, valid: true, invalid: false, catchAll };
+      if (INVALID.includes(token)) return { token, valid: false, invalid: true, catchAll };
+      return { token, valid: null, invalid: null, catchAll };
+    },
+  },
+};
+// The order is the order they are tried. The primary is the one whose free
+// allowance we want spent first.
+const VERIFIER_PRIMARY = String(process.env.VERIFIER_PROVIDER || 'myemailverifier').toLowerCase();
+// Read LIVE rather than frozen at module load. Production never changes these
+// mid-process, but a check that cannot configure a second provider cannot
+// execute the fallback at all - and a fallback nothing can reach is exactly the
+// mechanism this round exists to stop shipping.
+const _verifierOrder = () => [
+  String(process.env.VERIFIER_PROVIDER || 'myemailverifier').toLowerCase(),
+  String(process.env.VERIFIER_PROVIDER_2 || '').toLowerCase(),
+];
+const _verifierKeyFor = (id) => {
+  const def = EMAIL_VERIFIERS[id];
+  if (!def) return '';
+  return String(process.env[def.keyEnv] || '').trim();
+};
+// A provider with no key is not configured and is never counted as available -
+// otherwise "every provider is blocked" would read false on a box with no keys
+// at all, and a lead would be told its mailbox does not exist.
+const verifierProviders = (fallbackKey = '') => {
+  const out = [];
+  const _order = _verifierOrder();
+  for (const id of _order) {
+    if (!id || !EMAIL_VERIFIERS[id] || out.some(p => p.id === id)) continue;
+    const key = _verifierKeyFor(id) || (id === _order[0] ? String(fallbackKey || '').trim() : '');
+    if (key) out.push({ id, key, def: EMAIL_VERIFIERS[id] });
+  }
+  return out;
+};
+
+// Per-provider, because the whole point is that one being spent does not stand
+// the other down. The legacy no-argument calls read the PRIMARY, which is what
+// every existing caller and every existing check means by "the verifier".
+const VERIFIER_STATE = new Map();
+const _vState = (id) => {
+  const k = id || VERIFIER_PRIMARY;
+  if (!VERIFIER_STATE.has(k)) VERIFIER_STATE.set(k, { exhausted: false, dead: false, latchedAt: 0, probeAt: 0 });
+  return VERIFIER_STATE.get(k);
+};
 // Read-only: says whether the verifier is currently stood down. Deliberately
 // does NOT consume the recovery probe, because a caller asking "is it off"
 // must not spend the one attempt that would turn it back on.
-const verifierBlocked = () => (VERIFIER_EXHAUSTED || VERIFIER_DEAD);
+const verifierBlocked = (id) => { const st = _vState(id); return st.exhausted || st.dead; };
+// Round 133: is there ANY configured checker we could still ask? This is what
+// the row-level callers mean by "the verifier is down" - a primary that is
+// spent while a secondary still answers is not an outage, and reporting it as
+// one puts "could not check" on a lead we could have checked.
+const verifierAnyAvailable = (nowMs, fallbackKey = '') => verifierProviders(fallbackKey).some(p => verifierMayTry(nowMs, p.id));
 // Consuming: the door itself. After the cooldown, exactly ONE call is let
 // through to find out whether the allowance came back.
-const verifierGate = (nowMs) => {
-  if (!verifierBlocked()) return true;
+const verifierGate = (nowMs, id) => {
+  if (!verifierBlocked(id)) return true;
+  const st = _vState(id);
   // The clock is a parameter with today's default. Nothing in production
   // passes one; the boot check does, because the whole point of this gate
   // is what happens ten minutes after a latch and a fixture that cannot
   // travel there cannot see it.
   const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
-  if (now - VERIFIER_LATCHED_AT < VERIFIER_COOLDOWN_MS) return false;
-  if (now - VERIFIER_PROBE_AT < VERIFIER_COOLDOWN_MS) return false;
-  VERIFIER_PROBE_AT = now;
+  if (now - st.latchedAt < VERIFIER_COOLDOWN_MS) return false;
+  if (now - st.probeAt < VERIFIER_COOLDOWN_MS) return false;
+  st.probeAt = now;
   console.log(`\u{1F513} EMAIL VERIFIER: the ${Math.round(VERIFIER_COOLDOWN_MS / 60000)}-minute cooldown has passed, so ONE call is going through to find out whether it answers again. If it is refused the clock restarts; nothing else is spent meanwhile.`);
   return true;
 };
@@ -11085,36 +11233,59 @@ const verifierGate = (nowMs) => {
 // call ever reaches verifyEmailSMTP, and the recovery probe can never fire.
 // That is the §43 deadlock rebuilt one level up, so it is answered here and
 // read-only: it never consumes the probe.
-const verifierMayTry = (nowMs) => {
+const verifierMayTry = (nowMs, id) => {
   // Round 129: the day's allowance is asked FIRST. The latch below is the
   // vendor's own refusal, which is only ever discovered by spending a call and
   // hitting the wall, and every restart clears it - so on its own it is a brake
   // that arrives after the money has gone.
   if (!verifierMaySpend(1)) return false;
-  if (!verifierBlocked()) return true;
+  if (!verifierBlocked(id)) return true;
+  const st = _vState(id);
 
   const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
-  return now - VERIFIER_LATCHED_AT >= VERIFIER_COOLDOWN_MS && now - VERIFIER_PROBE_AT >= VERIFIER_COOLDOWN_MS;
+  return now - st.latchedAt >= VERIFIER_COOLDOWN_MS && now - st.probeAt >= VERIFIER_COOLDOWN_MS;
 };
-const verifierLatch = (kind) => {
-  VERIFIER_LATCHED_AT = Date.now();
-  if (kind === 'dead') VERIFIER_DEAD = true; else VERIFIER_EXHAUSTED = true;
+const verifierLatch = (kind, id) => {
+  const st = _vState(id);
+  st.latchedAt = Date.now();
+  if (kind === 'dead') st.dead = true; else st.exhausted = true;
+  // The two module lets are the PRIMARY's state, mirrored so every existing
+  // reader and every existing check keeps meaning what it always meant.
+  if (!id || id === VERIFIER_PRIMARY) { if (kind === 'dead') VERIFIER_DEAD = true; else VERIFIER_EXHAUSTED = true; }
 };
 // A call that ANSWERED is the proof the account is live again. Clearing on a
 // real answer rather than on a timer alone is what stops a permanently dead
 // key being reported as healthy every ten minutes.
-const verifierAnswered = () => {
-  if (!verifierBlocked()) return;
+const verifierAnswered = (id) => {
+  if (!verifierBlocked(id)) return;
   console.log(`\u{1F7E2} EMAIL VERIFIER: back. A probe answered, so SMTP verification is on again for every lead after this one - and every address checked while it was off is tier 3 at best, which is a fact about US and not about those prospects.`);
-  VERIFIER_EXHAUSTED = false; VERIFIER_DEAD = false; VERIFIER_LATCHED_AT = 0;
+  const st = _vState(id);
+  st.exhausted = false; st.dead = false; st.latchedAt = 0;
+  if (!id || id === VERIFIER_PRIMARY) { VERIFIER_EXHAUSTED = false; VERIFIER_DEAD = false; }
 };
 // One place to tune, and the error message quotes it so a future reader knows
 // what the cap actually was when the failure happened.
 const VERIFIER_TIMEOUT_MS = Number(process.env.VERIFIER_TIMEOUT_MS || 30000);
 
+// Round 133: the door now walks the configured providers in order. A primary
+// that is spent latches ITSELF and the loop moves to the next one, which is the
+// whole difference between "one checker died" and "this run stopped producing
+// owner mailboxes on lead one".
 const verifyEmailSMTP = async (email, verifierKey) => {
-  if (!email || !verifierKey) return { valid: null, catchAll: null, unknown: true, error: true };
-  if (!verifierGate()) return { valid: null, catchAll: null, unknown: true, error: true };
+  const _err = () => ({ valid: null, catchAll: null, unknown: true, error: true });
+  if (!email) return _err();
+  const _providers = verifierProviders(verifierKey);
+  if (!_providers.length) return _err();
+  for (const _p of _providers) {
+    if (!verifierGate(undefined, _p.id)) continue;
+    const _out = await _verifyVia(_p, email);
+    if (_out) return _out;
+  }
+  return _err();
+};
+
+const _verifyVia = async (provider, email) => {
+  const verifierKey = provider.key;
   // Round 129: this is the ONE door to the verifier, so it is the one place a
   // check can be counted and the one place the count can refuse. A refusal here
   // reads as "we could not ask" - the same shape as a closed gate - and never as
@@ -11146,32 +11317,44 @@ const verifyEmailSMTP = async (email, verifierKey) => {
     // 30 seconds costs us nothing when the answer comes back fast, and buys
     // the entire send path on the leads where it does not.
     noteVerifierCall();
-    const url = `https://client.myemailverifier.com/verifier/validate_single/${encodeURIComponent(email)}/${encodeURIComponent(verifierKey)}`;
+    const url = provider.def.url(email, verifierKey);
 
     const r = await fetchT(url, {}, VERIFIER_TIMEOUT_MS);
     const d = await safeJson(r);
-    const status = String(d?.Status || d?.status || '').toLowerCase();
+    const _read = provider.def.read(d) || { token: '', valid: null, invalid: null, catchAll: null };
+    const status = String(_read.token || '');
     const blob = JSON.stringify(d || {}).toLowerCase();
     // No status at all means the call did not actually run a check.
     if (!status) {
       if (/limit|quota|credit|exceed|insufficient|upgrade/.test(blob)) {
-        if (!VERIFIER_EXHAUSTED) console.log(`\ud83d\udd34 EMAIL VERIFIER OUT OF CREDITS — SMTP checks are no longer running. Nothing below can be read as "this mailbox does not exist"; it means we could not ask. It re-tests itself in ${Math.round(VERIFIER_COOLDOWN_MS / 60000)} minutes; a daily allowance that resets, or a top-up, comes back on its own.`);
-        verifierLatch('exhausted');
+        if (!verifierBlocked(provider.id)) console.log(`\ud83d\udd34 ${provider.def.label.toUpperCase()} OUT OF CREDITS — that checker is stood down. Nothing below can be read as "this mailbox does not exist"; it means we could not ask THAT one. Any other configured checker is tried on this same lead, and this one re-tests itself in ${Math.round(VERIFIER_COOLDOWN_MS / 60000)} minutes.`);
+        verifierLatch('exhausted', provider.id);
       } else if (r.status === 401 || r.status === 403 || /invalid.?key|unauthor|forbidden/.test(blob)) {
-        if (!VERIFIER_DEAD) console.log(`\ud83d\udd11 EMAIL VERIFIER KEY REJECTED — SMTP verification is off. This is not evidence about any prospect. Check VERIFIER_KEY in Settings; it re-tests itself every ${Math.round(VERIFIER_COOLDOWN_MS / 60000)} minutes in case the key was fixed.`);
-        verifierLatch('dead');
+        if (!verifierBlocked(provider.id)) console.log(`\ud83d\udd11 ${provider.def.label.toUpperCase()} KEY REJECTED — that checker is off. This is not evidence about any prospect. Check ${provider.def.keyEnv}; it re-tests itself every ${Math.round(VERIFIER_COOLDOWN_MS / 60000)} minutes in case the key was fixed.`);
+        verifierLatch('dead', provider.id);
       }
-      return { valid: null, catchAll: null, unknown: true, error: true };
+      // NULL, not an error shape: the caller's loop reads null as "this one did
+      // not answer, try the next" - which is the entire point of the round.
+      return null;
     }
     // It answered, which is the only proof that the account is live.
-    verifierAnswered();
-    const catchAll = /true|yes/i.test(String(d?.Catch_All_Status ?? d?.catch_all ?? ''));
+    verifierAnswered(provider.id);
+    // A token the adapter does not recognise is reported as UNKNOWN and named
+    // in full. Reoon's documentation is unreachable from this network, so the
+    // token lists are evidence rather than gospel - and a wrong guess that
+    // silently graded a live mailbox as dead would be indistinguishable from a
+    // working mapping. This line is how the vocabulary gets corrected from one
+    // real call instead of from a hunch.
+    if (_read.valid === null && _read.invalid === null) {
+      console.log(`\u2753 ${provider.def.label} answered "${status}", which this adapter does not recognise, so the address is treated as UNCHECKED rather than as good or bad. Add the token to the list in EMAIL_VERIFIERS.${provider.id} and it becomes a verdict.`);
+    }
     return {
-      valid: status === 'valid',
-      invalid: status === 'invalid',
-      catchAll,
-      unknown: status === 'unknown',
+      valid: _read.valid === true,
+      invalid: _read.invalid === true,
+      catchAll: _read.catchAll === true,
+      unknown: !(_read.valid === true) && !(_read.invalid === true),
       raw: status,
+      provider: provider.id,
     };
   } catch(e) {
     // ══ "TIMEOUT" IS ALL WE HAVE EVER LEARNED, AND IT IS NOT ENOUGH ═════════
@@ -11210,8 +11393,18 @@ const verifyEmailSMTP = async (email, verifierKey) => {
     // its severity costs exactly as much as one that understates it, so the alarm
     // is reserved for the case where every route has failed — which is a different
     // log line, on the path that resolves no pattern on a normal domain.
-    console.log(`\u26a0 SMTP VERIFY DID NOT ANSWER [${String(email).split('@')[1] || '?'}]: ${_why}. This is usually the recipient's own mail server refusing RCPT TO probes to stop address harvesting — it is per-domain and normal, and it does NOT block the send: the address falls back to Hunter verification and to the learned-pattern route, and typically resolves sendable seconds later. Only a lead where EVERY route failed is actually blocked, and that says so separately.`);
-    return { valid: null, catchAll: null, unknown: true, error: true };
+    console.log(`\u26a0 SMTP VERIFY DID NOT ANSWER [${String(email).split('@')[1] || '?'}] via ${provider.def.label}: ${_why}. This is usually the recipient's own mail server refusing RCPT TO probes to stop address harvesting — it is per-domain and normal, and it does NOT block the send: the address falls back to Hunter verification and to the learned-pattern route, and typically resolves sendable seconds later. Only a lead where EVERY route failed is actually blocked, and that says so separately.`);
+    // ══ ROUND 133: WHOSE FAULT DECIDES WHETHER WE TRY THE NEXT ONE ═════
+    // A TIMEOUT is a fact about the RECIPIENT's mail server - it stalled the
+    // RCPT TO probe on purpose. Asking a second vendor to hold the same
+    // conversation with the same hostile server buys nothing and costs another
+    // full 30 seconds on every such lead, so a timeout ENDS the attempt.
+    //
+    // A DNS failure, a refused connection or a broken TLS handshake is about
+    // the VENDOR's own host, and that is exactly what a second vendor fixes.
+    // Returning null there is what lets the fallback do its job.
+    const _vendorUnreachable = /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|EPIPE|CERT|TLS|SSL/i.test(_m);
+    return _vendorUnreachable ? null : { valid: null, catchAll: null, unknown: true, error: true };
   }
 };
 
@@ -35620,7 +35813,10 @@ const findEmailFireproof = async (_args) => {
   // where the answer was produced. A missing KEY is deliberately NOT an
   // outage: it is a setting nobody filled in, and reporting the two as one
   // makes every run by an operator without the key read as a failure.
-  const _verifierDown = !!((_args && _args.verifierKey) && verifierBlocked());
+  // Round 133: down means NO configured checker could be asked. A spent
+  // primary beside a live secondary is not an outage, and grading a lead
+  // 'verifier_down' on it would put "could not check" on a row we checked.
+  const _verifierDown = !!((_args && _args.verifierKey) && !verifierAnyAvailable(undefined, _args.verifierKey));
   if (_r && _r.email && !isMailboxShape(_r.email)) {
     console.log(`\u26d4 EMAIL REJECTED [${_r.email}]: this is not a mailbox \u2014 it is shaped like a file (a retina image asset such as logo@2x.png reads as an address to every regex). Live, team-dr-vargas@2x.jpg was scored 100/100 and marked sendable. The lead now carries no address instead of a JPEG, and the bounce is not charged to the sending domain.`);
     return { email: '', ...EMAIL_TIERS.NONE, name: _r.name || '', pattern: null, lookupBlocked: _r.lookupBlocked || null,
@@ -36361,9 +36557,9 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // looked and there is nothing there". Opposite meanings, opposite next actions:
     // one says re-run later, the other says stop spending on this lead. Hunter is
     // only the explanation when the free SMTP path did NOT get to run.
-    const _smtpActuallyRan = (_mayProbe && !verifierBlocked());
+    const _smtpActuallyRan = (_mayProbe && verifierAnyAvailable(undefined, verifierKey));
 
-    const _why = verifierBlocked() ? 'the email verifier stopped answering'
+    const _why = !verifierAnyAvailable(undefined, verifierKey) ? 'every configured email checker stopped answering'
       : (_lookupBlocked && !_smtpActuallyRan)
         ? (_lookupBlocked === 'hunter_key_rejected' ? 'Hunter key rejected' : _lookupBlocked === 'hunter_rate_limited' ? 'Hunter rate-limited — a throttle, not an empty balance; re-run this lead in a minute' : 'Hunter out of credits')
       : null;
@@ -36449,8 +36645,8 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
   // because our verifier is down is worth re-running, and one blocked because the
   // mail server denied every address is not.
   const inferred = candidates[0];
-  const _blockWhy = verifierBlocked()
-    ? 'the email verifier is unavailable, so nothing could be checked'
+  const _blockWhy = !verifierAnyAvailable(undefined, verifierKey)
+    ? 'every configured email checker is unavailable, so nothing could be checked'
     : _stalls
     ? 'their mail host stalls address probes by design, so no mailbox check was spent on a question it will not answer'
     : (catchAll !== true && catchAll !== false)
@@ -54603,6 +54799,9 @@ app.listen(PORT, () => {
       // again and walking into the same wall.
       seedVerifierDay().catch(() => {});
       probeDfsAuth().catch(() => {});
+      // Round 133: which checker, and does Hunter answer. Both were invisible
+      // until a lead walked into them.
+      probeContactKeys().catch(() => {});
 
       // Round 124: a read run left running by the process this one replaced.
       resumeReadRuns().catch(() => {});
@@ -57655,7 +57854,13 @@ app.listen(PORT, () => {
     // the whole positional assertion passed on a build with the block moved
     // back inside. Falsification caught it: the revert stayed GREEN. A check
     // that cannot fail is not a check.
-    const _nothingLeft = _src.indexOf(_n('const _smtpActuallyRan = (_mayProbe', ' && !verifierBlocked());'));
+    // Round 133 re-aimed this anchor. The gate stopped reading verifierBlocked
+    // and started reading verifierAnyAvailable, because a spent primary beside
+    // a live secondary is not an outage. The anchor moved with it rather than
+    // being deleted: an anchor that can no longer match is a check that has
+    // been disarmed, and it still reads as coverage.
+    const _nothingLeft = _src.indexOf(_n('const _smtpActuallyRan = (_mayProbe',
+      ' && verifierAnyAvailable(undefined, verifierKey));'));
 
     if (_gate < 0) _fails.push('the SMTP-gated block could not be found, so nothing here is being checked');
     else if (_hunter < 0) _fails.push('the Hunter email-finder is not guarded on \'catchAll !== true\' - either it was renamed, or its guard was tightened to === false, which is the 2026-09-04 defect: an UNKNOWN catch-all closing the one paid route that does not read an SMTP verdict');
@@ -57831,7 +58036,13 @@ app.listen(PORT, () => {
     }
     if (!String(verifierMayTry).includes(_n('verifierMay', 'Spend'))) _fails.push('the gate every caller asks before spending a check still reads only the latch - and the latch is set by hitting the wall and cleared by every restart, which is why the live run had no brake');
     for (const [_needle, _msg] of [
-      [_n('    noteVerifierCall();\n    const url = `https://client.myemailverifier.com', '/verifier/validate_single/'), 'the one door to the verifier no longer counts the check it is about to spend, so the day counter is decorative and the wall is discovered by walking into it again'],
+      // Round 133 re-aimed this anchor. The URL is built from the provider
+      // table now, so the old literal could never match again - and an anchor
+      // that cannot match is a disarmed check that still reads as coverage.
+      // The guarantee is unchanged and so is what this pins: the counter fires
+      // immediately before the call it is counting.
+      [_n('    noteVerifierCall();\n    const url = provider.def.url(email,',
+        ' verifierKey);'), 'the one door to the verifier no longer counts the check it is about to spend, so the day counter is decorative and the wall is discovered by walking into it again'],
       [_n('if (!verifierMaySpend(1)) {\n    if (_verifierDaySaid !==', ' _spendDayNow()) {'), 'the verifier door no longer refuses when the day is spent, so the count is a report rather than a brake'],
       [_n('seedVerifierDay().catch(()', ' => {});'), 'the day count is never seeded from the table, so a Render instance that slept resumes at zero and spends the allowance a second time'],
       [_n('if (!verifierMaySpend(2)) {', '\n'), 'the catch-all probe no longer asks whether two checks are left before starting a purchase that costs two'],
@@ -61700,6 +61911,92 @@ app.listen(PORT, () => {
     else console.log('\u2713 SETTLE SAID ONCE CHECK: both settle sentences sit behind one latch and the latch is set at the print, not at the first ask, so a lead that settles on a later ask still says so exactly once. Asserted on this file\'s own source, because settled() is a closure no fixture can reach - which is why the duplicate survived unnoticed.');
   } catch (e) {
     console.log(`\u26d4 SETTLE SAID ONCE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ MAILBOX CHECKER CHECK - round 133 ═════════════════════════════════════
+  // Live 2026-09-10: the checker answered "out of credits" on lead ONE of ten,
+  // latched, and every lead after it lost the branch that turns a published
+  // info@ into the owner's own mailbox. The run ended with five shared inboxes
+  // and NO owner mailboxes, and the screen called all five "confirmed".
+  //
+  // One checker dying must cost one lead, not a run. Everything below is
+  // EXECUTED on the real table and the real latch.
+  try {
+    const _fails = [];
+    const _envWas = { a: process.env.VERIFIER_PROVIDER, b: process.env.VERIFIER_PROVIDER_2,
+      ka: process.env.MYEMAILVERIFIER_KEY, kb: process.env.REOON_KEY };
+    try {
+      // 1. EVERY PROVIDER IS A COMPLETE ROW. A half-declared vendor fails at
+      // the first live call, on a lead, with money already spent.
+      for (const [_id, _def] of Object.entries(EMAIL_VERIFIERS)) {
+        if (!_def || typeof _def.url !== 'function' || typeof _def.read !== 'function' || !_def.label || !_def.keyEnv)
+          _fails.push(`the ${_id} checker is not a complete row (it needs a label, a key env var, a url builder and a reader), so choosing it would fail on a real lead`);
+        else if (!/^https:\/\//.test(String(_def.url('a@b.com', 'K') || '')))
+          _fails.push(`the ${_id} checker does not build an https URL`);
+      }
+      // 2. THE READERS, EXECUTED. A verdict must be a verdict, and anything the
+      // adapter does not recognise must be UNKNOWN - never quietly good or bad.
+      const _mev = EMAIL_VERIFIERS.myemailverifier.read({ Status: 'valid' });
+      if (_mev.valid !== true) _fails.push('MyEmailVerifier answering "valid" is no longer read as a good mailbox, so every address it confirms is thrown away');
+      if (EMAIL_VERIFIERS.myemailverifier.read({ Status: 'invalid' }).invalid !== true) _fails.push('MyEmailVerifier answering "invalid" is not read as a bad mailbox, so a dead address can be sent to');
+      const _reo = EMAIL_VERIFIERS.reoon.read({ status: 'safe' });
+      if (_reo.valid !== true) _fails.push('Reoon answering "safe" is not read as a good mailbox - the free checker would return nothing usable on every lead');
+      if (EMAIL_VERIFIERS.reoon.read({ is_safe_to_send: true }).valid !== true) _fails.push('Reoon\'s explicit is_safe_to_send is ignored, so the one field that cannot be redefined by a new token is not being read');
+      if (EMAIL_VERIFIERS.reoon.read({ status: 'spamtrap' }).invalid !== true) _fails.push('Reoon reporting a spam trap is not treated as do-not-send, which is how a sending domain gets burned');
+      const _odd = EMAIL_VERIFIERS.reoon.read({ status: 'something_new' });
+      if (_odd.valid !== null || _odd.invalid !== null) _fails.push('a token the adapter does not recognise is being turned into a verdict instead of UNKNOWN - a guessed mapping is indistinguishable from a working one, and this vendor\'s docs are not reachable from this network');
+      // 3. A CHECKER WITH NO KEY IS NOT A CHECKER. Otherwise a box with no keys
+      // reports "available" and a lead is told its mailbox does not exist.
+      process.env.VERIFIER_PROVIDER = 'myemailverifier'; process.env.VERIFIER_PROVIDER_2 = 'reoon';
+      delete process.env.MYEMAILVERIFIER_KEY; delete process.env.REOON_KEY;
+      if (verifierProviders().length !== 0) _fails.push('a checker with no key counts as configured, so a server with no keys at all claims it can check mailboxes');
+      // 4. THE FALLBACK, EXECUTED. This is the whole round: the primary is
+      // spent, and the lead still gets checked by the second one.
+      process.env.MYEMAILVERIFIER_KEY = 'k1'; process.env.REOON_KEY = 'k2';
+      const _two = verifierProviders();
+      if (_two.length !== 2 || _two[0].id !== 'myemailverifier' || _two[1].id !== 'reoon')
+        _fails.push(`two configured checkers do not come back in order - got ${JSON.stringify(_two.map(p => p.id))}`);
+      verifierLatch('exhausted', 'myemailverifier');
+      if (verifierMayTry(undefined, 'myemailverifier')) _fails.push('a checker that just said "out of credits" is asked again immediately');
+      // ══ THE UNLATCHED ONE IS NOT RATIONED ══════════════════════════════
+      // Falsification found the obvious assertion could not reach the defect.
+      // A globally-latched read still lets the OTHER provider past mayTry,
+      // because its own latchedAt is 0 and the cooldown arithmetic is
+      // trivially satisfied. What a global latch actually does is turn every
+      // call into the RECOVERY PROBE - one per ten minutes for the whole run.
+      // So the test is that the unlatched checker opens its gate TWICE in a
+      // row. A rationed one cannot, and that is the live defect: nine leads
+      // sharing a single probe instead of a checker that simply works.
+      if (!verifierGate(undefined, 'reoon') || !verifierGate(undefined, 'reoon'))
+        _fails.push('ONE checker running out stands the OTHER one down as well - the second checker is rationed to one recovery probe per cooldown instead of just answering, which is the 2026-09-10 defect exactly: the run stopped producing owner mailboxes on lead one');
+      if (!verifierAnyAvailable()) _fails.push('with a spent primary and a live secondary the run reports that no checker is available, so every remaining lead is told "could not check" while a checker was sitting there answering');
+      verifierAnswered('myemailverifier');
+      if (!verifierMayTry(undefined, 'myemailverifier')) _fails.push('a checker that answered again is still stood down');
+      // 4b. THE DOOR WALKS THE WHOLE LIST. Every assertion above exercises
+      // the pure functions, and the loop inside verifyEmailSMTP drives a
+      // NETWORK call that no fixture here can stand up - so the iteration is
+      // pinned on the live function's own text rather than left unchecked.
+      // Falsification proved that was needed: slicing the loop to one provider
+      // left every assertion above passing.
+      const _doorSrc = String(verifyEmailSMTP);
+      if (!/for\s*\(const _p of _providers\)/.test(_doorSrc))
+        _fails.push('the door no longer walks every configured checker - a spent primary ends the attempt and the secondary is never asked, which is the fallback existing on paper only');
+      // 5. AND NO CHECKER AVAILABLE IS STILL REPORTED HONESTLY.
+      verifierLatch('exhausted', 'myemailverifier'); verifierLatch('dead', 'reoon');
+      if (verifierAnyAvailable()) _fails.push('every configured checker is stood down and the run still reports one available, so a lead gets a verdict nothing produced');
+    } finally {
+      // Leave nothing behind: the next check boots into the state production
+      // starts in, or it measures something production never sees.
+      VERIFIER_STATE.clear(); VERIFIER_EXHAUSTED = false; VERIFIER_DEAD = false;
+      for (const [_k, _v] of [['VERIFIER_PROVIDER', _envWas.a], ['VERIFIER_PROVIDER_2', _envWas.b],
+        ['MYEMAILVERIFIER_KEY', _envWas.ka], ['REOON_KEY', _envWas.kb]]) {
+        if (_v === undefined) delete process.env[_k]; else process.env[_k] = _v;
+      }
+    }
+    if (_fails.length) console.log(`\u26d4 MAILBOX CHECKER CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    else console.log('\u2713 MAILBOX CHECKER CHECK: the checker is a setting rather than a vendor - every provider is a complete row, each reader was executed on a real payload, and a token the adapter does not recognise comes back UNCHECKED instead of being guessed into a verdict. A spent primary latches ITSELF and the secondary still answers on the same lead, which is the whole difference between one checker dying and a run losing every owner mailbox after lead one. A checker with no key is never counted, and when all of them are down the run says so.');
+  } catch (e) {
+    console.log(`\u26d4 MAILBOX CHECKER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
   // ---- A PLACE IS NOT A PERSON (ROUND 122) ------------------------------
@@ -72049,7 +72346,7 @@ app.listen(PORT, () => {
     // Whatever happened above, this process must leave here unlatched. A boot
     // check that leaves state behind fails its neighbour and the neighbour
     // gets the blame - recorded at the Firecrawl pacing check.
-    VERIFIER_EXHAUSTED = false; VERIFIER_DEAD = false; VERIFIER_LATCHED_AT = 0; VERIFIER_PROBE_AT = 0;
+    VERIFIER_EXHAUSTED = false; VERIFIER_DEAD = false; VERIFIER_STATE.clear();
 
     if (_fails.length) {
       console.log(`\u26d4 VERIFIER LATCH CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
@@ -72057,7 +72354,7 @@ app.listen(PORT, () => {
       console.log(`\u2713 VERIFIER LATCH CHECK: the email verifier can come back. A latch stops calls at once, exactly ONE probe is let through after the ${Math.round(VERIFIER_COOLDOWN_MS / 60000)}-minute cooldown, a call that ANSWERED is what clears it, and a rejected key latches separately from an empty allowance. Both flags were one-way for their whole life, so one busy minute turned SMTP verification off until Render restarted - and tier 2 is unreachable without it, so every address after the blip read as pattern-built rather than confirmed.`);
     }
   } catch (e) {
-    VERIFIER_EXHAUSTED = false; VERIFIER_DEAD = false; VERIFIER_LATCHED_AT = 0; VERIFIER_PROBE_AT = 0;
+    VERIFIER_EXHAUSTED = false; VERIFIER_DEAD = false; VERIFIER_STATE.clear();
     console.log(`\u26d4 VERIFIER LATCH CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
@@ -84310,8 +84607,23 @@ const _queueStateOf = (r) => r.moved_to_research_at ? 'moved' : r.ruled_out_at ?
 // NAME (published_personal), never a letter, and PostgREST hands the
 // sendable flag and the tier back as text.
 const EMAIL_GRADE_VERIFIED = ['published_personal', 'smtp_confirmed'];
-const emailVerifiedRow = (email, grade, sendable, tier) => !!email
-  && (EMAIL_GRADE_VERIFIED.includes(String(grade || '')) || (String(sendable) === 'true' && Number(tier) >= 1 && Number(tier) <= 2));
+const emailVerifiedRow = (email, grade, sendable, tier) => {
+  if (!email) return false;
+  const g = String(grade || '');
+  if (EMAIL_GRADE_VERIFIED.includes(g)) return true;
+  // ══ ROUND 133: AN EXPLICIT GRADE BEATS THE TIER FALLBACK ═══════════════
+  // published_role is tier 1 and sendable BY CONSTRUCTION - it is a real,
+  // published, usable address that simply is not the owner's. So the fallback
+  // below called every info@ "verified", and the card on the 2026-09-10 run
+  // read 5 confirmed on a batch with no owner mailbox in it at all.
+  //
+  // The fallback is not deleted: a row with NO grade (read before grades
+  // existed) still has nothing better than its tier to go on. It is demoted
+  // to what it always was - a guess for when we have no verdict - and a
+  // verdict, when we have one, is now allowed to be the answer.
+  if (g) return false;
+  return String(sendable) === 'true' && Number(tier) >= 1 && Number(tier) <= 2;
+};
 // Round 129: VERIFIED is not SENDABLE, and the card was reading only the
 // first. A tier-3 address the engine itself marked sendable cleared
 // _unvouchedSendGuard, which is the engine's own verdict that a rep may

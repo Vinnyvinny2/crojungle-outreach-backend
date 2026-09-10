@@ -144,3 +144,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 130 | 2026-09-10 | stop paying twice, stop losing the owner — 2026-09-10 | Cost / Truth / Contact | [round-130.md](round-130.md) |
 | 131 | 2026-09-10 | a guess stops outranking the truth — 2026-09-10 | Contact / Truth / Client | [round-131.md](round-131.md) |
 | 132 | 2026-09-10 | the sheet stops naming things that are not people — 2026-09-10 | Contact / Truth / Client | [round-132.md](round-132.md) |
+| 133 | 2026-09-10 | the decision-maker mailbox, and one door for the checker — 2026-09-10 | Email / Cost / Client | [round-133.md](round-133.md) |
