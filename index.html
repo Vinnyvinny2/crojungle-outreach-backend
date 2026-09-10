@@ -1341,7 +1341,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261011;
+const CLIENT_CONTRACT = 20261012;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -6442,6 +6442,11 @@ const leadFromCompany = (company) => {
       // address the email engine itself marked unsafe, separated from the mark.
       contactEmailSendable: company.contactEmailSendable === true,
       contactEmailBlockReason: company.contactEmailBlockReason || '',
+      // Round 132: the two tokens that separate "we could not ask" from "there
+      // is nothing there". Without them on the promoted lead, a row that was
+      // honest in Find goes back to saying "none found" in the pipeline.
+      contactEmailVerifierDown: company.contactEmailVerifierDown === true,
+      contactEmailLookupBlocked: company.contactEmailLookupBlocked || '',
       // Why we believe the owner is the owner, and how far the authority gate
       // trusted it. Both were computed on the contact read and stopped here,
       // so a rep looking at a promoted lead could not tell a name read off a
@@ -6516,8 +6521,25 @@ const queueStateOf = (l) => !l ? 'unread'
 // "Verified" is the server's own letter rule (emailVerifiedRow): an A grade -
 // published on their site as a person, or SMTP-confirmed - or a sendable
 // address at tier 1-2 from an older read. Never the checker-down grade.
+// ══ ROUND 132: "COULD NOT ASK" IS NOT "NONE" ═══════════════════════════════
+// Live 2026-09-10: the mailbox verifier ran out of credits mid-run and
+// Bellwether's own log line said, correctly, "This is NOT proof that no mailbox
+// exists". The row it produced said "- none found" and the chip counted it
+// under No email. That is an absence claimed about something we never managed
+// to ask, which is the one thing this system may never do.
+//
+// The signal was already on the row and read by nothing: contactEmailVerifierDown
+// for the mailbox checker, and from Round 132 contactEmailLookupBlocked for the
+// address supplier. Computed and not passed, the class this repo records most.
+//
+// Only ever reached with NO address. A lead whose name the buying floor held
+// back also has no address and DOES belong in "none": we could have asked and
+// chose not to, which is a decision and not an outage. That is why this reads
+// the supplier tokens and never the block-reason sentence.
+const emailLookupUnavailable = (c) => !!c && !c.contactEmail
+  && (c.contactEmailVerifierDown === true || !!String(c.contactEmailLookupBlocked || ''));
 const emailStatusOf = (c) => {
-  if (!c || !c.contactEmail) return 'none';
+  if (!c || !c.contactEmail) return emailLookupUnavailable(c) ? 'unreadable' : 'none';
   const g = String(c.contactEmailGrade || '');
   const t = c.contactEmailTier;
   if (g === 'published_personal' || g === 'smtp_confirmed') return 'verified';
@@ -6549,8 +6571,9 @@ const emailHeldBackOf = (c) => !!(c && c.contactEmail) && String(c.contactEmailS
 // instead of two booleans is what makes the four numbers add up to the leads
 // we actually read - the verified-but-refused row (published_personal with the
 // engine's flag off) used to be counted under Confirmed and under Held back.
-const BATCH_BUCKETS = ['email', 'sendable', 'held', 'noemail'];
+const BATCH_BUCKETS = ['email', 'sendable', 'held', 'noemail', 'unreadable'];
 const batchBucketOf = (l) => queueStateOf(l) !== 'read' ? 'other'
+  : emailStatusOf(l) === 'unreadable' ? 'unreadable'
   : emailStatusOf(l) === 'none' ? 'noemail'
   : emailStatusOf(l) === 'verified' ? 'email'
   : emailHeldBackOf(l) ? 'held'
@@ -6999,6 +7022,7 @@ function FindView({
       if (l.contactNameNotOnSite === true) flags.push('their pages name another business');
       const nameColor = st === 'failed' ? T.text3 : st === 'moved' ? T.text3 : es === 'verified' ? T.text : T.textDim;
       const emailCell = st === 'failed' ? h('span', { style: { color: T.amber } }, 'failed to read')
+        : es === 'unreadable' ? h('span', { style: { color: T.amberDim } }, '— could not check')
         : es === 'none' ? h('span', { style: { color: T.text3 } }, '— none found')
         : es === 'verified' ? h('span', { style: { color: T.text2 } }, l.contactEmail)
         : held ? h('span', { style: { color: T.text3 } }, h('span', { style: { color: T.amberDim } }, 'held '), l.contactEmail)
@@ -7033,7 +7057,7 @@ function FindView({
             stats.withEmail + ' confirmed · ' + stats.sendableOnly + ' more we can send to · ' + stats.heldBack + ' held back')),
         h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } }, columnsToggle, btn('tertiary', 'CSV', () => exportCsv(rows), { disabled: !exportable.length || busy === 'csv' }))),
       h('div', { style: { padding: '11px 16px', borderBottom: '1px solid ' + T.borderSubtle, display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center', fontSize: 11 } },
-        chipEl('email', 'Confirmed', counts.email), chipEl('sendable', 'Unconfirmed', counts.sendable), chipEl('held', 'Held back', counts.held), chipEl('noemail', 'No email', counts.noemail), chipEl('all', 'All', counts.all), chipEl('fit', 'Fit 70+', counts.fit),
+        chipEl('email', 'Confirmed', counts.email), chipEl('sendable', 'Unconfirmed', counts.sendable), chipEl('held', 'Held back', counts.held), chipEl('noemail', 'No email', counts.noemail), chipEl('unreadable', 'Could not check', counts.unreadable), chipEl('all', 'All', counts.all), chipEl('fit', 'Fit 70+', counts.fit),
         h('div', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 } },
           h('span', { style: { color: T.text2 } }, 'Sort'),
           h('select', { value: sortBy, onChange: e => setSortBy(e.target.value),

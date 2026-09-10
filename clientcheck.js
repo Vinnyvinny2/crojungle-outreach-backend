@@ -2405,7 +2405,7 @@ let contactTally = null;
                  'laneOf', 'laneChip', 'exportableContact', 'LANE_TABS', 'laneHas', 'laneKey',
                  // Round 124: the Find stage reads the server. Every decision the
                  // two screens make is a pure function so it can be executed here.
-                 'FIND_T', 'FIND_PRESETS', 'FIND_READ_MAX', 'FIND_ROUTE_VIEWS', 'queueStateOf', 'emailStatusOf', 'companyFromBatchLead',
+                 'FIND_T', 'FIND_PRESETS', 'FIND_READ_MAX', 'FIND_ROUTE_VIEWS', 'queueStateOf', 'emailLookupUnavailable', 'emailStatusOf', 'companyFromBatchLead',
                  // Round 129: sendable and held back, the two the batch card and
                  // the Move button read now.
                  'emailSendableOf', 'emailHeldBackOf',
@@ -2459,7 +2459,7 @@ let contactTally = null;
         + ' yn: contactYesNo, has: hasContactData,'
         + ' tally: findRunTally, tallyLine: findTallyLine,'
         + ' generic: isGenericMailbox,'
-        + ' state: queueStateOf, emailStatus: emailStatusOf, fromLead: companyFromBatchLead, cardStats: batchCardStats, estimate: readCreditEstimate, route: parseFindRoute, additions: pipelineAdditions,'
+        + ' state: queueStateOf, lookupUnavailable: emailLookupUnavailable, emailStatus: emailStatusOf, fromLead: companyFromBatchLead, cardStats: batchCardStats, estimate: readCreditEstimate, route: parseFindRoute, additions: pipelineAdditions,'
         + ' sendableOf: emailSendableOf, heldOf: emailHeldBackOf, sendableRow: emailSendableRow, heldRow: emailHeldBackRow,'
         + ' buckets: BATCH_BUCKETS, bucketOf: batchBucketOf, liveLeads: batchLiveLeads, chipFilter: batchChipFilter, chipCounts: batchChipCounts,'
         + ' verifiedRow: emailVerifiedRow, queueId: queueIdOf, tokens: FIND_T, presets: FIND_PRESETS, readMax: FIND_READ_MAX, runTitle: readRunTitle, answered: readRunAnswered, shortLocation, contract: CONTRACT_VERSION, clientContract: CLIENT_CONTRACT };')();
@@ -3588,7 +3588,10 @@ let contactTally = null;
     // chip that told the rep three sendable leads had no address must be gone.
     ["const pick = batchChipFilter(leads,", " chipKey);", 'the review table filters the chips with its own chain again instead of the shared bucket filter, which is how "No email" came to mean "not confirmed" and counted three sendable leads as having no address'],
     ["const counts = batchChipCounts(", "leads);", 'the numbers on the chips are assembled a second time beside the filter that produces the rows, so a chip can say one number and show a different set of leads'],
-    ["chipEl('noemail', 'No email',", " counts.noemail), chipEl('all', 'All', counts.all)", 'the four buckets are no longer together with All after them, so nothing on the screen shows the operator that the four numbers add up'],
+    // Round 132: FIVE buckets. "Could not check" is its own chip because a
+    // supplier that was down is not an address that does not exist, and the
+    // rep works the two differently: one is a dead end, the other is a re-run.
+    ["chipEl('noemail', 'No email',", " counts.noemail), chipEl('unreadable', 'Could not check', counts.unreadable), chipEl('all', 'All', counts.all)", 'the five buckets are no longer together with All after them, so nothing on the screen shows the operator that the five numbers add up'],
     ["chipEl('sendable', 'Unconfirmed',", " counts.sendable)", 'the unconfirmed chip is labelled "Can send" again while Screen A offers "Move N to Research" on a bigger number - one screen contradicting itself about how many leads the rep can write to'],
   ]) {
     if ((b === '' ? html : _findView).indexOf(b === '' ? a : _nn(a, b)) < 0) fails.push(why);
