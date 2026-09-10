@@ -61623,6 +61623,22 @@ app.listen(PORT, () => {
     const _pick = pickRosterOwner(_below);
     if (!_pick || _pick.name !== 'Colby Lindsey') _fails.push(`their own page lists "owner" directly above Colby Lindsey and the roster settles on ${JSON.stringify(_pick && _pick.name)} instead`);
     if (_below.some(r => /Functional Finished Basements/i.test(String(r.name || '')))) _fails.push('the strapline above the word owner is still parsed as one of their people');
+    // 2b. THE LINE BELOW A TITLE IS STILL VALIDATED. Falsification found the
+    // fixture above could not reach this: on that page the line below "owner"
+    // IS the person, so dropping the validation changed nothing. Put the
+    // strapline BELOW the title and the validation is the only thing standing
+    // between it and the sheet. Nobody is settled on here rather than skipping
+    // to the next line, deliberately: a page whose layout we cannot read is a
+    // page to fall through to the model on, not one to guess at.
+    if (pickRosterOwner(parseTeamRoster('<p>owner</p><p>Functional Finished Basements</p><p>Colby Lindsey</p>', 'The Basement Sanctuary')))
+      _fails.push('the line directly below an ownership title is taken as the person without being validated, so a strapline under the word "owner" is the name a rep dials for');
+    // 2c. AND THE BOUND HOLDS. The title-first pass runs ONLY when the main
+    // pass found nobody. Unbounded, this page gives Karen Fowler the title
+    // "Owner" from the line above her - a shorter title than the real owner's,
+    // which wins the ranking tiebreak outright. That is the phantom-row shape
+    // Globe Iron produced live, where the right owner won by luck.
+    const _phantom = pickRosterOwner(parseTeamRoster('<p>Josh Dembicki</p><p>Co-Founder, President</p><p>Owner</p><p>Karen Fowler</p>', 'Bellwether Windows'));
+    if (!_phantom || _phantom.name !== 'Josh Dembicki') _fails.push(`the title-first pass runs on a page that already named an owner and invents a second one: it settles on ${JSON.stringify(_phantom && _phantom.name)} instead of Josh Dembicki`);
     // 3. AND THE ORDINARY LAYOUT IS UNTOUCHED. Name first, title below - which
     // is every other roster on the run, so a fix for one shape must not cost
     // the other.

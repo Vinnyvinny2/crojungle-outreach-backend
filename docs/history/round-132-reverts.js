@@ -46,14 +46,14 @@ module.exports = [
   { name: '132-a-line-below-not-validated', path: 'src/all.js', prove: 'boot',
     old: "      if (!_p || !looksLikeRealName(_p.name) || allRoleWords(_p.name) || FIND_ROLE_NOUN.test(_p.name)) continue;\n",
     new: "      if (!_p) continue;\n",
-    mustPrint: /the title-first pass no longer validates the line below through personFromRun|still reads as a person/ },
+    mustPrint: /the line directly below an ownership title is taken as the person without being validated/ },
 
   // (A-5) the fix for the title-first layout costs the ordinary one. Every other
   // roster on the run is name-then-title, so this is the expensive direction.
   { name: '132-a-ordinary-roster-broken', path: 'src/all.js', prove: 'boot',
     old: "  if (!out.some(r => r.isOwner)) {\n    for (let i = 0; i < runs.length - 1; i++) {\n      const t = String(runs[i] || '').trim();\n",
     new: "  if (true) {\n    for (let i = 0; i < runs.length - 1; i++) {\n      const t = String(runs[i] || '').trim();\n",
-    mustPrint: /the ordinary name-then-title roster broke|their own page lists "owner" directly above/ },
+    mustPrint: /the title-first pass runs on a page that already named an owner and invents a second one/ },
 
   // ── PART B: a question does not print ───────────────────────────────────
 
