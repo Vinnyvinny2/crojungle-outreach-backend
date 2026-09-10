@@ -230,6 +230,15 @@ actually fires. A **new** revert, `131-a1-eponymous-lane-docked-for-the-grade`, 
 the branch an eponymous lead with a pattern address really takes, so Vin's ruling that
 grade C does not move is guarded by something that can go red.
 
+**The first aim of that new revert came back GREEN, and the reason is worth keeping.**
+Section 4 of the check scores each grade against **the same lead carrying no grade at
+all**. An edit that docks the empty grade by the same amount as the graded one moves
+both sides of that comparison and slips straight through. The revert now docks
+`'inferred'` alone, which is the careless widening the check's own comment warns about,
+and it goes red on its own line. Written down because it is a real limit of the
+comparison, not a one-off: **a guard that compares two things can be defeated by an
+edit that moves both.**
+
 ### Verification
 
 `node build.js --check` byte-exact → `GATES=static bash ci-gates.sh` → boot →
@@ -239,8 +248,8 @@ grade C does not move is guarded by something that can go red.
 GREEN, `build --check` byte-exact, `GATES=static` green.
 `CONTRACT_VERSION` and `CLIENT_CONTRACT` both **20261011**.
 
-**The 46 falsifications ran in an isolated copy of the tree at this commit**, never in
-the working tree — a deliberately-broken guard was committed to the branch once in
+**46 of 46 reverts went red on their own named line, tree restored byte for byte.**
+They ran in an isolated copy of the tree, never in the working tree — a deliberately-broken guard was committed to the branch once in
 Round 129 because a falsification run was mid-revert when the commit was taken, and the
 standing rule since is that falsify never runs where the commit is made.
 

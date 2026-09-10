@@ -66,9 +66,14 @@ module.exports = [
   // demoted from there at all. It can be demoted HERE, which is the branch an
   // eponymous lead with a pattern address actually takes, and Vin's ruling
   // that grade C does not move is only guarded if this goes red.
+  //
+  // It must dock 'inferred' ONLY. The check scores each grade against the SAME
+  // lead carrying no grade at all, so an edit that docks the empty grade by the
+  // same amount moves both sides of that comparison and slips through green -
+  // measured, not argued: the first aim here did exactly that.
   { name: '131-a1-eponymous-lane-docked-for-the-grade', path: 'src/all.js', prove: 'boot',
     old: "      if (s.ownerCanBuy === true && anyAddr) return { points: 10,",
-    new: "      if (s.ownerCanBuy === true && anyAddr) return { points: s.ownerGrade === 'confirmed' ? 10 : 6,",
+    new: "      if (s.ownerCanBuy === true && anyAddr) return { points: s.ownerGrade === 'inferred' ? 6 : 10,",
     mustPrint: /an eponymous owner now scores differently because of the grade/ },
 
   // (A1-6) a published address is docked for a doubt about the name, which
