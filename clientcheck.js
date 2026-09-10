@@ -2404,6 +2404,11 @@ let contactTally = null;
                  // Round 129: sendable and held back, the two the batch card and
                  // the Move button read now.
                  'emailSendableOf', 'emailHeldBackOf',
+                 // Round 130: the four buckets the review screen's chips are, and
+                 // the one filter both the rows and the numbers on the chips come
+                 // out of. "No email" was written as NOT CONFIRMED and counted
+                 // three leads with a sendable address as having none.
+                 'BATCH_BUCKETS', 'batchBucketOf', 'batchLiveLeads', 'batchChipFilter', 'batchChipCounts',
                  'batchCardStats', 'readCreditEstimate', 'parseFindRoute', 'pipelineAdditions', 'readRunTitle', 'findRunTime', 'readRunAnswered', 'shortLocation',
                  'leadFromCompany', 'uid', 'today', 'daysFromNow'];
   // Round 124: the SERVER's ports, lifted from the CR-stripped source. A read
@@ -2450,6 +2455,7 @@ let contactTally = null;
         + ' generic: isGenericMailbox,'
         + ' state: queueStateOf, emailStatus: emailStatusOf, fromLead: companyFromBatchLead, cardStats: batchCardStats, estimate: readCreditEstimate, route: parseFindRoute, additions: pipelineAdditions,'
         + ' sendableOf: emailSendableOf, heldOf: emailHeldBackOf, sendableRow: emailSendableRow, heldRow: emailHeldBackRow,'
+        + ' buckets: BATCH_BUCKETS, bucketOf: batchBucketOf, liveLeads: batchLiveLeads, chipFilter: batchChipFilter, chipCounts: batchChipCounts,'
         + ' verifiedRow: emailVerifiedRow, queueId: queueIdOf, tokens: FIND_T, presets: FIND_PRESETS, readMax: FIND_READ_MAX, runTitle: readRunTitle, answered: readRunAnswered, shortLocation, contract: CONTRACT_VERSION, clientContract: CLIENT_CONTRACT };')();
     } catch (e) {
       fails.push('the contact list no longer compiles standalone, so it cannot be verified: ' + e.message);
@@ -2676,6 +2682,109 @@ let contactTally = null;
               { readAt: 'x' },
             ]);
             if (_bs2.withEmail !== 1 || _bs2.sendable !== 2 || _bs2.sendableOnly !== 1 || _bs2.heldBack !== 1) fails.push('the batch card does not count what can be sent to: ' + JSON.stringify([_bs2.withEmail, _bs2.sendable, _bs2.sendableOnly, _bs2.heldBack]) + ' for confirmed / can send / more we can send to / held back — a run of sendable tier-3 addresses reads as "With email 0"');
+          }
+          // ══ ROUND 130: THE CHIPS MUST PARTITION THE BATCH ═════════════
+          // The chip row IS what the operator believes about a batch. Until this
+          // round "No email" was written as NOT CONFIRMED, so the ten-lead run of
+          // 2026-09-09 read "Confirmed 3 | Can send 6 | Held back 0 | All 9 | No
+          // email 6": Sharma Oral Surgery, Kelly Window and Door and Thomas
+          // Nabors sat under "Can send" AND under "No email" at once, and only
+          // three of the nine had no address at all. The counting is EXECUTED
+          // here on those nine leads, and the invariant is the one a filter row
+          // has to hold: every lead we read is under exactly ONE of the four
+          // buckets, the four add up to the leads we read, and the number on a
+          // chip is the size of the rows behind it.
+          {
+            const _mk = (n, over) => Object.assign({ id: n, name: n, readAt: 'x' }, over || {});
+            const _conf = (n, e) => _mk(n, { contactEmail: e, contactEmailGrade: 'published_personal', contactEmailSendable: true, contactEmailTier: 1 });
+            const _clear = (n, e) => _mk(n, { contactEmail: e, contactEmailGrade: 'pattern_guess', contactEmailSendable: true, contactEmailTier: 3 });
+            const _bare = (n) => _mk(n, { contactEmail: '' });
+            // The nine leads of the live run: three confirmed, three the engine
+            // cleared and we could not confirm, three with no address at all.
+            const _run = [
+              _conf('Aptos Family Dental', 'dr@aptosfamily.example'),
+              _conf('Bayside Roofing', 'owner@baysideroofing.example'),
+              _conf('Coastal Law Group', 'jane@coastallawgroup.example'),
+              _clear('Sharma Oral Surgery', 'rsharma@sharmaoral.example'),
+              _clear('Kelly Window and Door', 'jkelly@kellywindow.example'),
+              _clear('Thomas Nabors', 'tnabors@naborsdental.example'),
+              _bare('Gentle Dental Care'), _bare('Harbor HVAC'), _bare('Ivy Orthodontics'),
+            ];
+            const _c = M.chipCounts(_run);
+            if (_c.noemail !== 3) {
+              fails.push('the "No email" chip counts ' + _c.noemail + ' of the nine leads of the 2026-09-09 run instead of the 3 that have no address at all - it is back on "not confirmed", so three leads with an address the engine cleared are being shown to the rep as leads with nothing to write to');
+            }
+            if (_c.email !== 3) fails.push('the "Confirmed" chip counts ' + _c.email + ' of three confirmed addresses');
+            if (_c.sendable !== 3) {
+              fails.push('the "Unconfirmed" chip counts ' + _c.sendable + ' instead of 3 - it is counting the confirmed rows again, so the same lead is under two chips and the four numbers no longer add up to the batch');
+            }
+            if (_c.held !== 0) fails.push('the "Held back" chip counts ' + _c.held + ' on a run where the engine refused nothing');
+            if (_c.all !== 9) fails.push('the "All" chip counts ' + _c.all + ' of nine live leads');
+            if (_c.email + _c.sendable + _c.held + _c.noemail !== 9) {
+              fails.push('the four chips add up to ' + (_c.email + _c.sendable + _c.held + _c.noemail) + ' on a nine-lead batch where every lead was read, so the chips overlap and the screen is telling the operator about more leads than exist');
+            }
+            // The partition itself, lead by lead - the assertion that cannot be
+            // satisfied by two chips that happen to sum right on one fixture.
+            // The shapes here are the ones the buckets have to keep apart: a
+            // read lead in each of the four states, plus every state that means
+            // we have NOT looked (unread, failed, moved, ruled out) and a
+            // confirmed address the engine refused, which used to be counted
+            // under Confirmed and under Held back at the same time.
+            const _edge = _run.concat([
+              _mk('Nabors Held', { contactEmail: 'x@held.example', contactEmailGrade: 'pattern_guess', contactEmailSendable: false, contactEmailTier: 3, contactEmailBlockReason: 'the owner name was never vouched for' }),
+              _mk('Confirmed But Refused', { contactEmail: 'y@held.example', contactEmailGrade: 'published_personal', contactEmailSendable: false, contactEmailTier: 1 }),
+              _mk('Failed To Read', { readFailed: true }),
+              _mk('Already Moved', { contactEmail: 'z@moved.example', contactEmailSendable: true, contactEmailTier: 1, movedToResearchAt: 'y' }),
+              { id: 'Never Read', name: 'Never Read' },
+              _mk('Ruled Out', { ruledOutAt: 'z' }),
+            ]);
+            const _live = M.liveLeads(_edge);
+            for (const _l of _live) {
+              const _in = M.buckets.filter(k => M.chipFilter(_edge, k).some(x => x.id === _l.id));
+              const _read = M.state(_l) === 'read';
+              if (_read && _in.length !== 1) {
+                fails.push('"' + _l.name + '" is under ' + _in.length + ' of the four chips (' + _in.join(', ') + ') - a read lead has to be under exactly one, or the numbers on the chips overlap and the operator is reading a harsher screen than the truth');
+              }
+              if (!_read && _in.length !== 0) {
+                fails.push('"' + _l.name + '" was never read to the end and is still filed under ' + _in.join(', ') + ' - saying a lead has no address before we looked is an absence claim with no look behind it');
+              }
+            }
+            const _sum = M.buckets.reduce((a, k) => a + M.chipFilter(_edge, k).length, 0);
+            const _readCount = _live.filter(l => M.state(l) === 'read').length;
+            if (_sum !== _readCount) {
+              fails.push('the four chips cover ' + _sum + ' leads on a batch with ' + _readCount + ' read - they either overlap or leave a read lead in no bucket at all');
+            }
+            // A confirmed address the engine refused is the ONE shape
+            // emailStatusOf calls verified and emailHeldBackOf calls held, and
+            // it used to be counted under Confirmed AND under Held back. It is
+            // filed once now, under Confirmed - the precedence the row's own
+            // email cell has always used and the rule the server's confirmed
+            // count uses - so the row, the chip and the card say the same thing
+            // about it. Flipping the precedence is a screen change, not a tidy-up:
+            // it would file a row under "Held back" that shows no held marker.
+            if (M.bucketOf(_edge[10]) !== 'email') {
+              fails.push('a confirmed address the engine refused is filed as "' + M.bucketOf(_edge[10]) + '" instead of under Confirmed with the row and the server - it was counted under Confirmed and under Held back at once, which is how the numbers on the chips came to overlap');
+            }
+            if (M.bucketOf({ readAt: 'x', readFailed: true }) !== 'other' || M.bucketOf({}) !== 'other' || M.bucketOf({ readAt: 'x', movedToResearchAt: 'y' }) !== 'other') {
+              fails.push('a lead we have not finished reading is given one of the four review buckets, so the screen reports an address we never looked for');
+            }
+            // The number ON the chip is the size of the rows BEHIND it. These
+            // were two expressions until this round.
+            for (const _k of M.buckets.concat(['all', 'fit'])) {
+              if (_c[_k] !== M.chipFilter(_run, _k).length) fails.push('the number on the "' + _k + '" chip is not the number of rows it shows');
+            }
+            // And the card's three printed numbers ARE the same buckets, on both
+            // fixtures, so one lead can never be confirmed on the card and held
+            // back on the chips five pixels below it.
+            for (const [_what, _batch, _n] of [['the nine leads of the live run', _run, _c], ['a batch carrying every state at once', _edge, M.chipCounts(_edge)]]) {
+              const _cs = M.cardStats(_batch);
+              if (_cs.withEmail !== _n.email || _cs.sendableOnly !== _n.sendable || _cs.heldBack !== _n.held) {
+                fails.push('the batch card and the chips above it disagree about ' + _what + ': card ' + JSON.stringify([_cs.withEmail, _cs.sendableOnly, _cs.heldBack]) + ' vs chips ' + JSON.stringify([_n.email, _n.sendable, _n.held]) + ' for confirmed / unconfirmed / held back');
+              }
+            }
+            if (M.cardStats(_edge).sendable !== 6) {
+              fails.push('the card\'s sendable total is no longer every address the engine cleared, so it stops matching the "Move N to Research" button the rep presses');
+            }
           }
           // The credit estimate rides the server's figure, never the spec's 1.5.
           if (M.estimate(37, 5) !== 185 || M.estimate(10, undefined) !== 50 || M.estimate(50, 5) === 75) fails.push('the read button estimates credits from a number typed into the page rather than the server\'s measured per-read figure');
@@ -3355,6 +3464,14 @@ let contactTally = null;
     ["}, 3000);", "", 'the running row is not polled'],
     ["if (added.length) saveLeads([...existing, ...added], added);", "", 'the pipeline save pushes something other than EVERY added lead (the one-row-of-fifty defect)'],
     ["if (!quiet) { setChip('email'); setSortBy('fit'); setPicked(new Set(visibleOf(leads, 'email', 'fit')", ".filter(l => queueStateOf(l) === 'read').map(l => l.id))); }", 'Screen B does not open on With email with every visible row pre-selected'],
+    // Round 130: the chips are one filter and one counter. A fixture supplies
+    // its own arguments and cannot see a caller, so the call sites are pinned:
+    // the rows and the numbers must both come out of the shared pair, and the
+    // chip that told the rep three sendable leads had no address must be gone.
+    ["const pick = batchChipFilter(leads,", " chipKey);", 'the review table filters the chips with its own chain again instead of the shared bucket filter, which is how "No email" came to mean "not confirmed" and counted three sendable leads as having no address'],
+    ["const counts = batchChipCounts(", "leads);", 'the numbers on the chips are assembled a second time beside the filter that produces the rows, so a chip can say one number and show a different set of leads'],
+    ["chipEl('noemail', 'No email',", " counts.noemail), chipEl('all', 'All', counts.all)", 'the four buckets are no longer together with All after them, so nothing on the screen shows the operator that the four numbers add up'],
+    ["chipEl('sendable', 'Unconfirmed',", " counts.sendable)", 'the unconfirmed chip is labelled "Can send" again while Screen A offers "Move N to Research" on a bigger number - one screen contradicting itself about how many leads the rep can write to'],
   ]) {
     if ((b === '' ? html : _findView).indexOf(b === '' ? a : _nn(a, b)) < 0) fails.push(why);
   }

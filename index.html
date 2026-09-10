@@ -1341,7 +1341,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261009;
+const CLIENT_CONTRACT = 20261010;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -6347,6 +6347,42 @@ const emailStatusOf = (c) => {
 // the page's own store and as text from PostgREST, so both are read as text.
 const emailSendableOf = (c) => !!(c && c.contactEmail) && String(c.contactEmailSendable) === 'true';
 const emailHeldBackOf = (c) => !!(c && c.contactEmail) && String(c.contactEmailSendable) !== 'true';
+// Round 130: ONE reading of which bucket a lead on the review screen is in,
+// in the precedence the row's own email cell has always used - no address,
+// then confirmed, then an address the engine refused, then one it cleared and
+// we could not confirm. The chips read this, the numbers ON the chips read
+// this, and the card's three numbers read this, because two hand-kept copies
+// of one rule is the class this repo records most. Before it, "No email" was
+// written as NOT CONFIRMED, so on the ten-lead run of 2026-09-09 Sharma Oral
+// Surgery, Kelly Window and Door and Thomas Nabors were counted under "Can
+// send" AND under "No email": three leads with an address the engine had
+// cleared, on a screen telling the rep there was nothing to write to. Only
+// three of the nine had no address at all.
+// A lead that is unread, failed to read, moved or ruled out is in NO bucket:
+// we have not looked, and an absence claim needs a look. Reading one bucket
+// instead of two booleans is what makes the four numbers add up to the leads
+// we actually read - the verified-but-refused row (published_personal with the
+// engine's flag off) used to be counted under Confirmed and under Held back.
+const BATCH_BUCKETS = ['email', 'sendable', 'held', 'noemail'];
+const batchBucketOf = (l) => queueStateOf(l) !== 'read' ? 'other'
+  : emailStatusOf(l) === 'none' ? 'noemail'
+  : emailStatusOf(l) === 'verified' ? 'email'
+  : emailHeldBackOf(l) ? 'held'
+  : 'sendable';
+// The rows behind a chip and the number on it come out of ONE filter, so the
+// number on a chip can never be the size of a different set of rows.
+const batchLiveLeads = (leads) => (leads || []).filter(l => l && queueStateOf(l) !== 'ruled_out');
+const batchChipFilter = (leads, chipKey) => {
+  const live = batchLiveLeads(leads);
+  return BATCH_BUCKETS.includes(chipKey) ? live.filter(l => batchBucketOf(l) === chipKey)
+    : chipKey === 'fit' ? live.filter(l => typeof l.contactIcp === 'number' && l.contactIcp >= 70)
+    : live;
+};
+const batchChipCounts = (leads) => {
+  const out = { all: batchLiveLeads(leads).length, fit: batchChipFilter(leads, 'fit').length };
+  for (const k of BATCH_BUCKETS) out[k] = batchChipFilter(leads, k).length;
+  return out;
+};
 // A batch lead as the server hands it back: the company object with the row's
 // stamps merged on. The export stamp arrives as one string; the cells expect a list.
 const companyFromBatchLead = (l) => {
@@ -6366,9 +6402,11 @@ const batchCardStats = (leads) => {
     else if (st === 'ruled_out') s.ruledOut += 1;
     else if (st === 'failed') s.failed += 1;
     if (l.readAt) s.read += 1;
-    if (st === 'read' && emailStatusOf(l) === 'verified') s.withEmail += 1;
-    if (st === 'read' && emailSendableOf(l)) { s.sendable += 1; if (emailStatusOf(l) !== 'verified') s.sendableOnly += 1; }
-    if (st === 'read' && emailHeldBackOf(l)) s.heldBack += 1;
+    const _bucket = batchBucketOf(l);
+    if (_bucket === 'email') s.withEmail += 1;
+    if (st === 'read' && emailSendableOf(l)) s.sendable += 1;
+    if (_bucket === 'sendable') s.sendableOnly += 1;
+    if (_bucket === 'held') s.heldBack += 1;
     if (st === 'read' || st === 'failed') s.actionable += 1;
   }
   return s;
@@ -6703,13 +6741,7 @@ function FindView({
 
   // ── SCREEN B ───────────────────────────────────────────────────────────
   function visibleOf(leads, chipKey, sort) {
-    const live = (leads || []).filter(l => l && queueStateOf(l) !== 'ruled_out');
-    const pick = chipKey === 'email' ? live.filter(l => queueStateOf(l) === 'read' && emailStatusOf(l) === 'verified')
-      : chipKey === 'sendable' ? live.filter(l => queueStateOf(l) === 'read' && emailSendableOf(l))
-      : chipKey === 'held' ? live.filter(l => queueStateOf(l) === 'read' && emailHeldBackOf(l))
-      : chipKey === 'noemail' ? live.filter(l => !(queueStateOf(l) === 'read' && emailStatusOf(l) === 'verified'))
-      : chipKey === 'fit' ? live.filter(l => typeof l.contactIcp === 'number' && l.contactIcp >= 70)
-      : live;
+    const pick = batchChipFilter(leads, chipKey);
     const fit = (l) => (typeof l.contactIcp === 'number') ? l.contactIcp : -1;
     const eRank = (l) => ({ verified: 0, unverified: 1, none: 2 })[emailStatusOf(l)];
     return pick.slice().sort((a, b) => sort === 'name' ? String(a.name || '').localeCompare(String(b.name || ''))
@@ -6723,8 +6755,7 @@ function FindView({
     const run = batch.run || {};
     const leads = batch.leads || [];
     const stats = batchCardStats(leads);
-    const live = leads.filter(l => queueStateOf(l) !== 'ruled_out');
-    const counts = { email: visibleOf(leads, 'email', 'fit').length, sendable: visibleOf(leads, 'sendable', 'fit').length, held: visibleOf(leads, 'held', 'fit').length, all: live.length, noemail: visibleOf(leads, 'noemail', 'fit').length, fit: visibleOf(leads, 'fit', 'fit').length };
+    const counts = batchChipCounts(leads);
     const rows = visibleOf(leads, chip, sortBy);
     const selectable = rows.filter(l => queueStateOf(l) === 'read' || queueStateOf(l) === 'failed');
     const sel = new Set(Array.from(picked).filter(id => selectable.some(l => l.id === id)));
@@ -6796,7 +6827,7 @@ function FindView({
             stats.withEmail + ' confirmed · ' + stats.sendableOnly + ' more we can send to · ' + stats.heldBack + ' held back')),
         h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } }, columnsToggle, btn('tertiary', 'CSV', () => exportCsv(rows), { disabled: !exportable.length || busy === 'csv' }))),
       h('div', { style: { padding: '11px 16px', borderBottom: '1px solid ' + T.borderSubtle, display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center', fontSize: 11 } },
-        chipEl('email', 'Confirmed', counts.email), chipEl('sendable', 'Can send', counts.sendable), chipEl('held', 'Held back', counts.held), chipEl('all', 'All', counts.all), chipEl('noemail', 'No email', counts.noemail), chipEl('fit', 'Fit 70+', counts.fit),
+        chipEl('email', 'Confirmed', counts.email), chipEl('sendable', 'Unconfirmed', counts.sendable), chipEl('held', 'Held back', counts.held), chipEl('noemail', 'No email', counts.noemail), chipEl('all', 'All', counts.all), chipEl('fit', 'Fit 70+', counts.fit),
         h('div', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 } },
           h('span', { style: { color: T.text2 } }, 'Sort'),
           h('select', { value: sortBy, onChange: e => setSortBy(e.target.value),
