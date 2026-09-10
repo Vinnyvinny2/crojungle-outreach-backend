@@ -2405,7 +2405,7 @@ let contactTally = null;
                  'laneOf', 'laneChip', 'exportableContact', 'LANE_TABS', 'laneHas', 'laneKey',
                  // Round 124: the Find stage reads the server. Every decision the
                  // two screens make is a pure function so it can be executed here.
-                 'FIND_T', 'FIND_PRESETS', 'FIND_READ_MAX', 'FIND_ROUTE_VIEWS', 'queueStateOf', 'emailStatusOf', 'companyFromBatchLead',
+                 'FIND_T', 'FIND_PRESETS', 'FIND_READ_MAX', 'FIND_ROUTE_VIEWS', 'queueStateOf', 'emailLookupUnavailable', 'emailStatusOf', 'companyFromBatchLead',
                  // Round 129: sendable and held back, the two the batch card and
                  // the Move button read now.
                  'emailSendableOf', 'emailHeldBackOf',
@@ -2459,7 +2459,7 @@ let contactTally = null;
         + ' yn: contactYesNo, has: hasContactData,'
         + ' tally: findRunTally, tallyLine: findTallyLine,'
         + ' generic: isGenericMailbox,'
-        + ' state: queueStateOf, emailStatus: emailStatusOf, fromLead: companyFromBatchLead, cardStats: batchCardStats, estimate: readCreditEstimate, route: parseFindRoute, additions: pipelineAdditions,'
+        + ' state: queueStateOf, lookupUnavailable: emailLookupUnavailable, emailStatus: emailStatusOf, fromLead: companyFromBatchLead, cardStats: batchCardStats, estimate: readCreditEstimate, route: parseFindRoute, additions: pipelineAdditions,'
         + ' sendableOf: emailSendableOf, heldOf: emailHeldBackOf, sendableRow: emailSendableRow, heldRow: emailHeldBackRow,'
         + ' buckets: BATCH_BUCKETS, bucketOf: batchBucketOf, liveLeads: batchLiveLeads, chipFilter: batchChipFilter, chipCounts: batchChipCounts,'
         + ' verifiedRow: emailVerifiedRow, queueId: queueIdOf, tokens: FIND_T, presets: FIND_PRESETS, readMax: FIND_READ_MAX, runTitle: readRunTitle, answered: readRunAnswered, shortLocation, contract: CONTRACT_VERSION, clientContract: CLIENT_CONTRACT };')();
@@ -2738,6 +2738,36 @@ let contactTally = null;
             if (M.emailStatus(_shapes[0]) !== 'verified' || M.emailStatus(_shapes[1]) !== 'verified') fails.push('a published personal or SMTP-confirmed address is not "verified" on the review screen');
             if (M.emailStatus(_shapes[2]) !== 'unverified') fails.push('an address the checker never confirmed shows as verified - the unmeasured-as-measured class, on the one column the rep moves on');
             if (M.emailStatus(_shapes[6]) !== 'none') fails.push('a row with no address does not read "none"');
+            // ══ ROUND 132: "COULD NOT ASK" IS NOT "NONE" ═══════════════════
+            // Live 2026-09-10: the mailbox verifier ran out of credits mid-run,
+            // Bellwether's own log line said "This is NOT proof that no mailbox
+            // exists", and the row said "- none found" under the No email chip.
+            // Both directions are executed, because the widening direction is
+            // the one that would quietly reopen it: a name the buying floor
+            // HELD BACK also has no address and still belongs in "none" - we
+            // could have asked and chose not to, which is a decision and not an
+            // outage. That is why the rule reads the supplier TOKENS and never
+            // the block-reason sentence.
+            // The token has to LEAVE THE SERVER. Every fixture below builds its
+            // own row, so all of them would pass while the wire dropped the
+            // field - which is the computed-but-not-passed shape this whole
+            // state exists to fix. contactFieldsFrom is the server's own row
+            // builder, lifted from server.js.
+            if (M.fields({ email: { address: '', lookupBlocked: 'hunter_out_of_credits' } }).contactEmailLookupBlocked !== 'hunter_out_of_credits') fails.push('the server stops sending the token that says the address lookup was unavailable, so the page has only an English sentence to tell an outage from a refusal and the row goes back to claiming "none found"');
+            const _down = { contactEmail: '', contactEmailVerifierDown: true };
+            const _blocked = { contactEmail: '', contactEmailLookupBlocked: 'hunter_out_of_credits' };
+            const _heldName = { contactEmail: '', contactEmailBlockReason: 'no address was built: Dana Brooks was held back by the authority gate' };
+            if (M.emailStatus(_down) !== 'unreadable') fails.push('a lead read while the mailbox checker was down still reads "none found", which claims an absence about a question we never got to ask');
+            if (M.emailStatus(_blocked) !== 'unreadable') fails.push('a lead whose address supplier was out of credits still reads "none found" - the log line for exactly this case says "This is NOT proof that no mailbox exists"');
+            if (M.emailStatus(_heldName) !== 'none') fails.push('a name the buying floor deliberately held back is filed as an outage - we could have asked and chose not to, and calling that "could not check" invites a re-run that will never produce anything');
+            if (!M.lookupUnavailable(_down) || !M.lookupUnavailable(_blocked) || M.lookupUnavailable(_heldName)) fails.push('the unavailable rule does not separate a supplier that was down from a refusal we made on purpose');
+            // An address we DID get is never "could not check" whatever the
+            // suppliers were doing, or the chip would swallow real addresses.
+            if (M.emailStatus({ contactEmail: 'a@b.com', contactEmailGrade: 'published_personal', contactEmailSendable: true, contactEmailTier: 1, contactEmailVerifierDown: true }) !== 'verified') fails.push('a published address on a lead read while the checker was down is no longer verified, so the outage state has widened onto rows that have an address');
+            // The bucket the chip counts, and the count itself.
+            if (M.bucketOf({ ...(_down), readAt: '2026-09-10T00:00:00Z', contactReadOk: true }) !== 'unreadable') fails.push('the Could not check chip does not receive the rows whose lookup was unavailable, so they fall back under No email and the numbers say an absence we never established');
+            // And it survives promotion: a row honest in Find must not go back
+            // to lying once the lead is in the pipeline.
             for (const c of _shapes) {
               const page = M.emailStatus(c) === 'verified';
               // PostgREST hands the flag and the tier back as text, which is how the server reads them.
@@ -3588,7 +3618,10 @@ let contactTally = null;
     // chip that told the rep three sendable leads had no address must be gone.
     ["const pick = batchChipFilter(leads,", " chipKey);", 'the review table filters the chips with its own chain again instead of the shared bucket filter, which is how "No email" came to mean "not confirmed" and counted three sendable leads as having no address'],
     ["const counts = batchChipCounts(", "leads);", 'the numbers on the chips are assembled a second time beside the filter that produces the rows, so a chip can say one number and show a different set of leads'],
-    ["chipEl('noemail', 'No email',", " counts.noemail), chipEl('all', 'All', counts.all)", 'the four buckets are no longer together with All after them, so nothing on the screen shows the operator that the four numbers add up'],
+    // Round 132: FIVE buckets. "Could not check" is its own chip because a
+    // supplier that was down is not an address that does not exist, and the
+    // rep works the two differently: one is a dead end, the other is a re-run.
+    ["chipEl('noemail', 'No email',", " counts.noemail), chipEl('unreadable', 'Could not check', counts.unreadable), chipEl('all', 'All', counts.all)", 'the five buckets are no longer together with All after them, so nothing on the screen shows the operator that the five numbers add up'],
     ["chipEl('sendable', 'Unconfirmed',", " counts.sendable)", 'the unconfirmed chip is labelled "Can send" again while Screen A offers "Move N to Research" on a bigger number - one screen contradicting itself about how many leads the rep can write to'],
   ]) {
     if ((b === '' ? html : _findView).indexOf(b === '' ? a : _nn(a, b)) < 0) fails.push(why);
@@ -3789,7 +3822,13 @@ let findStat = null;
         contactEmail: 'dana@a.com', contactEmailTier: 3, contactEmailSendable: false,
         contactEmailBlockReason: 'built from a name the authority gate held back',
         contactPhone: '555-0100', contactPhoneOnSite: false,
+        // Round 132: the two tokens that separate "we could not ask" from
+        // "there is nothing there".
+        contactEmailVerifierDown: true, contactEmailLookupBlocked: 'hunter_out_of_credits',
       });
+      if (_lead.contactEmailVerifierDown !== true || _lead.contactEmailLookupBlocked !== 'hunter_out_of_credits') {
+        fails.push('the two tokens that say the address lookup was UNAVAILABLE are dropped on promotion, so a row that honestly said "could not check" in Find goes back to claiming "none found" in the pipeline - an absence asserted about a question nobody got to ask');
+      }
       if (_lead.contactEmailSendable !== false) {
         fails.push('a promoted lead arrives with the address and WITHOUT the do-not-send flag - the one field the card and the CSV both refuse to send on, separated from the address it belongs to');
       }

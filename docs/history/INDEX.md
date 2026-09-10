@@ -143,3 +143,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 129 | 2026-09-09 | the contact list produces addresses you can actually send to — 2026-09-09 | Contact / Cost / Truth | [round-129.md](round-129.md) |
 | 130 | 2026-09-10 | stop paying twice, stop losing the owner — 2026-09-10 | Cost / Truth / Contact | [round-130.md](round-130.md) |
 | 131 | 2026-09-10 | a guess stops outranking the truth — 2026-09-10 | Contact / Truth / Client | [round-131.md](round-131.md) |
+| 132 | 2026-09-10 | the sheet stops naming things that are not people — 2026-09-10 | Contact / Truth / Client | [round-132.md](round-132.md) |

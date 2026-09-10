@@ -164,7 +164,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261011;
+const CONTRACT_VERSION = 20261012;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -12494,7 +12494,22 @@ const looksLikeRealName = (n) => {
   // Live 2026-09-02, the 40-lead run: "Synergy Ministry" reached the sheet as
   // the decision-maker. A ministry, a church, a foundation or an institute
   // ends an organisation's name and ends nobody's.
-  const BUSINESS_TAIL = /^(?:surgery|surgeries|dentistry|orthodontics|construction|contracting|remodeling|remodelling|plumbing|roofing|landscaping|paving|insurance|realty|consulting|accounting|associates|trusts|solutions|systems|industries|enterprises|holdings|partners|specialists|clinic|clinics|center|centers|centre|hospital|practice|firm|agency|studio|salon|spa|supply|rentals|leasing|ministry|ministries|church|chapel|foundation|institute|association|academy|university|college|corporation)$/i;
+  // Live 2026-09-10, the ten-lead run: "Functional Finished Basements" reached
+  // the sheet as the owner of The Basement Sanctuary and that lead sorted FIRST
+  // at 93. It is their strapline. Executed, it cleared every filter here -
+  // three capitalised words, no role word, no job noun - because the tail list
+  // knew "surgery" and "roofing" and did not know "basements", which is a trade
+  // this app searches for by name ("basement finishing company").
+  //
+  // The list stays hand-declared rather than derived from GP_CATEGORIES,
+  // because deriving it imports the collisions: "law", "well", "pool", "home",
+  // "care", "estate", "water" and "tree" are all trade words in that table and
+  // all real surnames, and a filter tightened until it eats real names is the
+  // expensive failure. What stops that being a treadmill is TRADE TAIL COVERAGE
+  // CHECK, which refuses a boot where a GP_CATEGORIES noun is in neither this
+  // list nor the allowed-surname list beside it - so a new niche cannot reopen
+  // this hole quietly.
+  const BUSINESS_TAIL = /^(?:surgery|surgeries|dentistry|orthodontics|construction|contracting|remodeling|remodelling|plumbing|roofing|landscaping|paving|insurance|realty|consulting|accounting|associates|trusts|solutions|systems|industries|enterprises|holdings|partners|specialists|clinic|clinics|center|centers|centre|hospital|practice|firm|agency|studio|salon|spa|supply|rentals|leasing|ministry|ministries|church|chapel|foundation|institute|association|academy|university|college|corporation|basement|basements|remodel|remodels|restoration|restorations|renovation|renovations|excavation|grading|hardscaping|flooring|insulation|signage|masonry|siding|waterproofing|finishing|cabinetry|dermatology|veterinary|epoxy|drilling|sprinkler|sprinklers|coating|coatings|exteriors|interiors|mechanical|electrical|hvac)$/i;
   if (BUSINESS_TAIL.test(parts[parts.length - 1])) return false;
   return true;
 };
@@ -14336,6 +14351,34 @@ const parseTeamRoster = (html, companyName = '') => {
     }
     return r.isOwner ? Object.assign({}, r, { isOwner: false, twoPeople: true }) : r;
   });
+
+  // ══ A BARE TITLE'S NAME IS ON THE LINE BELOW IT ═══════════════════
+  // The Basement Sanctuary, live 2026-09-10: their page reads "Functional
+  // Finished Basements" / "owner" / "Colby Lindsey". The main pass reads a NAME
+  // and takes the next run as its title, so it paired the strapline sitting
+  // above the word "owner" and shipped that as the person. The lead sorted
+  // FIRST on the rep's sheet at 93. The real owner was on the very next line:
+  // the model found him for free moments later and lost, because a roster settle
+  // is the one thing no later source may outrank.
+  //
+  // Bounded exactly like the mononym pass below, and for the same reason - a
+  // title on its own line sits where a section heading sits:
+  //   - only when the main pass found NO owner at all
+  //   - the run must BE an unambiguous ownership title and nothing else
+  //   - the name below is validated by personFromRun, the one validator every
+  //     other roster path already uses, so no second copy of "is this a person"
+  //     is made here. That is what refuses the strapline on the line above.
+  if (!out.some(r => r.isOwner)) {
+    for (let i = 0; i < runs.length - 1; i++) {
+      const t = String(runs[i] || '').trim();
+      if (!t || titleKind(t) !== 'owner' || !looksLikeJobTitle(t)) continue;
+      const _p = personFromRun(runs[i + 1], companyName);
+      if (!_p || !looksLikeRealName(_p.name) || allRoleWords(_p.name) || FIND_ROLE_NOUN.test(_p.name)) continue;
+      out.push({ name: _p.name, title: t.replace(/\s+/g, ' '), isOwner: true });
+      console.log(`\u{1F464} ROSTER: their page puts the title first \u2014 "${t}" is listed directly above ${_p.name}, so the person is the line BELOW it and not the line above.`);
+      break;
+    }
+  }
 
   // ══ A ROSTER THAT NAMES ITS PEOPLE BY FIRST NAME ONLY ═════════════
   // Aqua Blue Pools, live: their page reads "Jerry Owner Kyle General Manager
@@ -34896,6 +34939,23 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // run bought stage 2 anyway. Nothing printed which one was false, so the
   // question could not be answered from the log at all. It can now.
   let _settleWhy = 'settled() was never called';
+  // ══ ROUND 132: A QUESTION DOES NOT PRINT ══════════════════════════════════
+  // settled() is a PREDICATE. It is asked six times - `if (!settled())`,
+  // `if (settled())` - and it also console.logged the settle sentence, so the
+  // sentence printed once per ASK rather than once per lead. Live 2026-09-10,
+  // Craig Kelley and Faultless: two identical EPONYMOUS lines from the single
+  // print statement in this file. The ROSTER SETTLES IT line above it has the
+  // same shape and the same fault.
+  //
+  // That matters beyond tidiness: the free-settle rate - the number that
+  // decides the Firecrawl plan - is measured by GREPPING these lines, so a
+  // duplicate inflates the thing we buy capacity from.
+  //
+  // The flag is set AT THE PRINT and not at the first ask, deliberately. A
+  // settle can become true on a later ask than the first (stage 1 finds
+  // nothing, a later source settles it), and a flag set on entry would swallow
+  // the sentence for exactly those leads.
+  let _settleSaid = false;
   // WHICH rule settled it, not just the prose. Two of the four settle on
   // deliberately thin evidence - eponymousConfident carries no confidence
   // floor at all, and rosterConfident fires on one uncorroborated roster
@@ -35002,10 +35062,12 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
       && ranked.authority >= DM_AUTHORITY_FLOOR
       && rosterConfidence !== 'low'
       && sameName(ranked.name, brainHit.name));
-    if (rosterConfident && !(corroborated || ownSiteConfident)) {
+    if (!_settleSaid && rosterConfident && !(corroborated || ownSiteConfident)) {
+      _settleSaid = true;
       console.log(`DM [${companyName}]: ROSTER SETTLES IT \u2014 their own team page states ${ranked.name} is "${brainHit.title}". That is the company naming its owner on a page it maintains, which no paid search can outrank. Skipping the web, licence and registry lookups (~12 Firecrawl credits saved).`);
     }
-    if (eponymousConfident && !(corroborated || ownSiteConfident || rosterConfident)) {
+    if (!_settleSaid && eponymousConfident && !(corroborated || ownSiteConfident || rosterConfident)) {
+      _settleSaid = true;
       // ══ ROUND 131: A BUSINESS NAME CANNOT CORROBORATE ITSELF ══════════
       // This line made two claims on every eponymous settle and neither was
       // always earned on the brain arm.
@@ -61536,6 +61598,110 @@ app.listen(PORT, () => {
     console.log(`⛔ SHEET TRUTH CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
+  // ══ ROSTER TITLE ORDER CHECK - round 132 ══════════════════════════════════
+  // The Basement Sanctuary, live 2026-09-10: their team page reads
+  //   Functional Finished Basements / owner / Colby Lindsey
+  // and the sheet named the STRAPLINE as the owner, on the lead that sorted
+  // first at 93. Two independent failures had to line up, so both are executed
+  // here rather than read: the surname slot did not know "Basements" is a trade
+  // this app searches for by name, and the parser only ever looked at the line
+  // ABOVE a title. The right answer was one line below and free.
+  try {
+    const _fails = [];
+    const _src132 = selfSourceNoCommentsLF();
+    const _n132 = (a, b) => a + b;
+    // 1. THE SURNAME SLOT. A trade noun ends a firm's name and ends nobody's.
+    for (const _b of ['Functional Finished Basements', 'Premier Bath Remodel', 'Apex Epoxy Coatings', 'Blue Ridge Masonry'])
+      if (looksLikeRealName(_b) !== false) _fails.push(`"${_b}" still reads as a person, so a company's own strapline can be the name a rep dials for`);
+    // AND IT DID NOT EAT REAL NAMES. Every one of these is a real surname that
+    // is ALSO a trade word in GP_CATEGORIES - the collision the derived version
+    // of this list would have imported, and the reason it stays declared.
+    for (const _r of ['Colby Lindsey', 'Dusty Hannah', 'John Law', 'Sarah Wells', 'Mike Pool', 'Dan Waters', 'Sam Tree', 'Liz Care'])
+      if (looksLikeRealName(_r) !== true) _fails.push(`the tail rule now refuses the real name ${_r} - a filter tightened until it eats real names is the expensive failure`);
+    // 2. THE PARSER, ON THE LIVE PAGE SHAPE. Title first, name below it.
+    const _below = parseTeamRoster('<p>Functional Finished Basements</p><p>owner</p><p>Colby Lindsey</p><p>Sanctuary to us means a relaxing place to go.</p>', 'The Basement Sanctuary');
+    const _pick = pickRosterOwner(_below);
+    if (!_pick || _pick.name !== 'Colby Lindsey') _fails.push(`their own page lists "owner" directly above Colby Lindsey and the roster settles on ${JSON.stringify(_pick && _pick.name)} instead`);
+    if (_below.some(r => /Functional Finished Basements/i.test(String(r.name || '')))) _fails.push('the strapline above the word owner is still parsed as one of their people');
+    // 2b. THE LINE BELOW A TITLE IS STILL VALIDATED. Falsification found the
+    // fixture above could not reach this: on that page the line below "owner"
+    // IS the person, so dropping the validation changed nothing. Put the
+    // strapline BELOW the title and the validation is the only thing standing
+    // between it and the sheet. Nobody is settled on here rather than skipping
+    // to the next line, deliberately: a page whose layout we cannot read is a
+    // page to fall through to the model on, not one to guess at.
+    // Asserted on the RAW roster and not on the ranked pick: rankRosterOwners
+    // re-applies the same three filters, so a defect here is invisible through
+    // pickRosterOwner. Falsification is what showed that - the revert of this
+    // guard came back GREEN through the pick and red only through the rows.
+    // The rows are what the "Also listed" log line prints, and what every other
+    // consumer of parseTeamRoster reads.
+    const _belowJunk = parseTeamRoster('<p>owner</p><p>Functional Finished Basements</p><p>Colby Lindsey</p>', 'The Basement Sanctuary');
+    if (_belowJunk.some(r => /Functional Finished Basements/i.test(String(r.name || ''))))
+      _fails.push('the line directly below an ownership title is taken as the person without being validated, so a strapline under the word "owner" becomes one of their people');
+    // 2c. AND THE BOUND HOLDS. The title-first pass runs ONLY when the main
+    // pass found nobody. Unbounded, this page gives Karen Fowler the title
+    // "Owner" from the line above her - a shorter title than the real owner's,
+    // which wins the ranking tiebreak outright. That is the phantom-row shape
+    // Globe Iron produced live, where the right owner won by luck.
+    // Counted, not ranked, for the same reason: whether the phantom WINS
+    // depends on two authority scores, and a page where it loses proves
+    // nothing about the bound. Whether it EXISTS does.
+    const _phantomRows = parseTeamRoster('<p>Josh Dembicki</p><p>Co-Founder, President</p><p>Owner</p><p>Karen Fowler</p>', 'Bellwether Windows').filter(r => r.isOwner);
+    if (_phantomRows.length !== 1 || _phantomRows[0].name !== 'Josh Dembicki')
+      _fails.push(`the title-first pass runs on a page that already named an owner and invents a second one: ${JSON.stringify(_phantomRows.map(r => r.name))} instead of Josh Dembicki alone`);
+    // 3. AND THE ORDINARY LAYOUT IS UNTOUCHED. Name first, title below - which
+    // is every other roster on the run, so a fix for one shape must not cost
+    // the other.
+    const _above = pickRosterOwner(parseTeamRoster('<p>Josh Dembicki</p><p>Co-Founder, President</p><p>Karen Fowler</p><p>Bookkeeper</p>', 'Bellwether Windows'));
+    if (!_above || _above.name !== 'Josh Dembicki') _fails.push(`the ordinary name-then-title roster broke: it settles on ${JSON.stringify(_above && _above.name)} instead of Josh Dembicki`);
+    // 4. THE CALL SITE. Every assertion above supplies its own page, so all of
+    // them would pass while the Find path handed the parser nothing.
+    if (!_src132.includes(_n132('      const _p = personFromRun(runs[i + 1],',
+      ' companyName);')))
+      _fails.push('the title-first pass no longer validates the line below through personFromRun, so a heading under a title can be a person again');
+    if (_fails.length) console.log(`\u26d4 ROSTER TITLE ORDER CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    else console.log('\u2713 ROSTER TITLE ORDER CHECK: a trade noun is refused in the surname slot and eight real surnames that are also trade words are not, and on the live page shape that put "owner" directly above the name, the roster now settles on Colby Lindsey rather than the strapline on the line above - while the ordinary name-then-title roster still settles on Josh Dembicki. Executed on the real parser and the real ranker, with the call site pinned.');
+  } catch (e) {
+    console.log(`\u26d4 ROSTER TITLE ORDER CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // ══ SETTLE SAID ONCE CHECK - round 132 ════════════════════════════════════
+  // settled() is a predicate asked six times that also printed the settle
+  // sentence, so Craig Kelley and Faultless got two identical EPONYMOUS lines
+  // from the one print statement in this file (live 2026-09-10). The
+  // free-settle rate is measured by GREPPING those lines, so a duplicate
+  // inflates the number that decides which Firecrawl plan we buy.
+  //
+  // This is a SOURCE assertion and says so. settled() is a closure inside
+  // findDecisionMaker that no fixture can call - which is exactly why the
+  // duplicate lived here unnoticed - so what can be proven mechanically is
+  // that both settle sentences sit behind the once-latch and that the latch is
+  // set at the print rather than at the first ask.
+  try {
+    const _fails = [];
+    const _srcS = selfSourceNoCommentsLF();
+    const _nS = (a, b) => a + b;
+    for (const [_needle, _msg] of [
+      [_nS('  let _settleSaid =',
+        ' false;'), 'the once-latch is gone, so the settle sentence prints once per ASK again and the free-settle rate counts duplicates'],
+      [_nS('    if (!_settleSaid && rosterConfident &&',
+        ' !(corroborated || ownSiteConfident)) {'), 'the ROSTER SETTLES IT sentence is no longer behind the latch'],
+      [_nS('    if (!_settleSaid && eponymousConfident &&',
+        ' !(corroborated || ownSiteConfident || rosterConfident)) {'), 'the EPONYMOUS sentence is no longer behind the latch, which is the exact line that printed twice'],
+    ]) if (!_srcS.includes(_needle)) _fails.push(_msg);
+    // The latch is set at the PRINT, twice - once inside each sentence. Set on
+    // entry instead, a lead that settles on a LATER ask than the first loses
+    // its sentence altogether, which is a worse bug than the duplicate.
+    const _setCount = _srcS.split(_nS('      _settleSaid =',
+      ' true;')).length - 1;
+    if (_setCount !== 2) _fails.push(`the latch is set ${_setCount} time(s) inside the settle sentences instead of 2 - set anywhere but at the print, a lead that settles on a later ask prints nothing at all`);
+    if (_fails.length) console.log(`\u26d4 SETTLE SAID ONCE CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    else console.log('\u2713 SETTLE SAID ONCE CHECK: both settle sentences sit behind one latch and the latch is set at the print, not at the first ask, so a lead that settles on a later ask still says so exactly once. Asserted on this file\'s own source, because settled() is a closure no fixture can reach - which is why the duplicate survived unnoticed.');
+  } catch (e) {
+    console.log(`\u26d4 SETTLE SAID ONCE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
   // ---- A PLACE IS NOT A PERSON (ROUND 122) ------------------------------
   // Twenty leads on 2026-09-08: "Greater Louisville" shipped as a decision-maker,
   // a sign franchise was dropped as a charity off its industries menu and then
@@ -83097,6 +83263,13 @@ const runFindContactRead = async (company, keys, opts = {}) => {
           address: em.email || '', tier: em.tier ?? null, sendable: em.sendable === true,
           label: em.label || '', pattern: em.pattern || '',
           blockReason: em.blockReason || em.lookupBlocked || '',
+          // ══ ROUND 132: "COULD NOT ASK" IS NOT "NONE" ══════════════════
+          // The TOKEN travels beside the sentence, not folded into it. The
+          // row needs to tell a supplier that was unavailable from a refusal
+          // we made on purpose, and the only thing carrying that was English
+          // prose - so the client would have had to regex a sentence, which
+          // is how a rule gets a fourth hand-kept copy.
+          lookupBlocked: em.lookupBlocked || '',
           // Who the address actually reaches. mailboxKind is the ONE
           // vocabulary; 'person' means only that it is not recognisably a
           // department mailbox, never that we know a human reads it.
@@ -83706,6 +83879,11 @@ const contactFieldsFrom = (data) => {
     contactEmailGradeSay: em.gradeSay || '',
     contactEmailVerifierDown: em.verifierDown === true,
     contactEmailBlockReason: em.blockReason || '',
+    // Round 132: a lead with NO address said "none found" on the sheet even
+    // when the supplier was down and we never got to ask. Live 2026-09-10,
+    // Bellwether: the log said "This is NOT proof that no mailbox exists" and
+    // the row said none found. This token is what lets the row say which.
+    contactEmailLookupBlocked: em.lookupBlocked || '',
     contactEmailPattern: em.pattern || '',
     contactOwnerBlockReason: own.blockReason || '',
     contactPhone: d.phone || '',
