@@ -62,13 +62,13 @@ Counts now: **55 declared categories** (`GP_CATEGORIES`; a tier-C one is benched
 | `TRADE_MODIFIERS` | `src/all.js:42214` (server.js:42214) | specialisms that narrow a search | TRADE PHRASE CHECK |
 | `TRADE_SYNONYM_GROUPS` | `src/all.js:42644` (server.js:42644) | trade words that count as the same word | — |
 | `SLUG_PRODUCT_LINE` | `src/all.js:43462` (server.js:43462) | product-line URL slugs | page checks |
-| `CHAIN_ROLE_RE` | `src/all.js:81137` (server.js:81137) | franchisee role titles on their own pages | CHAIN OUTLET CHECK |
-| `CHAIN_SELF_RE` | `src/all.js:81138` (server.js:81138) | franchise self-description | CHAIN OUTLET CHECK |
-| `CHAIN_DENIAL_RE` | `src/all.js:81140` (server.js:81140) | "locally owned, not a franchise" — never fires the drop | CHAIN OUTLET CHECK |
-| `FIND_ICP_TERMS` | `src/all.js:82225` (server.js:82225) | the contact-list FIT score terms | FIND ICP GATE CHECK |
-| `FIND_ICP_MIN_TERMS` | `src/all.js:82513` (server.js:82513) | below this many measured terms a lead is "not scored" | FIND ICP GATE CHECK |
+| `CHAIN_ROLE_RE` | `src/all.js:81156` (server.js:81156) | franchisee role titles on their own pages | CHAIN OUTLET CHECK |
+| `CHAIN_SELF_RE` | `src/all.js:81157` (server.js:81157) | franchise self-description | CHAIN OUTLET CHECK |
+| `CHAIN_DENIAL_RE` | `src/all.js:81159` (server.js:81159) | "locally owned, not a franchise" — never fires the drop | CHAIN OUTLET CHECK |
+| `FIND_ICP_TERMS` | `src/all.js:82244` (server.js:82244) | the contact-list FIT score terms | FIND ICP GATE CHECK |
+| `FIND_ICP_MIN_TERMS` | `src/all.js:82532` (server.js:82532) | below this many measured terms a lead is "not scored" | FIND ICP GATE CHECK |
 
 ## Company identity (what a full company swap would touch)
 
-- server.js: "CROJungle" appears 55 times (first at built lines 1309, 1381, 1500, 3440, 4451, 4477, 4503, 4650 …; `node build.js --where N` maps one); the audit system prompt `BRAIN_STATIC` is declared at `src/all.js:8342` (server.js:8342); `$800k` at built lines 5262, 5322, 5992, 6001, 6005, 6088, 6101, 6124, 6229, 40808, 45225, 62520 …; `$15M` at built lines 16425, 18436, 77312, 81889, 82220; the 200-employee gate at built lines 38496, 38497, 40396; the sending user agent `crojungleteam.com` at `src/all.js:4451` (server.js:4451); the Hunter sequence id comes from Settings, read in the send route (first `sequenceId` after `/api/send-to-hunter`, `src/all.js:85158` (server.js:85158)).
+- server.js: "CROJungle" appears 55 times (first at built lines 1309, 1381, 1500, 3440, 4451, 4477, 4503, 4650 …; `node build.js --where N` maps one); the audit system prompt `BRAIN_STATIC` is declared at `src/all.js:8342` (server.js:8342); `$800k` at built lines 5262, 5322, 5992, 6001, 6005, 6088, 6101, 6124, 6229, 40808, 45225, 62539 …; `$15M` at built lines 16425, 18436, 77331, 81908, 82239; the 200-employee gate at built lines 38496, 38497, 40396; the sending user agent `crojungleteam.com` at `src/all.js:4451` (server.js:4451); the Hunter sequence id comes from Settings, read in the send route (first `sequenceId` after `/api/send-to-hunter`, `src/all.js:85177` (server.js:85177)).
 - index.html: "CROJungle" appears 12 times (lines 6, 3994, 4133, 4176, 4385, 5036, 5099, 7962, 9458, 12295, 14832, 15462); `PILLAR_PRODUCT` at line 2871, `LAYER_PLAIN` at line 2838; the never-cold-email-from-CROJungle.com warning at line 14832.
