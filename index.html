@@ -1341,7 +1341,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261013;
+const CLIENT_CONTRACT = 20261014;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -6714,6 +6714,9 @@ function FindView({
   // time must be pressed on purpose each time, not remembered from last week.
   const [csvAgain, setCsvAgain] = React.useState(false);
   const [showAll, setShowAll] = React.useState(false);
+  // Run ids the user has ticked on Screen A. Separate from `picked`, which is
+  // LEADS inside one batch on Screen B - two different populations.
+  const [pickedRuns, setPickedRuns] = React.useState(() => new Set());
   const [note, setNote] = React.useState('');
   const [error, setError] = React.useState('');
   const [busy, setBusy] = React.useState('');
@@ -6869,19 +6872,45 @@ function FindView({
       + ((split.already.length && csvAgain !== true) ? (' ' + exportWithheldSay(split.already)) : ''));
     if (batch && batch.run) loadBatch(batch.run.id, true);
   };
+  // ══ ONE FILE, HOWEVER MANY BATCHES ══════════════════════════════════════
+  // Vin, 2026-09-10: "i need to be able to select multiple last batches and
+  // extract leads as csv". Both of these already fetched ONE run and acted on
+  // it; they take a list now and fetch in parallel, so there is still exactly
+  // one place that decides what a row is and one that decides what may move.
+  // A second copy of either rule is the class this repo records most.
+  // A lead cannot be in two batches, but a re-read CAN put the same business in
+  // two rows, and then one CSV across five batches carries it twice and the rep
+  // dials it twice. Keyed on the lead, first row wins.
+  const dedupeById = (leads) => {
+    const seen = new Set(), out = [];
+    for (const l of leads) { if (!l || seen.has(l.id)) continue; seen.add(l.id); out.push(l); }
+    return out;
+  };
+  const runLeads = async (runIds) => {
+    const ids = Array.isArray(runIds) ? runIds : [runIds];
+    const got = await Promise.all(ids.map(id =>
+      findApi('/api/read-runs/' + encodeURIComponent(id) + '/leads').then(b => (b.leads || []).map(companyFromBatchLead).filter(Boolean))));
+    return dedupeById(got.flat());
+  };
   const csvForRun = async (runId) => {
     setBusy('csv');
-    try { const b = await findApi('/api/read-runs/' + encodeURIComponent(runId) + '/leads'); await exportCsv((b.leads || []).map(companyFromBatchLead)); }
+    try { await exportCsv(await runLeads(runId)); }
     catch (e) { fail(e); } finally { setBusy(''); }
   };
   // Round 129: the bulk move offers every address the engine says we can send
   // to, not only the confirmed ones - the button was offering nothing on a run
   // whose addresses were sendable.
+  // ══ ONE RULE FOR WHAT MAY MOVE ══════════════════════════════════════════
+  // Both move buttons - one batch and many - come through here. queueStateOf
+  // === 'read' is what excludes a lead already in Research: moved outranks
+  // read in the one state order, so pressing this on a batch you already moved
+  // is a no-op rather than a second move. emailSendableOf is the engine's own
+  // answer to "can we send to this", NOT the confirmed rule (Round 129).
+  const sendableIdsIn = (leads) => leads.filter(l => l && queueStateOf(l) === 'read' && emailSendableOf(l)).map(l => l.id);
   const moveSendableOfRun = async (runId) => {
     setBusy('move');
     try {
-      const b = await findApi('/api/read-runs/' + encodeURIComponent(runId) + '/leads');
-      const ids = (b.leads || []).map(companyFromBatchLead).filter(l => l && queueStateOf(l) === 'read' && emailSendableOf(l)).map(l => l.id);
+      const ids = sendableIdsIn(await runLeads(runId));
       setBusy('');
       await moveIds(ids);
     } catch (e) { fail(e); setBusy(''); }
@@ -7178,9 +7207,65 @@ function FindView({
     return parts;
   };
   const inResearchSpan = (n) => h('span', { style: { color: T.lime } }, n);
-  const latestCard = !latest ? null : h('div', { style: { background: T.surface, border: '1px solid ' + T.borderStrong, borderRadius: 10, padding: '14px 16px 12px', marginBottom: 8 } },
-    h('div', { style: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 12, gap: 10 } },
-      h('div', { style: { fontSize: 13, fontWeight: 500 } }, readRunTitle(latest)),
+  // ══ TICKING SPENDS NOTHING ══════════════════════════════════════════════
+  // A tick is browser state and nothing else: no stamp, no credit, no request.
+  // Only the two buttons in the bar act, and each is the SAME function the
+  // single-batch buttons call, handed a list instead of one id.
+  const runTicked = (id) => pickedRuns.has(id);
+  const toggleRun = (id) => setPickedRuns(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+  const tickBox = (on, onClick, mixed) => h('span', {
+    onClick: (e) => { e.stopPropagation(); onClick(); },
+    role: 'checkbox', 'aria-checked': mixed ? 'mixed' : (on ? 'true' : 'false'),
+    style: { width: 15, height: 15, flex: '0 0 15px', borderRadius: 4, cursor: 'pointer',
+      border: '1px solid ' + (on || mixed ? T.purple : T.borderStrong),
+      background: on || mixed ? T.purple : 'transparent',
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: 10, lineHeight: 1, color: '#fff', userSelect: 'none' } },
+    on ? '\u2713' : (mixed ? '\u2013' : ''));
+  // The counts come off the run rows the list already holds - the same numbers
+  // printed on each card - so the bar can never disagree with the rows above it.
+  const tickedRuns = finished.filter(r => runTicked(r.id));
+  const tickedIds = tickedRuns.map(r => r.id);
+  const tickedRead = tickedRuns.reduce((a, r) => a + (Number(r.read_count) || 0), 0);
+  const tickedSendable = tickedRuns.reduce((a, r) => a + (Number(r.sendableEmail) || 0), 0);
+  const csvForRuns = () => csvForRun(tickedIds);
+  const moveSendableOfRuns = async () => {
+    setBusy('move');
+    try {
+      const ids = sendableIdsIn(await runLeads(tickedIds));
+      setBusy('');
+      await moveIds(ids);
+      setPickedRuns(new Set());
+    } catch (e) { fail(e); setBusy(''); }
+  };
+  // ══ THE BAR HOLDS ITS SPACE ═════════════════════════════════════════════
+  // It renders at the same height with nothing ticked, saying what ticking is
+  // for. Appearing from nothing pushes the whole batch list down under the
+  // cursor the moment the first box is ticked, which is how you mis-tick the
+  // second one.
+  const selectionBar = h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, minHeight: 34,
+      padding: '0 2px', marginBottom: 6, fontSize: 12, flexWrap: 'wrap' } },
+    tickBox(tickedRuns.length > 0 && tickedRuns.length === finished.length,
+      () => setPickedRuns(prev => (prev.size >= finished.length ? new Set() : new Set(finished.map(r => r.id)))),
+      tickedRuns.length > 0 && tickedRuns.length < finished.length),
+    !tickedRuns.length
+      ? h('span', { style: { color: T.text3 } }, 'Tick batches to export or move several at once')
+      : h(React.Fragment, null,
+          h('span', { style: { fontWeight: 500 } }, tickedRuns.length + (tickedRuns.length === 1 ? ' batch' : ' batches')),
+          h('span', { style: { color: T.text2 } }, tickedRead + ' read \u00b7 ' + tickedSendable + ' we can send to'),
+          h('span', { style: { marginLeft: 'auto', display: 'flex', gap: 6, flexWrap: 'wrap' } },
+            btn('tertiary', 'Clear', () => setPickedRuns(new Set()), { pad: '5px 9px' }),
+            btn('tertiary', 'CSV ' + tickedRead, csvForRuns, { pad: '5px 9px', disabled: busy === 'csv' || !tickedRead }),
+            btn('research', 'Move ' + tickedSendable + ' to Research', moveSendableOfRuns,
+              { pad: '5px 9px', disabled: busy === 'move' || !tickedSendable }))));
+  const latestCard = !latest ? null : h('div', { style: { background: runTicked(latest.id) ? T.muted : T.surface, border: '1px solid ' + (runTicked(latest.id) ? T.purple : T.borderStrong), borderRadius: 10, padding: '14px 16px 12px', marginBottom: 8 } },
+    h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 10 } },
+      h('div', { style: { fontSize: 13, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 9 } },
+        tickBox(runTicked(latest.id), () => toggleRun(latest.id)), readRunTitle(latest)),
       h('div', { style: { fontSize: 11, color: T.text2 } }, statsLine(latest)[0], ' · ' + (latest.withEmail || 0) + ' confirmed · ' + (latest.sendableOnly || 0) + ' more we can send to · ' + (latest.heldBackEmail || 0) + ' held back · ', inResearchSpan(latest.inResearch || 0), ' in Research')),
     latest.status === 'failed' && latest.error ? h('div', { style: { fontSize: 11, color: T.amber, marginBottom: 10 } }, latest.error) : null,
     h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' } },
@@ -7193,7 +7278,9 @@ function FindView({
         ? btn('tertiary', 'Retry ' + ((Number(latest.requested_count) || 0) - readRunAnswered(latest)), () => startRead(Math.min(unread, (Number(latest.requested_count) || 0) - readRunAnswered(latest))), { disabled: readDisabled }) : null));
   const compactRow = (r) => {
     const done = (Number(r.read_count) || 0) > 0 && ((r.inResearch || 0) + (r.ruledOut || 0)) >= (Number(r.read_count) || 0);
-    return h('div', { key: r.id, style: { background: done ? T.muted : T.surface, border: '1px solid ' + (done ? T.borderSubtle : T.border), opacity: done ? 0.6 : 1, borderRadius: 10, padding: '12px 16px', marginBottom: 6, display: 'flex', gap: 10, alignItems: 'center', fontSize: 12 } },
+    const on = runTicked(r.id);
+    return h('div', { key: r.id, style: { background: on ? T.muted : (done ? T.muted : T.surface), border: '1px solid ' + (on ? T.purple : (done ? T.borderSubtle : T.border)), opacity: done && !on ? 0.6 : 1, borderRadius: 10, padding: '12px 16px', marginBottom: 6, display: 'flex', gap: 10, alignItems: 'center', fontSize: 12 } },
+      tickBox(on, () => toggleRun(r.id)),
       h('span', { style: { flex: 1, minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, readRunTitle(r)),
       h('span', { style: { fontSize: 11, color: T.text2, whiteSpace: 'nowrap' } }, statsLine(r)[0], ' · ', inResearchSpan(r.inResearch || 0), ' in Research', (r.ruledOut || 0) > 0 ? ' · ' + r.ruledOut + ' ruled out' : ''),
       btn('tertiary', 'CSV', () => csvForRun(r.id), { pad: '5px 9px', disabled: busy === 'csv' }),
@@ -7206,7 +7293,7 @@ function FindView({
       summary ? h('span', { style: { fontSize: 11, color: T.text3 } }, (summary.readEver || 0) + ' read · ', h('span', { style: { color: T.text2 } }, (summary.moved || 0) + ' in Research')) : null),
     runs === null ? h('div', { style: { fontSize: 12, color: T.text3 } }, 'Loading…')
       : (!runsList.length ? h('div', { style: { fontSize: 12, color: T.text3, padding: '4px 0 8px' } }, 'No reads yet. Pick a count above and run one.')
-        : h(React.Fragment, null, runningRow, latestCard, ...shownRest.map(compactRow),
+        : h(React.Fragment, null, runningRow, finished.length ? selectionBar : null, latestCard, ...shownRest.map(compactRow),
             rest.length > 4 && !showAll ? h('div', { onClick: () => setShowAll(true), style: { fontSize: 11, color: T.purple, cursor: 'pointer', padding: '2px 0 6px' } }, 'Show all ' + finished.length) : null)));
   const archiveLine = h('div', { style: { padding: '12px 18px 16px', fontSize: 11, color: T.text3, display: 'flex', gap: 14, alignItems: 'center' } },
     h('span', null, 'Ruled out ', h('span', { style: { color: T.text2 } }, summary ? (summary.ruledOut || 0) : '—')),

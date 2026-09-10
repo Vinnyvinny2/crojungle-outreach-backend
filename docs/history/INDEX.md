@@ -145,3 +145,4 @@ The PART 4 heading and intro these sat under, verbatim:
 | 131 | 2026-09-10 | a guess stops outranking the truth — 2026-09-10 | Contact / Truth / Client | [round-131.md](round-131.md) |
 | 132 | 2026-09-10 | the sheet stops naming things that are not people — 2026-09-10 | Contact / Truth / Client | [round-132.md](round-132.md) |
 | 133 | 2026-09-10 | the decision-maker mailbox, and one door for the checker — 2026-09-10 | Email / Cost / Client | [round-133.md](round-133.md) |
+| 134 | 2026-09-10 | the batch list stops being one batch at a time — tick several read batches, one CSV and one move across all of them, the merge deduped, and the move rule extracted to one function after Round 129's guard caught it being written twice | Client / Find | [round-134.md](round-134.md) |

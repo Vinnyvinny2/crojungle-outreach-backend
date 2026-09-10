@@ -2371,6 +2371,9 @@ let contactTally = null;
 {
   const NEED2 = ['contactTabOf', 'CONTACT_TABS', 'findCsvCell', 'FIND_CSV_CTRL', 'FIND_CSV_COLUMNS', 'findContactRows', 'findContactCsv',
                  'contactYesNo', 'hasContactData',
+                 // Round 134: one file across several batches. The merge is only
+                 // safe if the same business cannot arrive twice.
+                 'dedupeById',
                  // A contact read stamps the build that produced it. Round 124: the
                  // stamp is the SERVER's contactFieldsFrom now (lifted below); the
                  // page keeps its own number so the two can be compared.
@@ -2467,12 +2470,27 @@ let contactTally = null;
         + ' state: queueStateOf, lookupUnavailable: emailLookupUnavailable, emailStatus: emailStatusOf, fromLead: companyFromBatchLead, cardStats: batchCardStats, estimate: readCreditEstimate, route: parseFindRoute, additions: pipelineAdditions,'
         + ' sendableOf: emailSendableOf, heldOf: emailHeldBackOf, sendableRow: emailSendableRow, heldRow: emailHeldBackRow,'
         + ' buckets: BATCH_BUCKETS, bucketOf: batchBucketOf, liveLeads: batchLiveLeads, chipFilter: batchChipFilter, chipCounts: batchChipCounts,'
-        + ' verifiedRow: emailVerifiedRow, queueId: queueIdOf, tokens: FIND_T, presets: FIND_PRESETS, readMax: FIND_READ_MAX, runTitle: readRunTitle, answered: readRunAnswered, shortLocation, contract: CONTRACT_VERSION, clientContract: CLIENT_CONTRACT };')();
+        + ' verifiedRow: emailVerifiedRow, queueId: queueIdOf, tokens: FIND_T, presets: FIND_PRESETS, readMax: FIND_READ_MAX, runTitle: readRunTitle, answered: readRunAnswered, shortLocation, contract: CONTRACT_VERSION, clientContract: CLIENT_CONTRACT, dedupeById };')();
     } catch (e) {
       fails.push('the contact list no longer compiles standalone, so it cannot be verified: ' + e.message);
     }
     if (M) {
       const Q = String.fromCharCode(34);
+      // ══ ONE FILE ACROSS SEVERAL BATCHES (Round 134) ══════════════════════
+      // Vin, 2026-09-10, asked to work several past batches at once. The merge
+      // runs behind two network calls, so this is the only place it can be
+      // EXECUTED. A re-read really can put one business in two read runs, and
+      // without this the rep gets the row twice and dials it twice.
+      {
+        const dd = M.dedupeById;
+        const twice = dd([{ id: 'a', company: 'Ace' }, { id: 'b', company: 'Bex' }, { id: 'a', company: 'Ace' }]);
+        if (twice.length !== 2) fails.push('one CSV across several batches carries the same business twice - the merge kept ' + twice.length + ' of 3 rows');
+        if (twice[0] && twice[0].company !== 'Ace') fails.push('the merge does not keep the FIRST row for a lead, so a re-read overwrites the batch the rep is working');
+        if (dd([null, { id: 'a' }, undefined]).length !== 1) fails.push('a null row survives the merge and the exporter reads a property off it');
+        if (dd([]).length !== 0) fails.push('the merge does not survive an empty selection');
+        const order = dd([{ id: 'c' }, { id: 'a' }, { id: 'b' }]).map(l => l.id).join('');
+        if (order !== 'cab') fails.push('the merge reorders the rows (' + order + '), so the file no longer opens newest batch first');
+      }
       // ONE — formula injection. A cell beginning =, +, - or @ EXECUTES when
       // the file opens in Excel or Sheets, and every value here is a business
       // name scraped off an arbitrary web page, opened by a junior rep.
@@ -3662,6 +3680,13 @@ let contactTally = null;
     ["stats.withEmail + ' confirmed · ' + stats.sharedInbox + ", "' shared inbox · ' + stats.sendableOnly + ' more we can send to · ' + stats.heldBack + ' held back'", 'the batch card does not print the four counters the chips below it show, so a run of sendable or shared addresses still reads as no email at all'],
     ["(latest.sendableEmail > 0) ? btn('research', 'Move ' + latest.sendableEmail", " + ' to Research', () => moveSendableOfRun(latest.id)", 'the Move-to-Research button counts only the confirmed addresses, so it offers nothing on a run whose addresses the engine said we can send to'],
     ["filter(l => l && queueStateOf(l) === 'read' && emailSendableOf(l))", ".map(l => l.id)", 'the bulk move filters on the confirmed rule again, so the button moves fewer leads than the card counts'],
+    // Round 134: the many-batch buttons must be the SAME two functions the
+    // single-batch buttons call. A second exporter would lose the 23-column
+    // rule and the already-exported withholding; a second move filter would be
+    // two hand-kept copies of the rule above, which is what shipped first.
+    ["const csvForRuns = () => csvForRun(", "tickedIds);", 'the many-batch CSV does not go through the one exporter, so it loses the fixed column order and hands the rep rows that already went out'],
+    ["const ids = sendableIdsIn(await runLeads(", "tickedIds));", 'the many-batch move does not use the one move rule, so it can move a lead already in Research or one we cannot send to'],
+    ["const ids = sendableIdsIn(await runLeads(", "runId));", 'the single-batch move no longer uses the shared move rule, so the two buttons can drift apart'],
     ["findApi('/api/find/archive')", "", 'the archive screen never loads'],
     // Round 131: the export goes through exportSplit, which applies BOTH
     // rules - the call lane and the once-only stamp - so the rows in the file
