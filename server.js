@@ -36809,12 +36809,45 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     const epEmail = _epArm.email;
     if (epEmail) {
       console.log(`✓ EMAIL [${domain}] EPONYMOUS (${_epArm.arm}): ${EPONYM_ARM_SAY[_epArm.arm]}, so ${epEmail} on their own domain is ${name}'s mailbox`);
+      // ══ ROUND 138: THE PREMISE ABOVE WAS FALSIFIED BY A LIVE ADDRESS ═════
+      // The comment opening this block says a first-name mailbox on an
+      // eponymous domain "needs no verifier ... a fact about the business, not
+      // a guess". On 2026-09-11 that was tested against a mail server for the
+      // first time and it is not true.
+      //
+      // Jay Murray Car Accident and Truck Accident Lawyers, jaymurraylaw.com,
+      // owner Jay Murray - the business carries his name, which is the whole
+      // premise - and jay@jaymurraylaw.com came back UNDELIVERABLE. It had
+      // shipped on the 2026-09-10 run as tier 3, sendable, with a Move to
+      // Research button beside it.
+      //
+      // Nothing downstream would have caught it. Their mail is on Microsoft
+      // 365, which stalls probes by design, so the one check at the send
+      // boundary answers UNKNOWN - and sendUnknownIsNotAYes lets a VOUCHED
+      // person's unknown through on purpose: "The send boundary answers
+      // unknown with SEND, deliberately". Jay Murray passed the authority
+      // gate. The mail would have gone, and the hard bounce would have been
+      // charged to the sending domain, which is the one asset here that
+      // cannot be rebuilt in an afternoon.
+      //
+      // Round 125 already learned this on the OTHER eponymous path and fixed
+      // it there: dean@davisfacialsurgery.com, 2026-09-08, "a mail server that
+      // would not say once ships a guess the rep cannot send to". That fix is
+      // a second SMTP ask sitting above the guess. This placement is the twin
+      // that has no ask at all, because it exists precisely for the case where
+      // no ask is possible. A fix applied to one branch and not its twin is
+      // the shape of Rounds 121 and 137 as well.
+      //
+      // So the address still ships - the rep sees it, and it is still the best
+      // guess we have for who to ask for on the phone - but it is NOT sendable.
+      // This block is gated on `catchAll !== true`, so the "it cannot bounce"
+      // reasoning that makes a catch-all address sendable does not apply here:
+      // this domain CAN bounce and we never asked it anything.
       return {
-        // TIER 3 for the same reason as the other eponymous path: inferred from
-        // the domain, never SMTP-confirmed. Strong, sendable, but not proven.
-        email: epEmail, tier: 3, score: 78, sendable: true, name, pattern: EPONYMOUS_PATTERN,
+        email: epEmail, ...EMAIL_TIERS.PATTERN_INFERRED, name, pattern: EPONYMOUS_PATTERN,
         inferredEponymous: true,
-        label: `${name}: ${EPONYM_ARM_SAY[_epArm.arm]} \u2014 a first-name mailbox on their own eponymous domain (inferred, not SMTP-confirmed)`,
+        blockReason: `no email is sent to ${epEmail}: the business is named after ${name}, but nothing has confirmed this mailbox exists and their mail server cannot be asked. Live on 2026-09-11, jay@jaymurraylaw.com passed exactly this reasoning and does not exist. Call the number instead.`,
+        label: `${name}: ${EPONYM_ARM_SAY[_epArm.arm]} — a first-name mailbox on their own eponymous domain (inferred, never confirmed, and not sent to)`,
       };
     }
   }
@@ -78995,6 +79028,30 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       _fails.push('an UNMEASURED crew no longer has its own arm, so "we did not look" resolves to the permissive side of a rule about what may be sent - the unmeasured-as-measured class, on a decision that reaches a prospect');
     }
     if (!(FRONT_DESK_CREW_MAX > 0 && FRONT_DESK_CREW_MAX <= 50)) _fails.push(`the front-desk crew ceiling is ${FRONT_DESK_CREW_MAX}, which is not a very small crew by any reading of the ruling`);
+
+    // ══ ROUND 138: AN EPONYMOUS GUESS NOBODY ASKED ABOUT IS NOT SENDABLE ═
+    // The second eponymous placement shipped tier 3 sendable on the argument,
+    // written in its own comment, that a first-name mailbox on a domain named
+    // after the person "needs no verifier ... a fact about the business, not a
+    // guess". Falsified live on 2026-09-11: jay@jaymurraylaw.com, at a firm
+    // called Jay Murray Law, is UNDELIVERABLE - and it had shipped sendable on
+    // the run before. Their host stalls probes, so the send boundary would have
+    // answered UNKNOWN, and unknown means SEND for a vouched person.
+    //
+    // The block is gated on catchAll !== true, so the "it cannot bounce"
+    // reasoning that makes a catch-all address sendable never applied here.
+    if (_src.indexOf(_n('email: epEmail, ...EMAIL_TIERS.PATTERN_INFERRED,', ' name, pattern: EPONYMOUS_PATTERN,')) < 0) {
+      _fails.push('the unverified eponymous mailbox ships SENDABLE again on a domain that can bounce and was never asked - live 2026-09-11, jay@jaymurraylaw.com passed exactly that reasoning and does not exist, and the send boundary answers UNKNOWN with SEND for a vouched person');
+    }
+    if (EMAIL_TIERS.PATTERN_INFERRED.sendable !== false) {
+      _fails.push('the inferred tier is sendable, so every guess in the file ships as an address the rep may write to');
+    }
+    // It must still SHIP - the rep needs the name and the best guess at who to
+    // ask for on the phone. Blocking it into nothing would trade a bounce for
+    // a blank row, which is not the trade being made here.
+    if (_src.indexOf(_n('blockReason: `no email is sent to ${epEmail}:', ' the business is named after ${name}')) < 0) {
+      _fails.push('the unverified eponymous address is dropped instead of shown with a reason, so the rep loses the one guess at who to ask for and the row cannot say why nothing is sent');
+    }
 
     // ══ ROUND 137: THE ROUTE SAYS WHAT HAPPENED, EVERY TIME ══════════════
     // It used to log only a hit and a dead account. On "asked and there was
