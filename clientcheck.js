@@ -1924,6 +1924,14 @@ const mergeStat = runMergeCheck();
       if (!Array.isArray(findBack.marketsSeen) || findBack.marketsSeen[0] !== 'Dallas, TX') {
         fails.push('the multi-market coverage a Find run measured for free does not survive a save, and nothing downstream can recover it');
       }
+      // ── 1c. ROUND 141: THE WEBSITE-LOOKS VERDICT ───────────────────────
+      // Measured once, on a paid read, and it decides which rows the rep is
+      // shown. Blanked on a reload it would read as "we never looked" on every
+      // lead in the pipeline, which is the exact shape of reachPredict.
+      const _looksBack = trip({ id: 'find-2', name: 'Dated Co', contactReadOk: true, contactSiteLooks: 'dated' });
+      if (_looksBack.contactSiteLooks !== 'dated') {
+        fails.push(`the website-looks verdict does not survive a save and reload (${JSON.stringify(_looksBack.contactSiteLooks)} came back for "dated") - the toggle that reads it would treat every reloaded lead as one nobody looked at`);
+      }
 
       // ── 2. AND IT IS NOT AUDITED ───────────────────────────────────────
       if (rt.audited(findBack)) {
@@ -2404,6 +2412,11 @@ let contactTally = null;
                  'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN',
                  // Round 110: size and target cells.
                  'targetOf', 'SHORT_CELL_MAX', 'shortCell', 'nameWithFlag', 'sizeCell', 'siteCell', 'siteGradeCell', 'targetCell', 'targetWhyCell', 'websiteCell', 'lastRowsLast',
+                 // Round 141: the SECOND website verdict - what a visitor sees -
+                 // and the toggle Vin asked for, which filters the rep's rows on
+                 // it. Every one of these is pure and at module scope so the
+                 // filter, the wording and the count can be RUN here.
+                 'SITE_LOOKS', 'siteLooksOf', 'SITE_LOOKS_SAY', 'siteLooksCell', 'siteLooksWanted', 'siteLooksFilter', 'siteLooksHidden', 'siteLooksHiddenSay',
                  // Round 111: the lane helpers the rep's sheet is filtered through.
                  'laneOf', 'laneChip', 'exportableContact', 'LANE_TABS', 'laneHas', 'laneKey',
                  // Round 124: the Find stage reads the server. Every decision the
@@ -2449,6 +2462,10 @@ let contactTally = null;
     // most, and this pair decides what reaches a prospect.
     _lift(/const OWNER_GRADES_MAY_SEND = \[[^\]]*\];/, 'OWNER_GRADES_MAY_SEND'),
     _lift(/const ownerGradeMaySend = [^\n]+\n/, 'ownerGradeMaySend'),
+    // Round 141: the four words the visual verdict may take. contactFieldsFrom
+    // guards the field against this list rather than against a retyped copy, so
+    // the list has to be in the sandbox the row builder is executed in.
+    _lift(/const SITE_LOOKS_WORDS = \[[^\]]*\];/, 'SITE_LOOKS_WORDS'),
   ].join('\n');
   const got2 = {};
   walk(ast, (n) => {
@@ -2467,7 +2484,9 @@ let contactTally = null;
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns, prefix: FIND_CSV_PREFIX,'
         + ' cityState: cityStateCell, split: exportSplit, withheldSay: exportWithheldSay,'
         + ' mergeView: mergeFindView, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
-        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, siteCell, targetCell, targetWhyCell, shortCell, SHORT_CELL_MAX, laneOf, laneChip, exportableContact, laneHas, laneKey, laneTabs: LANE_TABS, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
+        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, siteCell,'
+        + ' looksOf: siteLooksOf, looksCell: siteLooksCell, looksFilter: siteLooksFilter, looksHidden: siteLooksHidden, looksSay: siteLooksHiddenSay, looksWanted: siteLooksWanted,'
+        + ' targetCell, targetWhyCell, shortCell, SHORT_CELL_MAX, laneOf, laneChip, exportableContact, laneHas, laneKey, laneTabs: LANE_TABS, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
         + ' fields: contactFieldsFrom, failureFields: contactFailureFields,'
         + ' maySend: ownerGradeMaySend, maySendList: OWNER_GRADES_MAY_SEND,'
         // The request the driver reads: the same shape the browser used to send, from the server's own ports.
@@ -3229,6 +3248,62 @@ let contactTally = null;
           if (M.lean.indexOf('siteGrade') < 0) fails.push('the website grade is not in the lean file the rep actually opens');
         }
         if (M.siteCell({ name: 'Never Read Co', contactSiteMeasured: true, contactSiteShort: 'poor' }) !== '') fails.push('a lead that was never read gets a website verdict');
+        // ══ ROUND 141: THE BAD-WEBSITES TOGGLE, EXECUTED ═══════════════════
+        // Vin, 2026-09-11: "a toggle switch that just picks up businesses with
+        // fair and bad websites - like if I toggle that on we only target
+        // businesses with bad websites." A filter is the one control that can
+        // make a press look like it returned nothing, and the one that can
+        // quietly claim a website is fine when nobody ever looked at it. Every
+        // rule below is RUN on the real functions the screen calls.
+        {
+          const _looks = [
+            { id: 'm', name: 'Modern Co', contactReadOk: true, contactSiteLooks: 'modern' },
+            { id: 'd', name: 'Dated Co', contactReadOk: true, contactSiteLooks: 'dated' },
+            { id: 'b', name: 'Bad Co', contactReadOk: true, contactSiteLooks: 'bad' },
+            { id: 'u', name: 'Could Not Look Co', contactReadOk: true, contactSiteLooks: 'unknown' },
+            { id: 'o', name: 'Older Read Co', contactReadOk: true },
+          ];
+          // 1. OFF shows every lead. A filter nobody switched on that quietly
+          // shortens the list is how an operator concludes a press found nothing.
+          const _off = M.looksFilter(_looks, false);
+          if (_off.length !== _looks.length) fails.push(`the website toggle is OFF and the list is already shorter (${_off.length} of ${_looks.length}) - a filter nobody switched on is a press that silently returned less`);
+          if (_off.map(l => l.id).join('') !== 'mdbuo') fails.push('the website toggle is off and the rows came back in a different order or set');
+          // 2. ON shows dated, bad and the ones we could not look at - and NOT
+          // the business whose website looks modern.
+          const _on = M.looksFilter(_looks, true);
+          if (_on.map(l => l.id).join('') !== 'dbuo') fails.push(`the website toggle keeps ${JSON.stringify(_on.map(l => l.id))} - Vin asked for the businesses whose website is dated or bad, and a site we could not look at may not be dropped with the good ones`);
+          if (_on.some(l => l.id === 'm')) fails.push('a business whose website looks modern survives the bad-websites toggle, so the rep is still being handed the leads he switched it on to lose');
+          // 3. "unknown" survives AND is labelled as not-checked, never as bad.
+          // Never-looked is not looks-fine and it is not looks-bad either.
+          const _uCell = M.looksCell({ contactReadOk: true, contactSiteLooks: 'unknown' });
+          if (!/not checked/.test(_uCell)) fails.push(`a website we could not look at reads as "${_uCell}" on the row - never-looked is not a verdict, and asserting one is the absence claim this system exists to refuse`);
+          if (/\bbad\b|\bdated\b|\bmodern\b/.test(_uCell)) fails.push(`a website we could not look at is described as bad, dated or modern: "${_uCell}"`);
+          if (M.looksCell({ contactReadOk: true, contactSiteLooks: 'bad' }) === _uCell) fails.push('a website we looked at and found bad reads identically to one we never managed to look at');
+          if (M.looksFilter([{ id: 'u2', contactReadOk: true, contactSiteLooks: 'unknown' }], true).length !== 1) fails.push('a website we could not look at is hidden by the toggle - the owner ruled that an unreadable site is kept and marked, never hidden');
+          if (M.looksCell({ name: 'Never Read Co', contactSiteLooks: 'bad' }) !== '') fails.push('a lead that was never read gets a website-looks verdict');
+          // 4. The number on screen IS the number of rows that were removed.
+          for (const _o of [true, false]) {
+            const _n = M.looksHidden(_looks, _o);
+            if (_n !== _looks.length - M.looksFilter(_looks, _o).length) fails.push(`the hidden count says ${_n} and the toggle actually removed ${_looks.length - M.looksFilter(_looks, _o).length} - a list that shrinks without saying by how much is how a press reads as having returned nothing`);
+          }
+          if (M.looksHidden(_looks, true) !== 1) fails.push(`the toggle hid ${M.looksHidden(_looks, true)} of the fixture rather than the one business whose website looks modern`);
+          if (M.looksHidden(_looks, false) !== 0) fails.push('the toggle is off and the screen still claims it hid rows');
+          if (!/1 row/.test(M.looksSay(1)) || !/modern/.test(M.looksSay(1))) fails.push(`the hidden-rows line does not say how many were hidden or why: "${M.looksSay(1)}"`);
+          if (M.looksSay(0) !== '') fails.push('the screen prints a hidden-rows line when nothing was hidden');
+          // 5. The column. The rows in the file were chosen by this signal, so
+          // the file has to print it or the rep cannot check the list he was given.
+          if (M.lean.indexOf('siteLooks') < 0) fails.push('the website-looks verdict is not in the lean file the rep opens, so a list filtered on it exports without the column that chose the rows');
+          const _lrow = M.rows([{ name: 'Dated Co', contactReadOk: true, contactOwner: 'D E', contactPhone: '5554440000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteLooks: 'dated' }])[0];
+          if (!_lrow || !/dated/.test(String(_lrow.siteLooks))) fails.push(`the CSV does not carry what their website looks like (got ${JSON.stringify(_lrow && _lrow.siteLooks)})`);
+          const _urow = M.rows([{ name: 'Could Not Look Co', contactReadOk: true, contactOwner: 'U V', contactPhone: '5555550000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteLooks: 'unknown' }])[0];
+          if (!_urow || !/not checked/.test(String(_urow.siteLooks))) fails.push(`the CSV describes a website we could not look at as ${JSON.stringify(_urow && _urow.siteLooks)} instead of saying it was not checked`);
+          // 6. And the toggle is WIRED to the screen. A pure rule nothing calls
+          // is a check that cannot fail: pin the call sites too.
+          if (src.indexOf('siteLooksFilter(batchChipFilter(') < 0) fails.push('the batch review table no longer filters its rows through siteLooksFilter, so the toggle changes nothing on screen');
+          if (src.indexOf('siteLooksHiddenSay(') < 0) fails.push('nothing on the batch review screen prints how many rows the website toggle hid');
+          if (src.indexOf('siteLooksCell(l)') < 0) fails.push('the batch review row no longer shows what their website looks like, so a rep cannot see why a business is in a filtered list');
+          if (src.indexOf('setLooksOnly') < 0) fails.push('there is no bad-websites toggle on the screen at all');
+        }
         if (M.lean.indexOf('siteWhy') >= 0) fails.push('the long website sentence is back in the lean file');
         for (const k of ['size', 'site', 'target', 'marketingLead', 'marketingLeadEmail']) {
           if (M.lean.indexOf(k) < 0) fails.push(`the lean file does not carry "${k}" - the rep asked for size and who to go to`);
@@ -3525,6 +3600,30 @@ let contactTally = null;
       if (M.fields({ icp: {}, owner: {}, email: {}, signals: {} }).contactReadOk !== true) {
         fails.push('a real server answer does not set the read flag, so a lead that WAS read comes back into the next press and is paid for twice');
       }
+      // ROUND 141 — THE SECOND WEBSITE VERDICT, ON THE WIRE. A field returned by
+      // the read and merged by nothing is the class this repo records most, and
+      // the toggle Vin asked for is a filter over exactly this one field.
+      {
+        const _bad = M.fields({ icp: {}, owner: {}, email: {}, signals: {},
+          site: { measured: true, word: 'strong', gap: 0, grade: 10, looks: 'bad', looksMeasured: true, looksWhy: 'the design looks years out of date' },
+          spend: { firecrawl: 4, anthropicUsd: 0.01, render: 1 } });
+        if (_bad.contactSiteLooks !== 'bad' || _bad.contactSiteLooksMeasured !== true) {
+          fails.push('the visual website verdict does not reach the row, so the fair-and-bad toggle has nothing to filter on');
+        }
+        if (!/years out of date/.test(String(_bad.contactSiteLooksWhy || ''))) {
+          fails.push('the row carries the visual verdict without the sentence behind it, so a rep is given a word and no reason');
+        }
+        if (_bad.contactSpendRender !== 1) fails.push('the homepage render\'s share of the Firecrawl bill never reaches the row, so the credit rate cannot be settled from a batch');
+        // A site nobody rendered must not arrive looking like one that passed.
+        const _un = M.fields({ icp: {}, owner: {}, email: {}, signals: {},
+          site: { measured: true, word: 'strong', gap: 0, grade: 10, looks: 'unknown', looksMeasured: false, looksWhy: 'nobody looked' } });
+        if (_un.contactSiteLooks !== 'unknown' || _un.contactSiteLooksMeasured !== false) {
+          fails.push('a lead nobody rendered does not arrive as unknown, so "we could not look" is being read as "it looks fine"');
+        }
+        // And a word the verdict cannot produce never becomes one.
+        const _junk = M.fields({ icp: {}, owner: {}, email: {}, signals: {}, site: { looks: 'gorgeous', looksMeasured: true } });
+        if (_junk.contactSiteLooks !== 'unknown') fails.push('the row accepts a website verdict outside the declared four words');
+      }
       const f2 = M.fields({ signals: { adsCode: false, teamCount: 0, hiringAny: false }, icp: { score: 0 }, owner: {}, email: {} });
       if (f2.contactAdsCode !== false || f2.contactTeamCount !== 0 || f2.contactIcp !== 0) {
         fails.push('contactFieldsFrom throws away a genuine measured false or zero, which is the same defect pointed the other way');
@@ -3777,7 +3876,12 @@ let contactTally = null;
     // its own arguments and cannot see a caller, so the call sites are pinned:
     // the rows and the numbers must both come out of the shared pair, and the
     // chip that told the rep three sendable leads had no address must be gone.
-    ["const pick = batchChipFilter(leads,", " chipKey);", 'the review table filters the chips with its own chain again instead of the shared bucket filter, which is how "No email" came to mean "not confirmed" and counted three sendable leads as having no address'],
+    // Round 141 RE-AIMED, not retired: the rows now pass through the website
+    // toggle as well, so the old needle would have matched nothing - a
+    // disarmed check reading as coverage. Both intents are asserted at once:
+    // the chips still come out of the ONE shared bucket filter, and the
+    // toggle is wrapped around it rather than being a second chain beside it.
+    ["const pick = siteLooksFilter(batchChipFilter(leads,", " chipKey), looksOnly);", 'the review table filters the chips with its own chain again instead of the shared bucket filter wrapped in the website toggle, which is how "No email" came to mean "not confirmed" and counted three sendable leads as having no address'],
     ["const counts = batchChipCounts(", "leads);", 'the numbers on the chips are assembled a second time beside the filter that produces the rows, so a chip can say one number and show a different set of leads'],
     // Round 132: FIVE buckets. "Could not check" is its own chip because a
     // supplier that was down is not an address that does not exist, and the
