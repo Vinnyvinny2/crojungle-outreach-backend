@@ -3,3 +3,5 @@ node_modules/
 .probe.js
 .probe3.js
 .env
+# scratch worktrees created for parallel agent runs; never part of the build
+.claude/worktrees/
