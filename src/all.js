@@ -15068,7 +15068,15 @@ const SITE_LOOKS_FAULTS = [
   { id: 'oldDesign', points: 3, say: 'the design looks years out of date' },
   { id: 'agingDesign', points: 1, say: 'the design is starting to show its age' },
   { id: 'template', points: 2, say: 'it is an off-the-shelf template nobody has made their own' },
-  { id: 'desktopOnly', points: 2, say: 'the page is laid out for a desktop screen, so a phone gets it shrunk down' },
+  // ══ ROUND 142: THE MOBILE QUESTION LEFT THIS LIST ══════════════════════
+  // It asked the eyes whether the page is laid out for a desktop only - from
+  // a DESKTOP screenshot. The image cannot answer it, and on the 2026-09-11
+  // run it never once fired: two of the eleven points here were dead.
+  //
+  // It is not lost. readSiteAge already marks a missing viewport meta as a
+  // VISIBLE age marker, read free from markup, and that feeds datedBuild in
+  // the code half which now lands in this verdict. The question is answered
+  // where it can be answered, and asked nowhere it cannot.
   { id: 'cheapPhotos', points: 1, say: 'the pictures are stock, stretched or blurry' },
   { id: 'notCredible', points: 2, say: 'a stranger landing here would not trust them with the job' },
 ];
@@ -15076,8 +15084,65 @@ const SITE_LOOKS_FAULTS = [
 // this on fixtures rather than reading it, and every consumer reads this one
 // derivation — the rep's cell, the row, the toggle and the log line cannot
 // disagree about a business the way two hand-kept copies always do.
-const readSiteLooks = (v, notLookedWhy) => {
-  const _unknown = (why) => ({ looks: 'unknown', measured: false, score: null, faults: [], why });
+// ══ ROUND 142: THE FREE READ ALREADY KNEW, AND THIS IGNORED IT ═══════════
+// Round 141 shipped this reading the picture alone, and on the ten-lead run
+// of 2026-09-11 it returned 'modern' on all nine leads it judged. The toggle
+// it exists for collected nothing.
+//
+// Two faults, and the second is the one that matters. The band started at 2
+// while 'the design is starting to show its age' is worth 1, so the three
+// leads the eyes DID flag still read modern - Tranquility Place was described
+// in its own verdict as a "clean but dated design" and graded modern.
+//
+// And the code read, which costs nothing and had already run, was saying so
+// out loud on the same leads: Brick and Stone "the build is years out of
+// date; it is a DIY website-builder template"; Tranquility Place "a DIY
+// website-builder template; there is no enquiry form"; Journey Treatment
+// "the build is years out of date". Every one of those is something a
+// VISITOR meets, measured for free, and thrown away by a verdict that only
+// looked at the picture. Vin, 2026-09-11: "are we reading the code of the
+// website - the code tells us a lot as well and it shouldn't cost anything
+// more".
+//
+// So the verdict is both halves. The free half is the build and converts
+// groups of SITE_GAP_TERMS - read from the group, never a hand-kept list of
+// ids, so a fault added to those groups arrives here by itself. The invisible
+// half (schema, alt text, robots, titles) stays out: it is real, it feeds the
+// audit, and no visitor can see it.
+//
+// DATED AT ONE POINT (Vin, 2026-09-11: "'Starting to show its age' counts as
+// dated"). He asked for the fair AND bad websites; a site with one visible
+// fault is not a modern one.
+const SITE_LOOKS_DATED = 1;
+const SITE_LOOKS_BAD = 6;
+// WHICH CODE FAULTS A VISITOR CAN SEE, declared once. The build group (a
+// build years out of date, an untouched DIY template) and the converts group
+// (no enquiry form, a phone that will not dial) are things a person meets on
+// the page. The geo and seo groups - schema, robots, titles, alt text - are
+// real, feed the audit, and are invisible to everybody who is not a crawler.
+const SITE_LOOKS_VISIBLE_GROUPS = ['build', 'converts'];
+const readSiteLooks = (v, notLookedWhy, codeFaults) => {
+  // FILTERED HERE, not by the caller. This round's own check caught it: handed
+  // a schema fault the verdict counted it, because the function trusted
+  // whoever called it to have filtered first. A rule that depends on a caller
+  // remembering is the shape that breaks the day somebody adds a second call
+  // site - so the one declaration lives with the function that reads it, and
+  // the caller may now hand over every fault it has.
+  const _code = (Array.isArray(codeFaults) ? codeFaults : [])
+    .filter(f => f && SITE_LOOKS_VISIBLE_GROUPS.indexOf(f.group) >= 0);
+  const _codeScore = _code.reduce((n, f) => n + (Number(f && f.points) || 0), 0);
+  const _codeIds = _code.map(f => f && f.id).filter(Boolean);
+  const _codeSay = _code.map(f => f && f.say).filter(Boolean);
+  const _band = (n) => n >= SITE_LOOKS_BAD ? 'bad' : n >= SITE_LOOKS_DATED ? 'dated' : 'modern';
+  // The eyes could not judge. That is no longer blindness: if the free read
+  // found something a visitor meets, this lead is still judged, and the row
+  // says the verdict rests on their markup alone. Only when BOTH halves have
+  // nothing is it unknown - and a clean markup read with no picture IS
+  // unknown, because a site can have perfect code and still look terrible.
+  const _unknown = (why) => (_code.length
+    ? { looks: _band(_codeScore), measured: true, score: _codeScore, faults: _codeIds,
+        why: `${_codeSay.join('; ')} - all of it read free from their own markup. Nobody looked at the page itself: ${String(why || '').trim()}` }
+    : { looks: 'unknown', measured: false, score: null, faults: [], why });
   // The SECOND argument is the reason nobody looked - a drop, a switched-off
   // setting, a dead site, the per-lead credit cap. It reaches the row instead of
   // one flat sentence, because "we chose not to buy a picture" and "we bought
@@ -15094,19 +15159,21 @@ const readSiteLooks = (v, notLookedWhy) => {
     // An absent answer is NOT a fault. Only an explicit true (and, for
     // credibility, an explicit false) may score against a business.
     template: v.templateUntouched === true,
-    desktopOnly: v.desktopOnlyLayout === true,
     cheapPhotos: v.photosLookCheap === true,
     notCredible: v.looksCredible === false,
   };
   const _faults = SITE_LOOKS_FAULTS.filter(f => _hit[f.id] === true);
-  const _score = _faults.reduce((n, f) => n + f.points, 0);
+  const _score = _faults.reduce((n, f) => n + f.points, 0) + _codeScore;
   const _seen = String(v.whatAVisitorSees || '').trim();
   return {
-    looks: _score >= 5 ? 'bad' : _score >= 2 ? 'dated' : 'modern',
+    looks: _band(_score),
     measured: true,
     score: _score,
-    faults: _faults.map(f => f.id),
-    why: (_faults.length ? _faults.map(f => f.say).join('; ')
+    faults: _faults.map(f => f.id).concat(_codeIds),
+    // Both halves in one sentence, the eyes first, so a rep reading the row
+    // sees what a visitor meets before what a crawler meets.
+    why: ((_faults.length || _codeSay.length)
+      ? _faults.map(f => f.say).concat(_codeSay).join('; ')
       : 'a visitor lands on a current-looking page with nothing plainly wrong with it')
       + (_seen ? ` — ${_seen}` : ''),
   };
@@ -64003,6 +64070,13 @@ app.listen(PORT, () => {
     const _buyNeedle = _n('const _buy = siteLooksBuy({ notIcp: out.notIcp', ' === true, website, pagesRead: pages.length,');
     for (const [_needle, _msg] of [
       [_buyNeedle, 'the render no longer reads whether this lead was already dropped, so a franchise, a branch outlet and a chain network each pay for a picture of a homepage nobody will ever call'],
+      // ROUND 142: the drop refuses the VERDICT as well as the spend. Once the
+      // free markup read became a second pair of eyes, a dropped lead started
+      // coming back 'bad' off its own code - a grade nobody will ever read on
+      // a business we already refused, and a row that reads as a lead. Every
+      // other refusal on that branch is about money, not about the business,
+      // and those still keep the free read.
+      [_n('_buy.reason === ', "'dropped' ? [] : _freeSeen"), 'a lead dropped as a franchise, a branch or a chain is graded on its own markup anyway, so a business the system refused comes back carrying a website verdict'],
       [_n('out.site.looks = _looksSaw', '.looks;'), 'the visual verdict is computed and never reaches the lead - computed-but-not-passed, the class this file produces most'],
       [_n('out.site.looksMeasured = _looksSaw.measured', ' === true;'), 'whether anybody actually looked no longer travels, so unknown and modern arrive identical'],
       [_n('leadCapRefuse(', "'the homepage render')"), 'the render is bought past the per-lead credit ceiling, and the row cannot say it was skipped'],
@@ -64030,6 +64104,61 @@ app.listen(PORT, () => {
     } else {
       if (!(_iOutlet < _iBuy) || !(_iFranchise < _iBuy)) _fails.push('the render is bought BEFORE the branch and franchisee drops have run, so a chain outlet pays for a picture of a homepage nobody will ever call');
       if (!(_iBuy < _iWave)) _fails.push('the render sits after the paid owner wave, so a lead that drops between them has already bought both');
+    }
+
+    // ══ ROUND 142: THE VERDICT COULD NOT FLAG ANYTHING, AND THE FREE READ
+    //              ALREADY KNEW ══════════════════════════════════════════
+    // Round 141 shipped this reading the picture alone and it returned
+    // 'modern' on all nine leads of the 2026-09-11 run. Two causes, and both
+    // are asserted below on the leads themselves.
+    //
+    // A fixture supplies its own arguments, so the CALL SITE is pinned too:
+    // the free half must be read off the GROUP, because a hand-kept list of
+    // ids is the shape that stops catching the fault somebody adds next.
+    {
+      const _D = (id, group, points, say) => ({ id, group, points, say });
+      const _datedB = _D('datedBuild', 'build', 5, 'the build is years out of date');
+      const _diy = _D('diyBuilder', 'build', 3, 'it is a DIY website-builder template');
+      const _noForm = _D('noForm', 'converts', 4, 'there is no enquiry form anywhere we read');
+      const _schema = _D('noSchema', 'geo', 5, 'no business schema in their code');
+      const _look = (era, code) => readSiteLooks({ designEra: era, isRealHomepage: true, fullyRendered: true,
+        templateUntouched: false, photosLookCheap: false, looksCredible: true, whatAVisitorSees: '' }, '', code);
+
+      // The three live leads, by name, with the faults their own logs carried.
+      const _brick = _look('aging', [_datedB, _diy]);
+      if (_brick.looks !== 'bad') _fails.push(`Brick and Stone of NC - a build years out of date AND a DIY template, with eyes that call the design aging - reads "${_brick.looks}", and on 2026-09-11 it read modern while the line above it in the same log said both of those things`);
+      const _tranq = _look('aging', [_diy, _noForm]);
+      if (_tranq.looks !== 'bad') _fails.push(`Tranquility Place - a DIY template with no enquiry form and an aging design - reads "${_tranq.looks}"`);
+      const _journey = _look('current', [_datedB]);
+      if (_journey.looks !== 'dated') _fails.push(`Journey Treatment Center - a build years out of date, which the eyes did not notice - reads "${_journey.looks}", so the free read that DID notice is being thrown away`);
+
+      // Vin, 2026-09-11: "'Starting to show its age' counts as dated".
+      const _aging = _look('aging', []);
+      if (_aging.looks !== 'dated') _fails.push(`a design the eyes call "starting to show its age" reads "${_aging.looks}" - Vin ruled on 2026-09-11 that it counts as dated, because he asked for the fair websites as well as the bad ones`);
+      if (_look('current', []).looks !== 'modern') _fails.push('a current page with nothing wrong either side still reads as a site worth collecting, so the toggle would hand the rep every lead');
+
+      // The invisible half must stay out of it. A schema tag is real, it
+      // feeds the audit, and no visitor has ever seen one.
+      if (_look('current', [_schema]).looks !== 'modern') _fails.push('a missing schema tag alone now makes a website look bad to a visitor, which is the exact defect this round was asked to remove - it crosses a band on a fault nobody can see');
+
+      // The eyes blind, the markup not. This lead is still judged.
+      const _blind = readSiteLooks(null, 'the picture never came back', [_datedB, _diy]);
+      if (_blind.looks !== 'bad' || _blind.measured !== true) _fails.push(`a lead whose picture failed but whose markup says the build is years out of date and it is a DIY template reads "${_blind.looks}" - the free read already judged it and the verdict is discarding that`);
+      if (!/read free from their own markup/.test(_blind.why)) _fails.push('a verdict resting on the markup alone does not say so, so a rep cannot tell it from one where somebody looked at the page');
+      // And both blind is still unknown - never modern.
+      const _both = readSiteLooks(null, 'nobody looked', []);
+      if (_both.looks !== 'unknown' || _both.measured !== false) _fails.push(`a lead nobody looked at either way reads "${_both.looks}" instead of unknown`);
+
+      // The question a desktop screenshot cannot answer must stay gone.
+      if (SITE_LOOKS_FAULTS.some(f => f.id === 'desktopOnly')) _fails.push('the eyes are asked again whether the page is laid out for desktop only, from a DESKTOP screenshot - the image cannot answer it, it fired on 0 of 10 live leads, and readSiteAge already marks a missing viewport for free');
+
+      // The call site: the free half comes off the GROUP.
+      if (SITE_LOOKS_VISIBLE_GROUPS.join(',') !== 'build,converts') {
+        _fails.push(`the groups a visitor can see are now ${SITE_LOOKS_VISIBLE_GROUPS.join(', ')} - schema, robots, titles and alt text are real faults that feed the audit and no visitor has ever seen one, so letting them in here rebuilds the exact defect this round removed`);
+      }
+      if (_src.indexOf(_n('  const _code = (Array.isArray(codeFaults) ? codeFaults : [])\n', '    .filter(f => f && SITE_LOOKS_VISIBLE_GROUPS.indexOf(f.group) >= 0);')) < 0) {
+        _fails.push('the verdict no longer filters the code faults it is handed, so it counts whatever the caller passes - and the caller passes every fault the free read found, which puts schema tags and alt text back into how a website LOOKS');
+      }
     }
 
     if (_fails.length) console.log(`⛔ SITE LOOKS CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
@@ -84833,21 +84962,44 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // outlet and a chain network are all already marked by this line, and a lead
   // we have decided not to keep may not buy a picture of its homepage.
   let _renderCredits = 0;
-  let _looksSaw = readSiteLooks(null);
+  // ══ ROUND 142: THE FREE HALF, READ OFF THE GROUP AND NOT A LIST ════════
+  // The build and converts groups are the faults a VISITOR meets - a build
+  // years out of date, an untouched DIY template, no enquiry form, a phone
+  // number that will not dial. They were measured above for nothing and the
+  // visual verdict ignored them, so on 2026-09-11 it called nine of nine
+  // leads modern while the line right above it said "the build is years out
+  // of date".
+  //
+  // Read from the GROUP, never a hand-kept list of ids: a fault added to
+  // build or converts arrives here by itself, and the geo and seo groups stay
+  // out because nobody can see a schema tag.
+  // Every fault the free read found. readSiteLooks keeps the ones a visitor
+  // can see and drops the rest - one declaration, and this line cannot get it
+  // wrong by forgetting to filter.
+  const _freeSeen = (out.site.measured === true && Array.isArray(out.site.faults)) ? out.site.faults : [];
+  let _looksSaw = readSiteLooks(null, '', _freeSeen);
   {
     const _buy = siteLooksBuy({ notIcp: out.notIcp === true, website, pagesRead: pages.length,
       fcKey, apiKey, setting: FIND_SITE_LOOKS });
     if (!_buy.render) {
-      _looksSaw = readSiteLooks(null, _buy.why);
+      // THE DROP REFUSES THE VERDICT EXACTLY AS IT REFUSES THE SPEND. A lead
+      // dropped as a franchise, a branch or a chain is not worked, so it does
+      // not get graded either - the free markup faults are real but nobody is
+      // ever going to read them on a business we already refused, and a
+      // dropped row carrying "bad website" reads as a lead. Every other
+      // refusal here is about MONEY, not about the business, so those keep the
+      // free read: the cap, the switch, a missing key and a dead site all
+      // still say what their own markup shows.
+      _looksSaw = readSiteLooks(null, _buy.why, _buy.reason === 'dropped' ? [] : _freeSeen);
     } else if (leadCapRefuse('the homepage render')) {
-      _looksSaw = readSiteLooks(null, `no picture of their homepage was bought - this lead had already spent its ${FIND_LEAD_CREDIT_CAP} Firecrawl credits`);
+      _looksSaw = readSiteLooks(null, `no picture of their homepage was bought - this lead had already spent its ${FIND_LEAD_CREDIT_CAP} Firecrawl credits`, _freeSeen);
     } else {
       const _shot = await fcHomeShot(website, fcKey);
       _renderCredits += Number(_shot.credits) || 0;
       _looksSaw = _shot.shot
         ? readSiteLooks(await visionSiteLooks(_shot.shot, name, apiKey),
-            'we rendered their homepage and the read of it came back empty, so how it looks is unmeasured')
-        : readSiteLooks(null, _shot.why);
+            'we rendered their homepage and the read of it came back empty, so how it looks is unmeasured', _freeSeen)
+        : readSiteLooks(null, _shot.why, _freeSeen);
     }
   }
   out.site.looks = _looksSaw.looks;

@@ -861,8 +861,28 @@ const runLead = async (b, over, capMs) => {
       const nsShot = state.requests.slice(nsReq0).filter(q => q.host === 'api.firecrawl.dev' && _isRender(q)).length;
       ok(NS.code === 200 && NSJ.notIcp !== true, `a lead whose homepage render came back empty was dropped instead of kept: ${NS.code} ${JSON.stringify(NSJ.icpWhy || '').slice(0, 120)}`);
       ok(nsShot === 1, `the render was asked for ${nsShot} time(s) on a site that answered with no picture - once, and never retried`);
-      ok(NSS.looks === 'unknown' && NSS.looksMeasured === false, `a homepage nobody could see came back looks=${NSS.looks} measured=${NSS.looksMeasured} - unknown is not modern`);
-      ok(/no picture/.test(String(NSS.looksWhy || '')), `the row is not told WHY nobody could see their homepage: ${JSON.stringify(NSS.looksWhy)}`);
+      // ── ROUND 142 RE-AIMED THIS ASSERTION, AND SAYS SO ───────────────
+      // It read: no picture => looks 'unknown', measured false. That was right
+      // while the picture was the ONLY thing that could see a website. Round
+      // 142 gave the verdict a second pair of eyes that costs nothing - the
+      // build and converts faults the free markup read already found - after
+      // the toggle graded nine of nine live leads 'modern'. So a lead whose
+      // picture never came back is now judged on its own markup, and only a
+      // lead where BOTH reads came back empty is 'unknown'.
+      //
+      // The invariant that assertion existed to hold is unchanged and still
+      // enforced: never-looked must never read as looks-fine. It is proven on
+      // the dropped lead below, which comes back 'unknown' off this same live
+      // route, and on BOTH halves of the boot's SITE LOOKS CHECK.
+      ok(NSS.looksMeasured === true && NSS.looks !== 'modern' && NSS.looks !== 'unknown',
+        `the picture never came back and their own markup was read fine, and the lead came back looks=${NSS.looks} measured=${NSS.looksMeasured} - the free code read is the second pair of eyes, so this is judged, not unknown`);
+      ok(/markup/.test(String(NSS.looksWhy || '')) && /no picture/.test(String(NSS.looksWhy || '')),
+        `the row is not told that nobody could see their homepage AND that the verdict came off their code instead: ${JSON.stringify(NSS.looksWhy)}`);
+      // The one that cannot be allowed to drift: the markup verdict must agree
+      // with the markup. It is read from out.site.faults, so a verdict that
+      // named faults the technical read never found would be invented.
+      ok((NSS.looksFaults || []).every(f => (NSS.faults || []).some(x => x.id === f)),
+        `the visual verdict claims faults ${JSON.stringify(NSS.looksFaults)} that the markup read never found in ${JSON.stringify((NSS.faults || []).map(x => x.id))} - a verdict off nothing`);
       ok(NSS.measured === true && NSS.word === HSite.word && NSS.gap === HSite.gap, `the same build graded ${NSS.word}/${NSS.gap} with no picture and ${HSite.word}/${HSite.gap} with one - the markup read never needed a render`);
       ok((NSJ.spend || {}).render === 0, `a render that returned no picture was billed ${JSON.stringify((NSJ.spend || {}).render)} credit(s)`);
     }
