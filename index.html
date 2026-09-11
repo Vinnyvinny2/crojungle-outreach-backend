@@ -1341,7 +1341,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261014;
+const CLIENT_CONTRACT = 20261015;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -6542,6 +6542,17 @@ const emailStatusOf = (c) => {
   if (!c || !c.contactEmail) return emailLookupUnavailable(c) ? 'unreadable' : 'none';
   const g = String(c.contactEmailGrade || '');
   const t = c.contactEmailTier;
+  // ══ ROUND 135: CONFIRMED NAMES SOMEBODY ════════════════════════════════
+  // Live 2026-09-10: the batch's ONLY Confirmed address was
+  // lucas@paverrescuellc.com on a row whose own owner cell read "no owner
+  // named" - and the log shows the ladder had already thrown that person out
+  // ("DM/bizname: Lucas confidence low - discarded"). Grade A is not the lie:
+  // "published on their own site, and it is a person, not a department" is
+  // true of it. The CHIP is. Since Round 133, Confirmed means the OWNER'S own
+  // mailbox, so it has to be somebody's, and a mailbox we cannot attribute to
+  // anybody is a person other than the owner reading it first - which is what
+  // "Shared inbox" already says. The grade is untouched; only the claim moves.
+  if (g === 'published_personal' && !String(c.contactOwner || '').trim()) return 'shared';
   if (g === 'published_personal' || g === 'smtp_confirmed') return 'verified';
   // Round 133: SHARED INBOX. Live 2026-09-10, the screen said "5 confirmed"
   // and all five were info@ / contact@ mailboxes - the owner's own mailbox on
