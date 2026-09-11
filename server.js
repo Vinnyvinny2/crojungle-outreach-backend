@@ -12291,6 +12291,25 @@ const ownerAskLine = (name, grade, why) => {
   if (grade === 'inferred') return `Likely, not confirmed \u2014 ${why}. Ask for ${first}; if he is not the owner, ask who is.`;
   return `NOT confirmed \u2014 ${why || 'we could not verify this person'}. Ask for ${first}; if he is not the owner, ask who is.`;
 };
+// ══ WHICH OF THE GRADES MAY BE WRITTEN TO ═════════════════════════════════
+// A cold email opens with the man's first name, and that greeting ASSERTS he
+// owns the business. So the grade has to decide the send, and until now
+// nothing on the send path read it at all: a name graded 'inferred' - the
+// business is named after him and no other source names an owner - got the
+// same email, opening with the same first name, as a name three independent
+// sources agree on.
+//
+// Vin, 2026-09-11, after a deliverability test on the twenty-lead run:
+// confirmed or stated may be written to, inferred may not. Confirmed-only was
+// measured against the same run and refused - it would have held 6 of the 9
+// addresses that run produced, against 2 sends - so 'stated', their own site
+// saying who owns it, stays sendable.
+//
+// ONE declaration. index.html counts a rep-ready row on these same two tokens
+// and two hand-kept copies of one rule is the class this file records most;
+// clientcheck executes THIS list against the page's own rule.
+const OWNER_GRADES_MAY_SEND = ['confirmed', 'stated'];
+const ownerGradeMaySend = (grade) => OWNER_GRADES_MAY_SEND.indexOf(String(grade || '')) >= 0;
 const DM_CONFIDENCE_AT = { high: 80, medium: 50 };
 const dmConfidenceFor = (score) => {
   // typeof FIRST. Number(null) is 0 and Number.isFinite(0) is true, so an
@@ -14019,6 +14038,17 @@ const ROLE_WORDS = new Set([
   'manager', 'director', 'coordinator', 'specialist', 'support', 'service', 'services',
   'team', 'crew', 'development', 'business', 'quality', 'safety', 'production', 'finance',
   'hr', 'people', 'talent',
+  // Round 139: "Design Consultant" walked through the name door as a person, so
+  // a rep would have rung a remodeler and asked the front desk for him. The
+  // words a trade writes its sales titles out of were the gap - "design",
+  // "comfort", "advisor" and "master" are in no list here, so the every-token
+  // rule could never see a title made of them, and "Master Plumber" is the
+  // example the role-noun list itself cites. DISCLOSED COST, the same shape the place
+  // rule discloses: "Comfort" is a real first name, and a signature reading
+  // "Comfort" ALONE is now refused. A first name beside a surname is untouched,
+  // because one role word never makes a title - "Comfort Adebayo" is a person
+  // and so is "Ann Lead".
+  'advisor', 'advisors', 'comfort', 'design', 'master',
 ]);
 const allRoleWords = (s) => {
   const w = normalizeTitleWords(s).split(' ').filter(Boolean);
@@ -35008,14 +35038,84 @@ const HEADLINE_WORD_RE = /^(?:busting|breaking|choosing|finding|avoiding|underst
 // as a FIRST name are refused here; they are vanishingly rare as first names
 // and the commonest heads of a region.
 const PLACE_HEAD_RE = /^(?:greater|metro|metropolitan|downtown|uptown|midtown|central|north|south|east|west|northern|southern|eastern|western|northeast|northwest|southeast|southwest|upper|lower|coastal|inland|family|locally|serving)$/i;
+// A middle initial and a professional suffix are the two markers a collective
+// never carries. Declared here rather than beside the eponymous licence below,
+// because the door reads them too now and two copies of one marker list is the
+// disease this file records most.
+const PERSON_INITIAL_RE = /(?:^|\s)[A-Za-z]\.(?:\s|$)/;
+const PERSON_SUFFIX_RE = /(?:^|[\s,(])(?:MD|DDS|DMD|DVM|PhD|Esq|Jr|Sr|II|III|IV|CPA)\b/;
+// Case-insensitive twin of the one declaration above, the way CORP_ONE is built
+// from CORP_WORDS: a registry writes "HOWES, LUCAS B" and a roster writes
+// "John Smith, jr." and neither is a different rule.
+const PERSON_SUFFIX_ONE = new RegExp(PERSON_SUFFIX_RE.source, 'i');
+// ══ A RECORDS SYSTEM WRITES A PERSON SURNAME FIRST ════════════════════════
+// A contractor licence board, a state filing and a chamber directory all print
+// "HOFFMAN, HENRY". Nothing in this file reversed it, and the same shape failed
+// in two opposite directions: "Hoffman, Henry" walked the door as a person and
+// the call sheet read "Ask for Hoffman," - his SURNAME, offered to the rep as
+// his first name, with the email greeting built from the same token - while
+// "HOWES, LUCAS B" was refused outright, because the real-name test reads the
+// last token as the surname and the last token was his middle initial. One is a
+// fabricated first name in front of a stranger; the other silently drops a real
+// owner we paid to find.
+//
+// The flip is licensed by EVIDENCE, never by the shape alone, because "Baker,
+// Donelson" is a law firm and "Hoffman, Henry" is a man, and no shape rule can
+// separate them. Three things must hold: one comma with a single surname-shaped
+// word in front of it, a tail of at most two name-shaped words with no "&" and
+// no legal word in it, and then either a KNOWN given name (the declared
+// GIVEN_NAMES list the reachability predictor already runs on) or a middle
+// initial, which is what a records system prints and a firm name never carries.
+// Anything else comes back untouched and the door refuses it below, because a
+// name where we cannot tell the first name from the surname cannot be spoken to
+// a receptionist - PART 3: we would rather say nothing than say something wrong.
+//
+// SHOUTING IS UNDONE ONLY ON A NAME WE ARE ALREADY REWRITING: an all-capitals
+// token becomes Capitalised, so "HOWES, LUCAS B" reaches the sheet as
+// "Lucas B Howes". McDonald, O'Brien and the initial itself are untouched.
+const uninvertPersonName = (raw) => {
+  const s = String(raw || '').trim();
+  if (!s.includes(',')) return s;
+  const parts = s.split(',');
+  if (parts.length !== 2) return s;                       // an address or a list, not an inversion
+  const head = parts[0].trim(), tail = parts[1].trim();
+  if (!head || !tail) return s;
+  if (/&|\band\b/i.test(s)) return s;                     // a partnership or a firm
+  if (!/^[A-Za-z][A-Za-z'\u2019-]{1,24}$/.test(head)) return s;   // the surname slot is one word
+  const tt = tail.split(/\s+/).filter(Boolean);
+  if (!tt.length || tt.length > 2) return s;
+  if (!tt.every(t => /^[A-Za-z][A-Za-z'\u2019-]*\.?$/.test(t))) return s;
+  if (PERSON_SUFFIX_ONE.test(' ' + tail) || CORP_ONE.test(head) || tt.some(t => CORP_ONE.test(t.replace(/\.$/, '')))) return s;
+  const known = GIVEN_NAMES.has(tt[0].toLowerCase().replace(/[^a-z]/g, ''));
+  const initial = tt.slice(1).some(t => /^[A-Za-z]\.?$/.test(t));
+  if (!known && !initial) return s;                       // we cannot tell a firm from a man: leave it
+  const _case = (t) => /^[A-Z][A-Z'\u2019-]+$/.test(t) ? t[0] + t.slice(1).toLowerCase() : t;
+  return [...tt.map(_case), _case(head)].join(' ');
+};
 const ownerNameDoor = (name, companyName = '', allowOrgWord = false) => {
-  const s = String(name || '').trim();
-  if (!s) return 'empty';
+  const _raw = String(name || '').trim();
+  if (!_raw) return 'empty';
+  // Surname-first is read as the person it names before anything judges it, and
+  // a comma we could NOT resolve that way is a firm ("Baker, Donelson") or a
+  // name whose first name we cannot identify. Both are refused here: the one
+  // exception is a professional suffix, which is how a licensed individual
+  // signs ("David B. Brothers, MD").
+  const s = uninvertPersonName(_raw);
+  if (s.includes(',') && !PERSON_SUFFIX_ONE.test(s)) return 'not-a-name';
   const toks = s.split(/[\s\/\-]+/).filter(Boolean);
   if (toks.some(t => NAV_WORD_RE.test(t))) return 'not-a-name';
   if (toks.some(t => HEADLINE_WORD_RE.test(t.replace(/[.,:]$/, '')))) return 'not-a-name';
   if (!allowOrgWord && toks.some(t => ORG_TOKEN_RE.test(t.replace(/[.,]$/, '')))) return 'not-a-name';
-  if (toks.every(t => OWNER_WORD_RE.test(t) || ROLE_WORDS.has(t.toLowerCase()))) return 'title';
+  // Round 139: the door asked ONE of this file's two role-word lists, and the
+  // roster parsers have asked BOTH for their whole lives (a name is refused
+  // there when allRoleWords OR FIND_ROLE_NOUN hits). So "Design Consultant" and
+  // "Project Engineer" were refused on a team page and accepted as people from
+  // every other owner source - the licence boards, the web search, the registry
+  // - because "consultant" and "engineer" live in the list the door did not
+  // read. Two hand-kept copies of one rule is the class this file records most;
+  // the door now reads both. EVERY token must still be a role word, which is
+  // what keeps "Dean Foreman", "Miles Sales" and "Ann Lead" people.
+  if (toks.every(t => OWNER_WORD_RE.test(t) || ROLE_WORDS.has(t.toLowerCase()) || FIND_ROLE_NOUN.test(t))) return 'title';
   if (allRoleWords(s)) return 'title';
   const _flat = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').replace(/^the /, '').trim();
   const _co = _flat(companyName), _nm = _flat(s);
@@ -35046,8 +35146,6 @@ const ownerNameDoor = (name, companyName = '', allowOrgWord = false) => {
 // is a person. DISCLOSED COST: a real "Mike Brothers" with no initial and no
 // suffix anywhere is still refused, and that is the safer direction.
 const EPONYM_DOOR_SOURCE = new Set(['license_or_chamber', 'bbb_profile', 'own_website_brain', 'business_name', 'opencorporates']);
-const PERSON_INITIAL_RE = /(?:^|\s)[A-Za-z]\.(?:\s|$)/;
-const PERSON_SUFFIX_RE = /(?:^|[\s,(])(?:MD|DDS|DMD|DVM|PhD|Esq|Jr|Sr|II|III|IV|CPA)\b/;
 const eponymousDoorLicence = (f, companyName, door) => {
   if (door !== 'not-a-name') return null;
   const name = String((f && f.name) || '').trim();
@@ -35064,8 +35162,25 @@ const eponymousDoorLicence = (f, companyName, door) => {
 const rankOwnerCandidates = (found, companyName = '') => {
   if (!found || !found.length) return null;
   const clusters = [];
-  for (const f of found) {
-    if (!f || !f.name) continue;
+  for (const _f0 of found) {
+    if (!_f0 || !_f0.name) continue;
+    // ══ SURNAME-FIRST IS READ HERE, WHERE EVERY SOURCE PASSES ══════════════
+    // Not in the licence reader: five sources feed this ranker and the door
+    // exists precisely because each of them validating its own output by its
+    // own rule is how "Owner-Operator" reached a sheet. A records-style name is
+    // the same shape of failure, so it is resolved once, at the funnel, and the
+    // CANDIDATE is rewritten rather than only judged - the sheet, the ask line,
+    // the greeting and the mailbox guess all read this name.
+    const _un = uninvertPersonName(_f0.name);
+    const f = _un === _f0.name ? _f0 : { ..._f0, name: _un };
+    if (_un !== _f0.name) {
+      const _uk = 'flip|' + _f0.source + '|' + _f0.name;
+      if (!_ownerDoorSaid.has(_uk)) {
+        _ownerDoorSaid.add(_uk);
+        if (_ownerDoorSaid.size > 5000) _ownerDoorSaid.clear();
+        console.log(`DM/door [${companyName || '?'}]: ${_f0.source} names him "${_f0.name}", which is a records listing written surname first - read as "${_un}", so the sheet asks for him by his FIRST name instead of his last.`);
+      }
+    }
     // Round 116: a retired title is refused whatever the source said.
     if (f.title && RETIRED_RE.test(String(f.title))) { console.log(`DM/door [${companyName || '?'}]: "${f.name}" (${f.title}) is retired - refused before ranking`); continue; }
     const _door = ownerNameDoor(f.name, companyName);
@@ -40776,6 +40891,23 @@ const WEIGHTS = {
     });
 
     console.log(`After size gate: ${sizeGated.length} kept | blocked ${blockedCount} (${JSON.stringify(blockReasons)})`);
+    // ══ THE LOSS THE YIELD REPORT COULD NOT NAME ════════════════════════════
+    // The FIND YIELD line below has a row for this and nothing ever wrote it, so
+    // the row was dropped as undefined before the line printed and the "largest
+    // single loss" sentence could never name the gate that deletes the most. Two
+    // gates refuse a lead on its name at a Find press and both are counted here:
+    // the ICP filter above, whose twelve name branches are the one door every
+    // source goes through, and the size gate's four name blocks (a verified
+    // headcount DEMOTES since Round 114, so every block it still counts is a
+    // name or an industry tag, never a size).
+    //
+    // Counted as the DIFFERENCE each filter made rather than by a counter inside
+    // it, because a counter has to be remembered by whoever adds the thirteenth
+    // branch and a difference cannot be forgotten. Disclosed: two of those
+    // seventeen branches refuse on something other than the name - an enterprise
+    // job title in the posting, and a verified staffing industry tag - and both
+    // are unreachable for a Places lead, which is every lead in daily use.
+    _findYield.notIcp = (allCompanies.length - icpFiltered.length) + blockedCount;
 
     // SIGNAL STACKING — merge across sources, union signals
     const merged = new Map();
@@ -53439,6 +53571,42 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
         }
       }
       console.log(`OWNER/EMAIL MATCH [${company}]: ${ownerEmailMatch} — ${ownerEmailMatchReason}`);
+    }
+
+    // ══ THE SAME RULE, ON THE OTHER HALF OF THE PAIR ═════════════════════
+    // The Find read refuses to mark an address sendable when the owner's grade
+    // is not one we may write to. THIS route resolves its own address and none
+    // of its routes pass through that rule, so the two halves disagreed about
+    // the same business: the sheet said "not sent to", research said sendable,
+    // and /api/send-to-hunter - which blocks on emailResult.sendable and reads
+    // no grade at all - pushed it into the sequence. Every send goes through
+    // this route (the Send tab needs a pitch, which needs research), so the
+    // rule applied only at the Find read governed the sheet and nothing that
+    // actually went out.
+    //
+    // Placed HERE, not at the engine door: emailResult is assigned in four
+    // places on this route, and the last of them - the vision recovery, which
+    // reads an address off a picture of their homepage - builds { sendable:
+    // true } by hand without going near findEmailFireproof. This is the last
+    // line before anything reads the verdict, so all four arrive at it.
+    //
+    // ownerGradeMaySend is the ONE declaration: the same function the Find
+    // read calls and the same one clientcheck executes against the page.
+    //
+    // An owner with NO grade is left exactly as it was. That is the contact
+    // CACHE arm: contact_cache has no grade column, so a name reused from a
+    // previous research run comes back ungraded, and re-deriving a grade from
+    // the columns it does keep would manufacture evidence - an eponymous
+    // settle would read as "their own site states it", which is the opposite
+    // of true. The column is the fix and it needs a migration.
+    const _ownerGradeForSend = String((decisionMaker && decisionMaker.evidenceGrade) || '');
+    if (emailResult && emailResult.email && emailResult.sendable === true
+        && decisionMaker && decisionMaker.name && _ownerGradeForSend
+        && !ownerGradeMaySend(_ownerGradeForSend)) {
+      const _askFor = decisionMaker.askAs || `Ask for ${decisionMaker.name}; if he is not the owner, ask who is.`;
+      console.log(`\u{1F4DB} OWNER GRADE [${company}]: ${emailResult.email} is a real address and it is NOT being sent to - ${decisionMaker.name} is graded ${_ownerGradeForSend} as the owner (${decisionMaker.evidenceWhy || 'nothing we read names him as the owner'}). An email opening with his first name tells him we know he owns this business, and one source cannot carry that claim. ${_askFor}`);
+      emailResult = { ...emailResult, sendable: false,
+        blockReason: `no email is sent to ${emailResult.email}: ${decisionMaker.name} is graded ${_ownerGradeForSend} as the owner - ${decisionMaker.evidenceWhy || 'nothing we read names him as the owner'}. The address is real and the name is on the row - call instead of writing. ${_askFor}` };
     }
 
     const reach = scoreReachability({
@@ -70764,6 +70932,62 @@ app.listen(PORT, () => {
   } catch (e) {
     console.log(`⛔ ICP FILTER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
+  // ══ A YIELD REPORT THAT COULD NOT NAME ITS OWN WORST LOSS ════════════════
+  // The FIND YIELD line exists so the largest single loss of a Find run is
+  // visible without reading the code that caused it. One of its rows, the ICP
+  // name gate, was read from a field nothing ever assigned: the row came out
+  // undefined, the line's own filter dropped it before printing, and the
+  // "largest single loss" sentence could therefore never name the gate that
+  // deletes the most. The operator read a complete-looking report with its
+  // biggest number structurally missing.
+  //
+  // Executed, not read, in both halves: the assignment is lifted out of
+  // runDiscovery's own source and RUN on counts, and so is the row block that
+  // prints it. A fixture cannot see a caller, so the first half is what proves
+  // the number is written at all, and the second is what proves the line can
+  // print it and pick it as the worst.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _rd = String(runDiscovery);
+    // 1. Something assigns it, and it counts BOTH name gates rather than one.
+    const _ai = _rd.indexOf(_n('_findYield.notIcp', ' = '));
+    if (_ai < 0) {
+      _fails.push('nothing in a Find run writes the ICP name-gate loss, so that row is dropped from the FIND YIELD line before it prints and the largest single loss can never be the gate that deletes the most');
+    } else {
+      const _stmt = _rd.slice(_ai, _rd.indexOf(';', _ai) + 1);
+      const _got = new Function('_findYield', 'allCompanies', 'icpFiltered', 'blockedCount',
+        _stmt + ' return _findYield.notIcp;')({}, { length: 500 }, { length: 120 }, 7);
+      if (_got !== 387) {
+        _fails.push(`the ICP name-gate loss comes out ${_got} where 500 leads in, 120 surviving the name filter and 7 blocked by name at the size gate is 387 - a count that reads one gate and not the other under-reports the run's biggest loss, which is worse than leaving the row blank`);
+      }
+    }
+    // 2. The row prints, and it can be chosen as the largest single loss.
+    const _ri = _rd.indexOf(_n('const _rows = ', '['));
+    const _wi = _ri < 0 ? -1 : _rd.indexOf(_n('const _worst', ' = '), _ri);
+    if (_ri < 0 || _wi < 0) {
+      _fails.push('the FIND YIELD row block could not be found in runDiscovery, so nothing here is checking what the yield line prints');
+    } else {
+      const _block = _rd.slice(_ri, _rd.indexOf(';', _wi) + 1);
+      const _out = new Function('_y', '_bench', 'scored', 'SCALE_TIERS', '_large',
+        _block + ' return { rows: _rows, worst: _worst };')(
+        { seen: 500, underFloor: 12, notIcp: 387, franchise: 9, alreadyOwned: 4, catCap: 3, demoted: 6 },
+        [], [], SCALE_TIERS, []);
+      const _row = _out.rows.find(r => /ICP/.test(String(r[0])));
+      if (!_row) _fails.push('a Find run that lost 387 leads at the ICP name gate prints no row for them at all');
+      else if (Number(_row[1]) !== 387) _fails.push(`the ICP name-gate row prints ${JSON.stringify(_row[1])} rather than the 387 it was given`);
+      if (!_out.worst || !/ICP/.test(String(_out.worst[0]))) {
+        _fails.push(`the largest single loss is reported as "${_out.worst && _out.worst[0]}" on a run where the ICP name gate lost 387 of 500 - the sentence names a row it can reach instead of the worst one`);
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ FIND YIELD CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    } else {
+      console.log('✓ FIND YIELD CHECK: the yield report can name its own worst loss. The ICP name gate is counted where both halves of it settle - the name filter every source passes through and the size gate\'s name blocks - so the number is the difference each filter actually made rather than a counter somebody has to remember to increment; the row survives the line\'s own finite-number filter; and on a run that lost 387 leads of 500 that way, the line names it as the largest single loss instead of the biggest row it happens to be able to reach.');
+    }
+  } catch (e) {
+    console.log(`⛔ FIND YIELD CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
   // ══ A STEM WITH A WORD BOUNDARY AFTER IT MATCHES NOTHING ══════════════════
   // \bplumb\b cannot match "plumbing", because the g is a word character. The
   // stem only ever matches itself, and "plumb" alone is not a word anybody puts
@@ -78862,9 +79086,69 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       ['Busting Myths', 'Rad Law Firm', 'not-a-name', 'a blog headline followed by a real title is accepted as a person (Rad Law Firm, 2026-09-04)'],
       ['5 Signs', 'Rad Law Firm', 'not-a-name', 'a listicle heading is accepted as a person'],
       ['Irving Berlin', 'Berlin Roofing', null, 'a real first name that happens to end in -ing is refused'],
+      // Round 139: a job title still walked the door as a person. Each title
+      // below is refused by ONE of the two arms and nothing else, so neither
+      // arm can hide behind the other: "Design Consultant" needs the trade
+      // sales words in ROLE_WORDS, "Project Engineer" needs the role-noun list
+      // the roster parsers have always read. The real names beside them are the
+      // expensive direction - a refused owner is a lead the rep never calls.
+      ['Design Consultant', 'Ten Key Home & Kitchen Remodels', 'title', 'a two-word job title is accepted as a person - "Design Consultant" reached the door as a decision-maker and a rep would have asked the front desk for him by name'],
+      ['Comfort Advisor', 'Anderson Heating & Air', 'title', 'a trade sales title is accepted as a person - "Comfort Advisor" is what a heating company calls the man who sells the system'],
+      ['Project Engineer', 'X Co', 'title', 'a title made of a role word and a role NOUN is accepted as a person - the door reads only one of this file\'s two role-word lists again, so the roster parser refuses what every other owner source ships'],
+      ['Master Plumber', 'X Co', 'title', 'a trade qualification is accepted as a person, which is the exact row the role-noun list was written for'],
+      ['Dean Foreman', 'X Co', null, 'a real owner whose SURNAME is a role noun is refused - one role word has never made a title, and a filter tightened until it eats real names is the expensive failure'],
+      ['Miles Sales', 'X Co', null, 'a real owner whose surname is a role word is refused'],
+      ['Comfort Adebayo', 'X Co', null, 'a real first name that is now also a title word is refused beside a surname - the disclosed cost is the BARE first name only'],
+      // Round 139: a licence board, a state filing and a chamber directory all
+      // print a person surname first. The door reads that shape now, and a
+      // comma it could NOT resolve is a firm rather than a person.
+      ['Hoffman, Henry', 'Jax Paver Guys LLC', null, 'a licence record written surname-first is refused or, worse, kept as it stands - the sheet then asks the front desk for "Hoffman", which is his surname offered as his first name'],
+      ['HOWES, LUCAS B', 'Howes Paving LLC', null, 'a shouted record with a middle initial is refused, because the real-name test reads the initial as the surname - a real owner we paid to find is dropped'],
+      ['Ward, Charles P.', 'Ward Plumbing', null, 'a records name with a middle initial after the comma is refused'],
+      ['Baker, Donelson', 'Jax Paver Guys LLC', 'not-a-name', 'a law firm whose name is two surnames is accepted as a person - no SHAPE tells it from "Hoffman, Henry", so only evidence may license a flip and an unresolved comma must be refused'],
+      ['Smith, Jones & Ward LLP', 'Jax Paver Guys LLC', 'not-a-name', 'a firm with a comma and an ampersand is accepted as a person'],
+      ['Johnson, Inc.', 'Jax Paver Guys LLC', 'not-a-name', 'a legal suffix after a comma is accepted as a person'],
+      ['John Smith, Jr.', 'Smith Paving', null, 'a real person signing with a generational suffix is refused by the comma rule - the comma rule must exempt a professional or generational suffix'],
     ];
     for (const [_nm, _co, _want, _msg] of _doorCases) {
       if (ownerNameDoor(_nm, _co) !== _want) _fails.push(_msg);
+    }
+    // A fixture supplies its own arguments and cannot see a caller. The door is
+    // worth nothing unless the ranker asks it about every candidate BEFORE
+    // anybody is clustered, scored or picked, so the call site is pinned here.
+    {
+      const _sD = selfSourceNoCommentsLF();
+      const _nD = (a, b) => a + b;
+      if (!_sD.includes(_nD('const _door = ownerNameDoor(', 'f.name, companyName);'))) {
+        _fails.push('the owner ranker no longer asks the name door about each candidate, so a job title can be clustered, scored and shipped as the decision-maker whatever the door would have said about it');
+      }
+    }
+    // Round 139: the flip itself, on the live function, in both directions.
+    for (const [_in, _out, _msg] of [
+      ['Hoffman, Henry', 'Henry Hoffman', 'a records name with a KNOWN given name after the comma is not reversed'],
+      ['HOWES, LUCAS B', 'Lucas B Howes', 'a shouted records name with a middle initial is not reversed, or is left shouting'],
+      ['Ward, Charles P.', 'Charles P. Ward', 'a records name whose licence is the middle initial is not reversed'],
+      ['Baker, Donelson', 'Baker, Donelson', 'a two-surname law firm is FLIPPED into a person, which would put a firm on the call sheet as a man'],
+      ['Smith, Jones & Ward LLP', 'Smith, Jones & Ward LLP', 'a firm name carrying an ampersand is flipped into a person'],
+      ['Ward, Ward & Associates', 'Ward, Ward & Associates', 'a firm name carrying a legal word is flipped into a person'],
+      ['Johnson, Inc.', 'Johnson, Inc.', 'a legal suffix after a comma is read as a given name'],
+      ['Smith, Jones, Ward', 'Smith, Jones, Ward', 'a list of three surnames is flipped, so a partner list ships as one man'],
+      ['Charles P. Ward', 'Charles P. Ward', 'a real name with no comma in it is rewritten by a rule that should not touch it'],
+      ['Peter Enzinna', 'Peter Enzinna', 'a real name with no comma in it is rewritten'],
+    ]) {
+      if (uninvertPersonName(_in) !== _out) _fails.push(`${_msg} (uninvertPersonName("${_in}") is "${uninvertPersonName(_in)}")`);
+    }
+    // And the RANKER, driven: judging a records name without rewriting the
+    // candidate is half a fix, because the sheet, the ask line, the greeting
+    // and the mailbox guess all read the name this function returns.
+    {
+      const _flip = rankOwnerCandidates([{ name: 'HOWES, LUCAS B', title: 'Owner', source: 'license_or_chamber' }], 'Howes Paving LLC');
+      if (!_flip || _flip.name !== 'Lucas B Howes') {
+        _fails.push(`the ranker hands the sheet ${JSON.stringify(_flip && _flip.name)} for a licence record reading "HOWES, LUCAS B" - the rep would ask for a man by his surname, or for nobody at all`);
+      }
+      if (rankOwnerCandidates([{ name: 'Baker, Donelson', title: 'Owner', source: 'license_or_chamber' }], 'Jax Paver Guys LLC')) {
+        _fails.push('a law firm written "Baker, Donelson" is ranked as the decision-maker of a paving company');
+      }
     }
     // 7. THE WAVE IS BOUGHT ONE SEARCH AT A TIME. A Promise.all between the
     //    stage-2 marker and the settle re-check means the licence credits are
@@ -79090,6 +79374,109 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ OWNER MAILBOX FIRST CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A NAME WE ONLY INFERRED IS NOT A NAME WE MAY WRITE TO ═══════════════
+  // Round 139. A cold email opens with the man's first name, and that greeting
+  // asserts to a stranger that he owns the business. 'inferred' is the grade
+  // for a name nothing but the business's own name puts there: one source, and
+  // the title is an assumption the eponymous settle makes on purpose.
+  //
+  // The defect: ownerEvidenceGrade has graded every owner since it was
+  // written, and every reader of it is a counter, a letter on the sheet or one
+  // scoring term. The send verdict asked it nothing, so an inferred name and a
+  // name three independent sources agree on shipped the same sendable address
+  // - while index.html already refused to count the first one rep-ready. One
+  // rule live on one half of a pair.
+  //
+  // Executed against the live resolver on two fixtures alike in every field
+  // but settledBy, and the call site is pinned beside them: a fixture supplies
+  // its own arguments, so it can prove the rule right while the route never
+  // calls it.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+
+    // ── the grades, from the resolver itself ──────────────────────────────
+    const _own = (x) => Object.assign({
+      name: 'Jay Murray', canBuy: true, corroborated: false,
+      sources: ['own_website_brain', 'business_name'], settledBy: 'roster',
+    }, x || {});
+    const _gradeOf = (x) => ownerEvidenceGrade(_own(x)).grade;
+    // THE PAIR: identical in every field but one, so only the eponymous settle
+    // can be what separates them. A shared fixture is how two guards come to
+    // cover each other and neither revert goes red.
+    const _statedTwin = _gradeOf({});
+    const _inferredTwin = _gradeOf({ settledBy: 'eponymous' });
+    const _agreed = _gradeOf({ corroborated: true, sources: ['own_website_brain', 'web_search', 'registry'] });
+    const _heldBack = _gradeOf({ canBuy: false, blockReason: 'no title we could verify' });
+    if (_inferredTwin !== 'inferred') _fails.push(`a name settled ONLY by the business being named after him grades ${_inferredTwin}, not inferred, so the one grade this rule is about no longer exists`);
+    if (_statedTwin !== 'stated') _fails.push(`the same name, same sources, settled by their own roster instead, grades ${_statedTwin} rather than stated - the pair no longer differs by the eponymous settle alone and neither half proves anything`);
+    if (_agreed !== 'confirmed') _fails.push(`three independent sources agreeing grades ${_agreed}, not confirmed`);
+    if (_heldBack !== 'unconfirmed') _fails.push(`a name the buying floor held back grades ${_heldBack}, not unconfirmed`);
+
+    // ── the rule over them ────────────────────────────────────────────────
+    if (ownerGradeMaySend(_inferredTwin)) _fails.push('a name nothing but the business name puts there may be written to again, so the email opens by telling a stranger we know he owns the place on the strength of his own signage - and jay@jaymurraylaw.com, at a firm called Jay Murray Law, came back undeliverable on exactly that evidence');
+    if (!ownerGradeMaySend(_statedTwin)) _fails.push('their own site saying who owns it is no longer enough to write to him - confirmed-only was measured on the twenty-lead run at 6 of 9 addresses held against 2 sends, and refused');
+    if (!ownerGradeMaySend(_agreed)) _fails.push('a name three independent sources agree on may not be written to, so the rule has eaten the population it exists to protect');
+    if (ownerGradeMaySend(_heldBack)) _fails.push('a name the buying floor held back may be written to');
+    if (ownerGradeMaySend('')) _fails.push('a named owner carrying NO grade at all may be written to - an unmeasured grade is resolving to the permissive side of a rule that reaches a prospect');
+    if (ownerGradeMaySend(_inferredTwin) === ownerGradeMaySend(_statedTwin)) _fails.push('the two halves of the pair are now treated alike, so nothing about the eponymous settle changes what may be sent');
+    if (OWNER_GRADES_MAY_SEND.some(_t => OWNER_GRADES.indexOf(_t) < 0)) _fails.push(`the sendable list names a grade the resolver never returns (${OWNER_GRADES_MAY_SEND.join(', ')}), so the rule is written over a vocabulary nothing produces`);
+
+    // ── and the route actually asks (no fixture can see this) ─────────────
+    if (_src.indexOf(_n('&& out.owner && out.owner.name && ',
+      '!ownerGradeMaySend(out.owner.grade)) {')) < 0) {
+      _fails.push('the contact read no longer asks the grade before it marks an address sendable, so an inferred name ships a cold email addressed to him by first name exactly as a corroborated one does - and the page still refuses to count that row rep-ready, which is the same rule live on one half of a pair');
+    }
+    if (_src.indexOf(_n('OWNER GRADE [${name}]: ${out.email.address} is a real address and it is NOT being sent to',
+      ' - ${out.owner.name} is graded ')) < 0) {
+      _fails.push('the per-lead line that names which business was held and on whose evidence is gone, so a run cannot be told from one where every name was corroborated');
+    }
+    if (_src.indexOf(_n('out.email.blockReason = `no email is sent to ${out.email.address}: ${out.owner.name}',
+      ' is graded ')) < 0) {
+      _fails.push('the held address carries no reason, so the rep is shown an address the engine refused with nothing on the row saying why - or the address was deleted, which trades a bounce for a blank row');
+    }
+
+    // ══ AND THE OTHER HALF OF THE PAIR, WHICH IS THE ONE THAT SENDS ═══════
+    // The Find read's gate governs the SHEET. Every actual send goes out
+    // through /api/research, which resolves its own address four ways - the
+    // contact cache, the email engine, a rebuild off a mangled scrape, and a
+    // vision read of their homepage picture that writes { sendable: true } by
+    // hand - and then /api/send-to-hunter pushes on emailResult.sendable and
+    // reads no grade at all. A check that passes because the FIRST path is
+    // guarded, while the path that sends is open, is the disarmed guard this
+    // file names. Both call sites, and the link between them, are pinned.
+    if (_src.indexOf(_n('&& decisionMaker && decisionMaker.name && _ownerGradeForSend\n',
+      '        && !ownerGradeMaySend(_ownerGradeForSend)) {')) < 0) {
+      _fails.push('the research route marks its own address sendable without asking the owner grade, so a lead the Find read refused to write to is written to the moment research runs on it - and since a send needs a pitch, and a pitch needs research, that route is the one every email actually leaves by');
+    }
+    if (_src.indexOf(_n('emailResult = { ...emailResult, sendable: false,\n',
+      '        blockReason: `no email is sent to ${emailResult.email}:')) < 0) {
+      _fails.push('the research route no longer writes the refusal onto emailResult, so the send door - which refuses on emailResult.sendable and on nothing else - has nothing to read, and the address goes back to being pushed into the sequence');
+    }
+    if (_src.indexOf(_n('if (lead.emailResult && lead.emailResult.sendable === false) {\n',
+      '      results.failed.push({')) < 0) {
+      _fails.push('the send door stopped refusing a lead whose emailResult was marked not sendable - that one line is what carries EVERY address refusal in this file, the owner grade included, into the push that actually mails somebody');
+    }
+    {
+      const _deskAt = _src.indexOf(_n('out.email.companyMailbox === true &&',
+        ' out.email.sendable === true'));
+      const _gradeAt = _src.indexOf(_n('&& out.owner && out.owner.name && ',
+        '!ownerGradeMaySend(out.owner.grade)) {'));
+      if (_deskAt >= 0 && _gradeAt >= 0 && _gradeAt < _deskAt) {
+        _fails.push('the grade rule now runs BEFORE the crew-size rule, so a shared inbox at a fifty-person firm is refused for the wrong reason and the row tells the rep to ask a different question than the one that matters');
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ OWNER GRADE SEND CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ OWNER GRADE SEND CHECK: an email is addressed to a named person only when the resolver graded him ${OWNER_GRADES_MAY_SEND.join(' or ')}. Executed on the live resolver: two owners alike in every field but the eponymous settle grade stated and inferred, and only the first may be written to; a name three sources agree on still may; a name the buying floor held back may not; and a named owner with no grade at all may not. BOTH halves are pinned at their call sites - the Find read, which decides the sheet and runs after the crew-size rule so a front desk keeps its own reason, and the research route, which resolves its own address four ways and is the one every send actually leaves by - and so is the send door's refusal on emailResult.sendable, which is the single line carrying every address refusal into the push. The address, the name and the pivot line stay on the row: the lead keeps its seat on the call sheet, only the send stops.`);
+    }
+  } catch (e) {
+    console.log(`⛔ OWNER GRADE SEND CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
 
@@ -84240,6 +84627,30 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       out.email.blockReason = `no email is sent to ${out.email.address}: ${_why}. The address is real and it is on the row - call it instead.`;
       console.log(`\u{1F4EA} FRONT DESK [${name}]: ${out.email.address} is a real mailbox and it is NOT being sent to - ${_why}. A complaint from a shared inbox is charged to the sending domain, so it costs every later lead, not this one.`);
     }
+  }
+  // ══ THE GRADE DECIDES THE SEND, AND IT DECIDED NOTHING ════════════════
+  // ownerEvidenceGrade has graded every owner since it was written, and every
+  // reader of that grade is a counter, a letter on the sheet or one scoring
+  // term. Nothing on the send path asked it, so a name settled by the
+  // business's own name shipped an address marked sendable and the email
+  // opened with his first name - which asserts, to a stranger, that he owns
+  // the place. index.html already refuses to count that row rep-ready
+  // (contactOwnerGrade confirmed or stated); the server did not, so one rule
+  // was live on one half of a pair - the class recorded in Rounds 121, 125
+  // and 136.
+  //
+  // Decided HERE and AFTER the crew-size rule, so a front desk keeps its own
+  // reason: both facts are on `out` by this line and nothing has been written
+  // yet. The name, the address and the pivot line are untouched - the rep
+  // keeps the whole row and the lead stays on his call sheet. Only the
+  // permission to SEND moves, and the row says why in words.
+  if (out.email && out.email.address && out.email.sendable === true
+      && out.owner && out.owner.name && !ownerGradeMaySend(out.owner.grade)) {
+    const _og = String(out.owner.grade || 'not graded at all');
+    const _ask = out.owner.askAs || `Ask for ${out.owner.name}; if he is not the owner, ask who is.`;
+    out.email.sendable = false;
+    out.email.blockReason = `no email is sent to ${out.email.address}: ${out.owner.name} is graded ${_og} as the owner - ${out.owner.gradeWhy || 'nothing we read names him as the owner'}. The address is real and it is on the row - call it instead. ${_ask}`;
+    console.log(`\u{1F4DB} OWNER GRADE [${name}]: ${out.email.address} is a real address and it is NOT being sent to - ${out.owner.name} is graded ${_og} as the owner (${out.owner.gradeWhy || 'nothing we read names him as the owner'}). An email opening with his first name tells him we know he owns this business, and one source cannot carry that claim. ${_ask}`);
   }
   let _ml = pickMarketingLead(signals.teamNames, signals.teamTitles);
   // ══ ROUND 121: ASK WHEN WE HAVE NOBODY, NOT ONLY WHEN THEY HAVE AN ORG ══

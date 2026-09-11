@@ -59,8 +59,12 @@ receptionists, the owner's out of office, a million layers", the reachable buyer
 one rung down, the marketing decision-maker: CMO, VP of Marketing, Director of
 Marketing. A Marketing Manager or Coordinator is never the buyer ("if they can't
 sign then what's the point"). Size never decides this: "a business doing $5M could
-be a guy named Darrel", and Darrel is the owner and the target. The rule is
-executed, not written, by `SIZE AND LAYERS CHECK`.
+be a guy named Darrel", and Darrel is the owner and the target. Since 2026-09-11
+(Vin): **one person per business, the owner first** — a named decision-maker is
+written to only when the owner cannot be found, never both. On 16.5M cold emails
+the reply rate falls with every extra contact at the same company: 7.80% at one,
+6.02% at five, 3.80% at ten or more. The rule is executed, not written, by
+`SIZE AND LAYERS CHECK`.
 
 **A check that cannot fail is not a check.** See PART 6.
 
