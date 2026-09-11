@@ -5274,11 +5274,36 @@ const ICP_PREMIUM_RETAINER_MONTHLY = 10000;   // the '$10k' in OUR_PRICE_FIGURES
 // Round 114 (Vin, 2026-09-03): the ceiling is a REACHABILITY rule, never an
 // affordability one - "there is no top of the retainer; we would do a $50k a
 // day retainer if we got the deal". It marks where the phone stops reaching the
-// person who signs; a big company is an EMAIL lead, never dropped. $30M -> $35M
-// is headroom on a MEASURED number (a directory figure can be 30% off), and an
-// owner-run business over it stays on the call sheet up to the reach line.
-const ICP_REVENUE_BAND = { floor: 0.8e6, coreFrom: 1.2e6, upperFrom: 10e6, ceiling: 35e6 };
-const ICP_CALL_REACH_CEILING = 50e6;   // owner within reach and measured under this: still a call (Vin, 2026-09-03)
+// person who signs, and an owner-run business over it stays on the call sheet
+// up to the reach line.
+// ══ ROUND 139 (Vin, 2026-09-11): THE CEILING IS $15M AND THE WRITTEN ICP WON ══
+// The written ICP has said $800k-$15M for the life of this system; five
+// comments in this file quote that range; and the code carried $35M with the
+// number 15e6 appearing NOWHERE in it. Nothing measured the gap, so the ladder
+// drifted away from the document it is meant to execute. Vin ruled on
+// 2026-09-11 that the written ICP wins, which reverses the $35M he ruled on
+// 2026-09-03. Every cut is this table divided by a benchmark, so the staff
+// cuts, the truck cuts and the discovery employee gate all follow it down: 75
+// people, not 175, is now where a business leaves the call sheet.
+//
+// ══ AND THE REACH LINE DID NOT MOVE WITH IT (Vin, 2026-09-11) ═════════════
+// The first draft of this round scaled the reach line down with the cap, on
+// the arithmetic that $50M was ten sevenths of $35M. That was the wrong kind
+// of reasoning, and Vin settled it on the business rather than on the ratio:
+// a $24M roofing company, about 120 people, still run by the founder, his
+// name and his own address on the site - phone him, or just email him?
+// "id say do both for sure we should email him and phone him."
+//
+// The two numbers answer different questions and only one of them changed.
+// The CAP asks whether a business FITS what we sell, and that moved to $15M.
+// The REACH LINE asks whether the PHONE reaches the person who signs, and
+// nothing about a founder who answers his own phone changed on 2026-09-11:
+// he answers it at $24M exactly as he does at $9M. So it stays typed at the
+// number Vin ruled, and it is deliberately NOT derived from the cap - a ratio
+// nothing else reads is the same fact kept in two places waiting to drift,
+// which is the failure this whole round exists to correct.
+const ICP_REVENUE_BAND = { floor: 0.8e6, coreFrom: 1.2e6, upperFrom: 10e6, ceiling: 15e6 };
+const ICP_CALL_REACH_CEILING = 50e6;   // owner within reach and measured under this: still a call (Vin, 2026-09-03, re-affirmed 2026-09-11)
 const ICP_REVENUE_PER_EMPLOYEE = 200000;      // HVAC/plumbing/electrical $160-280k per head (MarginPlug, Tradesly, SubcontractorHub; Vertical IQ: 12 people ~= $2.9M), 2026-09-03
 const ICP_REVENUE_PER_TRUCK = 300000;         // $250-400k per truck, home services (Service Autopilot), 2026-09-03
 // Keyed by the CATEGORY_TIER label. A trade with no row uses the default; a
@@ -5407,7 +5432,7 @@ const LANE_TIERS = { call: ['entry', 'core', 'upper'], email: ['core', 'upper', 
 // And the call lane means a NAMED owner within reach: a read lead with a
 // phone and nobody named is the "no name yet" bucket, off the rep's sheet.
 const SIZE_WORD_TIER = { low: 'entry', medium: 'core', high: 'upper' };
-const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national, siteless, phone } = {}) => {
+const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national, siteless, phone, siteMarketingHead } = {}) => {
   const why = [];
   let t = SCALE_TIERS.includes(tier) ? tier : null;
   let measured = !!t;
@@ -5426,6 +5451,17 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
     t = 'entry';
     why.push(`under the floor on a ${sizeConfidence || 'guess'} - kept as low`);
   }
+  // ══ ROUND 139 (Vin, 2026-09-11): THE SAME HEADROOM AT THE TOP ══════════
+  // Round 114 gave the FLOOR headroom and left the ceiling hard, so the two
+  // ends of one ladder disagreed about what a guess is worth: a guess under
+  // $800k stayed on the rep's sheet and a guess over the cap was taken off it.
+  // A guess is the thing most likely wrong in both directions, and with the cap
+  // down at $15M the top end is the one a review count now reaches. Only a
+  // MEASURED size moves a business into the email-only lane.
+  if (t === 'over_ceiling' && sizeConfidence !== 'likely' && sizeConfidence !== 'sure') {
+    t = 'upper';
+    why.push(`over the cap on a ${sizeConfidence || 'guess'} - kept as high and still callable; only a measured size comes off the call sheet`);
+  }
   // Round 113 (Vin, 2026-09-03): a product company is kept, as an email lead.
   const layered = layers === 'layered', ts = source === 'theirstack', prod = product === true;
   // Round 114: a branch network, a PE-owned company and a national operator are
@@ -5440,7 +5476,16 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
   // business under the cap STAYS on the call sheet, ranked last and marked, and
   // the rep asks for the marketing head. Only a TheirStack lead (no phone) and
   // a product company (a sales line) are never on it.
-  const inCall = (LANE_TIERS.call.includes(t) || reach) && !ts && !prod;
+  // ══ ROUND 139 (Vin, 2026-09-11): A NAMED MARKETING DIRECTOR IS NOT A CALL ══
+  // Government arithmetic, not a hunch: BLS OEWS May 2023 counts about one
+  // Marketing Manager for every 442 specialty-trade establishments in Census
+  // CBP 2023. A trade business that publishes a Director of Marketing on its
+  // own team page is therefore, on the numbers alone, far bigger and more
+  // layered than the sheet the rep dials - receptionists, and the owner out of
+  // office. It is NOT benched: it keeps the email lane and that director is
+  // who the email goes to. It loses the call lane only.
+  const siteHead = siteMarketingHead === true;
+  const inCall = (LANE_TIERS.call.includes(t) || reach) && !ts && !prod && !siteHead;
   // ══ ROUND 121: A BUSINESS WITH NO WEBSITE IS THE CLEAREST LEAD WE FIND ══
   // Vin, 2026-09-04, ruling on two leads from that press: Delta Solar Power
   // (232 reviews) and American Dream Solar (305), both with a phone and no
@@ -5472,6 +5517,7 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
   if (big && !inCall && LANE_TIERS.email.includes(t)) why.push(`${big} - email, the marketing decision-maker at head office`);
   if (ts && LANE_TIERS.call.includes(t)) why.push('a TheirStack lead - email only');
   if (prod && LANE_TIERS.call.includes(t)) why.push(LANE_TIERS.email.includes(t) ? 'a product company - email only' : 'a product company - email whatever the size guess, its reviews do not measure a manufacturer');
+  if (siteHead && (LANE_TIERS.call.includes(t) || reach)) why.push('their own site names a marketing director, so the buying decision sits behind a marketing department - email only, and that director is who it goes to');
   if (_sitelessCall) why.push('no working website, so nobody can be named from their own pages - on the call sheet last, with the number to ask who runs it');
   if (noname) why.push('nobody named yet - off the call sheet until a name is found');
   if (LANE_TIERS.email.includes(t) && !email && !noname) why.push('nobody named to write to');
@@ -7230,6 +7276,9 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   // rather than inferred, and the fix is a retainer rather than a page edit.
   const citiesSearchedByCat = new Map();
   let calls = 0, skippedFranchise = 0, skippedCatCap = 0, skippedTooBig = 0, skippedNoPain = 0, keptNoWebsite = 0, keptBuilder = 0, lowRatingKept = 0;
+  // Round 139: branches dropped on the URL Google already handed us, before a credit moves.
+  let skippedBranchUrl = 0;
+  const _branchWhy = [];
   // The review floor is now the gate that decides whether a business is
   // established enough to be worth researching - the star band used to do it
   // and no longer does - so it needs a counter like every other gate here.
@@ -7455,6 +7504,28 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
           _tooBigWhy = `${reviews} Google reviews, above the ${GP_MAX_REVIEWS} ceiling \u2014 at this volume a business is often multi-location or already agency-managed. Review count measures whether they ASK, not how big they are, so this is a sort position and not a fact about them.`;
         }
         if (GP_FRANCHISE.test(name)) { skippedFranchise++; continue; } // franchise ≠ owner-reachable
+        // ══ ROUND 139: THE BRANCH TELL THAT COSTS NOTHING, AT THE PRESS ════
+        // GP_FRANCHISE above is a hand-kept list of brands somebody remembered
+        // and its own comment says so: it catches the franchise that has
+        // already burned money and misses the next one. readOutletTell is the
+        // opposite kind of rule. It reads the URL Google has already handed us
+        // - a locations. or stores. subdomain, a /locations/<city> path, a town
+        // slug inside a longer segment on a host not named after that town -
+        // and it needs no list, no request and no credit.
+        //
+        // It ran only at the contact read, which is about five Firecrawl
+        // credits too late. Vin ruled on 2026-09-11 that a branch network is
+        // dropped like a franchise, and this is the only place where that
+        // ruling saves the money: after this line the lead has been paid for.
+        // Nothing new is bought here - the website came back with the listing.
+        if (website) {
+          const _branch = readOutletTell({ name, homeUrl: website, city });
+          if (_branch.isOutlet) {
+            skippedBranchUrl++;
+            if (_branchWhy.length < 4) _branchWhy.push(`${name}: ${_branch.why}`);
+            continue;
+          }
+        }
         // ── ALREADY IN THE PIPELINE: SKIP IT HERE, NOT AT THE END ──────────
         // Before the per-category slot, so the slot goes to a business we do not
         // already own. This is the whole fix for repeat leads: the run stops
@@ -7614,6 +7685,9 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   // local manager does not own the marketing, so there is no engagement to sell
   // however reachable he is. This is the one filter in this function where the
   // business is genuinely not our ICP rather than merely sorted lower.
+  if (skippedBranchUrl) {
+    console.log(`\u{1F517} BRANCH URL [Places]: ${skippedBranchUrl} business(es) dropped before a credit moved - their own Google listing points at one location's page inside a bigger site rather than at a home page of their own \u2014 ${_branchWhy.join(' | ')}. The number on that listing reaches a branch and the marketing budget is set at head office, so there is no engagement to sell. Read from the URL Google returned, so this costs nothing and it happens at the press instead of after the site read.`);
+  }
   let skippedChain = 0;
   {
     // ══ AND THE MEMORY IT NEVER HAD ══════════════════════════════════
@@ -7663,7 +7737,7 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   for (let i = 0; buckets.some(b => i < b.length); i++) {
     for (const b of buckets) if (i < b.length) interleaved.push(b[i]);
   }
-  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises by name${skippedChain ? `, ${skippedChain} chain outlet(s) measured` : ''}, ${skippedTooBig ? `${skippedTooBig} too big DELETED` : `${demotedTooBig} too big demoted`}, ${skippedCatCap} over per-category cap${skippedAlreadyOwned ? `, ${skippedAlreadyOwned} already in your pipeline` : ''})`);
+  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises by name${skippedBranchUrl ? `, ${skippedBranchUrl} branch address(es) by URL` : ''}${skippedChain ? `, ${skippedChain} chain outlet(s) measured` : ''}, ${skippedTooBig ? `${skippedTooBig} too big DELETED` : `${demotedTooBig} too big demoted`}, ${skippedCatCap} over per-category cap${skippedAlreadyOwned ? `, ${skippedAlreadyOwned} already in your pipeline` : ''})`);
   // ══ HOW DEEP THE RUN ACTUALLY REACHED ════════════════════════════════════
   // The number to watch when leads feel repetitive. Places answers each query
   // with its twenty most prominent businesses in the same order every time, so
@@ -7754,7 +7828,7 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   if (tally && typeof tally === 'object') {
     tally.seen = seenFromGoogle;
     tally.underFloor = skippedUnderFloor;
-    tally.franchise = skippedFranchise + skippedChain;
+    tally.franchise = skippedFranchise + skippedChain + skippedBranchUrl;
     tally.alreadyOwned = skippedAlreadyOwned;
     tally.catCap = skippedCatCap;
     tally.demoted = benched.length;
@@ -12291,6 +12365,25 @@ const ownerAskLine = (name, grade, why) => {
   if (grade === 'inferred') return `Likely, not confirmed \u2014 ${why}. Ask for ${first}; if he is not the owner, ask who is.`;
   return `NOT confirmed \u2014 ${why || 'we could not verify this person'}. Ask for ${first}; if he is not the owner, ask who is.`;
 };
+// ══ WHICH OF THE GRADES MAY BE WRITTEN TO ═════════════════════════════════
+// A cold email opens with the man's first name, and that greeting ASSERTS he
+// owns the business. So the grade has to decide the send, and until now
+// nothing on the send path read it at all: a name graded 'inferred' - the
+// business is named after him and no other source names an owner - got the
+// same email, opening with the same first name, as a name three independent
+// sources agree on.
+//
+// Vin, 2026-09-11, after a deliverability test on the twenty-lead run:
+// confirmed or stated may be written to, inferred may not. Confirmed-only was
+// measured against the same run and refused - it would have held 6 of the 9
+// addresses that run produced, against 2 sends - so 'stated', their own site
+// saying who owns it, stays sendable.
+//
+// ONE declaration. index.html counts a rep-ready row on these same two tokens
+// and two hand-kept copies of one rule is the class this file records most;
+// clientcheck executes THIS list against the page's own rule.
+const OWNER_GRADES_MAY_SEND = ['confirmed', 'stated'];
+const ownerGradeMaySend = (grade) => OWNER_GRADES_MAY_SEND.indexOf(String(grade || '')) >= 0;
 const DM_CONFIDENCE_AT = { high: 80, medium: 50 };
 const dmConfidenceFor = (score) => {
   // typeof FIRST. Number(null) is 0 and Number.isFinite(0) is true, so an
@@ -14019,6 +14112,17 @@ const ROLE_WORDS = new Set([
   'manager', 'director', 'coordinator', 'specialist', 'support', 'service', 'services',
   'team', 'crew', 'development', 'business', 'quality', 'safety', 'production', 'finance',
   'hr', 'people', 'talent',
+  // Round 139: "Design Consultant" walked through the name door as a person, so
+  // a rep would have rung a remodeler and asked the front desk for him. The
+  // words a trade writes its sales titles out of were the gap - "design",
+  // "comfort", "advisor" and "master" are in no list here, so the every-token
+  // rule could never see a title made of them, and "Master Plumber" is the
+  // example the role-noun list itself cites. DISCLOSED COST, the same shape the place
+  // rule discloses: "Comfort" is a real first name, and a signature reading
+  // "Comfort" ALONE is now refused. A first name beside a surname is untouched,
+  // because one role word never makes a title - "Comfort Adebayo" is a person
+  // and so is "Ann Lead".
+  'advisor', 'advisors', 'comfort', 'design', 'master',
 ]);
 const allRoleWords = (s) => {
   const w = normalizeTitleWords(s).split(' ').filter(Boolean);
@@ -35008,14 +35112,84 @@ const HEADLINE_WORD_RE = /^(?:busting|breaking|choosing|finding|avoiding|underst
 // as a FIRST name are refused here; they are vanishingly rare as first names
 // and the commonest heads of a region.
 const PLACE_HEAD_RE = /^(?:greater|metro|metropolitan|downtown|uptown|midtown|central|north|south|east|west|northern|southern|eastern|western|northeast|northwest|southeast|southwest|upper|lower|coastal|inland|family|locally|serving)$/i;
+// A middle initial and a professional suffix are the two markers a collective
+// never carries. Declared here rather than beside the eponymous licence below,
+// because the door reads them too now and two copies of one marker list is the
+// disease this file records most.
+const PERSON_INITIAL_RE = /(?:^|\s)[A-Za-z]\.(?:\s|$)/;
+const PERSON_SUFFIX_RE = /(?:^|[\s,(])(?:MD|DDS|DMD|DVM|PhD|Esq|Jr|Sr|II|III|IV|CPA)\b/;
+// Case-insensitive twin of the one declaration above, the way CORP_ONE is built
+// from CORP_WORDS: a registry writes "HOWES, LUCAS B" and a roster writes
+// "John Smith, jr." and neither is a different rule.
+const PERSON_SUFFIX_ONE = new RegExp(PERSON_SUFFIX_RE.source, 'i');
+// ══ A RECORDS SYSTEM WRITES A PERSON SURNAME FIRST ════════════════════════
+// A contractor licence board, a state filing and a chamber directory all print
+// "HOFFMAN, HENRY". Nothing in this file reversed it, and the same shape failed
+// in two opposite directions: "Hoffman, Henry" walked the door as a person and
+// the call sheet read "Ask for Hoffman," - his SURNAME, offered to the rep as
+// his first name, with the email greeting built from the same token - while
+// "HOWES, LUCAS B" was refused outright, because the real-name test reads the
+// last token as the surname and the last token was his middle initial. One is a
+// fabricated first name in front of a stranger; the other silently drops a real
+// owner we paid to find.
+//
+// The flip is licensed by EVIDENCE, never by the shape alone, because "Baker,
+// Donelson" is a law firm and "Hoffman, Henry" is a man, and no shape rule can
+// separate them. Three things must hold: one comma with a single surname-shaped
+// word in front of it, a tail of at most two name-shaped words with no "&" and
+// no legal word in it, and then either a KNOWN given name (the declared
+// GIVEN_NAMES list the reachability predictor already runs on) or a middle
+// initial, which is what a records system prints and a firm name never carries.
+// Anything else comes back untouched and the door refuses it below, because a
+// name where we cannot tell the first name from the surname cannot be spoken to
+// a receptionist - PART 3: we would rather say nothing than say something wrong.
+//
+// SHOUTING IS UNDONE ONLY ON A NAME WE ARE ALREADY REWRITING: an all-capitals
+// token becomes Capitalised, so "HOWES, LUCAS B" reaches the sheet as
+// "Lucas B Howes". McDonald, O'Brien and the initial itself are untouched.
+const uninvertPersonName = (raw) => {
+  const s = String(raw || '').trim();
+  if (!s.includes(',')) return s;
+  const parts = s.split(',');
+  if (parts.length !== 2) return s;                       // an address or a list, not an inversion
+  const head = parts[0].trim(), tail = parts[1].trim();
+  if (!head || !tail) return s;
+  if (/&|\band\b/i.test(s)) return s;                     // a partnership or a firm
+  if (!/^[A-Za-z][A-Za-z'\u2019-]{1,24}$/.test(head)) return s;   // the surname slot is one word
+  const tt = tail.split(/\s+/).filter(Boolean);
+  if (!tt.length || tt.length > 2) return s;
+  if (!tt.every(t => /^[A-Za-z][A-Za-z'\u2019-]*\.?$/.test(t))) return s;
+  if (PERSON_SUFFIX_ONE.test(' ' + tail) || CORP_ONE.test(head) || tt.some(t => CORP_ONE.test(t.replace(/\.$/, '')))) return s;
+  const known = GIVEN_NAMES.has(tt[0].toLowerCase().replace(/[^a-z]/g, ''));
+  const initial = tt.slice(1).some(t => /^[A-Za-z]\.?$/.test(t));
+  if (!known && !initial) return s;                       // we cannot tell a firm from a man: leave it
+  const _case = (t) => /^[A-Z][A-Z'\u2019-]+$/.test(t) ? t[0] + t.slice(1).toLowerCase() : t;
+  return [...tt.map(_case), _case(head)].join(' ');
+};
 const ownerNameDoor = (name, companyName = '', allowOrgWord = false) => {
-  const s = String(name || '').trim();
-  if (!s) return 'empty';
+  const _raw = String(name || '').trim();
+  if (!_raw) return 'empty';
+  // Surname-first is read as the person it names before anything judges it, and
+  // a comma we could NOT resolve that way is a firm ("Baker, Donelson") or a
+  // name whose first name we cannot identify. Both are refused here: the one
+  // exception is a professional suffix, which is how a licensed individual
+  // signs ("David B. Brothers, MD").
+  const s = uninvertPersonName(_raw);
+  if (s.includes(',') && !PERSON_SUFFIX_ONE.test(s)) return 'not-a-name';
   const toks = s.split(/[\s\/\-]+/).filter(Boolean);
   if (toks.some(t => NAV_WORD_RE.test(t))) return 'not-a-name';
   if (toks.some(t => HEADLINE_WORD_RE.test(t.replace(/[.,:]$/, '')))) return 'not-a-name';
   if (!allowOrgWord && toks.some(t => ORG_TOKEN_RE.test(t.replace(/[.,]$/, '')))) return 'not-a-name';
-  if (toks.every(t => OWNER_WORD_RE.test(t) || ROLE_WORDS.has(t.toLowerCase()))) return 'title';
+  // Round 139: the door asked ONE of this file's two role-word lists, and the
+  // roster parsers have asked BOTH for their whole lives (a name is refused
+  // there when allRoleWords OR FIND_ROLE_NOUN hits). So "Design Consultant" and
+  // "Project Engineer" were refused on a team page and accepted as people from
+  // every other owner source - the licence boards, the web search, the registry
+  // - because "consultant" and "engineer" live in the list the door did not
+  // read. Two hand-kept copies of one rule is the class this file records most;
+  // the door now reads both. EVERY token must still be a role word, which is
+  // what keeps "Dean Foreman", "Miles Sales" and "Ann Lead" people.
+  if (toks.every(t => OWNER_WORD_RE.test(t) || ROLE_WORDS.has(t.toLowerCase()) || FIND_ROLE_NOUN.test(t))) return 'title';
   if (allRoleWords(s)) return 'title';
   const _flat = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').replace(/^the /, '').trim();
   const _co = _flat(companyName), _nm = _flat(s);
@@ -35046,8 +35220,6 @@ const ownerNameDoor = (name, companyName = '', allowOrgWord = false) => {
 // is a person. DISCLOSED COST: a real "Mike Brothers" with no initial and no
 // suffix anywhere is still refused, and that is the safer direction.
 const EPONYM_DOOR_SOURCE = new Set(['license_or_chamber', 'bbb_profile', 'own_website_brain', 'business_name', 'opencorporates']);
-const PERSON_INITIAL_RE = /(?:^|\s)[A-Za-z]\.(?:\s|$)/;
-const PERSON_SUFFIX_RE = /(?:^|[\s,(])(?:MD|DDS|DMD|DVM|PhD|Esq|Jr|Sr|II|III|IV|CPA)\b/;
 const eponymousDoorLicence = (f, companyName, door) => {
   if (door !== 'not-a-name') return null;
   const name = String((f && f.name) || '').trim();
@@ -35064,8 +35236,25 @@ const eponymousDoorLicence = (f, companyName, door) => {
 const rankOwnerCandidates = (found, companyName = '') => {
   if (!found || !found.length) return null;
   const clusters = [];
-  for (const f of found) {
-    if (!f || !f.name) continue;
+  for (const _f0 of found) {
+    if (!_f0 || !_f0.name) continue;
+    // ══ SURNAME-FIRST IS READ HERE, WHERE EVERY SOURCE PASSES ══════════════
+    // Not in the licence reader: five sources feed this ranker and the door
+    // exists precisely because each of them validating its own output by its
+    // own rule is how "Owner-Operator" reached a sheet. A records-style name is
+    // the same shape of failure, so it is resolved once, at the funnel, and the
+    // CANDIDATE is rewritten rather than only judged - the sheet, the ask line,
+    // the greeting and the mailbox guess all read this name.
+    const _un = uninvertPersonName(_f0.name);
+    const f = _un === _f0.name ? _f0 : { ..._f0, name: _un };
+    if (_un !== _f0.name) {
+      const _uk = 'flip|' + _f0.source + '|' + _f0.name;
+      if (!_ownerDoorSaid.has(_uk)) {
+        _ownerDoorSaid.add(_uk);
+        if (_ownerDoorSaid.size > 5000) _ownerDoorSaid.clear();
+        console.log(`DM/door [${companyName || '?'}]: ${_f0.source} names him "${_f0.name}", which is a records listing written surname first - read as "${_un}", so the sheet asks for him by his FIRST name instead of his last.`);
+      }
+    }
     // Round 116: a retired title is refused whatever the source said.
     if (f.title && RETIRED_RE.test(String(f.title))) { console.log(`DM/door [${companyName || '?'}]: "${f.name}" (${f.title}) is retired - refused before ranking`); continue; }
     const _door = ownerNameDoor(f.name, companyName);
@@ -40776,6 +40965,23 @@ const WEIGHTS = {
     });
 
     console.log(`After size gate: ${sizeGated.length} kept | blocked ${blockedCount} (${JSON.stringify(blockReasons)})`);
+    // ══ THE LOSS THE YIELD REPORT COULD NOT NAME ════════════════════════════
+    // The FIND YIELD line below has a row for this and nothing ever wrote it, so
+    // the row was dropped as undefined before the line printed and the "largest
+    // single loss" sentence could never name the gate that deletes the most. Two
+    // gates refuse a lead on its name at a Find press and both are counted here:
+    // the ICP filter above, whose twelve name branches are the one door every
+    // source goes through, and the size gate's four name blocks (a verified
+    // headcount DEMOTES since Round 114, so every block it still counts is a
+    // name or an industry tag, never a size).
+    //
+    // Counted as the DIFFERENCE each filter made rather than by a counter inside
+    // it, because a counter has to be remembered by whoever adds the thirteenth
+    // branch and a difference cannot be forgotten. Disclosed: two of those
+    // seventeen branches refuse on something other than the name - an enterprise
+    // job title in the posting, and a verified staffing industry tag - and both
+    // are unreachable for a Places lead, which is every lead in daily use.
+    _findYield.notIcp = (allCompanies.length - icpFiltered.length) + blockedCount;
 
     // SIGNAL STACKING — merge across sources, union signals
     const merged = new Map();
@@ -53441,6 +53647,42 @@ const _CLEARED = /\b(NOT flagged|not a flag|no claims? flagged|no flagged claims
       console.log(`OWNER/EMAIL MATCH [${company}]: ${ownerEmailMatch} — ${ownerEmailMatchReason}`);
     }
 
+    // ══ THE SAME RULE, ON THE OTHER HALF OF THE PAIR ═════════════════════
+    // The Find read refuses to mark an address sendable when the owner's grade
+    // is not one we may write to. THIS route resolves its own address and none
+    // of its routes pass through that rule, so the two halves disagreed about
+    // the same business: the sheet said "not sent to", research said sendable,
+    // and /api/send-to-hunter - which blocks on emailResult.sendable and reads
+    // no grade at all - pushed it into the sequence. Every send goes through
+    // this route (the Send tab needs a pitch, which needs research), so the
+    // rule applied only at the Find read governed the sheet and nothing that
+    // actually went out.
+    //
+    // Placed HERE, not at the engine door: emailResult is assigned in four
+    // places on this route, and the last of them - the vision recovery, which
+    // reads an address off a picture of their homepage - builds { sendable:
+    // true } by hand without going near findEmailFireproof. This is the last
+    // line before anything reads the verdict, so all four arrive at it.
+    //
+    // ownerGradeMaySend is the ONE declaration: the same function the Find
+    // read calls and the same one clientcheck executes against the page.
+    //
+    // An owner with NO grade is left exactly as it was. That is the contact
+    // CACHE arm: contact_cache has no grade column, so a name reused from a
+    // previous research run comes back ungraded, and re-deriving a grade from
+    // the columns it does keep would manufacture evidence - an eponymous
+    // settle would read as "their own site states it", which is the opposite
+    // of true. The column is the fix and it needs a migration.
+    const _ownerGradeForSend = String((decisionMaker && decisionMaker.evidenceGrade) || '');
+    if (emailResult && emailResult.email && emailResult.sendable === true
+        && decisionMaker && decisionMaker.name && _ownerGradeForSend
+        && !ownerGradeMaySend(_ownerGradeForSend)) {
+      const _askFor = decisionMaker.askAs || `Ask for ${decisionMaker.name}; if he is not the owner, ask who is.`;
+      console.log(`\u{1F4DB} OWNER GRADE [${company}]: ${emailResult.email} is a real address and it is NOT being sent to - ${decisionMaker.name} is graded ${_ownerGradeForSend} as the owner (${decisionMaker.evidenceWhy || 'nothing we read names him as the owner'}). An email opening with his first name tells him we know he owns this business, and one source cannot carry that claim. ${_askFor}`);
+      emailResult = { ...emailResult, sendable: false,
+        blockReason: `no email is sent to ${emailResult.email}: ${decisionMaker.name} is graded ${_ownerGradeForSend} as the owner - ${decisionMaker.evidenceWhy || 'nothing we read names him as the owner'}. The address is real and the name is on the row - call instead of writing. ${_askFor}` };
+    }
+
     const reach = scoreReachability({
       // Observed behaviour: does this owner answer strangers? Measured from how
       // many of the reviews we actually read carry an owner reply.
@@ -62361,7 +62603,9 @@ app.listen(PORT, () => {
     // ── 2. THE MECHANISM: WHAT THE BUSINESS SAYS ABOUT ITSELF ──────────
     const _pg = (url, text) => ({ url, text, html: text });
     const _chainCases = [
-      // Round 114: a KIND per case - 'franchise' drops, 'network' is kept as an email lead, false is an independent.
+      // Round 114 gave each case a KIND; Round 139 (Vin, 2026-09-11) drops BOTH
+      // kinds. The kind still decides the REASON on the row and the sentence the
+      // note carries, so it is still asserted per case; false is an independent.
       ['a team page naming a Franchise Owner', { pages: [_pg('https://trulynolen.com/', 'Pest control since 1938.')], rosterTitles: ['Majority Franchise Owner', 'Operations Manager'], links: [] }, 'franchise'],
       ['a per-state locations URL we read', { pages: [_pg('https://www.windownation.com/locations/north-carolina/charlotte', 'Windows.')], rosterTitles: [], links: [] }, 'network'],
       ['a per-state locations URL in their own nav', { pages: [_pg('https://x.com/', 'Windows.')], rosterTitles: [], links: ['https://x.com/locations/texas/austin'] }, 'network'],
@@ -62417,10 +62661,29 @@ app.listen(PORT, () => {
           ? `${what} is not read as a chain, and that is a ${want} bought at full price`
           : `${what} is read as a CHAIN, and on the drop rule that deletes a real lead`);
       } else if (wantChain && got.kind !== want) {
-        // Round 114 (Vin): a branch network is a LARGE company kept for email; only a franchise drops.
-        _fails.push(`${what} is read as ${got.kind || 'a chain of no kind'} and should be ${want} - ${want === 'network' ? 'a large company was dropped as a franchise' : 'a franchise was kept as an email lead'}`);
+        // Round 139 (Vin): both kinds drop. The kind decides the REASON the row
+        // carries, and a wrong reason on a dropped lead is a wrong sentence.
+        _fails.push(`${what} is read as ${got.kind || 'a chain of no kind'} and should be ${want} - both drop, but the row would carry ${want === 'network' ? 'the franchisor sentence about a business that has no franchisor' : 'the branch sentence, and the franchisor who owns the marketing fund is never named'}`);
       }
     }
+    // ══ ROUND 139 (Vin, 2026-09-11): A BRANCH NETWORK IS DROPPED, NOT MARKED ══
+    // Alpha Foundations Repair Tampa was read as a branch network on a live run
+    // and still cost the whole contact read, because Round 114 only MARKED it
+    // and every gate that stops a spend asks notIcp. One declaration answers
+    // for both kinds now, and it is executed here on the shape that lead had.
+    {
+      const _alpha = readChainEvidence({ pages: [_pg('https://www.alphafoundations.com/locations/fl/tampa', 'Foundation repair in Tampa.')], rosterTitles: [], links: [], name: 'Alpha Foundations Repair Tampa' });
+      if (_alpha.kind !== 'network') _fails.push(`the Alpha Foundations shape reads as "${_alpha.kind || 'nothing at all'}" rather than a branch network, so the drop cannot fire on it`);
+      if (chainIsOutOfIcp(_alpha) !== true) _fails.push('a business whose own site publishes a per-city location page under a state is NOT out of the ICP - a branch network is read, marked, and then bought at full price, which is exactly what Alpha Foundations Repair Tampa cost on a live run');
+      if (chainIsOutOfIcp({ isChain: true, kind: 'franchise' }) !== true) _fails.push('a franchise outlet is no longer out of the ICP');
+      if (chainIsOutOfIcp(readChainEvidence({ pages: [_pg('https://x.com/', 'Family owned since 1998. We serve the whole county.')], rosterTitles: ['Owner'], links: [] })) !== false) _fails.push('an independent family business reads as out of the ICP, and this rule DELETES the lead');
+      if (chainIsOutOfIcp(readChainEvidence({ pages: [], rosterTitles: [], links: [] })) !== false) _fails.push('a site we could not read at all is dropped as a chain - "we did not look" has never meant "it is one"');
+      // The press half: the same branch, caught off the URL Google returned,
+      // before a Firecrawl credit can move.
+      if (readOutletTell({ name: 'Alpha Foundations Repair Tampa', homeUrl: 'https://www.alphafoundations.com/locations/fl/tampa', city: 'Tampa, FL' }).isOutlet !== true) _fails.push('the Find press cannot tell a branch address from an independent on the URL Google already handed it, so the drop there fires on nothing and the credits are spent anyway');
+      if (readOutletTell({ name: 'Darley Plumbing', homeUrl: 'https://darleyplumbing.com/', city: 'Tampa, FL' }).isOutlet !== false) _fails.push('an ordinary business whose listing points at its own home page is DELETED at the press as a branch, and that delete has no bench and no second chance');
+    }
+
     // == AND A NONPROFIT, FROM ITS OWN PAGE ==============================
     const _npCases = [
       ['a page stating 501(c)(3)', { pages: [_pg('https://x.org/', 'Hope Recovery is a 501(c)(3) nonprofit organization.')], links: [] }, true],
@@ -62575,15 +62838,25 @@ app.listen(PORT, () => {
       [_nd('const _outOfIcp = nameIsOutOfIcp(', 'company.name);'), 'the contact route no longer refuses a lead by name before it spends'],
       [_nd('if (nameIsOutOfIcp(name))', ' return false;'), 'discovery no longer runs the one name gate, so a benched franchise walks back in'],
       [_nd('out.chain = readChainEvidence({ pages,', ' rosterTitles: signals.teamTitles, links, name });'), 'the contact read no longer looks for chain evidence at all, or reads it without the listing name (the "Brand - City" outlet tell is blind)'],
-      [_nd('if (out.chain.isChain && out.chain.kind', " === 'franchise') {"), 'a branch network is dropped as a franchise again, or a franchise is kept (Round 114: only franchise evidence drops)'],
-      [_nd('signals.branchNetwork', ' = true;'), 'a branch network is read and never marked, so the lane cannot route it to email'],
+      [_nd('if (out.chain.isChain && out.chain.kind', " === 'franchise') {"), 'a franchise no longer gets the franchisor sentence, so a dropped lead carries the wrong reason on its row'],
+      [_nd('signals.branchNetwork', ' = true;'), 'a branch network is read and never marked, so the head-office rule, the layers verdict and the TARGET line are all blind to it'],
+      [_nd('} else if (chainIsOutOfIcp(out.chain))', ' {'), 'the contact read stopped asking the one declaration whether this chain is out of the ICP, so a branch network is marked and bought at full price again (Alpha Foundations Repair Tampa)'],
+      [_nd("out.notIcp = true; out.icpReason = 'chain'; out.icpWhy = out.chain", '.why;'), 'a branch network read off their own pages is marked and NOT dropped, so the paid owner wave, the size lookup and the address lookup are all still bought on a branch'],
+      [_nd("out.notIcp = true; out.icpReason = 'chain'; out.icpWhy = out.outlet", '.why;'), 'a branch caught only by where its Google listing points is marked and not dropped, so it is read at full price'],
+      [_nd("out.notIcp = true; out.icpReason = 'chain'; out.icpWhy = _late", '.why;'), 'a branch network that only their own sitemap reveals is marked and not dropped, so the address lookup behind it is still bought'],
+      [_nd('const _branch = readOutletTell({ name, homeUrl: website,', ' city });'), 'the Find press no longer reads where a listing points, so a branch address is queued and pays for a whole contact read before anything notices it is a branch'],
       [_nd('if (apiKey && name &&', ' !out.notIcp) {'), 'a chain outlet still buys the paid owner wave'],
       [_nd('out.outlet = readOutletTell({ name, homeUrl:', ' ((pages || []).find(p'), 'the contact read no longer asks where their own Google listing points, so a branch on a brand site is read as an independent'],
       [_nd('const _headOffice = signals.branchNetwork', ' === true;'), 'the head-office rule no longer reads the branch mark'],
       [_nd('const paidOwner = opts.paidOwnerLookup !== false', ' && !_headOffice;'), 'a branch of a national brand buys the paid owner wave again - ten credits and three minutes for a signer who sits at head office'],
       [_nd('if (website &&', ' !out.notIcp) {'), 'a chain outlet still buys the address lookup'],
       [_nd('out.nonprofit = readNonprofitEvidence({ pages,', ' links });'), 'the contact read no longer looks for nonprofit evidence at all'],
-      [_nd('if (!out.notIcp && out.nonprofit', '.isNonprofit) {'), 'a nonprofit is read and then bought anyway - the verdict does not reach notIcp'],
+      // Until Round 139 this needle asserted that the nonprofit verdict
+      // REACHED notIcp. Vin's ruling of 2026-09-11 makes that the defect
+      // rather than the guard - a nonprofit is kept and worked like any other
+      // lead - so the call site is pinned as the read plus the note it puts on
+      // the row, and the drop itself is asserted ABSENT after this list.
+      [_nd('if (out.nonprofit', '.isNonprofit) {'), 'the nonprofit read is measured and then said to nobody, so the rep dials a recovery centre with nothing on the row telling him what it is'],
       [_nd('out.tells = readOwnershipTells({', ' pages });'), 'the contact read no longer looks for ownership tells at all'],
       [_nd('if (!out.notIcp && out.tells.isOut && out.tells.reason', " === 'franchise') {"), 'a franchisee is bought anyway, or a PE-owned / national company is dropped again (Round 114: marked, routed to email)'],
       [_nd('signals.peOwned = out.tells.reason', " === 'owned';"), 'a PE-owned company is read and never marked, so the lane cannot route it to email'],
@@ -62635,11 +62908,19 @@ app.listen(PORT, () => {
     for (const [needle, why] of _sites) {
       if (!_src.includes(needle)) _fails.push(why);
     }
+    // ══ ROUND 139 (Vin, 2026-09-11): THE READ STAYS, THE DROP GOES ════════
+    // Both directions, because ripping the detection out and putting the drop
+    // back are opposite failures and each costs its own thing: the first
+    // leaves the rep dialling a charity blind, the second deletes a lead with
+    // a named CEO on it. The needle is assembled at runtime - a literal here
+    // would find itself in this very line.
+    if (_src.includes(_nd('out.icpReason = ', "'nonprofit';"))) _fails.push('a nonprofit is dropped out of the ICP again - Vin ruled on 2026-09-11 that it is kept and worked like any other lead, because a named, reachable CEO can say yes whoever files the tax return');
+    if (!_np('Hope Recovery is a registered 501(c)(3). Make a donation today and your gift is put to work in the community.').isNonprofit) _fails.push('the nonprofit READ was taken out along with the drop, so nothing on the row tells the rep what kind of organisation he is calling');
 
     if (_fails.length) {
       console.log(`⛔ FIND ICP GATE CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
     } else {
-      console.log(`✓ FIND ICP GATE CHECK: ${_mustDie.length} national brands are refused by name before a byte moves and ${_mustLive.length} owner-operated names beside them survive; ${_chainCases.length} chain cases are read from the business's OWN pages in both directions, including an independent that prints "not a franchise", a two-branch operator and a franchise lawyer; ${Object.keys(_mail).length} addresses resolve through ONE mailbox vocabulary where six disagreeing lists used to sit, so recruiting@ off a careers page can no longer ship as a tier-1 published address at score 100; and a roster that names its people by first name only finally yields the owner it states, marked as a candidate to corroborate rather than as a settled identity. A locations index counts in both shapes: one per-city page under a state is a branch network by construction, while a one-segment state page needs ${CHAIN_STATE_ONLY_MIN} distinct states before it says anything - so DHI Roofing's six are caught and a single-state independent is not. The sitemap findOwnerViaBrain already paid for now reaches that rule instead of being dropped on the floor. Every call site is pinned, because a fixture supplies its own arguments and cannot see a caller.`);
+      console.log(`✓ FIND ICP GATE CHECK: ${_mustDie.length} national brands are refused by name before a byte moves and ${_mustLive.length} owner-operated names beside them survive; ${_chainCases.length} chain cases are read from the business's OWN pages in both directions, including an independent that prints "not a franchise", a two-branch operator and a franchise lawyer; ${Object.keys(_mail).length} addresses resolve through ONE mailbox vocabulary where six disagreeing lists used to sit, so recruiting@ off a careers page can no longer ship as a tier-1 published address at score 100; and a roster that names its people by first name only finally yields the owner it states, marked as a candidate to corroborate rather than as a settled identity. A locations index counts in both shapes: one per-city page under a state is a branch network by construction, while a one-segment state page needs ${CHAIN_STATE_ONLY_MIN} distinct states before it says anything - so DHI Roofing's six are caught and a single-state independent is not. The sitemap findOwnerViaBrain already paid for now reaches that rule instead of being dropped on the floor. A branch network is dropped exactly as a franchise is, by one declaration the press, the contact read and the sitemap re-read all call, so Alpha Foundations Repair Tampa is refused instead of bought. Every call site is pinned, because a fixture supplies its own arguments and cannot see a caller.`);
     }
   } catch (e) {
     console.log(`⛔ FIND ICP GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -62800,10 +63081,30 @@ app.listen(PORT, () => {
       const _c = scaleCuts(ICP_REVENUE_PER_EMPLOYEE), _t = scaleCuts(ICP_REVENUE_PER_TRUCK);
       if (Math.abs(ICP_REVENUE_BAND.coreFrom - ICP_PREMIUM_RETAINER_MONTHLY * 12 / ICP_MARKETING_SHARE) > 1) _fails.push('the core floor is not the premium retainer at the 10% rule - the ladder and the price list drifted apart');
       if (!OUR_PRICE_FIGURES.includes('$' + Math.round(ICP_PREMIUM_RETAINER_MONTHLY / 1000) + 'k')) _fails.push('the retainer the ladder is derived from is not a licensed price figure');
-      if (_c.entry !== 4 || _c.core !== 6 || _c.upper !== 50 || _c.ceiling !== 175) _fails.push(`the default staff cuts read ${JSON.stringify(_c)} - not 4 / 6 / 50 / 175 from $800k / $1.2M / $10M / $35M at $200k a head`);
-      if (_t.entry !== 3 || _t.core !== 4 || _t.upper !== 33 || _t.ceiling !== 117) _fails.push(`the truck cuts read ${JSON.stringify(_t)}`);
-      // Round 114 (Vin, 2026-09-03): the call cap has headroom, the owner-run reach line sits above it, the email lane has no ceiling.
-      if (ICP_REVENUE_BAND.ceiling !== 35e6 || ICP_CALL_REACH_CEILING !== 50e6) _fails.push(`the call cap is $${ICP_REVENUE_BAND.ceiling / 1e6}M and the owner-run reach line $${ICP_CALL_REACH_CEILING / 1e6}M - Vin ruled $35M and $50M on 2026-09-03`);
+      if (_c.entry !== 4 || _c.core !== 6 || _c.upper !== 50 || _c.ceiling !== 75) _fails.push(`the default staff cuts read ${JSON.stringify(_c)} - not 4 / 6 / 50 / 75 from $800k / $1.2M / $10M / $15M at $200k a head`);
+      if (_t.entry !== 3 || _t.core !== 4 || _t.upper !== 33 || _t.ceiling !== 50) _fails.push(`the truck cuts read ${JSON.stringify(_t)} - not 3 / 4 / 33 / 50 from the same four dollar lines at $300k a truck`);
+      // ══ ROUND 139 (Vin, 2026-09-11): ONE NUMBER MOVED AND ONE DID NOT ════
+      // Round 114 (Vin, 2026-09-03) put the call cap at $35M and the owner-run
+      // reach line at $50M. Two numbers, two different questions, and only the
+      // first of them changed this round.
+      //
+      // THE CAP asks whether a business FITS what we sell. The written ICP has
+      // always said $800k-$15M, 15e6 appeared nowhere in the code, and Vin
+      // ruled on 2026-09-11 that the written ICP wins - so the cap is $15M,
+      // reversing his own $35M, and it is asserted as the document's number.
+      //
+      // THE REACH LINE asks whether the PHONE reaches the person who signs. It
+      // is $50M and it did NOT move, because nothing about how reachable a
+      // founder is changed on 2026-09-11: an owner who answers his own phone
+      // still answers it at $24M. Vin ruled that exact business into BOTH lanes
+      // that day - "id say do both for sure we should email him and phone him"
+      // - so this is a LITERAL on purpose. Deriving it from the cap (this
+      // round's first draft did, at ten sevenths) lets a FIT decision silently
+      // move a REACHABILITY one, and leaves the ratio as a second copy of a
+      // fact nothing else reads, waiting to drift.
+      if (ICP_REVENUE_BAND.ceiling !== 15e6) _fails.push(`the call cap is $${ICP_REVENUE_BAND.ceiling / 1e6}M - Vin ruled $15M on 2026-09-11, reversing his own $35M of 2026-09-03, because the written ICP says $800k-$15M and the code had drifted away from it`);
+      if (ICP_CALL_REACH_CEILING !== 50e6) _fails.push(`the owner-run reach line is $${ICP_CALL_REACH_CEILING / 1e6}M - Vin ruled $50M and re-affirmed it on 2026-09-11 by putting a $24M founder-run roofer in BOTH lanes; the cap is a fit line and it moved, this is a reachability line and it did not, so it is never derived from the cap`);
+      if (tierFromRevenue(14e6) !== 'upper' || tierFromRevenue(16e6) !== 'over_ceiling') _fails.push(`a $14M business reads "${tierFromRevenue(14e6)}" and a $16M one reads "${tierFromRevenue(16e6)}" - under a $15M cap the first is high and callable and the second is over the cap`);
       if (!LANE_TIERS.email.includes('over_ceiling') || LANE_TIERS.call.includes('over_ceiling')) _fails.push('the email lane has a ceiling again, or the call lane lost its cap');
       if (!(ICP_CALL_REACH_CEILING > ICP_REVENUE_BAND.ceiling)) _fails.push('the reach line is not above the call cap, so the owner-run override can never fire');
       if (tierFromCount(_c.core - 1, _c) !== 'entry' || tierFromCount(_c.core, _c) !== 'core' || tierFromCount(_c.upper, _c) !== 'core' || tierFromCount(_c.upper + 1, _c) !== 'upper' || tierFromCount(_c.ceiling, _c) !== 'upper' || tierFromCount(_c.ceiling + 1, _c) !== 'over_ceiling' || tierFromCount(_c.entry - 1, _c) !== 'below_floor') _fails.push('the tier boundaries do not sit on the cuts');
@@ -62857,19 +63158,55 @@ app.listen(PORT, () => {
       // Round 114: headroom on the floor - a GUESS under it stays on the sheet as low.
       if (_ln({ tier: 'below_floor', sizeConfidence: 'guess', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('a business under the floor on a GUESS is benched (Vin, 2026-09-03: headroom on every measured number)');
       // Round 114: over the call cap is EMAIL, not nothing; owner-run under the reach line is still a call.
-      if (_ln({ tier: 'over_ceiling', layers: 'layered', source: 'google_places', target: 'marketing' }) !== 'email') _fails.push('a layered business over the call cap is not an email lead');
-      if (_ln({ tier: 'over_ceiling', layers: 'layered', source: 'google_places', target: 'marketing', usd: 255e6, peOwned: true }) !== 'email') _fails.push('Rose Paving ($255M, PE-owned, layered) is not email only');
-      if (_ln({ tier: 'upper', layers: 'owner', source: 'google_places', target: 'owner', usd: 24e6 }) !== 'call + email') _fails.push('DMI Paving ($24M, owner-run) is not in both lanes');
-      if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'owner', usd: 40e6 }) !== 'call + email') _fails.push('an owner-run business at $40M is off the call sheet - the $50M reach line is not read');
-      if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'owner', usd: 60e6 }) !== 'email') _fails.push('an owner-run business at $60M is on the call sheet - the reach line has no top');
-      if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'owner', usd: null }) !== 'email') _fails.push('an over-cap business with no measured dollars is called on nothing');
-      if (_ln({ tier: 'over_ceiling', layers: 'layered', source: 'google_places', target: 'marketing', usd: 40e6 }) !== 'email') _fails.push('a LAYERED business at $40M is called - the reach line is for the owner-run only');
-      if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'owner', usd: 40e6, peOwned: true }) !== 'email') _fails.push('a PE-owned business at $40M is called - the reach line is for the owner-run only');
+      // Round 139: every over-cap fixture below now STATES sizeConfidence
+      // 'sure', because an over-cap tier on a guess is kept callable from this
+      // round on. Without that field these would silently start measuring the
+      // new rule instead of the one they were written for. The dollar figures
+      // are unchanged from Round 114: they straddle the $50M REACH line, which
+      // did NOT move when the cap did, so DMI Paving's $24M now sits well
+      // inside it - Vin put that business in both lanes on 2026-09-11.
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'layered', source: 'google_places', target: 'marketing' }) !== 'email') _fails.push('a layered business measured over the call cap is not an email lead');
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'layered', source: 'google_places', target: 'marketing', usd: 255e6, peOwned: true }) !== 'email') _fails.push('Rose Paving ($255M, PE-owned, layered) is not email only');
+      if (_ln({ tier: 'upper', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 12e6 }) !== 'call + email') _fails.push('an owner-run business measured at $12M, inside the cap, is not in both lanes');
+      // DMI Paving: $24M, about 120 people, still run by the founder. Over the
+      // $15M cap and a long way under the $50M reach line, and Vin ruled it
+      // into BOTH lanes on 2026-09-11 - "do both for sure".
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 24e6 }) !== 'call + email') _fails.push(`DMI Paving ($24M, owner-run, over the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap) is off the call sheet - the reach line was scaled down with the cap, and a founder who answers his own phone still answers it at $24M`);
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 40e6 }) !== 'call + email') _fails.push(`an owner-run business measured at $40M is off the call sheet - the $${ICP_CALL_REACH_CEILING / 1e6}M reach line is not read`);
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 60e6 }) !== 'email') _fails.push('an owner-run business measured at $60M is on the call sheet - the reach line has no top');
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: null }) !== 'email') _fails.push('an over-cap business with no measured dollars is called on nothing');
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'layered', source: 'google_places', target: 'marketing', usd: 40e6 }) !== 'email') _fails.push('a LAYERED business measured at $40M is called - the reach line is for the owner-run only');
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 40e6, peOwned: true }) !== 'email') _fails.push('a PE-owned business measured at $40M is called - the reach line is for the owner-run only');
+      // ══ ROUND 139 (Vin, 2026-09-11): A GUESS OVER THE CAP STAYS CALLABLE ══
+      // The mirror of Round 114's floor rule. The two fixtures differ in ONE
+      // field, so neither of them can pass on anything else.
+      {
+        const _guessOver = lanesFor({ tier: 'over_ceiling', sizeConfidence: 'guess', layers: 'owner', source: 'google_places', target: 'owner' });
+        const _sureOver = lanesFor({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner' });
+        if (laneWord(_guessOver) !== 'call + email') _fails.push(`a business over the cap on a GUESS is off the rep's call sheet (got ${laneWord(_guessOver)}) - only a MEASURED size takes a lead off it, which is the headroom the floor has had since Round 114`);
+        if (_guessOver.tier !== 'upper') _fails.push(`an over-cap guess still reads "${_guessOver.tier}" instead of being kept as high`);
+        if (laneWord(_sureOver) !== 'email') _fails.push(`the same lead with its size MEASURED is still on the call sheet (got ${laneWord(_sureOver)}) - the over-cap rule now fires on nothing`);
+      }
+      // ══ ROUND 139 (Vin, 2026-09-11): A NAMED MARKETING DIRECTOR IS NOT A CALL ══
+      // BLS OEWS May 2023 against Census CBP 2023: about one Marketing Manager
+      // per 442 specialty-trade establishments. A trade business publishing a
+      // Director of Marketing on its own team page is bigger and more layered
+      // than the sheet the rep dials. It keeps the EMAIL lane - it is never
+      // benched - and again the two fixtures differ in one field.
+      {
+        const _mh = lanesFor({ tier: 'core', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'marketing', siteMarketingHead: true });
+        const _noMh = lanesFor({ tier: 'core', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'marketing', siteMarketingHead: false });
+        if (_mh.call !== false) _fails.push("a business whose own site names a marketing director is still on the rep's call sheet - one Marketing Manager exists per 442 specialty-trade establishments, so that title is near-certain evidence of a business bigger and more layered than the sheet is for");
+        if (_mh.email !== true) _fails.push('a business whose own site names a marketing director lost its email lane too - it is not benched, it is written to');
+        if (_mh.noname !== false) _fails.push('a business with a named marketing director is in the no-name bucket, so a row carrying a name reads to the rep as nobody');
+        if (!/marketing director/.test(_mh.why)) _fails.push('the row does not say why the call lane was taken away, so the rep cannot tell it from a resolver failure');
+        if (laneWord(_noMh) !== 'call + email') _fails.push(`the same lead with nobody named in marketing is not in both lanes (got ${laneWord(_noMh)}), so the marketing-director rule is firing on every lead`);
+      }
       // Round 114: a branch network, PE-owned or national under the cap stays on the sheet, last; over the cap it is email.
       for (const [k, what] of [['network', 'a branch network'], ['peOwned', 'a PE-owned company'], ['national', 'a national operator']]) {
         const _b = lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'owner', [k]: true });
         if (laneWord(_b) !== 'call + email' || _b.last !== true || !/last/.test(_b.why)) _fails.push(`${what} under the cap is not on the call sheet last and in the email lane (got ${laneWord(_b)})`);
-        if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'marketing', [k]: true }) !== 'email') _fails.push(`${what} over the cap is not an email lead`);
+        if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'marketing', [k]: true }) !== 'email') _fails.push(`${what} measured over the cap is not an email lead`);
       }
       if (_ln({ tier: 'core', layers: 'layered', source: 'google_places', target: 'none' }) !== 'no name yet') _fails.push('a layered business with nobody named is not the no-name bucket');
       // The measured dollars the reach line reads.
@@ -62939,7 +63276,8 @@ app.listen(PORT, () => {
       [_n('network: signals.branchNetwork === true, peOwned: signals.peOwned === true,', ' national: signals.nationalOperator === true,'), 'the branch-network, PE-owned and national marks never reach the lane'],
       // Round 121: the two facts that put a website-less business in front of
       // the rep. Both are already measured; the lane could not see either.
-      [_n('siteless: signals.readable !== true,', ' phone: !!out.phone });'), 'the lane cannot tell a lead whose pages we could not read from one we simply have not named, so Vin\'s ruling that a business with a phone and no website belongs on the call sheet is dead at the call site'],
+      [_n('siteless: signals.readable !== true, phone: !!out.phone,', ' siteMarketingHead: _siteMarketingHead });'), 'the lane cannot tell a lead whose pages we could not read from one we simply have not named (so Vin\'s ruling that a business with a phone and no website belongs on the call sheet is dead at the call site), or the marketing director their own roster names never reaches the lane and the rep dials a business with a marketing department'],
+      [_n('const _siteMarketingHead = !!(_ml && _ml.source ===', " 'own_website_roster');"), 'the marketing head is read from whatever _ml holds by then, so a HUNTER result - an index\'s claim, not the business\'s own page - takes a lead off the rep\'s call sheet'],
       [_n('signals.scaleUsd = (_scale && !_scale.guess', ' && Number(_scale.usd) > 0) ? Number(_scale.usd) : null;'), 'the measured dollars never reach the signals, or a tenure guess supplies them'],
       [_n('signals.laneLast = _lanes.last', ' === true;'), 'the lane says "last" and the score never hears it, so a layered lead is not ranked last'],
       [_n('c.verifiedEmployees > ', 'ICP_EMPLOYEE_BLOCK) {'), 'the discovery employee gate is back on a literal'],
@@ -62967,7 +63305,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ SIZE AND LAYERS CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
     } else {
-      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the ladder and the layers (Darrel in both; TheirStack and product companies email only; layered, a branch network, PE-owned and national on the call sheet LAST under the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap and email over it; an owner-run business over the cap still called under $${ICP_CALL_REACH_CEILING / 1e6}M; nobody named means no email lane; under the floor benched only when likely or sure); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; the size search is not bought on a lead whose own team page already lists three to five people, nor on a one-person trade, nor a second directory query on a MEASURED zero review count; and the buying floor has one copy.`);
+      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the ladder and the layers (Darrel in both; TheirStack and product companies email only; layered, PE-owned and national on the call sheet LAST under the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap and email over it; a detected branch network dropped outright, at the press off its own listing URL and at the read off its own pages; an owner-run business over the cap still called under $${ICP_CALL_REACH_CEILING / 1e6}M; nobody named means no email lane; under the floor benched only when likely or sure, and over the cap taken off the call sheet only when likely or sure; a business whose own site names a marketing director written to and never dialled); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; the size search is not bought on a lead whose own team page already lists three to five people, nor on a one-person trade, nor a second directory query on a MEASURED zero review count; and the buying floor has one copy.`);
     }
   } catch (e) {
     console.log(`⛔ SIZE AND LAYERS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -63556,8 +63894,12 @@ app.listen(PORT, () => {
       }
       const _sc = estimateScaleBand({ staffProse: 14, staffProseSay: 'a team of 14 technicians' });
       if (!_sc || _sc.band !== 'core' || !/estimated/.test(_sc.say)) _fails.push('fourteen published technicians is not an estimated core band, or the sentence forgot to say "estimated"');
-      if ((estimateScaleBand({ verifiedEmployees: 176 }) || {}).band !== 'over_ceiling') _fails.push('176 verified employees is not read as over the call cap');
-      if ((estimateScaleBand({ verifiedEmployees: 175 }) || {}).band !== 'upper') _fails.push('175 verified employees is not read as the upper tier');
+      // Round 139 (Vin, 2026-09-11): the cap is $15M, so at $200k a head the
+      // boundary these two sit either side of moved from 175 people to 75.
+      // Both are typed on purpose: deriving them from the cut would make this
+      // pair agree with any ceiling, including one nobody ruled.
+      if ((estimateScaleBand({ verifiedEmployees: 76 }) || {}).band !== 'over_ceiling') _fails.push('76 verified employees is not read as over the call cap - at $200k a head that is $15.2M, past the cap Vin ruled on 2026-09-11');
+      if ((estimateScaleBand({ verifiedEmployees: 75 }) || {}).band !== 'upper') _fails.push('75 verified employees is not read as the upper tier - at $200k a head that is exactly the $15M cap, and the lead is still on the call sheet');
       if ((estimateScaleBand({ fleetProse: 12 }) || {}).band !== 'core') _fails.push('a twelve-truck fleet is not read as a core-band business');
       if ((estimateScaleBand({ yearsInBusiness: 20, reviewCount: 80 }) || {}).band !== 'entry') _fails.push('twenty years at eighty reviews is not read as an established small business (entry)');
       if ((estimateScaleBand({ revenueStated: '$5M', revenueStatedSource: 'zoominfo.com' }) || {}).band !== 'core' || !/directory/.test((estimateScaleBand({ revenueStated: '$5M' }) || {}).say)) _fails.push('a directory\'s stated $5M does not read as core, labelled as a directory\'s figure');
@@ -70763,6 +71105,62 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ ICP FILTER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ A YIELD REPORT THAT COULD NOT NAME ITS OWN WORST LOSS ════════════════
+  // The FIND YIELD line exists so the largest single loss of a Find run is
+  // visible without reading the code that caused it. One of its rows, the ICP
+  // name gate, was read from a field nothing ever assigned: the row came out
+  // undefined, the line's own filter dropped it before printing, and the
+  // "largest single loss" sentence could therefore never name the gate that
+  // deletes the most. The operator read a complete-looking report with its
+  // biggest number structurally missing.
+  //
+  // Executed, not read, in both halves: the assignment is lifted out of
+  // runDiscovery's own source and RUN on counts, and so is the row block that
+  // prints it. A fixture cannot see a caller, so the first half is what proves
+  // the number is written at all, and the second is what proves the line can
+  // print it and pick it as the worst.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _rd = String(runDiscovery);
+    // 1. Something assigns it, and it counts BOTH name gates rather than one.
+    const _ai = _rd.indexOf(_n('_findYield.notIcp', ' = '));
+    if (_ai < 0) {
+      _fails.push('nothing in a Find run writes the ICP name-gate loss, so that row is dropped from the FIND YIELD line before it prints and the largest single loss can never be the gate that deletes the most');
+    } else {
+      const _stmt = _rd.slice(_ai, _rd.indexOf(';', _ai) + 1);
+      const _got = new Function('_findYield', 'allCompanies', 'icpFiltered', 'blockedCount',
+        _stmt + ' return _findYield.notIcp;')({}, { length: 500 }, { length: 120 }, 7);
+      if (_got !== 387) {
+        _fails.push(`the ICP name-gate loss comes out ${_got} where 500 leads in, 120 surviving the name filter and 7 blocked by name at the size gate is 387 - a count that reads one gate and not the other under-reports the run's biggest loss, which is worse than leaving the row blank`);
+      }
+    }
+    // 2. The row prints, and it can be chosen as the largest single loss.
+    const _ri = _rd.indexOf(_n('const _rows = ', '['));
+    const _wi = _ri < 0 ? -1 : _rd.indexOf(_n('const _worst', ' = '), _ri);
+    if (_ri < 0 || _wi < 0) {
+      _fails.push('the FIND YIELD row block could not be found in runDiscovery, so nothing here is checking what the yield line prints');
+    } else {
+      const _block = _rd.slice(_ri, _rd.indexOf(';', _wi) + 1);
+      const _out = new Function('_y', '_bench', 'scored', 'SCALE_TIERS', '_large',
+        _block + ' return { rows: _rows, worst: _worst };')(
+        { seen: 500, underFloor: 12, notIcp: 387, franchise: 9, alreadyOwned: 4, catCap: 3, demoted: 6 },
+        [], [], SCALE_TIERS, []);
+      const _row = _out.rows.find(r => /ICP/.test(String(r[0])));
+      if (!_row) _fails.push('a Find run that lost 387 leads at the ICP name gate prints no row for them at all');
+      else if (Number(_row[1]) !== 387) _fails.push(`the ICP name-gate row prints ${JSON.stringify(_row[1])} rather than the 387 it was given`);
+      if (!_out.worst || !/ICP/.test(String(_out.worst[0]))) {
+        _fails.push(`the largest single loss is reported as "${_out.worst && _out.worst[0]}" on a run where the ICP name gate lost 387 of 500 - the sentence names a row it can reach instead of the worst one`);
+      }
+    }
+    if (_fails.length) {
+      console.log(`⛔ FIND YIELD CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
+    } else {
+      console.log('✓ FIND YIELD CHECK: the yield report can name its own worst loss. The ICP name gate is counted where both halves of it settle - the name filter every source passes through and the size gate\'s name blocks - so the number is the difference each filter actually made rather than a counter somebody has to remember to increment; the row survives the line\'s own finite-number filter; and on a run that lost 387 leads of 500 that way, the line names it as the largest single loss instead of the biggest row it happens to be able to reach.');
+    }
+  } catch (e) {
+    console.log(`⛔ FIND YIELD CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ A STEM WITH A WORD BOUNDARY AFTER IT MATCHES NOTHING ══════════════════
   // \bplumb\b cannot match "plumbing", because the g is a word character. The
@@ -78862,9 +79260,69 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       ['Busting Myths', 'Rad Law Firm', 'not-a-name', 'a blog headline followed by a real title is accepted as a person (Rad Law Firm, 2026-09-04)'],
       ['5 Signs', 'Rad Law Firm', 'not-a-name', 'a listicle heading is accepted as a person'],
       ['Irving Berlin', 'Berlin Roofing', null, 'a real first name that happens to end in -ing is refused'],
+      // Round 139: a job title still walked the door as a person. Each title
+      // below is refused by ONE of the two arms and nothing else, so neither
+      // arm can hide behind the other: "Design Consultant" needs the trade
+      // sales words in ROLE_WORDS, "Project Engineer" needs the role-noun list
+      // the roster parsers have always read. The real names beside them are the
+      // expensive direction - a refused owner is a lead the rep never calls.
+      ['Design Consultant', 'Ten Key Home & Kitchen Remodels', 'title', 'a two-word job title is accepted as a person - "Design Consultant" reached the door as a decision-maker and a rep would have asked the front desk for him by name'],
+      ['Comfort Advisor', 'Anderson Heating & Air', 'title', 'a trade sales title is accepted as a person - "Comfort Advisor" is what a heating company calls the man who sells the system'],
+      ['Project Engineer', 'X Co', 'title', 'a title made of a role word and a role NOUN is accepted as a person - the door reads only one of this file\'s two role-word lists again, so the roster parser refuses what every other owner source ships'],
+      ['Master Plumber', 'X Co', 'title', 'a trade qualification is accepted as a person, which is the exact row the role-noun list was written for'],
+      ['Dean Foreman', 'X Co', null, 'a real owner whose SURNAME is a role noun is refused - one role word has never made a title, and a filter tightened until it eats real names is the expensive failure'],
+      ['Miles Sales', 'X Co', null, 'a real owner whose surname is a role word is refused'],
+      ['Comfort Adebayo', 'X Co', null, 'a real first name that is now also a title word is refused beside a surname - the disclosed cost is the BARE first name only'],
+      // Round 139: a licence board, a state filing and a chamber directory all
+      // print a person surname first. The door reads that shape now, and a
+      // comma it could NOT resolve is a firm rather than a person.
+      ['Hoffman, Henry', 'Jax Paver Guys LLC', null, 'a licence record written surname-first is refused or, worse, kept as it stands - the sheet then asks the front desk for "Hoffman", which is his surname offered as his first name'],
+      ['HOWES, LUCAS B', 'Howes Paving LLC', null, 'a shouted record with a middle initial is refused, because the real-name test reads the initial as the surname - a real owner we paid to find is dropped'],
+      ['Ward, Charles P.', 'Ward Plumbing', null, 'a records name with a middle initial after the comma is refused'],
+      ['Baker, Donelson', 'Jax Paver Guys LLC', 'not-a-name', 'a law firm whose name is two surnames is accepted as a person - no SHAPE tells it from "Hoffman, Henry", so only evidence may license a flip and an unresolved comma must be refused'],
+      ['Smith, Jones & Ward LLP', 'Jax Paver Guys LLC', 'not-a-name', 'a firm with a comma and an ampersand is accepted as a person'],
+      ['Johnson, Inc.', 'Jax Paver Guys LLC', 'not-a-name', 'a legal suffix after a comma is accepted as a person'],
+      ['John Smith, Jr.', 'Smith Paving', null, 'a real person signing with a generational suffix is refused by the comma rule - the comma rule must exempt a professional or generational suffix'],
     ];
     for (const [_nm, _co, _want, _msg] of _doorCases) {
       if (ownerNameDoor(_nm, _co) !== _want) _fails.push(_msg);
+    }
+    // A fixture supplies its own arguments and cannot see a caller. The door is
+    // worth nothing unless the ranker asks it about every candidate BEFORE
+    // anybody is clustered, scored or picked, so the call site is pinned here.
+    {
+      const _sD = selfSourceNoCommentsLF();
+      const _nD = (a, b) => a + b;
+      if (!_sD.includes(_nD('const _door = ownerNameDoor(', 'f.name, companyName);'))) {
+        _fails.push('the owner ranker no longer asks the name door about each candidate, so a job title can be clustered, scored and shipped as the decision-maker whatever the door would have said about it');
+      }
+    }
+    // Round 139: the flip itself, on the live function, in both directions.
+    for (const [_in, _out, _msg] of [
+      ['Hoffman, Henry', 'Henry Hoffman', 'a records name with a KNOWN given name after the comma is not reversed'],
+      ['HOWES, LUCAS B', 'Lucas B Howes', 'a shouted records name with a middle initial is not reversed, or is left shouting'],
+      ['Ward, Charles P.', 'Charles P. Ward', 'a records name whose licence is the middle initial is not reversed'],
+      ['Baker, Donelson', 'Baker, Donelson', 'a two-surname law firm is FLIPPED into a person, which would put a firm on the call sheet as a man'],
+      ['Smith, Jones & Ward LLP', 'Smith, Jones & Ward LLP', 'a firm name carrying an ampersand is flipped into a person'],
+      ['Ward, Ward & Associates', 'Ward, Ward & Associates', 'a firm name carrying a legal word is flipped into a person'],
+      ['Johnson, Inc.', 'Johnson, Inc.', 'a legal suffix after a comma is read as a given name'],
+      ['Smith, Jones, Ward', 'Smith, Jones, Ward', 'a list of three surnames is flipped, so a partner list ships as one man'],
+      ['Charles P. Ward', 'Charles P. Ward', 'a real name with no comma in it is rewritten by a rule that should not touch it'],
+      ['Peter Enzinna', 'Peter Enzinna', 'a real name with no comma in it is rewritten'],
+    ]) {
+      if (uninvertPersonName(_in) !== _out) _fails.push(`${_msg} (uninvertPersonName("${_in}") is "${uninvertPersonName(_in)}")`);
+    }
+    // And the RANKER, driven: judging a records name without rewriting the
+    // candidate is half a fix, because the sheet, the ask line, the greeting
+    // and the mailbox guess all read the name this function returns.
+    {
+      const _flip = rankOwnerCandidates([{ name: 'HOWES, LUCAS B', title: 'Owner', source: 'license_or_chamber' }], 'Howes Paving LLC');
+      if (!_flip || _flip.name !== 'Lucas B Howes') {
+        _fails.push(`the ranker hands the sheet ${JSON.stringify(_flip && _flip.name)} for a licence record reading "HOWES, LUCAS B" - the rep would ask for a man by his surname, or for nobody at all`);
+      }
+      if (rankOwnerCandidates([{ name: 'Baker, Donelson', title: 'Owner', source: 'license_or_chamber' }], 'Jax Paver Guys LLC')) {
+        _fails.push('a law firm written "Baker, Donelson" is ranked as the decision-maker of a paving company');
+      }
     }
     // 7. THE WAVE IS BOUGHT ONE SEARCH AT A TIME. A Promise.all between the
     //    stage-2 marker and the settle re-check means the licence credits are
@@ -79090,6 +79548,109 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ OWNER MAILBOX FIRST CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ A NAME WE ONLY INFERRED IS NOT A NAME WE MAY WRITE TO ═══════════════
+  // Round 139. A cold email opens with the man's first name, and that greeting
+  // asserts to a stranger that he owns the business. 'inferred' is the grade
+  // for a name nothing but the business's own name puts there: one source, and
+  // the title is an assumption the eponymous settle makes on purpose.
+  //
+  // The defect: ownerEvidenceGrade has graded every owner since it was
+  // written, and every reader of it is a counter, a letter on the sheet or one
+  // scoring term. The send verdict asked it nothing, so an inferred name and a
+  // name three independent sources agree on shipped the same sendable address
+  // - while index.html already refused to count the first one rep-ready. One
+  // rule live on one half of a pair.
+  //
+  // Executed against the live resolver on two fixtures alike in every field
+  // but settledBy, and the call site is pinned beside them: a fixture supplies
+  // its own arguments, so it can prove the rule right while the route never
+  // calls it.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+
+    // ── the grades, from the resolver itself ──────────────────────────────
+    const _own = (x) => Object.assign({
+      name: 'Jay Murray', canBuy: true, corroborated: false,
+      sources: ['own_website_brain', 'business_name'], settledBy: 'roster',
+    }, x || {});
+    const _gradeOf = (x) => ownerEvidenceGrade(_own(x)).grade;
+    // THE PAIR: identical in every field but one, so only the eponymous settle
+    // can be what separates them. A shared fixture is how two guards come to
+    // cover each other and neither revert goes red.
+    const _statedTwin = _gradeOf({});
+    const _inferredTwin = _gradeOf({ settledBy: 'eponymous' });
+    const _agreed = _gradeOf({ corroborated: true, sources: ['own_website_brain', 'web_search', 'registry'] });
+    const _heldBack = _gradeOf({ canBuy: false, blockReason: 'no title we could verify' });
+    if (_inferredTwin !== 'inferred') _fails.push(`a name settled ONLY by the business being named after him grades ${_inferredTwin}, not inferred, so the one grade this rule is about no longer exists`);
+    if (_statedTwin !== 'stated') _fails.push(`the same name, same sources, settled by their own roster instead, grades ${_statedTwin} rather than stated - the pair no longer differs by the eponymous settle alone and neither half proves anything`);
+    if (_agreed !== 'confirmed') _fails.push(`three independent sources agreeing grades ${_agreed}, not confirmed`);
+    if (_heldBack !== 'unconfirmed') _fails.push(`a name the buying floor held back grades ${_heldBack}, not unconfirmed`);
+
+    // ── the rule over them ────────────────────────────────────────────────
+    if (ownerGradeMaySend(_inferredTwin)) _fails.push('a name nothing but the business name puts there may be written to again, so the email opens by telling a stranger we know he owns the place on the strength of his own signage - and jay@jaymurraylaw.com, at a firm called Jay Murray Law, came back undeliverable on exactly that evidence');
+    if (!ownerGradeMaySend(_statedTwin)) _fails.push('their own site saying who owns it is no longer enough to write to him - confirmed-only was measured on the twenty-lead run at 6 of 9 addresses held against 2 sends, and refused');
+    if (!ownerGradeMaySend(_agreed)) _fails.push('a name three independent sources agree on may not be written to, so the rule has eaten the population it exists to protect');
+    if (ownerGradeMaySend(_heldBack)) _fails.push('a name the buying floor held back may be written to');
+    if (ownerGradeMaySend('')) _fails.push('a named owner carrying NO grade at all may be written to - an unmeasured grade is resolving to the permissive side of a rule that reaches a prospect');
+    if (ownerGradeMaySend(_inferredTwin) === ownerGradeMaySend(_statedTwin)) _fails.push('the two halves of the pair are now treated alike, so nothing about the eponymous settle changes what may be sent');
+    if (OWNER_GRADES_MAY_SEND.some(_t => OWNER_GRADES.indexOf(_t) < 0)) _fails.push(`the sendable list names a grade the resolver never returns (${OWNER_GRADES_MAY_SEND.join(', ')}), so the rule is written over a vocabulary nothing produces`);
+
+    // ── and the route actually asks (no fixture can see this) ─────────────
+    if (_src.indexOf(_n('&& out.owner && out.owner.name && ',
+      '!ownerGradeMaySend(out.owner.grade)) {')) < 0) {
+      _fails.push('the contact read no longer asks the grade before it marks an address sendable, so an inferred name ships a cold email addressed to him by first name exactly as a corroborated one does - and the page still refuses to count that row rep-ready, which is the same rule live on one half of a pair');
+    }
+    if (_src.indexOf(_n('OWNER GRADE [${name}]: ${out.email.address} is a real address and it is NOT being sent to',
+      ' - ${out.owner.name} is graded ')) < 0) {
+      _fails.push('the per-lead line that names which business was held and on whose evidence is gone, so a run cannot be told from one where every name was corroborated');
+    }
+    if (_src.indexOf(_n('out.email.blockReason = `no email is sent to ${out.email.address}: ${out.owner.name}',
+      ' is graded ')) < 0) {
+      _fails.push('the held address carries no reason, so the rep is shown an address the engine refused with nothing on the row saying why - or the address was deleted, which trades a bounce for a blank row');
+    }
+
+    // ══ AND THE OTHER HALF OF THE PAIR, WHICH IS THE ONE THAT SENDS ═══════
+    // The Find read's gate governs the SHEET. Every actual send goes out
+    // through /api/research, which resolves its own address four ways - the
+    // contact cache, the email engine, a rebuild off a mangled scrape, and a
+    // vision read of their homepage picture that writes { sendable: true } by
+    // hand - and then /api/send-to-hunter pushes on emailResult.sendable and
+    // reads no grade at all. A check that passes because the FIRST path is
+    // guarded, while the path that sends is open, is the disarmed guard this
+    // file names. Both call sites, and the link between them, are pinned.
+    if (_src.indexOf(_n('&& decisionMaker && decisionMaker.name && _ownerGradeForSend\n',
+      '        && !ownerGradeMaySend(_ownerGradeForSend)) {')) < 0) {
+      _fails.push('the research route marks its own address sendable without asking the owner grade, so a lead the Find read refused to write to is written to the moment research runs on it - and since a send needs a pitch, and a pitch needs research, that route is the one every email actually leaves by');
+    }
+    if (_src.indexOf(_n('emailResult = { ...emailResult, sendable: false,\n',
+      '        blockReason: `no email is sent to ${emailResult.email}:')) < 0) {
+      _fails.push('the research route no longer writes the refusal onto emailResult, so the send door - which refuses on emailResult.sendable and on nothing else - has nothing to read, and the address goes back to being pushed into the sequence');
+    }
+    if (_src.indexOf(_n('if (lead.emailResult && lead.emailResult.sendable === false) {\n',
+      '      results.failed.push({')) < 0) {
+      _fails.push('the send door stopped refusing a lead whose emailResult was marked not sendable - that one line is what carries EVERY address refusal in this file, the owner grade included, into the push that actually mails somebody');
+    }
+    {
+      const _deskAt = _src.indexOf(_n('out.email.companyMailbox === true &&',
+        ' out.email.sendable === true'));
+      const _gradeAt = _src.indexOf(_n('&& out.owner && out.owner.name && ',
+        '!ownerGradeMaySend(out.owner.grade)) {'));
+      if (_deskAt >= 0 && _gradeAt >= 0 && _gradeAt < _deskAt) {
+        _fails.push('the grade rule now runs BEFORE the crew-size rule, so a shared inbox at a fifty-person firm is refused for the wrong reason and the row tells the rep to ask a different question than the one that matters');
+      }
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ OWNER GRADE SEND CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ OWNER GRADE SEND CHECK: an email is addressed to a named person only when the resolver graded him ${OWNER_GRADES_MAY_SEND.join(' or ')}. Executed on the live resolver: two owners alike in every field but the eponymous settle grade stated and inferred, and only the first may be written to; a name three sources agree on still may; a name the buying floor held back may not; and a named owner with no grade at all may not. BOTH halves are pinned at their call sites - the Find read, which decides the sheet and runs after the crew-size rule so a front desk keeps its own reason, and the research route, which resolves its own address four ways and is the one every send actually leaves by - and so is the send door's refusal on emailResult.sendable, which is the single line carrying every address refusal into the push. The address, the name and the pivot line stay on the row: the lead keeps its seat on the call sheet, only the send stops.`);
+    }
+  } catch (e) {
+    console.log(`⛔ OWNER GRADE SEND CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
 
@@ -82259,6 +82820,21 @@ const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
   };
 };
 
+// ══ ROUND 139 (Vin, 2026-09-11): A BRANCH NETWORK IS DROPPED, NOT MARKED ══
+// Round 114 kept a detected branch network as an email lead and only MARKED
+// it, and marking stopped nothing: Alpha Foundations Repair Tampa was read as
+// a branch network on a live run and still cost the whole contact read,
+// because every gate after the mark asks `notIcp` and the mark is not it.
+// Vin ruled on 2026-09-11 that a branch network is dropped exactly as a
+// franchise is - the local number reaches a branch and the marketing budget is
+// set at head office, so there is no engagement to sell either way.
+//
+// ONE declaration, executed by the boot check and called by every site that
+// drops, so the rule cannot end up with two hand-kept copies that disagree.
+// It stays FALSE on an unmeasured read: a site we could not open is not a
+// chain, and "we did not look" has never meant "it is one".
+const chainIsOutOfIcp = (chain) => !!(chain && chain.isChain === true && (chain.kind === 'franchise' || chain.kind === 'network'));
+
 // pages: [{ url, intent, html, text }] - whatever we managed to read, however.
 // ══ AN ABSENCE NEEDS A PAGE WE ACTUALLY READ ══════════════════════════════
 // anyMarkup below is a 500-byte floor on RAW HTML, and a rendered page whose
@@ -83665,12 +84241,16 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     out.icpReason = 'chain';
     out.icpWhy = out.chain.why;
     notes.push(`this is a franchise outlet \u2014 ${out.chain.why}. The franchisor sets the marketing fund and approves the vendors, so there is nothing here to sell.`);
-  } else if (out.chain.isChain) {
-    // Round 114 (Vin, 2026-09-03): a branch network is a LARGE company - kept,
-    // marked, an email lead. The local number reaches a branch; the decision
-    // is at head office, with the marketing decision-maker.
+  } else if (chainIsOutOfIcp(out.chain)) {
+    // Round 114 (Vin, 2026-09-03) kept a branch network as an email lead and
+    // only marked it. Round 139 (Vin, 2026-09-11) DROPS it, for the reason a
+    // franchise is dropped: the local number reaches a branch and the
+    // marketing budget is set at head office. The mark is still set, because
+    // the head-office rule, the layers verdict and the TARGET line all read
+    // it - what changes is that everything priced after this line is refused.
     signals.branchNetwork = true;
-    notes.push(`a branch network \u2014 ${out.chain.why}. Kept as an email lead: the local number reaches a branch, and the marketing decision-maker at head office is the target.`);
+    out.notIcp = true; out.icpReason = 'chain'; out.icpWhy = out.chain.why;
+    notes.push(`a branch network \u2014 ${out.chain.why}. The local number reaches a branch and the marketing budget is set at head office, so there is nothing here to sell.`);
   } else if (out.chain.measured !== true) {
     // == AN ABSENCE CLAIM NEEDS A LOOK =====================================
     // readChainEvidence has computed `measured` since it was written and
@@ -83693,7 +84273,8 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       brand: (out.chain && out.chain.brand) || out.outlet.brand || '',
       why: [(out.chain && out.chain.why) || '', out.outlet.why].filter(Boolean).join('; '),
     });
-    notes.push(`a branch of a bigger operation — ${out.outlet.why}. Kept as an email lead: the local number reaches a branch, and the marketing decision-maker at head office is the target.`);
+    out.notIcp = true; out.icpReason = 'chain'; out.icpWhy = out.outlet.why;
+    notes.push(`a branch of a bigger operation — ${out.outlet.why}. The local number reaches a branch and the marketing budget is set at head office, so there is nothing here to sell.`);
   }
   // ── AND IS THE WEBSITE THE THING WE SELL? ──────────────────────────────
   // Round 118 (Vin, 2026-09-04: "a company with a bad or poor website ... is it
@@ -83719,14 +84300,25 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   } else if (website) {
     console.log(`\u{1F5A5} SITE [${name}]: not judged — ${out.site.why}. Nothing about their build is claimed either way.`);
   }
-  // Same seat as the chain read, same reason: everything after this line
-  // costs credits, and a nonprofit has no owner to sell to.
+  // ══ ROUND 139 (Vin, 2026-09-11): A NONPROFIT IS KEPT AND WORKED ════════
+  // This sat in the same seat as the chain read and DROPPED the lead, on the
+  // reasoning that a nonprofit has no owner whose own money is on the line.
+  // Vin ruled on 2026-09-11 that the reasoning does not hold: a named,
+  // reachable CEO is a person who can say yes, whoever files the tax return,
+  // and a recovery centre whose own page names the person who runs it is the
+  // same sale as any other lead on the sheet.
+  //
+  // The READ is untouched - the detection was never the problem, and its two
+  // hardest cases (a contractor who BUILDS for a 501(c)3, a sign shop that
+  // SERVES nonprofits) are still refused by it. Only the VERDICT changes: it
+  // no longer sets notIcp, so nothing downstream is stood down and this lead
+  // buys exactly what every other lead buys.
+  //
+  // It is not silent either. The note tells the rep what kind of organisation
+  // he is about to call, which is context the drop used to bury.
   out.nonprofit = readNonprofitEvidence({ pages, links });
-  if (!out.notIcp && out.nonprofit.isNonprofit) {
-    out.notIcp = true;
-    out.icpReason = 'nonprofit';
-    out.icpWhy = out.nonprofit.why;
-    notes.push(`this is a nonprofit \u2014 ${out.nonprofit.why}. There is no owner whose own money is on the line, so there is nothing here to sell.`);
+  if (out.nonprofit.isNonprofit) {
+    notes.push(`a nonprofit \u2014 ${out.nonprofit.why}. It is kept and worked like any other lead: whoever files the tax return, the person who runs it can still say yes, and the rep should know what he is calling before he dials.`);
   }
   out.tells = readOwnershipTells({ pages });
   if (!out.notIcp && out.tells.isOut && out.tells.reason === 'franchise') {
@@ -83913,11 +84505,12 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         out.icpReason = 'chain';
         out.icpWhy = _late.why;
         notes.push(`this is a franchise outlet \u2014 ${_late.why}. Their homepage links none of it; their own sitemap does.`);
-      } else if (_late.isChain && signals.branchNetwork !== true) {
-        // Round 114: the sitemap shows a branch network - marked, kept, email.
+      } else if (chainIsOutOfIcp(_late) && signals.branchNetwork !== true) {
+        // Round 139: the sitemap shows a branch network - dropped, like a franchise.
         out.chain = _late;
         signals.branchNetwork = true;
-        notes.push(`a branch network \u2014 ${_late.why}. Their homepage links none of it; their own sitemap does. Kept as an email lead.`);
+        out.notIcp = true; out.icpReason = 'chain'; out.icpWhy = _late.why;
+        notes.push(`a branch network \u2014 ${_late.why}. Their homepage links none of it; their own sitemap does. The local number reaches a branch and the marketing budget is set at head office, so there is nothing here to sell.`);
       }
     }
   }
@@ -84241,7 +84834,35 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       console.log(`\u{1F4EA} FRONT DESK [${name}]: ${out.email.address} is a real mailbox and it is NOT being sent to - ${_why}. A complaint from a shared inbox is charged to the sending domain, so it costs every later lead, not this one.`);
     }
   }
+  // ══ THE GRADE DECIDES THE SEND, AND IT DECIDED NOTHING ════════════════
+  // ownerEvidenceGrade has graded every owner since it was written, and every
+  // reader of that grade is a counter, a letter on the sheet or one scoring
+  // term. Nothing on the send path asked it, so a name settled by the
+  // business's own name shipped an address marked sendable and the email
+  // opened with his first name - which asserts, to a stranger, that he owns
+  // the place. index.html already refuses to count that row rep-ready
+  // (contactOwnerGrade confirmed or stated); the server did not, so one rule
+  // was live on one half of a pair - the class recorded in Rounds 121, 125
+  // and 136.
+  //
+  // Decided HERE and AFTER the crew-size rule, so a front desk keeps its own
+  // reason: both facts are on `out` by this line and nothing has been written
+  // yet. The name, the address and the pivot line are untouched - the rep
+  // keeps the whole row and the lead stays on his call sheet. Only the
+  // permission to SEND moves, and the row says why in words.
+  if (out.email && out.email.address && out.email.sendable === true
+      && out.owner && out.owner.name && !ownerGradeMaySend(out.owner.grade)) {
+    const _og = String(out.owner.grade || 'not graded at all');
+    const _ask = out.owner.askAs || `Ask for ${out.owner.name}; if he is not the owner, ask who is.`;
+    out.email.sendable = false;
+    out.email.blockReason = `no email is sent to ${out.email.address}: ${out.owner.name} is graded ${_og} as the owner - ${out.owner.gradeWhy || 'nothing we read names him as the owner'}. The address is real and it is on the row - call it instead. ${_ask}`;
+    console.log(`\u{1F4DB} OWNER GRADE [${name}]: ${out.email.address} is a real address and it is NOT being sent to - ${out.owner.name} is graded ${_og} as the owner (${out.owner.gradeWhy || 'nothing we read names him as the owner'}). An email opening with his first name tells him we know he owns this business, and one source cannot carry that claim. ${_ask}`);
+  }
   let _ml = pickMarketingLead(signals.teamNames, signals.teamTitles);
+  // Round 139: THEIR OWN roster, captured before the Hunter fallback can
+  // overwrite _ml. The call-sheet rule below turns on what this business
+  // published about itself, never on what an index says about it.
+  const _siteMarketingHead = !!(_ml && _ml.source === 'own_website_roster');
   // ══ ROUND 121: ASK WHEN WE HAVE NOBODY, NOT ONLY WHEN THEY HAVE AN ORG ══
   // This read `_layers.verdict === 'layered'` and nothing else, so the one
   // route left after the owner ladder has failed was switched OFF on exactly
@@ -84288,7 +84909,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // siteless: their pages could not be read AT ALL - no website on the listing,
   // or a site that returned nothing. readable is the same flag readLayers uses
   // to refuse a layers verdict, so the two cannot disagree about what we saw.
-  const _lanes = lanesFor({ tier: signals.scaleBand, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true, siteless: signals.readable !== true, phone: !!out.phone });
+  const _lanes = lanesFor({ tier: signals.scaleBand, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true, siteless: signals.readable !== true, phone: !!out.phone, siteMarketingHead: _siteMarketingHead });
   out.lanes = _lanes;
   // Round 114: a layered or owned-elsewhere lead on the call sheet ranks LAST.
   signals.laneLast = _lanes.last === true;

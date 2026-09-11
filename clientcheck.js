@@ -2442,6 +2442,13 @@ let contactTally = null;
     _lift(/const emailVerifiedRow = [\s\S]*?\n\};\n/, 'emailVerifiedRow'),
     _lift(/const emailSendableRow = [^\n]+\n/, 'emailSendableRow'),
     _lift(/const emailHeldBackRow = [^\n]+\n/, 'emailHeldBackRow'),
+    // Round 139: which owner grades an email may be addressed to. The server
+    // decides it once and the page counts a rep-ready row on the same two
+    // tokens, so the two rules are executed side by side below rather than
+    // read - two hand-kept copies of one rule is the class this repo records
+    // most, and this pair decides what reaches a prospect.
+    _lift(/const OWNER_GRADES_MAY_SEND = \[[^\]]*\];/, 'OWNER_GRADES_MAY_SEND'),
+    _lift(/const ownerGradeMaySend = [^\n]+\n/, 'ownerGradeMaySend'),
   ].join('\n');
   const got2 = {};
   walk(ast, (n) => {
@@ -2462,6 +2469,7 @@ let contactTally = null;
         + ' mergeView: mergeFindView, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
         + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, siteCell, targetCell, targetWhyCell, shortCell, SHORT_CELL_MAX, laneOf, laneChip, exportableContact, laneHas, laneKey, laneTabs: LANE_TABS, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
         + ' fields: contactFieldsFrom, failureFields: contactFailureFields,'
+        + ' maySend: ownerGradeMaySend, maySendList: OWNER_GRADES_MAY_SEND,'
         // The request the driver reads: the same shape the browser used to send, from the server's own ports.
         + ' body: (c, S) => ({ company: readRunCompanyFrom(c), keys: readRunKeysFrom(S), paidOwnerLookup: readRunOptsFrom(S).paidOwnerLookup, resolveWebsiteSearch: readRunOptsFrom(S).resolveWebsiteSearch }),'
         + ' yn: contactYesNo, has: hasContactData,'
@@ -3329,6 +3337,29 @@ let contactTally = null;
         }
         if (!/confirmed/.test(_line)) fails.push('the tally line does not report how many owners we actually stand behind');
         if (M.tally([]).repReady !== 0) fails.push('an empty run reports rep-ready rows');
+        // ══ ONE RULE ABOUT WHICH NAMES MAY BE WRITTEN TO (Round 139) ═════
+        // The page has required confirmed-or-stated to call a row rep-ready
+        // since this counter was written; the SERVER's sendable verdict asked
+        // the grade nothing, so it shipped a cold email addressed by first
+        // name to a man only his own business name calls the owner. Both
+        // halves are executed here, across all four grades, because a rule
+        // applied to one half of a pair is the class this repo records most.
+        for (const _g of ['confirmed', 'stated', 'inferred', 'unconfirmed']) {
+          const _serverWouldSend = M.maySend(_g);
+          const _pageCountsIt = M.tally([{ ..._ready, name: 'G ' + _g, contactOwnerGrade: _g }]).repReady === 1;
+          if (_serverWouldSend !== _pageCountsIt) {
+            fails.push(`the server ${_serverWouldSend ? 'lets an email be addressed to' : 'refuses to write to'} an owner graded "${_g}" and the page counts that row as ${_pageCountsIt ? 'ready to work' : 'not ready'} — the two halves hold different rules about which names may be written to, so the run report and what actually goes out describe different sets of leads`);
+          }
+        }
+        if (M.maySendList.join(',') !== 'confirmed,stated') fails.push(`the server may write to ${M.maySendList.join(' or ') || 'nothing'} — confirmed-only was measured on the twenty-lead run at 6 of 9 addresses held against 2 sends and refused, and anything wider lets an inferred name be addressed by first name`);
+        // A lead the email lane drops for this reason is NOT benched: it keeps
+        // its name, its pivot line and its seat on the rep's call sheet.
+        const _inf = { ..._ready, name: 'Inferred Co', contactOwnerGrade: 'inferred',
+          contactEmailSendable: false, contactOwnerAskAs: 'Likely, not confirmed. Ask for A; if he is not the owner, ask who is.' };
+        const _infT = M.tally([_inf]);
+        if (_infT.repReady !== 0) fails.push('a lead whose owner is only inferred counts as ready to work, so the run report promises a rep a row the send path refused');
+        if (_infT.pivotReady !== 1) fails.push('a lead held out of the email lane on its owner grade is counted as nothing at all, when the rep can still call it and ask who owns the business — the owner ruled it stays on the call sheet');
+        if (!M.rows([_inf]).length) fails.push('a lead held out of the email lane on its owner grade is dropped from the exported call sheet, which benches a real lead instead of moving it to the phone');
         // Round 116: the size score on the panel.
         const _ts = M.tally([
           { ..._ready, name: 'S1', contactSizeConfidence: 'sure' }, { ..._ready, name: 'S2', contactSizeConfidence: 'likely' },
