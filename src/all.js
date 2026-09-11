@@ -36342,6 +36342,28 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     const _nonRecruit = scraped.emails.find(e => !RECRUIT_LOCAL_RE.test(e.split('@')[0].replace(/[^a-z0-9]/g, '')));
     let best = nameMatch || personal || _nonRecruit || scraped.emails[0];
     let isGeneric = ['role', 'company'].includes(mailboxKind(best, _mbCtx));
+    // ══ ROUND 140: A COLLEAGUE'S MAILBOX IS NOT THE OWNER'S EITHER ═════════
+    // `best` above prefers the decision-maker's own address, then falls
+    // through to ANY personal one. That fall-through is a colleague: JFK
+    // Window & Door publishes megan@ and the owner is John Karle; Wasatch
+    // Recovery publishes ryan@ and the owner is Mark Richards. Both shipped
+    // on the 2026-09-11 ten-lead run as the lead's email address.
+    //
+    // The search below - build the owner's mailbox and ask the mail server
+    // whether it exists - is the one route in this file that produces an
+    // owner's address, and it was gated on isGeneric. A front desk opened
+    // it; a colleague did not. So on those leads nothing was tried at all.
+    // We named the right man and filed somebody else's inbox against him.
+    //
+    // Round 136 taught this file "the owner's own mailbox before the front
+    // desk". Nobody taught it "before ANYONE else's" - the same rule with
+    // only the narrower half written down, which is the one-rule-on-one-half
+    // -of-a-pair class this file records most.
+    //
+    // A SUPERSET of isGeneric, never a replacement: a role or company inbox
+    // cannot match the owner's name, so every lead that opened the gate
+    // before still opens it. It only ever adds the colleague case.
+    let _isOwnMailbox = !!nameMatch;
 
     // ══ A SHARED INBOX IS NOT THE OWNER ══════════════════════════════════════
     // When the only address a site publishes is info@, this returned it and
@@ -36360,7 +36382,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // exists. An unverified guess must never displace an address the company
     // published; that would trade a low-open-rate certainty for a bounce, and
     // bounce rate is the single biggest differentiator between senders.
-    if (isGeneric && name && verifierKey) {
+    if (!_isOwnMailbox && name && verifierKey) {
       try {
         // ══ ONE CHECK OR NONE, NEVER SIX ═══════════════════════════════
         // Round 129. This fires on the most common shape in this ICP - a site
@@ -36392,6 +36414,13 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
         // every Microsoft tenant - returns null and never reaches the guesses,
         // as does a spent day and a verifier that did not answer. null is not
         // false, so none of those becomes a guess.
+        // Round 140: WHAT was published decides the wording of all three
+        // outcomes below. A per-lead line states what was measured about
+        // THIS business, so a colleague's mailbox must not be reported as
+        // a shared inbox - the rep reads these and acts on them.
+        const _pubSay = isGeneric
+          ? `only the shared inbox ${best}`
+          : `${best}, which belongs to somebody at the company and not to ${name}`;
         let _catchAll = catchAllKnown(domain);
         if (_catchAll === undefined) _catchAll = await isCatchAllDomain(domain, verifierKey);
         // A learned convention is still one check, not three. Otherwise the
@@ -36406,14 +36435,20 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
             if (!_cand || _cand === best) continue;
             const _res = await verifyEmailSMTP(_cand, verifierKey);
             if (_res && _res.valid === true) {
-              console.log(`\u21c4 EMAIL [${domain}]: their site publishes only ${best}, a shared inbox. ${_cand} is ${name}'s own mailbox and SMTP confirms it exists, so the email reaches the person it argues with instead of whoever reads enquiries.`);
+              console.log(`\u21c4 EMAIL [${domain}]: their site publishes ${_pubSay}. ${_cand} is ${name}'s own mailbox and SMTP confirms it exists, so the email reaches the person it argues with instead of somebody who would have to forward it.`);
               best = _cand;
               isGeneric = false;
+              _isOwnMailbox = true;
               rememberPattern(domain, _pat);
               break;
             }
           }
-          if (isGeneric) console.log(`EMAIL [${domain}]: only the shared inbox ${best} is published and no personal mailbox for ${name} could be confirmed, so the published address stands. An unverified guess is not worth a bounce.`);
+          // Only when the loop did NOT find one. This carried an `isGeneric`
+          // guard, which the swap above sets false - so the guard was doing
+          // two jobs at once and the second one silently. Said plainly now:
+          // a lead whose owner mailbox WAS confirmed must not also be told it
+          // could not be.
+          if (!_isOwnMailbox) console.log(`EMAIL [${domain}]: their site publishes ${_pubSay}, and no personal mailbox for ${name} could be confirmed, so the published address stands and the row says whose it is. An unverified guess is not worth a bounce.`);
         } else {
           // Name the REAL reason. The old sentence said "we do not know how
           // this company builds its addresses" on every lead, which read as a
@@ -36425,7 +36460,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
               : !_tryPatterns.length
                 ? `no candidate mailbox could be built for ${name} (VERIFIER_PATTERN_TRIES is ${SHARED_INBOX_TRY_MAX})`
                 : 'the catch-all verdict did not come back false';
-          console.log(`EMAIL [${domain}]: their site publishes only the shared inbox ${best}, and no personal mailbox for ${name} was tried - ${_why}. A guess must never displace an address they published, so the shared inbox stands.`);
+          console.log(`EMAIL [${domain}]: their site publishes ${_pubSay}, and no personal mailbox for ${name} was tried - ${_why}. A guess must never displace an address they published, so it stands and the row says whose it is.`);
         }
       } catch (e) {
 
@@ -36446,13 +36481,26 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     if (_fromCareers) _marks.push('their careers page, so a recruiter reads it');
     else if (_kind === 'company') _marks.push("the company's own mailbox, not a person");
     else if (isGeneric) _marks.push('a shared inbox, not a person');
+    // Round 140: the third case. A real mailbox belonging to a real person
+    // who is NOT the one we are writing to read as identical to the owner's
+    // own - same tier, same score 100, same label - so a rep glancing at the
+    // row had nothing telling him megan@ is not John. Vin, 2026-09-11: keep
+    // it, because it is a real address and the rep can still use it, and mark
+    // it, because an email opening with the owner's first name must not go to
+    // a colleague's desk.
+    else if (!_isOwnMailbox && name && _kind === 'person') _marks.push(`a colleague's mailbox, not ${name}'s`);
     if (_offDomain) _marks.push('on a different domain from their website');
     const _label = _marks.length
       ? `Published on their site (${_marks.join('; ')})`
       : 'Published on their site';
     // Score, not tier: a role inbox found on a careers page is the weakest
     // thing this branch can return and it was scoring 100.
-    const _score = _fromCareers ? 70 : (isGeneric ? 85 : (_offDomain ? 90 : 100));
+    // Round 140: a colleague's mailbox scores below a shared inbox, not with
+    // the owner's own. The email is written at owner altitude; arriving on a
+    // named colleague's desk it reads as a vendor pitch to forward, which is
+    // the same death as a front desk with a person's name on it.
+    const _notOwners = !_isOwnMailbox && !!name && _kind === 'person';
+    const _score = _fromCareers ? 70 : (_notOwners ? 80 : (isGeneric ? 85 : (_offDomain ? 90 : 100)));
     console.log(`✓ EMAIL [${domain}] T1 scraped from ${scraped.source}: ${best} [${_kind}${_marks.length ? ' \u2014 ' + _marks.join('; ') : ''}]`);
     return {
       email: best, ...EMAIL_TIERS.CONFIRMED_SCRAPED,
@@ -79541,10 +79589,52 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       _fails.push('Hunter is now asked for everybody at the domain, which names non-owners at owner-run businesses - but the compose path still resolves its recipient from the owner chain alone, so those leads become an owner-voiced, greeting-less email sent to a company mailbox. Wire the recipient before opening the query');
     }
 
+    // ══ ROUND 140: AND BEFORE A COLLEAGUE'S DESK, NOT ONLY THE FRONT ONE ══
+    // Round 136 wrote this rule with one half of it: the owner's own mailbox
+    // is asked for before the FRONT DESK. The route that asks was gated on the
+    // published address being generic, so a site publishing a named colleague
+    // closed it - and on the 2026-09-11 ten-lead run, JFK Window & Door
+    // (published megan@, owner John F. Karle) and Wasatch Recovery (published
+    // ryan@, owner Mark Richards) both shipped a colleague's inbox as the
+    // lead's email, with nothing tried for the owner and nothing on the row
+    // saying whose desk it was. One rule, one half written down.
+    //
+    // EXECUTED on the predicate that decides it, with the live pairs from that
+    // run, and the call site pinned beside it - a fixture supplies its own
+    // arguments and cannot see which condition the route actually asks.
+    {
+      const _own = (local, owner) => localMatchesName(local, String(owner).toLowerCase().replace(/[^a-z\s]/g, '').split(/\s+/).filter(w => w.length > 2));
+      if (_own('megan', 'John F. Karle')) _fails.push('megan@ reads as John F. Karle\'s own mailbox, so the search for his would be skipped as already done');
+      if (_own('ryan', 'Mark Richards')) _fails.push('ryan@ reads as Mark Richards\'s own mailbox');
+      if (!_own('brent', 'Brent Hale')) _fails.push('brent@ does NOT read as Brent Hale\'s own mailbox, so the one shape that already works would be re-searched and a confirmed owner address could be displaced by a guess');
+      if (!_own('john.karle', 'John F. Karle')) _fails.push('a first.last mailbox does not read as its owner\'s');
+      // The route must ask whether the published address is the OWNER'S, not
+      // whether it is generic. Reverting this one condition is what put a
+      // colleague's inbox on the sheet under the owner's name.
+      if (_src.indexOf(_n('    if (!_isOwnMailbox && name &&', ' verifierKey) {')) < 0) {
+        _fails.push('the owner-mailbox search is gated on the published address being GENERIC again, so a business that publishes a colleague (megan@ at JFK Window & Door, ryan@ at Wasatch Recovery) has nothing tried for its owner at all - no probe, no ask, no guess - and that colleague ships as the lead\'s address');
+      }
+      if (_src.indexOf(_n('    let _isOwnMailbox =', ' !!nameMatch;')) < 0) {
+        _fails.push('nothing records whether the published address is the owner\'s own, so the gate, the label and the score have no one answer to read and will drift into three');
+      }
+      if (_src.indexOf(_n("_marks.push(`a colleague's mailbox,", " not ${name}'s`);")) < 0) {
+        _fails.push('a colleague\'s real mailbox is labelled exactly like the owner\'s own, so a rep reading the row cannot tell that an email opening with the owner\'s first name would land on somebody else\'s desk');
+      }
+      // And the swap must SAY it succeeded. Without this the owner's own
+      // confirmed mailbox is labelled a colleague's and scored below a shared
+      // inbox - the rule inverted on exactly the leads it exists to win.
+      if (_src.indexOf(_n('              _isOwnMailbox', ' = true;')) < 0) {
+        _fails.push('a confirmed owner mailbox is not recorded as his, so the address this whole route exists to find is then labelled a colleague\'s and scored below a shared inbox');
+      }
+      if (_src.indexOf(_n('          if (!_isOwnMailbox) console.log(`EMAIL [${domain}]:', ' their site publishes ${_pubSay}')) < 0) {
+        _fails.push('the could-not-confirm line is no longer guarded on the outcome, so a lead whose owner mailbox WAS confirmed is also told it could not be - two sentences about one measurement, which is the contradiction class this file records');
+      }
+    }
+
     if (_fails.length) {
       console.log(`⛔ OWNER MAILBOX FIRST CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
     } else {
-      console.log(`✓ OWNER MAILBOX FIRST CHECK: the decision-maker's own mailbox is asked for before his company's front desk is accepted. The Find read hands over the Hunter key it was already holding, so the one route that asks for a named person's own address can run at all; the company-mailbox probe HOLDS its answer instead of returning it, so every route below it stays reachable; and the grade tells three states apart that were one - his own desk (smtp_confirmed), his firm's front desk (company_mailbox), and a shared inbox nobody is named against (published_role). A front desk ships sendable only at an owner-run business with a named owner and a measured crew of ${FRONT_DESK_CREW_MAX} or fewer; an unmeasured crew is refused, because we did not look is not the same as the owner reading it himself. An owner named by one word now builds kenny@, which is SMTP-confirmed or dropped, never guessed.`);
+      console.log(`✓ OWNER MAILBOX FIRST CHECK: the decision-maker's own mailbox is asked for before his company's front desk is accepted. The Find read hands over the Hunter key it was already holding, so the one route that asks for a named person's own address can run at all; the company-mailbox probe HOLDS its answer instead of returning it, so every route below it stays reachable; and the grade tells three states apart that were one - his own desk (smtp_confirmed), his firm's front desk (company_mailbox), and a shared inbox nobody is named against (published_role). A front desk ships sendable only at an owner-run business with a named owner and a measured crew of ${FRONT_DESK_CREW_MAX} or fewer; an unmeasured crew is refused, because we did not look is not the same as the owner reading it himself. An owner named by one word now builds kenny@, which is SMTP-confirmed or dropped, never guessed. Round 140 widened the rule to the half it was missing: his own mailbox is asked for before ANY other person's, not only before a front desk, so a site publishing a colleague (megan@ at JFK Window & Door, ryan@ at Wasatch Recovery) no longer closes the one route that produces an owner address. Executed on the predicate that decides it with those live pairs. A colleague's address is kept when his own cannot be confirmed, because it is real and the rep can use it - and the row says whose desk it is, and scores it below a shared inbox, because an owner-voiced email landing on a named colleague reads as a pitch to forward.`);
     }
   } catch (e) {
     console.log(`⛔ OWNER MAILBOX FIRST CHECK COULD NOT RUN — ${(e && e.message) || e}.`);

@@ -48,27 +48,27 @@ Counts now: **55 declared categories** (`GP_CATEGORIES`; a tier-C one is benched
 | `TRADE_MONEY_EXEMPT` | `src/all.js:27709` (server.js:27709) | trades with no honest single job value | TRADE TABLE COVERAGE CHECK |
 | `FINANCING_RE` | `src/all.js:27726` (server.js:27726) | consumer-financing vendors and offer text | SIGNAL TRUTH CHECK |
 | `BIG_TICKET_TRADE_RE` | `src/all.js:27747` (server.js:27747) | trades where missing financing is a gap | MONEY SIGNAL CHECK |
-| `ICP_STAFFING` | `src/all.js:39744` (server.js:39744) | staffing / recruiting — not our ICP | ICP FILTER, STEM MATCH |
-| `ICP_INSTITUTION` | `src/all.js:39745` (server.js:39745) | institutions — blocked | ICP FILTER, STEM MATCH |
-| `ICP_SMALL_PRACTICE` | `src/all.js:39756` (server.js:39756) | the small-practice escape from the health block | ICP FILTER, STEM MATCH |
-| `ICP_BIG_HEALTH` | `src/all.js:39760` (server.js:39760) | hospitals / health systems — blocked | ICP FILTER, STEM MATCH |
-| `STEM_COMPLETE_WORDS` | `src/all.js:39788` (server.js:39788) | every bare stem a list may end on | STEM MATCH CHECK |
-| `BRAND_LEGAL_SUFFIX_RE` | `src/all.js:39814` (server.js:39814) | legal suffixes stripped before a brand compare | ICP FILTER CHECK |
-| `BLOCKED_COMPANIES` | `src/all.js:39842` (server.js:39842) | brand set 1 (whole-name match) | ICP FILTER CHECK |
-| `STAFFING_BRANDS` | `src/all.js:39908` (server.js:39908) | brand set 2 | ICP FILTER CHECK |
-| `ENTERPRISE_BRANDS` | `src/all.js:39921` (server.js:39921) | brand set 3 | ICP FILTER CHECK |
-| `NATIONAL_BRANDS` | `src/all.js:39931` (server.js:39931) | brand set 4 | ICP FILTER CHECK |
-| `TRADE_WORDS` | `src/all.js:42072` (server.js:42072) | word → trade lookup | — |
-| `TRADE_MODIFIERS` | `src/all.js:42646` (server.js:42646) | specialisms that narrow a search | TRADE PHRASE CHECK |
-| `TRADE_SYNONYM_GROUPS` | `src/all.js:43076` (server.js:43076) | trade words that count as the same word | — |
-| `SLUG_PRODUCT_LINE` | `src/all.js:43894` (server.js:43894) | product-line URL slugs | page checks |
-| `CHAIN_ROLE_RE` | `src/all.js:82127` (server.js:82127) | franchisee role titles on their own pages | CHAIN OUTLET CHECK |
-| `CHAIN_SELF_RE` | `src/all.js:82128` (server.js:82128) | franchise self-description | CHAIN OUTLET CHECK |
-| `CHAIN_DENIAL_RE` | `src/all.js:82130` (server.js:82130) | "locally owned, not a franchise" — never fires the drop | CHAIN OUTLET CHECK |
-| `FIND_ICP_TERMS` | `src/all.js:83230` (server.js:83230) | the contact-list FIT score terms | FIND ICP GATE CHECK |
-| `FIND_ICP_MIN_TERMS` | `src/all.js:83518` (server.js:83518) | below this many measured terms a lead is "not scored" | FIND ICP GATE CHECK |
+| `ICP_STAFFING` | `src/all.js:39792` (server.js:39792) | staffing / recruiting — not our ICP | ICP FILTER, STEM MATCH |
+| `ICP_INSTITUTION` | `src/all.js:39793` (server.js:39793) | institutions — blocked | ICP FILTER, STEM MATCH |
+| `ICP_SMALL_PRACTICE` | `src/all.js:39804` (server.js:39804) | the small-practice escape from the health block | ICP FILTER, STEM MATCH |
+| `ICP_BIG_HEALTH` | `src/all.js:39808` (server.js:39808) | hospitals / health systems — blocked | ICP FILTER, STEM MATCH |
+| `STEM_COMPLETE_WORDS` | `src/all.js:39836` (server.js:39836) | every bare stem a list may end on | STEM MATCH CHECK |
+| `BRAND_LEGAL_SUFFIX_RE` | `src/all.js:39862` (server.js:39862) | legal suffixes stripped before a brand compare | ICP FILTER CHECK |
+| `BLOCKED_COMPANIES` | `src/all.js:39890` (server.js:39890) | brand set 1 (whole-name match) | ICP FILTER CHECK |
+| `STAFFING_BRANDS` | `src/all.js:39956` (server.js:39956) | brand set 2 | ICP FILTER CHECK |
+| `ENTERPRISE_BRANDS` | `src/all.js:39969` (server.js:39969) | brand set 3 | ICP FILTER CHECK |
+| `NATIONAL_BRANDS` | `src/all.js:39979` (server.js:39979) | brand set 4 | ICP FILTER CHECK |
+| `TRADE_WORDS` | `src/all.js:42120` (server.js:42120) | word → trade lookup | — |
+| `TRADE_MODIFIERS` | `src/all.js:42694` (server.js:42694) | specialisms that narrow a search | TRADE PHRASE CHECK |
+| `TRADE_SYNONYM_GROUPS` | `src/all.js:43124` (server.js:43124) | trade words that count as the same word | — |
+| `SLUG_PRODUCT_LINE` | `src/all.js:43942` (server.js:43942) | product-line URL slugs | page checks |
+| `CHAIN_ROLE_RE` | `src/all.js:82217` (server.js:82217) | franchisee role titles on their own pages | CHAIN OUTLET CHECK |
+| `CHAIN_SELF_RE` | `src/all.js:82218` (server.js:82218) | franchise self-description | CHAIN OUTLET CHECK |
+| `CHAIN_DENIAL_RE` | `src/all.js:82220` (server.js:82220) | "locally owned, not a franchise" — never fires the drop | CHAIN OUTLET CHECK |
+| `FIND_ICP_TERMS` | `src/all.js:83320` (server.js:83320) | the contact-list FIT score terms | FIND ICP GATE CHECK |
+| `FIND_ICP_MIN_TERMS` | `src/all.js:83608` (server.js:83608) | below this many measured terms a lead is "not scored" | FIND ICP GATE CHECK |
 
 ## Company identity (what a full company swap would touch)
 
-- server.js: "CROJungle" appears 55 times (first at built lines 1309, 1381, 1500, 3440, 4451, 4477, 4503, 4650 …; `node build.js --where N` maps one); the audit system prompt `BRAIN_STATIC` is declared at `src/all.js:8416` (server.js:8416); `$800k` at built lines 5262, 5280, 5347, 5457, 6038, 6047, 6051, 6134, 6147, 6170, 6275, 41240 …; `$15M` at built lines 5279, 5280, 5298, 5459, 16568, 18579, 63084, 63092, 63093, 63105, 63107, 63172 …; the 200-employee gate at built lines 38911, 38912, 40811; the sending user agent `crojungleteam.com` at `src/all.js:4451` (server.js:4451); the Hunter sequence id comes from Settings, read in the send route (first `sequenceId` after `/api/send-to-hunter`, `src/all.js:86268` (server.js:86268)).
+- server.js: "CROJungle" appears 55 times (first at built lines 1309, 1381, 1500, 3440, 4451, 4477, 4503, 4650 …; `node build.js --where N` maps one); the audit system prompt `BRAIN_STATIC` is declared at `src/all.js:8416` (server.js:8416); `$800k` at built lines 5262, 5280, 5347, 5457, 6038, 6047, 6051, 6134, 6147, 6170, 6275, 41288 …; `$15M` at built lines 5279, 5280, 5298, 5459, 16568, 18579, 63132, 63140, 63141, 63153, 63155, 63220 …; the 200-employee gate at built lines 38959, 38960, 40859; the sending user agent `crojungleteam.com` at `src/all.js:4451` (server.js:4451); the Hunter sequence id comes from Settings, read in the send route (first `sequenceId` after `/api/send-to-hunter`, `src/all.js:86358` (server.js:86358)).
 - index.html: "CROJungle" appears 12 times (lines 6, 3994, 4133, 4176, 4385, 5036, 5099, 8100, 9596, 12433, 14970, 15600); `PILLAR_PRODUCT` at line 2871, `LAYER_PLAIN` at line 2838; the never-cold-email-from-CROJungle.com warning at line 14970.
