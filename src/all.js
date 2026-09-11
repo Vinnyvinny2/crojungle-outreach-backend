@@ -5274,11 +5274,36 @@ const ICP_PREMIUM_RETAINER_MONTHLY = 10000;   // the '$10k' in OUR_PRICE_FIGURES
 // Round 114 (Vin, 2026-09-03): the ceiling is a REACHABILITY rule, never an
 // affordability one - "there is no top of the retainer; we would do a $50k a
 // day retainer if we got the deal". It marks where the phone stops reaching the
-// person who signs; a big company is an EMAIL lead, never dropped. $30M -> $35M
-// is headroom on a MEASURED number (a directory figure can be 30% off), and an
-// owner-run business over it stays on the call sheet up to the reach line.
-const ICP_REVENUE_BAND = { floor: 0.8e6, coreFrom: 1.2e6, upperFrom: 10e6, ceiling: 35e6 };
-const ICP_CALL_REACH_CEILING = 50e6;   // owner within reach and measured under this: still a call (Vin, 2026-09-03)
+// person who signs, and an owner-run business over it stays on the call sheet
+// up to the reach line.
+// ══ ROUND 139 (Vin, 2026-09-11): THE CEILING IS $15M AND THE WRITTEN ICP WON ══
+// The written ICP has said $800k-$15M for the life of this system; five
+// comments in this file quote that range; and the code carried $35M with the
+// number 15e6 appearing NOWHERE in it. Nothing measured the gap, so the ladder
+// drifted away from the document it is meant to execute. Vin ruled on
+// 2026-09-11 that the written ICP wins, which reverses the $35M he ruled on
+// 2026-09-03. Every cut is this table divided by a benchmark, so the staff
+// cuts, the truck cuts and the discovery employee gate all follow it down: 75
+// people, not 175, is now where a business leaves the call sheet.
+//
+// ══ AND THE REACH LINE DID NOT MOVE WITH IT (Vin, 2026-09-11) ═════════════
+// The first draft of this round scaled the reach line down with the cap, on
+// the arithmetic that $50M was ten sevenths of $35M. That was the wrong kind
+// of reasoning, and Vin settled it on the business rather than on the ratio:
+// a $24M roofing company, about 120 people, still run by the founder, his
+// name and his own address on the site - phone him, or just email him?
+// "id say do both for sure we should email him and phone him."
+//
+// The two numbers answer different questions and only one of them changed.
+// The CAP asks whether a business FITS what we sell, and that moved to $15M.
+// The REACH LINE asks whether the PHONE reaches the person who signs, and
+// nothing about a founder who answers his own phone changed on 2026-09-11:
+// he answers it at $24M exactly as he does at $9M. So it stays typed at the
+// number Vin ruled, and it is deliberately NOT derived from the cap - a ratio
+// nothing else reads is the same fact kept in two places waiting to drift,
+// which is the failure this whole round exists to correct.
+const ICP_REVENUE_BAND = { floor: 0.8e6, coreFrom: 1.2e6, upperFrom: 10e6, ceiling: 15e6 };
+const ICP_CALL_REACH_CEILING = 50e6;   // owner within reach and measured under this: still a call (Vin, 2026-09-03, re-affirmed 2026-09-11)
 const ICP_REVENUE_PER_EMPLOYEE = 200000;      // HVAC/plumbing/electrical $160-280k per head (MarginPlug, Tradesly, SubcontractorHub; Vertical IQ: 12 people ~= $2.9M), 2026-09-03
 const ICP_REVENUE_PER_TRUCK = 300000;         // $250-400k per truck, home services (Service Autopilot), 2026-09-03
 // Keyed by the CATEGORY_TIER label. A trade with no row uses the default; a
@@ -5407,7 +5432,7 @@ const LANE_TIERS = { call: ['entry', 'core', 'upper'], email: ['core', 'upper', 
 // And the call lane means a NAMED owner within reach: a read lead with a
 // phone and nobody named is the "no name yet" bucket, off the rep's sheet.
 const SIZE_WORD_TIER = { low: 'entry', medium: 'core', high: 'upper' };
-const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national, siteless, phone } = {}) => {
+const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national, siteless, phone, siteMarketingHead } = {}) => {
   const why = [];
   let t = SCALE_TIERS.includes(tier) ? tier : null;
   let measured = !!t;
@@ -5426,6 +5451,17 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
     t = 'entry';
     why.push(`under the floor on a ${sizeConfidence || 'guess'} - kept as low`);
   }
+  // ══ ROUND 139 (Vin, 2026-09-11): THE SAME HEADROOM AT THE TOP ══════════
+  // Round 114 gave the FLOOR headroom and left the ceiling hard, so the two
+  // ends of one ladder disagreed about what a guess is worth: a guess under
+  // $800k stayed on the rep's sheet and a guess over the cap was taken off it.
+  // A guess is the thing most likely wrong in both directions, and with the cap
+  // down at $15M the top end is the one a review count now reaches. Only a
+  // MEASURED size moves a business into the email-only lane.
+  if (t === 'over_ceiling' && sizeConfidence !== 'likely' && sizeConfidence !== 'sure') {
+    t = 'upper';
+    why.push(`over the cap on a ${sizeConfidence || 'guess'} - kept as high and still callable; only a measured size comes off the call sheet`);
+  }
   // Round 113 (Vin, 2026-09-03): a product company is kept, as an email lead.
   const layered = layers === 'layered', ts = source === 'theirstack', prod = product === true;
   // Round 114: a branch network, a PE-owned company and a national operator are
@@ -5440,7 +5476,16 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
   // business under the cap STAYS on the call sheet, ranked last and marked, and
   // the rep asks for the marketing head. Only a TheirStack lead (no phone) and
   // a product company (a sales line) are never on it.
-  const inCall = (LANE_TIERS.call.includes(t) || reach) && !ts && !prod;
+  // ══ ROUND 139 (Vin, 2026-09-11): A NAMED MARKETING DIRECTOR IS NOT A CALL ══
+  // Government arithmetic, not a hunch: BLS OEWS May 2023 counts about one
+  // Marketing Manager for every 442 specialty-trade establishments in Census
+  // CBP 2023. A trade business that publishes a Director of Marketing on its
+  // own team page is therefore, on the numbers alone, far bigger and more
+  // layered than the sheet the rep dials - receptionists, and the owner out of
+  // office. It is NOT benched: it keeps the email lane and that director is
+  // who the email goes to. It loses the call lane only.
+  const siteHead = siteMarketingHead === true;
+  const inCall = (LANE_TIERS.call.includes(t) || reach) && !ts && !prod && !siteHead;
   // ══ ROUND 121: A BUSINESS WITH NO WEBSITE IS THE CLEAREST LEAD WE FIND ══
   // Vin, 2026-09-04, ruling on two leads from that press: Delta Solar Power
   // (232 reviews) and American Dream Solar (305), both with a phone and no
@@ -5472,6 +5517,7 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
   if (big && !inCall && LANE_TIERS.email.includes(t)) why.push(`${big} - email, the marketing decision-maker at head office`);
   if (ts && LANE_TIERS.call.includes(t)) why.push('a TheirStack lead - email only');
   if (prod && LANE_TIERS.call.includes(t)) why.push(LANE_TIERS.email.includes(t) ? 'a product company - email only' : 'a product company - email whatever the size guess, its reviews do not measure a manufacturer');
+  if (siteHead && (LANE_TIERS.call.includes(t) || reach)) why.push('their own site names a marketing director, so the buying decision sits behind a marketing department - email only, and that director is who it goes to');
   if (_sitelessCall) why.push('no working website, so nobody can be named from their own pages - on the call sheet last, with the number to ask who runs it');
   if (noname) why.push('nobody named yet - off the call sheet until a name is found');
   if (LANE_TIERS.email.includes(t) && !email && !noname) why.push('nobody named to write to');
@@ -7230,6 +7276,9 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   // rather than inferred, and the fix is a retainer rather than a page edit.
   const citiesSearchedByCat = new Map();
   let calls = 0, skippedFranchise = 0, skippedCatCap = 0, skippedTooBig = 0, skippedNoPain = 0, keptNoWebsite = 0, keptBuilder = 0, lowRatingKept = 0;
+  // Round 139: branches dropped on the URL Google already handed us, before a credit moves.
+  let skippedBranchUrl = 0;
+  const _branchWhy = [];
   // The review floor is now the gate that decides whether a business is
   // established enough to be worth researching - the star band used to do it
   // and no longer does - so it needs a counter like every other gate here.
@@ -7455,6 +7504,28 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
           _tooBigWhy = `${reviews} Google reviews, above the ${GP_MAX_REVIEWS} ceiling \u2014 at this volume a business is often multi-location or already agency-managed. Review count measures whether they ASK, not how big they are, so this is a sort position and not a fact about them.`;
         }
         if (GP_FRANCHISE.test(name)) { skippedFranchise++; continue; } // franchise ≠ owner-reachable
+        // ══ ROUND 139: THE BRANCH TELL THAT COSTS NOTHING, AT THE PRESS ════
+        // GP_FRANCHISE above is a hand-kept list of brands somebody remembered
+        // and its own comment says so: it catches the franchise that has
+        // already burned money and misses the next one. readOutletTell is the
+        // opposite kind of rule. It reads the URL Google has already handed us
+        // - a locations. or stores. subdomain, a /locations/<city> path, a town
+        // slug inside a longer segment on a host not named after that town -
+        // and it needs no list, no request and no credit.
+        //
+        // It ran only at the contact read, which is about five Firecrawl
+        // credits too late. Vin ruled on 2026-09-11 that a branch network is
+        // dropped like a franchise, and this is the only place where that
+        // ruling saves the money: after this line the lead has been paid for.
+        // Nothing new is bought here - the website came back with the listing.
+        if (website) {
+          const _branch = readOutletTell({ name, homeUrl: website, city });
+          if (_branch.isOutlet) {
+            skippedBranchUrl++;
+            if (_branchWhy.length < 4) _branchWhy.push(`${name}: ${_branch.why}`);
+            continue;
+          }
+        }
         // ── ALREADY IN THE PIPELINE: SKIP IT HERE, NOT AT THE END ──────────
         // Before the per-category slot, so the slot goes to a business we do not
         // already own. This is the whole fix for repeat leads: the run stops
@@ -7614,6 +7685,9 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   // local manager does not own the marketing, so there is no engagement to sell
   // however reachable he is. This is the one filter in this function where the
   // business is genuinely not our ICP rather than merely sorted lower.
+  if (skippedBranchUrl) {
+    console.log(`\u{1F517} BRANCH URL [Places]: ${skippedBranchUrl} business(es) dropped before a credit moved - their own Google listing points at one location's page inside a bigger site rather than at a home page of their own \u2014 ${_branchWhy.join(' | ')}. The number on that listing reaches a branch and the marketing budget is set at head office, so there is no engagement to sell. Read from the URL Google returned, so this costs nothing and it happens at the press instead of after the site read.`);
+  }
   let skippedChain = 0;
   {
     // ══ AND THE MEMORY IT NEVER HAD ══════════════════════════════════
@@ -7663,7 +7737,7 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   for (let i = 0; buckets.some(b => i < b.length); i++) {
     for (const b of buckets) if (i < b.length) interleaved.push(b[i]);
   }
-  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises by name${skippedChain ? `, ${skippedChain} chain outlet(s) measured` : ''}, ${skippedTooBig ? `${skippedTooBig} too big DELETED` : `${demotedTooBig} too big demoted`}, ${skippedCatCap} over per-category cap${skippedAlreadyOwned ? `, ${skippedAlreadyOwned} already in your pipeline` : ''})`);
+  console.log(`Google Places: ${interleaved.length} local owner-operated businesses from ${calls} queries across ${byCat.size} categories (${skippedFranchise} franchises by name${skippedBranchUrl ? `, ${skippedBranchUrl} branch address(es) by URL` : ''}${skippedChain ? `, ${skippedChain} chain outlet(s) measured` : ''}, ${skippedTooBig ? `${skippedTooBig} too big DELETED` : `${demotedTooBig} too big demoted`}, ${skippedCatCap} over per-category cap${skippedAlreadyOwned ? `, ${skippedAlreadyOwned} already in your pipeline` : ''})`);
   // ══ HOW DEEP THE RUN ACTUALLY REACHED ════════════════════════════════════
   // The number to watch when leads feel repetitive. Places answers each query
   // with its twenty most prominent businesses in the same order every time, so
@@ -7754,7 +7828,7 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   if (tally && typeof tally === 'object') {
     tally.seen = seenFromGoogle;
     tally.underFloor = skippedUnderFloor;
-    tally.franchise = skippedFranchise + skippedChain;
+    tally.franchise = skippedFranchise + skippedChain + skippedBranchUrl;
     tally.alreadyOwned = skippedAlreadyOwned;
     tally.catCap = skippedCatCap;
     tally.demoted = benched.length;
@@ -62529,7 +62603,9 @@ app.listen(PORT, () => {
     // ── 2. THE MECHANISM: WHAT THE BUSINESS SAYS ABOUT ITSELF ──────────
     const _pg = (url, text) => ({ url, text, html: text });
     const _chainCases = [
-      // Round 114: a KIND per case - 'franchise' drops, 'network' is kept as an email lead, false is an independent.
+      // Round 114 gave each case a KIND; Round 139 (Vin, 2026-09-11) drops BOTH
+      // kinds. The kind still decides the REASON on the row and the sentence the
+      // note carries, so it is still asserted per case; false is an independent.
       ['a team page naming a Franchise Owner', { pages: [_pg('https://trulynolen.com/', 'Pest control since 1938.')], rosterTitles: ['Majority Franchise Owner', 'Operations Manager'], links: [] }, 'franchise'],
       ['a per-state locations URL we read', { pages: [_pg('https://www.windownation.com/locations/north-carolina/charlotte', 'Windows.')], rosterTitles: [], links: [] }, 'network'],
       ['a per-state locations URL in their own nav', { pages: [_pg('https://x.com/', 'Windows.')], rosterTitles: [], links: ['https://x.com/locations/texas/austin'] }, 'network'],
@@ -62585,10 +62661,29 @@ app.listen(PORT, () => {
           ? `${what} is not read as a chain, and that is a ${want} bought at full price`
           : `${what} is read as a CHAIN, and on the drop rule that deletes a real lead`);
       } else if (wantChain && got.kind !== want) {
-        // Round 114 (Vin): a branch network is a LARGE company kept for email; only a franchise drops.
-        _fails.push(`${what} is read as ${got.kind || 'a chain of no kind'} and should be ${want} - ${want === 'network' ? 'a large company was dropped as a franchise' : 'a franchise was kept as an email lead'}`);
+        // Round 139 (Vin): both kinds drop. The kind decides the REASON the row
+        // carries, and a wrong reason on a dropped lead is a wrong sentence.
+        _fails.push(`${what} is read as ${got.kind || 'a chain of no kind'} and should be ${want} - both drop, but the row would carry ${want === 'network' ? 'the franchisor sentence about a business that has no franchisor' : 'the branch sentence, and the franchisor who owns the marketing fund is never named'}`);
       }
     }
+    // ══ ROUND 139 (Vin, 2026-09-11): A BRANCH NETWORK IS DROPPED, NOT MARKED ══
+    // Alpha Foundations Repair Tampa was read as a branch network on a live run
+    // and still cost the whole contact read, because Round 114 only MARKED it
+    // and every gate that stops a spend asks notIcp. One declaration answers
+    // for both kinds now, and it is executed here on the shape that lead had.
+    {
+      const _alpha = readChainEvidence({ pages: [_pg('https://www.alphafoundations.com/locations/fl/tampa', 'Foundation repair in Tampa.')], rosterTitles: [], links: [], name: 'Alpha Foundations Repair Tampa' });
+      if (_alpha.kind !== 'network') _fails.push(`the Alpha Foundations shape reads as "${_alpha.kind || 'nothing at all'}" rather than a branch network, so the drop cannot fire on it`);
+      if (chainIsOutOfIcp(_alpha) !== true) _fails.push('a business whose own site publishes a per-city location page under a state is NOT out of the ICP - a branch network is read, marked, and then bought at full price, which is exactly what Alpha Foundations Repair Tampa cost on a live run');
+      if (chainIsOutOfIcp({ isChain: true, kind: 'franchise' }) !== true) _fails.push('a franchise outlet is no longer out of the ICP');
+      if (chainIsOutOfIcp(readChainEvidence({ pages: [_pg('https://x.com/', 'Family owned since 1998. We serve the whole county.')], rosterTitles: ['Owner'], links: [] })) !== false) _fails.push('an independent family business reads as out of the ICP, and this rule DELETES the lead');
+      if (chainIsOutOfIcp(readChainEvidence({ pages: [], rosterTitles: [], links: [] })) !== false) _fails.push('a site we could not read at all is dropped as a chain - "we did not look" has never meant "it is one"');
+      // The press half: the same branch, caught off the URL Google returned,
+      // before a Firecrawl credit can move.
+      if (readOutletTell({ name: 'Alpha Foundations Repair Tampa', homeUrl: 'https://www.alphafoundations.com/locations/fl/tampa', city: 'Tampa, FL' }).isOutlet !== true) _fails.push('the Find press cannot tell a branch address from an independent on the URL Google already handed it, so the drop there fires on nothing and the credits are spent anyway');
+      if (readOutletTell({ name: 'Darley Plumbing', homeUrl: 'https://darleyplumbing.com/', city: 'Tampa, FL' }).isOutlet !== false) _fails.push('an ordinary business whose listing points at its own home page is DELETED at the press as a branch, and that delete has no bench and no second chance');
+    }
+
     // == AND A NONPROFIT, FROM ITS OWN PAGE ==============================
     const _npCases = [
       ['a page stating 501(c)(3)', { pages: [_pg('https://x.org/', 'Hope Recovery is a 501(c)(3) nonprofit organization.')], links: [] }, true],
@@ -62743,15 +62838,25 @@ app.listen(PORT, () => {
       [_nd('const _outOfIcp = nameIsOutOfIcp(', 'company.name);'), 'the contact route no longer refuses a lead by name before it spends'],
       [_nd('if (nameIsOutOfIcp(name))', ' return false;'), 'discovery no longer runs the one name gate, so a benched franchise walks back in'],
       [_nd('out.chain = readChainEvidence({ pages,', ' rosterTitles: signals.teamTitles, links, name });'), 'the contact read no longer looks for chain evidence at all, or reads it without the listing name (the "Brand - City" outlet tell is blind)'],
-      [_nd('if (out.chain.isChain && out.chain.kind', " === 'franchise') {"), 'a branch network is dropped as a franchise again, or a franchise is kept (Round 114: only franchise evidence drops)'],
-      [_nd('signals.branchNetwork', ' = true;'), 'a branch network is read and never marked, so the lane cannot route it to email'],
+      [_nd('if (out.chain.isChain && out.chain.kind', " === 'franchise') {"), 'a franchise no longer gets the franchisor sentence, so a dropped lead carries the wrong reason on its row'],
+      [_nd('signals.branchNetwork', ' = true;'), 'a branch network is read and never marked, so the head-office rule, the layers verdict and the TARGET line are all blind to it'],
+      [_nd('} else if (chainIsOutOfIcp(out.chain))', ' {'), 'the contact read stopped asking the one declaration whether this chain is out of the ICP, so a branch network is marked and bought at full price again (Alpha Foundations Repair Tampa)'],
+      [_nd("out.notIcp = true; out.icpReason = 'chain'; out.icpWhy = out.chain", '.why;'), 'a branch network read off their own pages is marked and NOT dropped, so the paid owner wave, the size lookup and the address lookup are all still bought on a branch'],
+      [_nd("out.notIcp = true; out.icpReason = 'chain'; out.icpWhy = out.outlet", '.why;'), 'a branch caught only by where its Google listing points is marked and not dropped, so it is read at full price'],
+      [_nd("out.notIcp = true; out.icpReason = 'chain'; out.icpWhy = _late", '.why;'), 'a branch network that only their own sitemap reveals is marked and not dropped, so the address lookup behind it is still bought'],
+      [_nd('const _branch = readOutletTell({ name, homeUrl: website,', ' city });'), 'the Find press no longer reads where a listing points, so a branch address is queued and pays for a whole contact read before anything notices it is a branch'],
       [_nd('if (apiKey && name &&', ' !out.notIcp) {'), 'a chain outlet still buys the paid owner wave'],
       [_nd('out.outlet = readOutletTell({ name, homeUrl:', ' ((pages || []).find(p'), 'the contact read no longer asks where their own Google listing points, so a branch on a brand site is read as an independent'],
       [_nd('const _headOffice = signals.branchNetwork', ' === true;'), 'the head-office rule no longer reads the branch mark'],
       [_nd('const paidOwner = opts.paidOwnerLookup !== false', ' && !_headOffice;'), 'a branch of a national brand buys the paid owner wave again - ten credits and three minutes for a signer who sits at head office'],
       [_nd('if (website &&', ' !out.notIcp) {'), 'a chain outlet still buys the address lookup'],
       [_nd('out.nonprofit = readNonprofitEvidence({ pages,', ' links });'), 'the contact read no longer looks for nonprofit evidence at all'],
-      [_nd('if (!out.notIcp && out.nonprofit', '.isNonprofit) {'), 'a nonprofit is read and then bought anyway - the verdict does not reach notIcp'],
+      // Until Round 139 this needle asserted that the nonprofit verdict
+      // REACHED notIcp. Vin's ruling of 2026-09-11 makes that the defect
+      // rather than the guard - a nonprofit is kept and worked like any other
+      // lead - so the call site is pinned as the read plus the note it puts on
+      // the row, and the drop itself is asserted ABSENT after this list.
+      [_nd('if (out.nonprofit', '.isNonprofit) {'), 'the nonprofit read is measured and then said to nobody, so the rep dials a recovery centre with nothing on the row telling him what it is'],
       [_nd('out.tells = readOwnershipTells({', ' pages });'), 'the contact read no longer looks for ownership tells at all'],
       [_nd('if (!out.notIcp && out.tells.isOut && out.tells.reason', " === 'franchise') {"), 'a franchisee is bought anyway, or a PE-owned / national company is dropped again (Round 114: marked, routed to email)'],
       [_nd('signals.peOwned = out.tells.reason', " === 'owned';"), 'a PE-owned company is read and never marked, so the lane cannot route it to email'],
@@ -62803,11 +62908,19 @@ app.listen(PORT, () => {
     for (const [needle, why] of _sites) {
       if (!_src.includes(needle)) _fails.push(why);
     }
+    // ══ ROUND 139 (Vin, 2026-09-11): THE READ STAYS, THE DROP GOES ════════
+    // Both directions, because ripping the detection out and putting the drop
+    // back are opposite failures and each costs its own thing: the first
+    // leaves the rep dialling a charity blind, the second deletes a lead with
+    // a named CEO on it. The needle is assembled at runtime - a literal here
+    // would find itself in this very line.
+    if (_src.includes(_nd('out.icpReason = ', "'nonprofit';"))) _fails.push('a nonprofit is dropped out of the ICP again - Vin ruled on 2026-09-11 that it is kept and worked like any other lead, because a named, reachable CEO can say yes whoever files the tax return');
+    if (!_np('Hope Recovery is a registered 501(c)(3). Make a donation today and your gift is put to work in the community.').isNonprofit) _fails.push('the nonprofit READ was taken out along with the drop, so nothing on the row tells the rep what kind of organisation he is calling');
 
     if (_fails.length) {
       console.log(`⛔ FIND ICP GATE CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
     } else {
-      console.log(`✓ FIND ICP GATE CHECK: ${_mustDie.length} national brands are refused by name before a byte moves and ${_mustLive.length} owner-operated names beside them survive; ${_chainCases.length} chain cases are read from the business's OWN pages in both directions, including an independent that prints "not a franchise", a two-branch operator and a franchise lawyer; ${Object.keys(_mail).length} addresses resolve through ONE mailbox vocabulary where six disagreeing lists used to sit, so recruiting@ off a careers page can no longer ship as a tier-1 published address at score 100; and a roster that names its people by first name only finally yields the owner it states, marked as a candidate to corroborate rather than as a settled identity. A locations index counts in both shapes: one per-city page under a state is a branch network by construction, while a one-segment state page needs ${CHAIN_STATE_ONLY_MIN} distinct states before it says anything - so DHI Roofing's six are caught and a single-state independent is not. The sitemap findOwnerViaBrain already paid for now reaches that rule instead of being dropped on the floor. Every call site is pinned, because a fixture supplies its own arguments and cannot see a caller.`);
+      console.log(`✓ FIND ICP GATE CHECK: ${_mustDie.length} national brands are refused by name before a byte moves and ${_mustLive.length} owner-operated names beside them survive; ${_chainCases.length} chain cases are read from the business's OWN pages in both directions, including an independent that prints "not a franchise", a two-branch operator and a franchise lawyer; ${Object.keys(_mail).length} addresses resolve through ONE mailbox vocabulary where six disagreeing lists used to sit, so recruiting@ off a careers page can no longer ship as a tier-1 published address at score 100; and a roster that names its people by first name only finally yields the owner it states, marked as a candidate to corroborate rather than as a settled identity. A locations index counts in both shapes: one per-city page under a state is a branch network by construction, while a one-segment state page needs ${CHAIN_STATE_ONLY_MIN} distinct states before it says anything - so DHI Roofing's six are caught and a single-state independent is not. The sitemap findOwnerViaBrain already paid for now reaches that rule instead of being dropped on the floor. A branch network is dropped exactly as a franchise is, by one declaration the press, the contact read and the sitemap re-read all call, so Alpha Foundations Repair Tampa is refused instead of bought. Every call site is pinned, because a fixture supplies its own arguments and cannot see a caller.`);
     }
   } catch (e) {
     console.log(`⛔ FIND ICP GATE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -62968,10 +63081,30 @@ app.listen(PORT, () => {
       const _c = scaleCuts(ICP_REVENUE_PER_EMPLOYEE), _t = scaleCuts(ICP_REVENUE_PER_TRUCK);
       if (Math.abs(ICP_REVENUE_BAND.coreFrom - ICP_PREMIUM_RETAINER_MONTHLY * 12 / ICP_MARKETING_SHARE) > 1) _fails.push('the core floor is not the premium retainer at the 10% rule - the ladder and the price list drifted apart');
       if (!OUR_PRICE_FIGURES.includes('$' + Math.round(ICP_PREMIUM_RETAINER_MONTHLY / 1000) + 'k')) _fails.push('the retainer the ladder is derived from is not a licensed price figure');
-      if (_c.entry !== 4 || _c.core !== 6 || _c.upper !== 50 || _c.ceiling !== 175) _fails.push(`the default staff cuts read ${JSON.stringify(_c)} - not 4 / 6 / 50 / 175 from $800k / $1.2M / $10M / $35M at $200k a head`);
-      if (_t.entry !== 3 || _t.core !== 4 || _t.upper !== 33 || _t.ceiling !== 117) _fails.push(`the truck cuts read ${JSON.stringify(_t)}`);
-      // Round 114 (Vin, 2026-09-03): the call cap has headroom, the owner-run reach line sits above it, the email lane has no ceiling.
-      if (ICP_REVENUE_BAND.ceiling !== 35e6 || ICP_CALL_REACH_CEILING !== 50e6) _fails.push(`the call cap is $${ICP_REVENUE_BAND.ceiling / 1e6}M and the owner-run reach line $${ICP_CALL_REACH_CEILING / 1e6}M - Vin ruled $35M and $50M on 2026-09-03`);
+      if (_c.entry !== 4 || _c.core !== 6 || _c.upper !== 50 || _c.ceiling !== 75) _fails.push(`the default staff cuts read ${JSON.stringify(_c)} - not 4 / 6 / 50 / 75 from $800k / $1.2M / $10M / $15M at $200k a head`);
+      if (_t.entry !== 3 || _t.core !== 4 || _t.upper !== 33 || _t.ceiling !== 50) _fails.push(`the truck cuts read ${JSON.stringify(_t)} - not 3 / 4 / 33 / 50 from the same four dollar lines at $300k a truck`);
+      // ══ ROUND 139 (Vin, 2026-09-11): ONE NUMBER MOVED AND ONE DID NOT ════
+      // Round 114 (Vin, 2026-09-03) put the call cap at $35M and the owner-run
+      // reach line at $50M. Two numbers, two different questions, and only the
+      // first of them changed this round.
+      //
+      // THE CAP asks whether a business FITS what we sell. The written ICP has
+      // always said $800k-$15M, 15e6 appeared nowhere in the code, and Vin
+      // ruled on 2026-09-11 that the written ICP wins - so the cap is $15M,
+      // reversing his own $35M, and it is asserted as the document's number.
+      //
+      // THE REACH LINE asks whether the PHONE reaches the person who signs. It
+      // is $50M and it did NOT move, because nothing about how reachable a
+      // founder is changed on 2026-09-11: an owner who answers his own phone
+      // still answers it at $24M. Vin ruled that exact business into BOTH lanes
+      // that day - "id say do both for sure we should email him and phone him"
+      // - so this is a LITERAL on purpose. Deriving it from the cap (this
+      // round's first draft did, at ten sevenths) lets a FIT decision silently
+      // move a REACHABILITY one, and leaves the ratio as a second copy of a
+      // fact nothing else reads, waiting to drift.
+      if (ICP_REVENUE_BAND.ceiling !== 15e6) _fails.push(`the call cap is $${ICP_REVENUE_BAND.ceiling / 1e6}M - Vin ruled $15M on 2026-09-11, reversing his own $35M of 2026-09-03, because the written ICP says $800k-$15M and the code had drifted away from it`);
+      if (ICP_CALL_REACH_CEILING !== 50e6) _fails.push(`the owner-run reach line is $${ICP_CALL_REACH_CEILING / 1e6}M - Vin ruled $50M and re-affirmed it on 2026-09-11 by putting a $24M founder-run roofer in BOTH lanes; the cap is a fit line and it moved, this is a reachability line and it did not, so it is never derived from the cap`);
+      if (tierFromRevenue(14e6) !== 'upper' || tierFromRevenue(16e6) !== 'over_ceiling') _fails.push(`a $14M business reads "${tierFromRevenue(14e6)}" and a $16M one reads "${tierFromRevenue(16e6)}" - under a $15M cap the first is high and callable and the second is over the cap`);
       if (!LANE_TIERS.email.includes('over_ceiling') || LANE_TIERS.call.includes('over_ceiling')) _fails.push('the email lane has a ceiling again, or the call lane lost its cap');
       if (!(ICP_CALL_REACH_CEILING > ICP_REVENUE_BAND.ceiling)) _fails.push('the reach line is not above the call cap, so the owner-run override can never fire');
       if (tierFromCount(_c.core - 1, _c) !== 'entry' || tierFromCount(_c.core, _c) !== 'core' || tierFromCount(_c.upper, _c) !== 'core' || tierFromCount(_c.upper + 1, _c) !== 'upper' || tierFromCount(_c.ceiling, _c) !== 'upper' || tierFromCount(_c.ceiling + 1, _c) !== 'over_ceiling' || tierFromCount(_c.entry - 1, _c) !== 'below_floor') _fails.push('the tier boundaries do not sit on the cuts');
@@ -63025,19 +63158,55 @@ app.listen(PORT, () => {
       // Round 114: headroom on the floor - a GUESS under it stays on the sheet as low.
       if (_ln({ tier: 'below_floor', sizeConfidence: 'guess', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('a business under the floor on a GUESS is benched (Vin, 2026-09-03: headroom on every measured number)');
       // Round 114: over the call cap is EMAIL, not nothing; owner-run under the reach line is still a call.
-      if (_ln({ tier: 'over_ceiling', layers: 'layered', source: 'google_places', target: 'marketing' }) !== 'email') _fails.push('a layered business over the call cap is not an email lead');
-      if (_ln({ tier: 'over_ceiling', layers: 'layered', source: 'google_places', target: 'marketing', usd: 255e6, peOwned: true }) !== 'email') _fails.push('Rose Paving ($255M, PE-owned, layered) is not email only');
-      if (_ln({ tier: 'upper', layers: 'owner', source: 'google_places', target: 'owner', usd: 24e6 }) !== 'call + email') _fails.push('DMI Paving ($24M, owner-run) is not in both lanes');
-      if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'owner', usd: 40e6 }) !== 'call + email') _fails.push('an owner-run business at $40M is off the call sheet - the $50M reach line is not read');
-      if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'owner', usd: 60e6 }) !== 'email') _fails.push('an owner-run business at $60M is on the call sheet - the reach line has no top');
-      if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'owner', usd: null }) !== 'email') _fails.push('an over-cap business with no measured dollars is called on nothing');
-      if (_ln({ tier: 'over_ceiling', layers: 'layered', source: 'google_places', target: 'marketing', usd: 40e6 }) !== 'email') _fails.push('a LAYERED business at $40M is called - the reach line is for the owner-run only');
-      if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'owner', usd: 40e6, peOwned: true }) !== 'email') _fails.push('a PE-owned business at $40M is called - the reach line is for the owner-run only');
+      // Round 139: every over-cap fixture below now STATES sizeConfidence
+      // 'sure', because an over-cap tier on a guess is kept callable from this
+      // round on. Without that field these would silently start measuring the
+      // new rule instead of the one they were written for. The dollar figures
+      // are unchanged from Round 114: they straddle the $50M REACH line, which
+      // did NOT move when the cap did, so DMI Paving's $24M now sits well
+      // inside it - Vin put that business in both lanes on 2026-09-11.
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'layered', source: 'google_places', target: 'marketing' }) !== 'email') _fails.push('a layered business measured over the call cap is not an email lead');
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'layered', source: 'google_places', target: 'marketing', usd: 255e6, peOwned: true }) !== 'email') _fails.push('Rose Paving ($255M, PE-owned, layered) is not email only');
+      if (_ln({ tier: 'upper', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 12e6 }) !== 'call + email') _fails.push('an owner-run business measured at $12M, inside the cap, is not in both lanes');
+      // DMI Paving: $24M, about 120 people, still run by the founder. Over the
+      // $15M cap and a long way under the $50M reach line, and Vin ruled it
+      // into BOTH lanes on 2026-09-11 - "do both for sure".
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 24e6 }) !== 'call + email') _fails.push(`DMI Paving ($24M, owner-run, over the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap) is off the call sheet - the reach line was scaled down with the cap, and a founder who answers his own phone still answers it at $24M`);
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 40e6 }) !== 'call + email') _fails.push(`an owner-run business measured at $40M is off the call sheet - the $${ICP_CALL_REACH_CEILING / 1e6}M reach line is not read`);
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 60e6 }) !== 'email') _fails.push('an owner-run business measured at $60M is on the call sheet - the reach line has no top');
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: null }) !== 'email') _fails.push('an over-cap business with no measured dollars is called on nothing');
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'layered', source: 'google_places', target: 'marketing', usd: 40e6 }) !== 'email') _fails.push('a LAYERED business measured at $40M is called - the reach line is for the owner-run only');
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 40e6, peOwned: true }) !== 'email') _fails.push('a PE-owned business measured at $40M is called - the reach line is for the owner-run only');
+      // ══ ROUND 139 (Vin, 2026-09-11): A GUESS OVER THE CAP STAYS CALLABLE ══
+      // The mirror of Round 114's floor rule. The two fixtures differ in ONE
+      // field, so neither of them can pass on anything else.
+      {
+        const _guessOver = lanesFor({ tier: 'over_ceiling', sizeConfidence: 'guess', layers: 'owner', source: 'google_places', target: 'owner' });
+        const _sureOver = lanesFor({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner' });
+        if (laneWord(_guessOver) !== 'call + email') _fails.push(`a business over the cap on a GUESS is off the rep's call sheet (got ${laneWord(_guessOver)}) - only a MEASURED size takes a lead off it, which is the headroom the floor has had since Round 114`);
+        if (_guessOver.tier !== 'upper') _fails.push(`an over-cap guess still reads "${_guessOver.tier}" instead of being kept as high`);
+        if (laneWord(_sureOver) !== 'email') _fails.push(`the same lead with its size MEASURED is still on the call sheet (got ${laneWord(_sureOver)}) - the over-cap rule now fires on nothing`);
+      }
+      // ══ ROUND 139 (Vin, 2026-09-11): A NAMED MARKETING DIRECTOR IS NOT A CALL ══
+      // BLS OEWS May 2023 against Census CBP 2023: about one Marketing Manager
+      // per 442 specialty-trade establishments. A trade business publishing a
+      // Director of Marketing on its own team page is bigger and more layered
+      // than the sheet the rep dials. It keeps the EMAIL lane - it is never
+      // benched - and again the two fixtures differ in one field.
+      {
+        const _mh = lanesFor({ tier: 'core', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'marketing', siteMarketingHead: true });
+        const _noMh = lanesFor({ tier: 'core', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'marketing', siteMarketingHead: false });
+        if (_mh.call !== false) _fails.push("a business whose own site names a marketing director is still on the rep's call sheet - one Marketing Manager exists per 442 specialty-trade establishments, so that title is near-certain evidence of a business bigger and more layered than the sheet is for");
+        if (_mh.email !== true) _fails.push('a business whose own site names a marketing director lost its email lane too - it is not benched, it is written to');
+        if (_mh.noname !== false) _fails.push('a business with a named marketing director is in the no-name bucket, so a row carrying a name reads to the rep as nobody');
+        if (!/marketing director/.test(_mh.why)) _fails.push('the row does not say why the call lane was taken away, so the rep cannot tell it from a resolver failure');
+        if (laneWord(_noMh) !== 'call + email') _fails.push(`the same lead with nobody named in marketing is not in both lanes (got ${laneWord(_noMh)}), so the marketing-director rule is firing on every lead`);
+      }
       // Round 114: a branch network, PE-owned or national under the cap stays on the sheet, last; over the cap it is email.
       for (const [k, what] of [['network', 'a branch network'], ['peOwned', 'a PE-owned company'], ['national', 'a national operator']]) {
         const _b = lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'owner', [k]: true });
         if (laneWord(_b) !== 'call + email' || _b.last !== true || !/last/.test(_b.why)) _fails.push(`${what} under the cap is not on the call sheet last and in the email lane (got ${laneWord(_b)})`);
-        if (_ln({ tier: 'over_ceiling', layers: 'owner', source: 'google_places', target: 'marketing', [k]: true }) !== 'email') _fails.push(`${what} over the cap is not an email lead`);
+        if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'marketing', [k]: true }) !== 'email') _fails.push(`${what} measured over the cap is not an email lead`);
       }
       if (_ln({ tier: 'core', layers: 'layered', source: 'google_places', target: 'none' }) !== 'no name yet') _fails.push('a layered business with nobody named is not the no-name bucket');
       // The measured dollars the reach line reads.
@@ -63107,7 +63276,8 @@ app.listen(PORT, () => {
       [_n('network: signals.branchNetwork === true, peOwned: signals.peOwned === true,', ' national: signals.nationalOperator === true,'), 'the branch-network, PE-owned and national marks never reach the lane'],
       // Round 121: the two facts that put a website-less business in front of
       // the rep. Both are already measured; the lane could not see either.
-      [_n('siteless: signals.readable !== true,', ' phone: !!out.phone });'), 'the lane cannot tell a lead whose pages we could not read from one we simply have not named, so Vin\'s ruling that a business with a phone and no website belongs on the call sheet is dead at the call site'],
+      [_n('siteless: signals.readable !== true, phone: !!out.phone,', ' siteMarketingHead: _siteMarketingHead });'), 'the lane cannot tell a lead whose pages we could not read from one we simply have not named (so Vin\'s ruling that a business with a phone and no website belongs on the call sheet is dead at the call site), or the marketing director their own roster names never reaches the lane and the rep dials a business with a marketing department'],
+      [_n('const _siteMarketingHead = !!(_ml && _ml.source ===', " 'own_website_roster');"), 'the marketing head is read from whatever _ml holds by then, so a HUNTER result - an index\'s claim, not the business\'s own page - takes a lead off the rep\'s call sheet'],
       [_n('signals.scaleUsd = (_scale && !_scale.guess', ' && Number(_scale.usd) > 0) ? Number(_scale.usd) : null;'), 'the measured dollars never reach the signals, or a tenure guess supplies them'],
       [_n('signals.laneLast = _lanes.last', ' === true;'), 'the lane says "last" and the score never hears it, so a layered lead is not ranked last'],
       [_n('c.verifiedEmployees > ', 'ICP_EMPLOYEE_BLOCK) {'), 'the discovery employee gate is back on a literal'],
@@ -63135,7 +63305,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ SIZE AND LAYERS CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
     } else {
-      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the ladder and the layers (Darrel in both; TheirStack and product companies email only; layered, a branch network, PE-owned and national on the call sheet LAST under the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap and email over it; an owner-run business over the cap still called under $${ICP_CALL_REACH_CEILING / 1e6}M; nobody named means no email lane; under the floor benched only when likely or sure); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; the size search is not bought on a lead whose own team page already lists three to five people, nor on a one-person trade, nor a second directory query on a MEASURED zero review count; and the buying floor has one copy.`);
+      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the ladder and the layers (Darrel in both; TheirStack and product companies email only; layered, PE-owned and national on the call sheet LAST under the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap and email over it; a detected branch network dropped outright, at the press off its own listing URL and at the read off its own pages; an owner-run business over the cap still called under $${ICP_CALL_REACH_CEILING / 1e6}M; nobody named means no email lane; under the floor benched only when likely or sure, and over the cap taken off the call sheet only when likely or sure; a business whose own site names a marketing director written to and never dialled); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; the size search is not bought on a lead whose own team page already lists three to five people, nor on a one-person trade, nor a second directory query on a MEASURED zero review count; and the buying floor has one copy.`);
     }
   } catch (e) {
     console.log(`⛔ SIZE AND LAYERS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -63724,8 +63894,12 @@ app.listen(PORT, () => {
       }
       const _sc = estimateScaleBand({ staffProse: 14, staffProseSay: 'a team of 14 technicians' });
       if (!_sc || _sc.band !== 'core' || !/estimated/.test(_sc.say)) _fails.push('fourteen published technicians is not an estimated core band, or the sentence forgot to say "estimated"');
-      if ((estimateScaleBand({ verifiedEmployees: 176 }) || {}).band !== 'over_ceiling') _fails.push('176 verified employees is not read as over the call cap');
-      if ((estimateScaleBand({ verifiedEmployees: 175 }) || {}).band !== 'upper') _fails.push('175 verified employees is not read as the upper tier');
+      // Round 139 (Vin, 2026-09-11): the cap is $15M, so at $200k a head the
+      // boundary these two sit either side of moved from 175 people to 75.
+      // Both are typed on purpose: deriving them from the cut would make this
+      // pair agree with any ceiling, including one nobody ruled.
+      if ((estimateScaleBand({ verifiedEmployees: 76 }) || {}).band !== 'over_ceiling') _fails.push('76 verified employees is not read as over the call cap - at $200k a head that is $15.2M, past the cap Vin ruled on 2026-09-11');
+      if ((estimateScaleBand({ verifiedEmployees: 75 }) || {}).band !== 'upper') _fails.push('75 verified employees is not read as the upper tier - at $200k a head that is exactly the $15M cap, and the lead is still on the call sheet');
       if ((estimateScaleBand({ fleetProse: 12 }) || {}).band !== 'core') _fails.push('a twelve-truck fleet is not read as a core-band business');
       if ((estimateScaleBand({ yearsInBusiness: 20, reviewCount: 80 }) || {}).band !== 'entry') _fails.push('twenty years at eighty reviews is not read as an established small business (entry)');
       if ((estimateScaleBand({ revenueStated: '$5M', revenueStatedSource: 'zoominfo.com' }) || {}).band !== 'core' || !/directory/.test((estimateScaleBand({ revenueStated: '$5M' }) || {}).say)) _fails.push('a directory\'s stated $5M does not read as core, labelled as a directory\'s figure');
@@ -82646,6 +82820,21 @@ const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
   };
 };
 
+// ══ ROUND 139 (Vin, 2026-09-11): A BRANCH NETWORK IS DROPPED, NOT MARKED ══
+// Round 114 kept a detected branch network as an email lead and only MARKED
+// it, and marking stopped nothing: Alpha Foundations Repair Tampa was read as
+// a branch network on a live run and still cost the whole contact read,
+// because every gate after the mark asks `notIcp` and the mark is not it.
+// Vin ruled on 2026-09-11 that a branch network is dropped exactly as a
+// franchise is - the local number reaches a branch and the marketing budget is
+// set at head office, so there is no engagement to sell either way.
+//
+// ONE declaration, executed by the boot check and called by every site that
+// drops, so the rule cannot end up with two hand-kept copies that disagree.
+// It stays FALSE on an unmeasured read: a site we could not open is not a
+// chain, and "we did not look" has never meant "it is one".
+const chainIsOutOfIcp = (chain) => !!(chain && chain.isChain === true && (chain.kind === 'franchise' || chain.kind === 'network'));
+
 // pages: [{ url, intent, html, text }] - whatever we managed to read, however.
 // ══ AN ABSENCE NEEDS A PAGE WE ACTUALLY READ ══════════════════════════════
 // anyMarkup below is a 500-byte floor on RAW HTML, and a rendered page whose
@@ -84052,12 +84241,16 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     out.icpReason = 'chain';
     out.icpWhy = out.chain.why;
     notes.push(`this is a franchise outlet \u2014 ${out.chain.why}. The franchisor sets the marketing fund and approves the vendors, so there is nothing here to sell.`);
-  } else if (out.chain.isChain) {
-    // Round 114 (Vin, 2026-09-03): a branch network is a LARGE company - kept,
-    // marked, an email lead. The local number reaches a branch; the decision
-    // is at head office, with the marketing decision-maker.
+  } else if (chainIsOutOfIcp(out.chain)) {
+    // Round 114 (Vin, 2026-09-03) kept a branch network as an email lead and
+    // only marked it. Round 139 (Vin, 2026-09-11) DROPS it, for the reason a
+    // franchise is dropped: the local number reaches a branch and the
+    // marketing budget is set at head office. The mark is still set, because
+    // the head-office rule, the layers verdict and the TARGET line all read
+    // it - what changes is that everything priced after this line is refused.
     signals.branchNetwork = true;
-    notes.push(`a branch network \u2014 ${out.chain.why}. Kept as an email lead: the local number reaches a branch, and the marketing decision-maker at head office is the target.`);
+    out.notIcp = true; out.icpReason = 'chain'; out.icpWhy = out.chain.why;
+    notes.push(`a branch network \u2014 ${out.chain.why}. The local number reaches a branch and the marketing budget is set at head office, so there is nothing here to sell.`);
   } else if (out.chain.measured !== true) {
     // == AN ABSENCE CLAIM NEEDS A LOOK =====================================
     // readChainEvidence has computed `measured` since it was written and
@@ -84080,7 +84273,8 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       brand: (out.chain && out.chain.brand) || out.outlet.brand || '',
       why: [(out.chain && out.chain.why) || '', out.outlet.why].filter(Boolean).join('; '),
     });
-    notes.push(`a branch of a bigger operation — ${out.outlet.why}. Kept as an email lead: the local number reaches a branch, and the marketing decision-maker at head office is the target.`);
+    out.notIcp = true; out.icpReason = 'chain'; out.icpWhy = out.outlet.why;
+    notes.push(`a branch of a bigger operation — ${out.outlet.why}. The local number reaches a branch and the marketing budget is set at head office, so there is nothing here to sell.`);
   }
   // ── AND IS THE WEBSITE THE THING WE SELL? ──────────────────────────────
   // Round 118 (Vin, 2026-09-04: "a company with a bad or poor website ... is it
@@ -84106,14 +84300,25 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   } else if (website) {
     console.log(`\u{1F5A5} SITE [${name}]: not judged — ${out.site.why}. Nothing about their build is claimed either way.`);
   }
-  // Same seat as the chain read, same reason: everything after this line
-  // costs credits, and a nonprofit has no owner to sell to.
+  // ══ ROUND 139 (Vin, 2026-09-11): A NONPROFIT IS KEPT AND WORKED ════════
+  // This sat in the same seat as the chain read and DROPPED the lead, on the
+  // reasoning that a nonprofit has no owner whose own money is on the line.
+  // Vin ruled on 2026-09-11 that the reasoning does not hold: a named,
+  // reachable CEO is a person who can say yes, whoever files the tax return,
+  // and a recovery centre whose own page names the person who runs it is the
+  // same sale as any other lead on the sheet.
+  //
+  // The READ is untouched - the detection was never the problem, and its two
+  // hardest cases (a contractor who BUILDS for a 501(c)3, a sign shop that
+  // SERVES nonprofits) are still refused by it. Only the VERDICT changes: it
+  // no longer sets notIcp, so nothing downstream is stood down and this lead
+  // buys exactly what every other lead buys.
+  //
+  // It is not silent either. The note tells the rep what kind of organisation
+  // he is about to call, which is context the drop used to bury.
   out.nonprofit = readNonprofitEvidence({ pages, links });
-  if (!out.notIcp && out.nonprofit.isNonprofit) {
-    out.notIcp = true;
-    out.icpReason = 'nonprofit';
-    out.icpWhy = out.nonprofit.why;
-    notes.push(`this is a nonprofit \u2014 ${out.nonprofit.why}. There is no owner whose own money is on the line, so there is nothing here to sell.`);
+  if (out.nonprofit.isNonprofit) {
+    notes.push(`a nonprofit \u2014 ${out.nonprofit.why}. It is kept and worked like any other lead: whoever files the tax return, the person who runs it can still say yes, and the rep should know what he is calling before he dials.`);
   }
   out.tells = readOwnershipTells({ pages });
   if (!out.notIcp && out.tells.isOut && out.tells.reason === 'franchise') {
@@ -84300,11 +84505,12 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         out.icpReason = 'chain';
         out.icpWhy = _late.why;
         notes.push(`this is a franchise outlet \u2014 ${_late.why}. Their homepage links none of it; their own sitemap does.`);
-      } else if (_late.isChain && signals.branchNetwork !== true) {
-        // Round 114: the sitemap shows a branch network - marked, kept, email.
+      } else if (chainIsOutOfIcp(_late) && signals.branchNetwork !== true) {
+        // Round 139: the sitemap shows a branch network - dropped, like a franchise.
         out.chain = _late;
         signals.branchNetwork = true;
-        notes.push(`a branch network \u2014 ${_late.why}. Their homepage links none of it; their own sitemap does. Kept as an email lead.`);
+        out.notIcp = true; out.icpReason = 'chain'; out.icpWhy = _late.why;
+        notes.push(`a branch network \u2014 ${_late.why}. Their homepage links none of it; their own sitemap does. The local number reaches a branch and the marketing budget is set at head office, so there is nothing here to sell.`);
       }
     }
   }
@@ -84653,6 +84859,10 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     console.log(`\u{1F4DB} OWNER GRADE [${name}]: ${out.email.address} is a real address and it is NOT being sent to - ${out.owner.name} is graded ${_og} as the owner (${out.owner.gradeWhy || 'nothing we read names him as the owner'}). An email opening with his first name tells him we know he owns this business, and one source cannot carry that claim. ${_ask}`);
   }
   let _ml = pickMarketingLead(signals.teamNames, signals.teamTitles);
+  // Round 139: THEIR OWN roster, captured before the Hunter fallback can
+  // overwrite _ml. The call-sheet rule below turns on what this business
+  // published about itself, never on what an index says about it.
+  const _siteMarketingHead = !!(_ml && _ml.source === 'own_website_roster');
   // ══ ROUND 121: ASK WHEN WE HAVE NOBODY, NOT ONLY WHEN THEY HAVE AN ORG ══
   // This read `_layers.verdict === 'layered'` and nothing else, so the one
   // route left after the owner ladder has failed was switched OFF on exactly
@@ -84699,7 +84909,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // siteless: their pages could not be read AT ALL - no website on the listing,
   // or a site that returned nothing. readable is the same flag readLayers uses
   // to refuse a layers verdict, so the two cannot disagree about what we saw.
-  const _lanes = lanesFor({ tier: signals.scaleBand, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true, siteless: signals.readable !== true, phone: !!out.phone });
+  const _lanes = lanesFor({ tier: signals.scaleBand, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true, siteless: signals.readable !== true, phone: !!out.phone, siteMarketingHead: _siteMarketingHead });
   out.lanes = _lanes;
   // Round 114: a layered or owned-elsewhere lead on the call sheet ranks LAST.
   signals.laneLast = _lanes.last === true;
