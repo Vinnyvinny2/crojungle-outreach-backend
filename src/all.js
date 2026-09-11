@@ -36305,6 +36305,85 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
   //   3. Stop the instant one resolves.
   // Worst case ~5 checks/company; typical case 1-2. That's 25-50 companies/day.
   const _mayProbe = (catchAll !== true) && !!verifierKey && !_stalls;
+
+  // ══ ROUND 137: THE ONE ROUTE THAT NEEDS NO PROBE, LOCKED INSIDE THE ═════
+  // ══ GATE THAT A MAIL HOST REFUSING TO ANSWER PROBES SLAMS SHUT ═════════
+  // Round 136 handed this read its Hunter key. The key arrives; the block
+  // does not run. `worthACredit` sat inside `if (_mayProbe)`, and _mayProbe
+  // is false whenever mailProviderStalls(domain) is true - Microsoft 365,
+  // which stalls address probes on purpose to stop harvesting.
+  //
+  // The email-finder does not probe anything. It asks Hunter's index for a
+  // named person's own mailbox. It is the ONLY route that survives a host
+  // that will not answer, and it was the one route that host switched off.
+  // Live, 2026-09-10: four of ten leads were on Microsoft 365 - Ward & Ward,
+  // Jay Murray, Western Hills, Alpha Foundations - and Hunter was never
+  // asked on any of them.
+  //
+  // This is Round 121's defect one term over. That round's own words: "a
+  // guard written to handle UNKNOWN, sitting inside a block UNKNOWN can
+  // never enter." It fixed the catchAll term of this same gate and left
+  // _stalls doing the identical thing.
+  //
+  // Defined ONCE and called from both paths rather than moving the block or
+  // copying it: two hand-kept copies of one rule is the class this repo
+  // records most, and restructuring 400 lines to move one call is how a
+  // regression gets earned. Exactly one call can execute per lead - the
+  // probe branch returns before reaching the fall-through call site.
+  const _askHunterForTheirOwnMailbox = async () => {
+    // CREDIT GUARD: email-finder costs a Hunter credit and the free plan is
+    // 50/month. Only spend it when it is genuinely the deciding factor - a
+    // confirmed decision-maker, no address yet, every free route already
+    // failed. Never for a generic/role name, and never on a catch-all domain
+    // (that path is already sendable without paying).
+    const worthACredit = hunterKey && name && looksLikeRealName(name) && catchAll !== true;
+    if (!worthACredit) {
+      // ══ ROUND 137: SILENCE HERE IS THE UNMEASURED-AS-MEASURED CLASS ════
+      // This route used to log only when it FOUND something or when the
+      // account was dead. On "asked and there was nothing" it said nothing
+      // at all - so reading a log you could not tell that from "never ran",
+      // which is the exact distinction this round exists to fix. Every lead
+      // now says which.
+      const _why = !hunterKey ? 'no Hunter key is configured'
+        : !name ? 'nobody is named on this lead, and the finder needs a person to look up'
+        : !looksLikeRealName(name) ? `"${name}" does not read as a person's name`
+        : 'their domain accepts every address, so a Hunter answer could not be confirmed and the address is already sendable without paying';
+      console.log(`EMAIL [${domain}]: the Hunter email-finder was NOT asked - ${_why}. No Hunter credit was spent, and this is not evidence that no address exists.`);
+      return null;
+    }
+    const hf = await hunterFindPersonEmail(domain, name, hunterKey);
+    // Record that the last paid route was CLOSED rather than empty, so nothing
+    // downstream reports "no defensible address found" for a lookup we never got
+    // to make. The distinction is the whole point: one is a fact about them, the
+    // other is a fact about our account.
+    if (hf && hf.unavailable) {
+      _lookupBlocked = hf.reason;
+      console.log(`EMAIL [${domain}]: could NOT check ${name} — ${_lookupBlocked === 'hunter_rate_limited' ? 'Hunter is rate-limited right now, which is a speed limit and not an empty balance — re-running this lead in a minute will ask again' : 'Hunter out of credits'}. This is not evidence that no address exists.`);
+      return null;
+    }
+    if (hf && hf.email) {
+      // Only trust it if Hunter actually SOURCED it, or SMTP confirms it. A bare
+      // pattern guess at ~60 confidence is how people get blacklisted.
+      if (hf.sourced && hf.score >= 80) {
+        console.log(`✓ EMAIL [${domain}] recovered by Hunter Finder (sourced, ${hf.score}): ${hf.email}`);
+        return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null, score: Math.min(95, hf.score) };
+      }
+      // A stalling host cannot answer this either, so do not burn 30 seconds
+      // per address asking it. The finder's own answer stands or falls alone.
+      if (verifierKey && !_stalls) {
+        const v = await verifyEmailSMTP(hf.email, verifierKey);
+        if (v.valid === true) {
+          console.log(`✓ EMAIL [${domain}] Hunter Finder + SMTP confirmed: ${hf.email}`);
+          return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null };
+        }
+      }
+      console.log(`EMAIL [${domain}]: Hunter Finder returned ${hf.email} at confidence ${hf.score} but it is unsourced/unverified — not sendable`);
+      return null;
+    }
+    console.log(`EMAIL [${domain}]: the Hunter email-finder WAS asked for ${name} and its index has no address for them. One credit spent; this is a fact about their record, not about our account.`);
+    return null;
+  };
+
   if (_mayProbe) {
 
     const learnedFirst = domainPatternMemory.get(domain);
@@ -36636,34 +36715,8 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // decision-maker, no address yet, and every free route has already failed. Never
     // for a generic/role name, and never when the domain is catch-all (that path is
     // already sendable without paying).
-    const worthACredit = hunterKey && name && looksLikeRealName(name) && catchAll !== true;
-    if (worthACredit) {
-      const hf = await hunterFindPersonEmail(domain, name, hunterKey);
-      // Record that the last paid route was CLOSED rather than empty, so nothing
-      // downstream reports "no defensible address found" for a lookup we never got
-      // to make. The distinction is the whole point: one is a fact about them, the
-      // other is a fact about our account.
-      if (hf && hf.unavailable) {
-        _lookupBlocked = hf.reason;
-        console.log(`EMAIL [${domain}]: could NOT check ${name} \u2014 ${_lookupBlocked === 'hunter_rate_limited' ? 'Hunter is rate-limited right now, which is a speed limit and not an empty balance \u2014 re-running this lead in a minute will ask again' : 'Hunter out of credits'}. This is not evidence that no address exists.`);
-      }
-      if (hf && hf.email) {
-        // Only trust it if Hunter actually SOURCED it, or SMTP confirms it. A bare
-        // pattern guess at ~60 confidence is how people get blacklisted.
-        if (hf.sourced && hf.score >= 80) {
-          console.log(`\u2713 EMAIL [${domain}] recovered by Hunter Finder (sourced, ${hf.score}): ${hf.email}`);
-          return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null, score: Math.min(95, hf.score) };
-        }
-        if (verifierKey) {
-          const v = await verifyEmailSMTP(hf.email, verifierKey);
-          if (v.valid === true) {
-            console.log(`\u2713 EMAIL [${domain}] Hunter Finder + SMTP confirmed: ${hf.email}`);
-            return { email: hf.email, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null };
-          }
-        }
-        console.log(`EMAIL [${domain}]: Hunter Finder returned ${hf.email} at confidence ${hf.score} but it is unsourced/unverified \u2014 not sendable`);
-      }
-    }
+    const _hfOwn = await _askHunterForTheirOwnMailbox();
+    if (_hfOwn) return _hfOwn;
 
     // \u2550\u2550 ROUND 136: NO PERSONAL MAILBOX, SO THE HELD FRONT DESK STANDS \u2550\u2550\u2550\u2550
     // Every route to this person's OWN address has now run and failed. The
@@ -36765,6 +36818,18 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
       };
     }
   }
+
+  // ══ ROUND 137: THE SECOND CALL SITE - THE ONE A STALLING HOST TAKES ════
+  // Everything free has now run and returned nothing: no published address,
+  // no learned pattern, no catch-all, not eponymous. The only thing left
+  // below is a GUESS that ships blocked, which is the same as nothing.
+  //
+  // This is where the credit is genuinely the deciding factor, and it is the
+  // path a Microsoft-365 lead takes - the probe branch above never ran for
+  // it, so the finder was never asked. Exactly one of the two call sites can
+  // execute per lead: the probe branch returns before it reaches here.
+  const _hfLate = await _askHunterForTheirOwnMailbox();
+  if (_hfLate) return _hfLate;
 
   // ── TIER 4: no catch-all, no pattern, no evidence → genuine guess. NOT sendable. ──
   // Kept as DATA, never as a result. It is returned so the UI can show what the
@@ -58004,8 +58069,39 @@ app.listen(PORT, () => {
     // them. What "inside" actually looks like in this file is INDENTATION: the
     // gated block's contents sit at six spaces, everything at function level
     // sits at four. That is the whole test, and falsification agrees with it.
-    else if (!_src.includes(_n('\n    const worthACredit', ' = hunterKey'))) {
-      _fails.push('the Hunter finder is indented as a nested block, which in this function means it is back inside the catchAll === false gate - so an UNKNOWN catch-all closes a route whose own guard already admits UNKNOWN, and the SMTP timeout line promises the operator that exact fallback');
+    // ══ ROUND 137 RE-AIMED THIS, AND IT WAS DISARMED WHEN IT ARRIVED ══════
+    // What stood here tested INDENTATION: "the gated block's contents sit at
+    // six spaces, everything at function level sits at four", so it asserted
+    // `\n    const worthACredit` was present. A later refactor put the gate at
+    // TWO spaces, which makes its body four - so four spaces stopped meaning
+    // "function level" and started meaning "inside the gate". The needle kept
+    // matching and the check kept passing while the Hunter finder sat inside
+    // `if (_mayProbe)`, where a Microsoft-365 domain closes it. Four of ten
+    // leads on 2026-09-10 never reached it and this check stayed green.
+    //
+    // A guard nobody can trip is worse than no guard, because it still reads
+    // as coverage. So it no longer tests indentation at all: it asserts the
+    // finder is CALLED from a site that no probe gate encloses, which is the
+    // property that actually matters and the one that broke.
+    else if (!_src.includes(_n('\n  const _hfLate = await _askHunterForTheir', 'OwnMailbox();'))) {
+      _fails.push('the Hunter email-finder has no call site outside the probe gate, so a mail host that stalls address probes - Microsoft 365, the most common one in this ICP - closes the one route that needs no probe at all. That is Round 121’s defect with _stalls in place of catchAll');
+    }
+    // And it must still be reachable from INSIDE the probe branch, or a
+    // domain we CAN probe pays for the free routes and never asks the paid
+    // one that would have settled it.
+    else if (!_src.includes(_n('    const _hfOwn = await _askHunterForTheir', 'OwnMailbox();'))) {
+      _fails.push('the probe branch no longer asks the Hunter finder, so a normal domain whose every pattern was denied gives up without the one lookup that could still name a mailbox');
+    }
+    // One implementation, two call sites. A second COPY of the credit guard
+    // is the two-hand-kept-copies class, and it is how the two paths start
+    // disagreeing about when a Hunter credit may be spent.
+    // The needle carries its own newline and indentation on purpose. Written
+    // as the bare statement it also matched THIS FILE's own check source,
+    // where the same text sits inside a string literal - the self-matching
+    // needle that `check-writing-traps` opens with, walked into while writing
+    // a check about a disarmed check.
+    else if (_src.split(_n('\n    const worthACredit = hunterKey', ' && name')).length - 1 !== 1) {
+      _fails.push('the Hunter credit guard exists in more than one place, so the two call sites can disagree about when a credit may be spent');
     }
     // And the UNKNOWN is remembered, briefly, rather than re-probed per lead.
     if (!_src.includes(_n('catchAllCache.set(domain,', ' null);'))) _fails.push('an UNKNOWN catch-all is not cached at all, so every later lead on that domain re-pays two probes and up to sixty seconds to learn the same nothing');
@@ -78899,6 +78995,25 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       _fails.push('an UNMEASURED crew no longer has its own arm, so "we did not look" resolves to the permissive side of a rule about what may be sent - the unmeasured-as-measured class, on a decision that reaches a prospect');
     }
     if (!(FRONT_DESK_CREW_MAX > 0 && FRONT_DESK_CREW_MAX <= 50)) _fails.push(`the front-desk crew ceiling is ${FRONT_DESK_CREW_MAX}, which is not a very small crew by any reading of the ruling`);
+
+    // ══ ROUND 137: THE ROUTE SAYS WHAT HAPPENED, EVERY TIME ══════════════
+    // It used to log only a hit and a dead account. On "asked and there was
+    // nothing" it said nothing at all, so a log could not tell that from
+    // "never ran" - and on the 2026-09-10 run that is exactly what could not
+    // be settled about Meyer Windows. Never looked is not measured zero, and
+    // this round's whole subject is a route nobody could prove had run.
+    if (_src.indexOf(_n('the Hunter email-finder was NOT asked', ' - ${_why}')) < 0) {
+      _fails.push('a lead where the Hunter finder was skipped no longer says so, so a log cannot tell "we did not ask" from "we asked and there was nothing" - the unmeasured-as-measured class, on the one route this round exists to make reachable');
+    }
+    if (_src.indexOf(_n('the Hunter email-finder WAS asked for ${name}', ' and its index has no address')) < 0) {
+      _fails.push('a Hunter lookup that came back empty prints nothing, so a credit is spent with no record of what it bought');
+    }
+    // It must not re-open SMTP on a host that stalls: the whole point of this
+    // route is that it needs no probe. Without this, every lead it was opened
+    // up for runs to the 30-second cap per address for nothing.
+    if (_src.indexOf(_n('if (verifierKey && !_stalls) {', '\n        const v = await verifyEmailSMTP(hf.email, verifierKey);')) < 0) {
+      _fails.push('the Hunter finder confirms its answer over SMTP even on a host that stalls probes by design, so the domains it was just opened up for each burn the timeout cap and answer nothing');
+    }
 
     // ── the tripwire on the fallback path nobody has wired yet ──
     // Widening this query names non-owners at owner-run businesses, which sets
