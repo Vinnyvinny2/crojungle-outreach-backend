@@ -2566,7 +2566,7 @@ let contactTally = null;
         const _fix = [{
           contactReadOk: true, name: 'Fixed Co', batchId: 'b1b2c3d4-77ff-4a00-9e11-000000000001',
           contactOwner: 'Jo Blogs', contactOwnerTitle: 'Owner', contactOwnerGrade: 'confirmed',
-          contactEmail: 'jo@fixedco.com', contactEmailGrade: 'published_personal', contactEmailSendable: true,
+          contactEmail: 'jo@fixedco.com', contactEmailGrade: 'published_personal', contactOwner: 'Ada Lovelace', contactEmailSendable: true,
           contactPhone: '+1 555 0100', contactCallWindowShort: 'from 7am',
           location: '4521 W Bell Rd Suite 12, Phoenix, AZ 85308, USA', industry: 'Roofing',
           website: 'https://fixedco.com', rating: 4.4, reviewCount: 51,
@@ -2749,15 +2749,25 @@ let contactTally = null;
           // the review screen cannot deliver.
           {
             const _shapes = [
-              { contactEmail: 'a@b.com', contactEmailGrade: 'published_personal', contactEmailSendable: false, contactEmailTier: 1 },
+              { contactEmail: 'a@b.com', contactEmailGrade: 'published_personal', contactOwner: 'Ada Lovelace', contactEmailSendable: false, contactEmailTier: 1 },
               { contactEmail: 'a@b.com', contactEmailGrade: 'smtp_confirmed', contactEmailSendable: true, contactEmailTier: 2 },
               { contactEmail: 'a@b.com', contactEmailGrade: 'verifier_down', contactEmailSendable: true, contactEmailTier: 3 },
               { contactEmail: 'a@b.com', contactEmailGrade: 'published_role', contactEmailSendable: true, contactEmailTier: 1 },
               { contactEmail: 'a@b.com', contactEmailGrade: '', contactEmailSendable: true, contactEmailTier: 2 },
               { contactEmail: 'a@b.com', contactEmailGrade: '', contactEmailSendable: false, contactEmailTier: 4 },
-              { contactEmail: '', contactEmailGrade: 'published_personal', contactEmailSendable: true, contactEmailTier: 1 },
+              { contactEmail: '', contactEmailGrade: 'published_personal', contactOwner: 'Ada Lovelace', contactEmailSendable: true, contactEmailTier: 1 },
               { contactEmail: 'a@b.com', contactEmailGrade: 'pattern_guess', contactEmailSendable: true, contactEmailTier: null },
+              // Round 135, shape 8: a published PERSONAL mailbox on a lead where
+              // nobody was named - lucas@paverrescuellc.com, live on 2026-09-10,
+              // the batch's only Confirmed on a row whose owner cell read 'no owner
+              // named'. It is the one shape that exercises the new rule on BOTH
+              // sides; without it the wire test cannot fail, because every other
+              // personal fixture here names an owner and the two halves agree
+              // either way. A guard no fixture can reach is the class this repo
+              // records, and this round created one for an hour.
+              { contactEmail: 'lucas@b.com', contactEmailGrade: 'published_personal', contactEmailSendable: true, contactEmailTier: 1 },
             ];
+            if (M.emailStatus(_shapes[8]) !== 'shared') fails.push('a personal mailbox on a lead where nobody was named still reads Confirmed on the review screen, so the rep is told he has the owner and cannot say who');
             if (M.emailStatus(_shapes[0]) !== 'verified' || M.emailStatus(_shapes[1]) !== 'verified') fails.push('a published personal or SMTP-confirmed address is not "verified" on the review screen');
             if (M.emailStatus(_shapes[2]) !== 'unverified') fails.push('an address the checker never confirmed shows as verified - the unmeasured-as-measured class, on the one column the rep moves on');
             if (M.emailStatus(_shapes[6]) !== 'none') fails.push('a row with no address does not read "none"');
@@ -2770,7 +2780,7 @@ let contactTally = null;
             // The grade was on the row the whole time and the chip read the
             // tier instead: published_role is the server's own verdict that
             // somebody other than the owner reads it first.
-            const _own = { contactEmail: 'darrel@rossandwitmer.example', contactEmailGrade: 'published_personal', contactEmailSendable: true, contactEmailTier: 1 };
+            const _own = { contactEmail: 'darrel@rossandwitmer.example', contactEmailGrade: 'published_personal', contactOwner: 'Ada Lovelace', contactEmailSendable: true, contactEmailTier: 1 };
             const _role = { contactEmail: 'info@rossandwitmer.example', contactEmailGrade: 'published_role', contactEmailSendable: true, contactEmailTier: 1 };
             // The off-domain case reaches the page as the SAME grade - a
             // personal-looking name on a domain that is not theirs is still
@@ -2811,7 +2821,7 @@ let contactTally = null;
             if (!M.lookupUnavailable(_down) || !M.lookupUnavailable(_blocked) || M.lookupUnavailable(_heldName)) fails.push('the unavailable rule does not separate a supplier that was down from a refusal we made on purpose');
             // An address we DID get is never "could not check" whatever the
             // suppliers were doing, or the chip would swallow real addresses.
-            if (M.emailStatus({ contactEmail: 'a@b.com', contactEmailGrade: 'published_personal', contactEmailSendable: true, contactEmailTier: 1, contactEmailVerifierDown: true }) !== 'verified') fails.push('a published address on a lead read while the checker was down is no longer verified, so the outage state has widened onto rows that have an address');
+            if (M.emailStatus({ contactEmail: 'a@b.com', contactEmailGrade: 'published_personal', contactOwner: 'Ada Lovelace', contactEmailSendable: true, contactEmailTier: 1, contactEmailVerifierDown: true }) !== 'verified') fails.push('a published address on a lead read while the checker was down is no longer verified, so the outage state has widened onto rows that have an address');
             // The bucket the chip counts, and the count itself.
             if (M.bucketOf({ ...(_down), readAt: '2026-09-10T00:00:00Z', contactReadOk: true }) !== 'unreadable') fails.push('the Could not check chip does not receive the rows whose lookup was unavailable, so they fall back under No email and the numbers say an absence we never established');
             // And it survives promotion: a row honest in Find must not go back
@@ -2830,7 +2840,7 @@ let contactTally = null;
               // this whole round exists to end.
               const page = M.emailStatus(c) === 'verified';
               // PostgREST hands the flag and the tier back as text, which is how the server reads them.
-              const srv = M.verifiedRow(c.contactEmail, c.contactEmailGrade, String(c.contactEmailSendable), c.contactEmailTier === null ? null : String(c.contactEmailTier));
+              const srv = M.verifiedRow(c.contactEmail, c.contactEmailGrade, String(c.contactEmailSendable), c.contactEmailTier === null ? null : String(c.contactEmailTier), c.contactOwner);
               if (page !== srv) { fails.push('the page and the server disagree about whether ' + JSON.stringify(c) + ' has a verified email, so the batch card count and the review filter are two different numbers'); break; }
             }
             // Round 129: the same wire test for SENDABLE and HELD BACK. A
@@ -2849,8 +2859,8 @@ let contactTally = null;
           // The batch card, off the rows.
           {
             const _bs = M.cardStats([
-              { readAt: 'x', contactEmail: 'a@b.com', contactEmailGrade: 'published_personal' },
-              { readAt: 'x', contactEmail: 'b@b.com', contactEmailGrade: 'published_personal', movedToResearchAt: 'y' },
+              { readAt: 'x', contactEmail: 'a@b.com', contactEmailGrade: 'published_personal', contactOwner: 'Ada Lovelace' },
+              { readAt: 'x', contactEmail: 'b@b.com', contactEmailGrade: 'published_personal', contactOwner: 'Ada Lovelace', movedToResearchAt: 'y' },
               { readAt: 'x', readFailed: true },
               { readAt: 'x', ruledOutAt: 'z' },
               null,
@@ -2859,7 +2869,7 @@ let contactTally = null;
             // Round 129: the three numbers the card prints. A tier-3 address the
             // engine cleared is one we can send to; one it refused is held back.
             const _bs2 = M.cardStats([
-              { readAt: 'x', contactEmail: 'a@b.com', contactEmailGrade: 'published_personal', contactEmailSendable: true, contactEmailTier: 1 },
+              { readAt: 'x', contactEmail: 'a@b.com', contactEmailGrade: 'published_personal', contactOwner: 'Ada Lovelace', contactEmailSendable: true, contactEmailTier: 1 },
               { readAt: 'x', contactEmail: 'b@b.com', contactEmailGrade: 'pattern_guess', contactEmailSendable: true, contactEmailTier: 3 },
               { readAt: 'x', contactEmail: 'c@b.com', contactEmailGrade: 'pattern_guess', contactEmailSendable: false, contactEmailTier: 3, contactEmailBlockReason: 'the owner name was never vouched for' },
               { readAt: 'x' },
@@ -2879,7 +2889,7 @@ let contactTally = null;
           // chip is the size of the rows behind it.
           {
             const _mk = (n, over) => Object.assign({ id: n, name: n, readAt: 'x' }, over || {});
-            const _conf = (n, e) => _mk(n, { contactEmail: e, contactEmailGrade: 'published_personal', contactEmailSendable: true, contactEmailTier: 1 });
+            const _conf = (n, e) => _mk(n, { contactEmail: e, contactEmailGrade: 'published_personal', contactOwner: 'Ada Lovelace', contactEmailSendable: true, contactEmailTier: 1 });
             const _clear = (n, e) => _mk(n, { contactEmail: e, contactEmailGrade: 'pattern_guess', contactEmailSendable: true, contactEmailTier: 3 });
             const _bare = (n) => _mk(n, { contactEmail: '' });
             // The nine leads of the live run: three confirmed, three the engine
@@ -2916,7 +2926,7 @@ let contactTally = null;
             // under Confirmed and under Held back at the same time.
             const _edge = _run.concat([
               _mk('Nabors Held', { contactEmail: 'x@held.example', contactEmailGrade: 'pattern_guess', contactEmailSendable: false, contactEmailTier: 3, contactEmailBlockReason: 'the owner name was never vouched for' }),
-              _mk('Confirmed But Refused', { contactEmail: 'y@held.example', contactEmailGrade: 'published_personal', contactEmailSendable: false, contactEmailTier: 1 }),
+              _mk('Confirmed But Refused', { contactEmail: 'y@held.example', contactEmailGrade: 'published_personal', contactOwner: 'Ada Lovelace', contactEmailSendable: false, contactEmailTier: 1 }),
               _mk('Failed To Read', { readFailed: true }),
               _mk('Already Moved', { contactEmail: 'z@moved.example', contactEmailSendable: true, contactEmailTier: 1, movedToResearchAt: 'y' }),
               { id: 'Never Read', name: 'Never Read' },

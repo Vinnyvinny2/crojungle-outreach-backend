@@ -164,7 +164,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261014;
+const CONTRACT_VERSION = 20261015;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -10770,6 +10770,15 @@ const inferPattern = (email, fullName) => {
   return map[local] || null;
 };
 
+// ══ HOW MANY MAILBOXES ONE LEAD MAY TRY ═══════════════════════════════════
+// Vin, 2026-09-11, asked which of four costs to carry and ruled "probe + top 3
+// patterns". Two checks buy the catch-all verdict, then at most this many
+// guesses at the owner's own mailbox, stopping at the first confirmation. The
+// names come from buildCandidates' own frequency order and are never listed a
+// second time here: two hand-kept copies of one ordering is the class this
+// repo records most. Settable on Render so the cost can be dialled without a
+// rebuild, which is the shape Round 133 established for the checker itself.
+const SHARED_INBOX_TRY_MAX = Math.max(0, Number(process.env.VERIFIER_PATTERN_TRIES || 3) || 0);
 const applyPattern = (pattern, fullName, domain) => {
   const c = buildCandidates(fullName, domain).find(x => x.pattern === pattern);
   return c ? c.email : '';
@@ -35774,6 +35783,15 @@ const emailConfidenceGrade = (r, opts) => {
     // With an owner named, the local part has to be his (the one name rule,
     // localMatchesName). With nobody named there is nothing to compare, and
     // the address keeps the grade the page earned it.
+    //
+    // Round 135 tried to move this and put it back. The GRADE is not the lie:
+    // "published on their own site, and it is a person, not a department" is a
+    // true sentence about lucas@paverrescuellc.com. What was false on the
+    // 2026-09-10 run is the CHIP built on it - since Round 133 "Confirmed"
+    // means the OWNER'S own mailbox, and that row's own owner cell read "no
+    // owner named". The fix belongs where the claim is made, not here, and it
+    // is in emailStatusOf. Three guards and a written ruling defend this line;
+    // they were right.
     const _owner = opts && opts.ownerName ? String(opts.ownerName) : '';
     if (_owner) {
       const _toks = _owner.toLowerCase().replace(/[^a-z\s]/g, ' ').split(/\s+/).filter(t => t.length >= 2);
@@ -36116,9 +36134,32 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
         // confirmation may displace an address the company published, which is
         // the rule the block below was written around.
         const _learned = domainPatternMemory.get(domain);
-        const _tryPatterns = _learned ? [_learned] : [];
-        const _catchAll = _tryPatterns.length ? catchAllKnown(domain) : undefined;
-        if (_catchAll === false) {                      // catch-all proves nothing
+        // ══ ROUND 129 IS REVERSED HERE, ON VIN'S RULING ══════════════════
+        // The two lines this replaces read the catch-all CACHE and gave up when
+        // it was empty. On a business we have never read that cache is always
+        // empty, so this branch could not run at all - the engine was
+        // UNREACHABLE on a new domain, not merely rare. It could only fire on a
+        // domain whose convention we had already learned, and a convention is
+        // only learned from a personal address we already found: a closed loop.
+        // Proven on the 2026-09-10 ten-lead run, which spent 0 of 100 checks
+        // and produced 0 owner mailboxes with five leads sitting in this exact
+        // shape. Round 129's arithmetic was 100 free checks a day with the
+        // verifier out of credits; at Reoon's price the whole month costs about
+        // five dollars, and Vin's standing ask is decision-maker mailboxes.
+        //
+        // So ASK rather than only read. isCatchAllDomain is the one prober and
+        // it already refuses honestly: a host that stalls probes by design -
+        // every Microsoft tenant - returns null and never reaches the guesses,
+        // as does a spent day and a verifier that did not answer. null is not
+        // false, so none of those becomes a guess.
+        let _catchAll = catchAllKnown(domain);
+        if (_catchAll === undefined) _catchAll = await isCatchAllDomain(domain, verifierKey);
+        // A learned convention is still one check, not three. Otherwise the
+        // first SHARED_INBOX_TRY_MAX of buildCandidates' own frequency order.
+        const _tryPatterns = _learned
+          ? [_learned]
+          : buildCandidates(name, domain).slice(0, SHARED_INBOX_TRY_MAX).map(c => c.pattern);
+        if (_catchAll === false && _tryPatterns.length) {   // catch-all proves nothing
 
           for (const _pat of _tryPatterns) {
             const _cand = applyPattern(_pat, name, domain);
@@ -36134,7 +36175,17 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
           }
           if (isGeneric) console.log(`EMAIL [${domain}]: only the shared inbox ${best} is published and no personal mailbox for ${name} could be confirmed, so the published address stands. An unverified guess is not worth a bounce.`);
         } else {
-          console.log(`EMAIL [${domain}]: their site publishes only the shared inbox ${best}. ${_learned ? 'We have not proved that their mail server rejects addresses that do not exist, so a yes from it would prove nothing' : `We do not know how this company builds its addresses, so a personal mailbox for ${name} would be a guess`}, and a guess must never displace an address they published. No mailbox check is spent here.`);
+          // Name the REAL reason. The old sentence said "we do not know how
+          // this company builds its addresses" on every lead, which read as a
+          // fact about them and was a fact about a gate that could not open.
+          const _why = _catchAll === true
+            ? 'their mail server accepts every address, so a yes from it would prove nothing'
+            : _catchAll === null || _catchAll === undefined
+              ? 'we could not get a straight answer out of their mail server, so nothing here can be read as a confirmation'
+              : !_tryPatterns.length
+                ? `no candidate mailbox could be built for ${name} (VERIFIER_PATTERN_TRIES is ${SHARED_INBOX_TRY_MAX})`
+                : 'the catch-all verdict did not come back false';
+          console.log(`EMAIL [${domain}]: their site publishes only the shared inbox ${best}, and no personal mailbox for ${name} was tried - ${_why}. A guess must never displace an address they published, so the shared inbox stands.`);
         }
       } catch (e) {
 
@@ -58222,8 +58273,15 @@ app.listen(PORT, () => {
       [_n('let catchAll =', ' catchAllKnown(domain);'), 'the catch-all verdict is bought up front on every lead again - two of a hundred daily checks spent before a single question has been put to the mail server, on leads where no candidate address is ever accepted and the verdict changes nothing'],
       [_n('if (catchAll === undefined) catchAll = await isCatchAllDomain(domain,', ' verifierKey);'), 'the verdict is no longer bought at the moment a candidate is accepted, so either an acceptance on a server that accepts everything ships as "SMTP-verified (mailbox exists)", or nothing can ever reach tier 2 at all'],
       [_n('const toTry = ordered.slice(0,', ' 2);'), 'the pattern waterfall is back to four or five blind guesses a lead, which is most of a day\'s allowance spent on the leads where nothing resolves'],
-      [_n('const _tryPatterns = _learned ?', ' [_learned] : [];'), 'the shared-inbox upgrade guesses at four mailboxes again on a domain whose convention we do not know - up to six of a hundred daily checks spent on a lead that ALREADY HAS an address'],
-      [_n('const _catchAll = _tryPatterns.length ?', ' catchAllKnown(domain) : undefined;'), 'the shared-inbox upgrade buys the two-probe catch-all verdict again for a lead that already has a published address'],
+      // ══ RE-AIMED IN ROUND 135, NOT RETIRED ═══════════════════════════
+      // These two pinned Round 129's shut gate. Vin reversed that on
+      // 2026-09-11 ("probe + top 3 patterns"), so the old text is gone and
+      // pinning it would be a guard nobody can trip. The JOB survives: the
+      // spend must stay BOUNDED and it must stay DECLARED, which is what
+      // Round 129 was actually protecting. Unbounded blind guessing is what
+      // may never come back.
+      [_n('.slice(0, SHARED_INBOX_TRY_MAX)', '.map(c => c.pattern);'), 'the shared-inbox upgrade guesses at every mailbox its builder knows again, unbounded, instead of the declared number Vin ruled on - which is how six of a hundred daily checks went on one lead that ALREADY HAD an address'],
+      [_n('if (_catchAll === undefined) _catchAll = await isCatchAllDomain(domain,', ' verifierKey);'), 'the upgrade reads the catch-all CACHE without ever probing, which on a domain we have never seen is always empty - that is the closed loop that made this engine unreachable and spent 0 of 100 checks across ten leads while producing 0 owner mailboxes'],
       [_n('if (mailProviderStalls(domain)) {', '\n'), 'the catch-all probe is spent on a host that stalls address probes by design, which burns two checks and up to a minute to learn nothing'],
       [_n('const _stalls = mailProviderStalls(domain);', '\n'), 'the waterfall no longer asks who hosts their mail, so every probe on a hardened tenant runs to the cap and answers nothing'],
     ]) if (!_src.includes(_needle)) _fails.push(_msg);
@@ -63407,6 +63465,7 @@ app.listen(PORT, () => {
       const _eg = (r, o) => emailConfidenceGrade(r, o || {});
       const _cases = [
         ['a person at their own domain', { email: 'a@b.com', tier: 1, kind: 'person' }, 'published_personal'],
+        ['the named owner\'s own mailbox', { email: 'bob.smith@b.com', tier: 1, kind: 'person' }, 'published_personal', { ownerName: 'Bob Smith' }],
         ['a recruiting inbox off their careers page', { email: 'recruiting@b.com', tier: 1, kind: 'role', fromCareersPage: true }, 'published_role'],
         ['a published address on somebody else domain', { email: 'a@other.com', tier: 1, kind: 'person', offDomain: true }, 'published_role'],
         ['a confirmed mailbox', { email: 'a@b.com', tier: 2, kind: 'person' }, 'smtp_confirmed'],
@@ -63414,11 +63473,11 @@ app.listen(PORT, () => {
         ['a pattern guess', { email: 'a@b.com', tier: 4 }, 'pattern_guess'],
         ['no address at all', { email: '' }, 'none'],
       ];
-      for (const [_what, _r, _want] of _cases) {
-        const _got = _eg(_r);
+      for (const [_what, _r, _want, _opts] of _cases) {
+        const _got = _eg(_r, _opts);
         if (_got !== _want) _fails.push(`${_what} grades "${_got}" and should grade "${_want}"`);
       }
-      if (new Set(_cases.map(c => _eg(c[1]))).size !== 6) {
+      if (new Set(_cases.map(c => _eg(c[1], c[3]))).size !== 6) {
         _fails.push('the email grades collapse into fewer than six answers, so two materially different addresses read the same on the row');
       }
       // The outage may explain a GUESS. It may never override a measurement:
@@ -64191,7 +64250,12 @@ app.listen(PORT, () => {
     if (readRunStatusOf({ crashed: true }) !== 'failed') _fails.push('a run that broke is not called failed');
     // 2b. "WITH EMAIL" on a card: the grade on a row is a name, never a letter,
     //     and the flag and the tier arrive as text.
-    if (!emailVerifiedRow('a@b.com', 'published_personal', 'false', '1')) _fails.push('a published personal address does not count as an email on the batch card');
+    // Round 135: the same address, and the owner is what decides it now. On
+    // 2026-09-10 the batch's one Confirmed was lucas@ on a row reading "no
+    // owner named", so a personal mailbox we cannot attribute to anybody is no
+    // longer Confirmed. It is still real, still sendable, still exported.
+    if (!emailVerifiedRow('a@b.com', 'published_personal', 'false', '1', 'Ada Lovelace')) _fails.push('the named owner\'s own published address does not count as an email on the batch card');
+    if (emailVerifiedRow('a@b.com', 'published_personal', 'false', '1', '')) _fails.push('a personal mailbox on a lead where NOBODY was named still counts as Confirmed, so the card claims an owner mailbox it cannot name - lucas@paverrescuellc.com, live on 2026-09-10');
     if (emailVerifiedRow('a@b.com', 'verifier_down', 'true', '3')) _fails.push('an address the checker never confirmed counts as an email on the batch card');
     if (!emailVerifiedRow('a@b.com', '', 'true', '2')) _fails.push('a sendable tier-2 address from an older read does not count on the batch card');
     if (emailVerifiedRow('', 'published_personal', 'true', '1') || emailVerifiedRow('a@b.com', '', 'true', null)) _fails.push('a row with no address, or no tier, counts as with-email');
@@ -84607,9 +84671,16 @@ const _queueStateOf = (r) => r.moved_to_research_at ? 'moved' : r.ruled_out_at ?
 // NAME (published_personal), never a letter, and PostgREST hands the
 // sendable flag and the tier back as text.
 const EMAIL_GRADE_VERIFIED = ['published_personal', 'smtp_confirmed'];
-const emailVerifiedRow = (email, grade, sendable, tier) => {
+const emailVerifiedRow = (email, grade, sendable, tier, ownerName) => {
   if (!email) return false;
   const g = String(grade || '');
+  // ══ ROUND 135: CONFIRMED NAMES SOMEBODY ════════════════════════════════
+  // The client's emailStatusOf makes the same call and this is the other half
+  // of it - clientcheck executes both and fails if they disagree. A published
+  // PERSONAL mailbox on a lead where nobody was named is not the owner's, and
+  // Confirmed has meant the owner's own mailbox since Round 133. It stays
+  // sendable and keeps its grade; it stops counting as Confirmed.
+  if (g === 'published_personal' && !String(ownerName || '').trim()) return false;
   if (EMAIL_GRADE_VERIFIED.includes(g)) return true;
   // ══ ROUND 133: AN EXPLICIT GRADE BEATS THE TIER FALLBACK ═══════════════
   // published_role is tier 1 and sendable BY CONSTRUCTION - it is a real,
@@ -84715,7 +84786,7 @@ app.get('/api/read-runs', async (req, res) => {
   if (runs === null) return res.status(502).json({ error: 'the runs could not be read: ' + (sbWhy('read_runs') || 'Supabase gave no reason') });
   // The per-batch counts the cards read, off the rows themselves.
   const ids = runs.map(r => r.id);
-  const rows = ids.length ? await rqSelect('batch_id,read_at,read_failed,ruled_out_at,moved_to_research_at,emailGrade:extra->>contactEmailGrade,emailSendable:extra->>contactEmailSendable,emailTier:extra->>contactEmailTier,email:extra->>contactEmail', 'batch_id=in.' + _qInList(ids)) : [];
+  const rows = ids.length ? await rqSelect('batch_id,read_at,read_failed,ruled_out_at,moved_to_research_at,emailGrade:extra->>contactEmailGrade,emailSendable:extra->>contactEmailSendable,emailTier:extra->>contactEmailTier,email:extra->>contactEmail,owner:extra->>contactOwner', 'batch_id=in.' + _qInList(ids)) : [];
   const by = new Map(ids.map(id => [id, { withEmail: 0, sendableEmail: 0, sendableOnly: 0, heldBackEmail: 0, inResearch: 0, ruledOut: 0 }]));
   for (const r of (rows || [])) {
     const b = by.get(r.batch_id); if (!b) continue;
@@ -84726,7 +84797,7 @@ app.get('/api/read-runs', async (req, res) => {
     // sendableEmail is every address the engine says we may write to (the number
     // the Move button offers); sendableOnly is the rest of that set once the
     // confirmed ones are named; heldBackEmail is an address we found and cannot use.
-    const _ver = emailVerifiedRow(r.email, r.emailGrade, r.emailSendable, r.emailTier);
+    const _ver = emailVerifiedRow(r.email, r.emailGrade, r.emailSendable, r.emailTier, r.owner);
     if (_ver) b.withEmail += 1;
     if (emailSendableRow(r.email, r.emailGrade, r.emailSendable, r.emailTier)) { b.sendableEmail += 1; if (!_ver) b.sendableOnly += 1; }
     if (emailHeldBackRow(r.email, r.emailGrade, r.emailSendable, r.emailTier)) b.heldBackEmail += 1;
