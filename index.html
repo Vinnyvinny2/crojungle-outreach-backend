@@ -1341,7 +1341,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261015;
+const CLIENT_CONTRACT = 20261016;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5571,7 +5571,7 @@ const websiteProvenanceCell = (c) => (c && c.contactWebsiteResolved === true)
 // unknown); D a guess, or a run on which our checker was down.
 const OWNER_GRADE_RATING = { confirmed: 'A', stated: 'B', inferred: 'C', unconfirmed: 'D' };
 const ownerGradeRating = (c) => (c && c.contactOwner && OWNER_GRADE_RATING[c.contactOwnerGrade]) || '';
-const EMAIL_GRADE_RATING = { published_personal: 'A', smtp_confirmed: 'A', published_role: 'B', catch_all: 'C', pattern_guess: 'D', verifier_down: 'D' };
+const EMAIL_GRADE_RATING = { published_personal: 'A', smtp_confirmed: 'A', company_mailbox: 'B', published_role: 'B', catch_all: 'C', pattern_guess: 'D', verifier_down: 'D' };
 const emailGradeRating = (c) => {
   if (!c || !c.contactEmail) return '';
   const g = c.contactEmailGrade;
@@ -6447,6 +6447,26 @@ const leadFromCompany = (company) => {
       // honest in Find goes back to saying "none found" in the pipeline.
       contactEmailVerifierDown: company.contactEmailVerifierDown === true,
       contactEmailLookupBlocked: company.contactEmailLookupBlocked || '',
+      // ══ ROUND 136: THE GRADE STOPPED AT THE FIND TAB ══════════════════
+      // The server writes twenty-one contact fields and this carried ten. The
+      // email GRADE was not among them - so emailStatusOf, which reads the
+      // grade first, fell through to its tier ladder on every promoted lead,
+      // and a published_role info@ that read "Shared inbox" on the Find tab
+      // read "Confirmed, grade A" in Research: the stage that writes the cold
+      // email. Not one row per run - every promoted row.
+      //
+      // Same class as contactEmailSendable above, and the same fix: a field
+      // and the verdict about it are one measurement and must travel together.
+      // Round 136 adds companyMailbox beside them, so Vin's rule - never email
+      // a shared inbox unless the crew is very small - can still be read after
+      // the lead leaves this tab.
+      contactEmailGrade: company.contactEmailGrade || '',
+      contactEmailGradeSay: company.contactEmailGradeSay || '',
+      contactEmailKind: company.contactEmailKind || '',
+      contactEmailOffDomain: company.contactEmailOffDomain === true,
+      contactEmailFromCareers: company.contactEmailFromCareers === true,
+      contactEmailCompanyMailbox: company.contactEmailCompanyMailbox === true,
+      contactOwnerGrade: company.contactOwnerGrade || '',
       // Why we believe the owner is the owner, and how far the authority gate
       // trusted it. Both were computed on the contact read and stopped here,
       // so a rep looking at a promoted lead could not tell a name read off a
@@ -6566,6 +6586,23 @@ const emailStatusOf = (c) => {
   // exportable and still on the call sheet. Only the word "Confirmed" moves.
   const sendableT12 = c.contactEmailSendable === true && typeof t === 'number' && t >= 1 && t <= 2;
   if (g === 'published_role') return sendableT12 ? 'shared' : 'unverified';
+  // ══ ROUND 136: THE FRONT DESK IS ITS OWN STATE ═════════════════════════
+  // The company-mailbox probe confirms a REAL mailbox by SMTP, so it used to
+  // arrive as tier 2 and grade smtp_confirmed - indistinguishable from the
+  // owner's own desk. Live 2026-09-10: contact@coloradoinjurylaw.com sat under
+  // Confirmed beside jeff@thebentonlawfirm.com, and only one of those is the
+  // man's own mailbox. Vin, 2026-09-11: "we should never email shared inbox
+  // unless its a very small crew". The rep cannot honour that without seeing
+  // which it is, so it gets its own word rather than borrowing another's.
+  if (g === 'company_mailbox') return sendableT12 ? 'company' : 'unverified';
+  // ══ ROUND 136: AN EXPLICIT GRADE BEATS THE TIER FALLBACK, HERE TOO ═════
+  // The server half (emailVerifiedRow) has had `if (g) return false` since
+  // Round 133 and this half never grew it, so the two disagreed for every
+  // grade neither branch above names. Nothing reached it through the grader,
+  // which is exactly why it survived - an unreachable divergence still reads
+  // as agreement. clientcheck executes both halves; this is what keeps them
+  // one rule rather than two hand-kept copies.
+  if (g) return sendableT12 ? 'shared' : 'unverified';
   if (sendableT12) return 'verified';
   return 'unverified';
 };
@@ -6598,11 +6635,12 @@ const emailHeldBackOf = (c) => !!(c && c.contactEmail) && String(c.contactEmailS
 // shared inbox is not the owner's mailbox, so it may not be counted under
 // Confirmed; it is a real published address the engine cleared, so it may not
 // be dropped into Unconfirmed with the pattern guesses either.
-const BATCH_BUCKETS = ['email', 'shared', 'sendable', 'held', 'noemail', 'unreadable'];
+const BATCH_BUCKETS = ['email', 'company', 'shared', 'sendable', 'held', 'noemail', 'unreadable'];
 const batchBucketOf = (l) => queueStateOf(l) !== 'read' ? 'other'
   : emailStatusOf(l) === 'unreadable' ? 'unreadable'
   : emailStatusOf(l) === 'none' ? 'noemail'
   : emailStatusOf(l) === 'verified' ? 'email'
+  : emailStatusOf(l) === 'company' ? 'company'
   : emailStatusOf(l) === 'shared' ? 'shared'
   : emailHeldBackOf(l) ? 'held'
   : 'sendable';
@@ -6630,7 +6668,7 @@ const companyFromBatchLead = (l) => {
   return out;
 };
 const batchCardStats = (leads) => {
-  const s = { total: 0, read: 0, failed: 0, withEmail: 0, sharedInbox: 0, sendable: 0, sendableOnly: 0, heldBack: 0, inResearch: 0, ruledOut: 0, actionable: 0 };
+  const s = { total: 0, read: 0, failed: 0, withEmail: 0, companyMailbox: 0, sharedInbox: 0, sendable: 0, sendableOnly: 0, heldBack: 0, inResearch: 0, ruledOut: 0, actionable: 0 };
   for (const l of (Array.isArray(leads) ? leads : [])) {
     if (!l) continue;
     s.total += 1;
@@ -6641,6 +6679,7 @@ const batchCardStats = (leads) => {
     if (l.readAt) s.read += 1;
     const _bucket = batchBucketOf(l);
     if (_bucket === 'email') s.withEmail += 1;
+    if (_bucket === 'company') s.companyMailbox += 1;
     if (_bucket === 'shared') s.sharedInbox += 1;
     if (st === 'read' && emailSendableOf(l)) s.sendable += 1;
     if (_bucket === 'sendable') s.sendableOnly += 1;
@@ -7033,7 +7072,7 @@ function FindView({
     // Every state emailStatusOf can return has a rank here: a state missing
     // from this map ranks undefined and the whole comparison collapses to NaN,
     // which silently drops the operator back to a Fit sort.
-    const eRank = (l) => ({ verified: 0, shared: 1, unverified: 2, none: 3, unreadable: 4 })[emailStatusOf(l)];
+    const eRank = (l) => ({ verified: 0, company: 1, shared: 2, unverified: 3, none: 4, unreadable: 5 })[emailStatusOf(l)];
     return pick.slice().sort((a, b) => sort === 'name' ? String(a.name || '').localeCompare(String(b.name || ''))
       : sort === 'email' ? (eRank(a) - eRank(b)) || (fit(b) - fit(a))
       : (fit(b) - fit(a)) || String(a.name || '').localeCompare(String(b.name || '')));
@@ -7087,6 +7126,7 @@ function FindView({
         : es === 'none' ? h('span', { style: { color: T.text3 } }, '— none found')
         : es === 'verified' ? h('span', { style: { color: T.text2 } }, l.contactEmail)
         // The tag goes FIRST, for the same reason the unverified one does.
+        : es === 'company' ? h('span', { style: { color: T.text2 } }, h('span', { style: { color: T.amberDim } }, 'front desk '), l.contactEmail)
         : es === 'shared' ? h('span', { style: { color: T.text2 } }, h('span', { style: { color: T.amberDim } }, 'shared '), l.contactEmail)
         : held ? h('span', { style: { color: T.text3 } }, h('span', { style: { color: T.amberDim } }, 'held '), l.contactEmail)
         // The tag goes FIRST: the cell truncates, and on a long address the tag
@@ -7117,10 +7157,10 @@ function FindView({
           // letter rule; the middle number is every other address the engine
           // said we may send to; the last is the ones it refused.
           h('div', { style: { fontSize: 11, color: T.text2, marginTop: 2 } },
-            stats.withEmail + ' confirmed · ' + stats.sharedInbox + ' shared inbox · ' + stats.sendableOnly + ' more we can send to · ' + stats.heldBack + ' held back')),
+            stats.withEmail + ' confirmed · ' + stats.companyMailbox + ' company mailbox · ' + stats.sharedInbox + ' shared inbox · ' + stats.sendableOnly + ' more we can send to · ' + stats.heldBack + ' held back')),
         h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } }, columnsToggle, btn('tertiary', 'CSV', () => exportCsv(rows), { disabled: !exportable.length || busy === 'csv' }))),
       h('div', { style: { padding: '11px 16px', borderBottom: '1px solid ' + T.borderSubtle, display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center', fontSize: 11 } },
-        chipEl('email', 'Confirmed', counts.email), chipEl('shared', 'Shared inbox', counts.shared), chipEl('sendable', 'Unconfirmed', counts.sendable), chipEl('held', 'Held back', counts.held), chipEl('noemail', 'No email', counts.noemail), chipEl('unreadable', 'Could not check', counts.unreadable), chipEl('all', 'All', counts.all), chipEl('fit', 'Fit 70+', counts.fit),
+        chipEl('email', 'Confirmed', counts.email), chipEl('company', 'Company mailbox', counts.company), chipEl('shared', 'Shared inbox', counts.shared), chipEl('sendable', 'Unconfirmed', counts.sendable), chipEl('held', 'Held back', counts.held), chipEl('noemail', 'No email', counts.noemail), chipEl('unreadable', 'Could not check', counts.unreadable), chipEl('all', 'All', counts.all), chipEl('fit', 'Fit 70+', counts.fit),
         h('div', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 } },
           h('span', { style: { color: T.text2 } }, 'Sort'),
           h('select', { value: sortBy, onChange: e => setSortBy(e.target.value),
