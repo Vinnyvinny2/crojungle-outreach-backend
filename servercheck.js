@@ -158,6 +158,13 @@ const anthropicAnswer = (bodyText, b) => {
     usage: { input_tokens: 1200, output_tokens: 180, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
   });
   const t = bodyText;
+  // Round 141: the visual website read. Matched on its own field names, ahead of
+  // every other branch, because it is the only call that asks for designEra.
+  if (/designEra/.test(t)) {
+    return wrap(Object.assign({ isRealHomepage: true, fullyRendered: true, designEra: 'old',
+      templateUntouched: true, desktopOnlyLayout: false, photosLookCheap: false, looksCredible: false,
+      whatAVisitorSees: 'a narrow page with a stock photograph of a roof and small grey type' }, state.eyes || {}));
+  }
   if (state.mode === 'husk' && /pitchAngle/.test(t) && /FACT_DISCIPLINE|NEVER fabricate|evidence/i.test(t) && /IMAGE|homepage|HOMEPAGE/i.test(t)) {
     return wrap({ pitchAngle: null, realPain: null, embarrassingFinding: null, situationRead: null, recommendedProduct: null, originalFindings: [] });
   }
@@ -225,6 +232,10 @@ const FIND_HOME_HTML = (b) => `<!doctype html><html><head><title>${b.company}</t
   + ` <a href="https://${b.host}/careers">Careers</a> <a href="https://facebook.com/x">Facebook</a></nav>`
   + `<h1>${b.company}</h1><p>Roof repair and replacement for Dallas homeowners, since 1998.</p>`
   + `<p>${'We answer the phone ourselves and we stand behind our work. '.repeat(12)}</p>`
+  // Round 141: their own pages selling franchises is the cheapest franchise
+  // tell readChainEvidence owns, and it fires on the FIRST page read - which is
+  // the whole reason the render sits behind the drop rather than before it.
+  + (state.franchise ? `<p>Franchise opportunities are available in your territory. Ask about owning a franchise.</p>` : '')
   + `<footer>&copy; 2026 ${b.company}</footer></body></html>`;
 const FIND_STRANGER_HTML = () => `<!doctype html><html><head><title>Zeta Widgets Supply</title></head><body><h1>Zeta Widgets Supply</h1>`
   + `<p>${'Industrial widgets, flanges and fittings for the trade, shipped same day from our Dallas warehouse. '.repeat(8)}</p>`
@@ -403,7 +414,10 @@ const fake = http.createServer(async (req, res) => {
   const body = await readBody(req);
   // Round 112: the search query rides the record, so a scenario can tell the
   // size lookup's searches from a page bought instead of read for free.
-  try { const _j = JSON.parse(String(body || '')); state.requests[state.requests.length - 1].query = String((_j && _j.query) || ''); state.requests[state.requests.length - 1].url = String((_j && _j.url) || ''); } catch (e) { state.requests[state.requests.length - 1].query = ''; state.requests[state.requests.length - 1].url = ''; }
+  // Round 141: and the FORMATS, because the contact read now asks Firecrawl for
+  // exactly one thing it cannot get free - a picture of the homepage - and the
+  // free-read invariant below has to tell that one render from a page BUY.
+  try { const _j = JSON.parse(String(body || '')); state.requests[state.requests.length - 1].query = String((_j && _j.query) || ''); state.requests[state.requests.length - 1].url = String((_j && _j.url) || ''); state.requests[state.requests.length - 1].formats = Array.isArray(_j && _j.formats) ? _j.formats.slice() : []; } catch (e) { state.requests[state.requests.length - 1].query = ''; state.requests[state.requests.length - 1].url = ''; state.requests[state.requests.length - 1].formats = []; }
   const b = BIZ_BY_HOST[host] || state.biz || biz('A');
 
   if (host === 'api.anthropic.com') return send(res, 200, anthropicAnswer(body, b));
@@ -428,13 +442,27 @@ const fake = http.createServer(async (req, res) => {
     }
     if (/\/v1\/search/.test(path)) return send(res, 200, { data: [] }, H);
     if (/\/v1\/scrape/.test(path)) {
-      let url = ''; try { url = JSON.parse(body).url || ''; } catch (e) { void e; }
+      let url = '', fmts = []; try { const _b = JSON.parse(body); url = _b.url || ''; fmts = Array.isArray(_b.formats) ? _b.formats : []; } catch (e) { void e; }
+      // A render-only request: the real API answers with a SIGNED URL, not the
+      // bytes, and the reader then fetches it over plain HTTP. state.noShot is
+      // the other real case - the request runs and no picture comes back.
+      if (fmts.length === 1 && fmts[0] === 'screenshot') {
+        return send(res, 200, state.noShot ? { success: true, data: {} } : { success: true, data: { screenshot: 'https://shots.example/home.png' } }, H);
+      }
       const isHome = url.replace(/\/+$/, '').endsWith(b.host);
       const md = isHome ? HOMEPAGE_MD(b)
         : `# ${b.company} - ${url.split('/').pop()}\n\nThis interior page of ${b.company} describes ${url.split('/').pop()} in honest detail, at enough length that the duplicate-page fingerprint can tell it apart from every other page on the site. The ${url.split('/').pop()} page carries its own words.\n`;
       return send(res, 200, { success: true, data: { markdown: md, rawHtml: HOMEPAGE_HTML(b) } }, H);
     }
     return send(res, 200, { success: true, data: {} }, H);
+  }
+
+  // Round 141: where a Firecrawl render is collected from. A real 1x1 PNG, so
+  // the reader's own byte and decode guards run on something they can decode.
+  if (host === 'shots.example') {
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    res.writeHead(200, { 'Content-Type': 'image/png', 'Content-Length': String(png.length) });
+    return res.end(png);
   }
 
   if (host === 'api.apify.com') {
@@ -756,8 +784,14 @@ const runLead = async (b, over, capMs) => {
     // answers a plain fetch. The size searches are counted apart and must be the
     // only Firecrawl calls on this lead.
     const _isSizeQ = (q) => /revenue \(prospeo\.io|employees \(site:linkedin/.test(String(q || ''));
-    const hFcFree = state.requests.slice(hReq0).filter(q => q.host === 'api.firecrawl.dev' && !_isSizeQ(q.query)).length;
+    // Round 141: a RENDER is a request for one picture and nothing else. It is
+    // the one thing on this route that cannot be had for free, it is bought
+    // once a lead, and it is counted apart - so "the free read is still the
+    // door" keeps meaning pages, which is what it was written to mean.
+    const _isRender = (q) => Array.isArray(q.formats) && q.formats.length === 1 && q.formats[0] === 'screenshot';
+    const hFcFree = state.requests.slice(hReq0).filter(q => q.host === 'api.firecrawl.dev' && !_isSizeQ(q.query) && !_isRender(q)).length;
     const hFcSize = state.requests.slice(hReq0).filter(q => q.host === 'api.firecrawl.dev' && _isSizeQ(q.query)).length;
+    const hFcShot = state.requests.slice(hReq0).filter(q => q.host === 'api.firecrawl.dev' && _isRender(q)).length;
     const hApify = apifyCalls() - hAp0;
     const HJ = H1.json || {};
     ok(H1.code === 200, `the contact read answered ${H1.code}: ${String(HJ.error || '').slice(0, 160)}`);
@@ -772,6 +806,22 @@ const runLead = async (b, over, capMs) => {
     // five of seven leads got back "no record of this business". So on THIS lead
     // the size lookup must buy nothing, and must say which reason stood it down.
     ok(hFcSize === 0, `the size lookup bought ${hFcSize} search(es) on a lead whose own team page lists three people - that page already answers the question the directory search asks`);
+    // ── ROUND 141: THE SECOND VERDICT, DRIVEN THROUGH THE REAL ROUTE ──────
+    // One render a lead, not one a page: the free plain-fetch door reads four
+    // pages here and exactly one picture is bought.
+    ok(hFcShot === 1, `the contact read took ${hFcShot} homepage render(s) on one lead - it is one picture of the first screen, once`);
+    const HSite = HJ.site || {};
+    ok(HSite.looks === 'bad' && HSite.looksMeasured === true, `the eyes called this homepage old, an untouched template and not credible, and the lead came back looks=${HSite.looks} measured=${HSite.looksMeasured}`);
+    ok(/out of date/.test(String(HSite.looksWhy || '')), `the visual verdict arrived with no reason a person could check: ${JSON.stringify(HSite.looksWhy)}`);
+    // THE BLAST RADIUS, on a live route rather than on a fixture: the picture
+    // said "bad" and the technical grade the audit and the Find score read is
+    // still the markup verdict, computed from the same four pages as before.
+    ok(HSite.measured === true && HSite.word === 'weak' && HSite.gap === 14 && HSite.grade === 5,
+      `the technical website grade MOVED when the visual one arrived: word=${HSite.word} gap=${HSite.gap} grade=${HSite.grade} on ${(HSite.faults || []).map(f => f.id).join(',') || 'no faults'} - every audit finding and the Find score read those three`);
+    ok(HSite.looks !== HSite.word, 'the two website verdicts have collapsed into one word, so the toggle and the audit can no longer disagree - which is the whole reason there are two');
+    ok((HJ.spend || {}).render === 1, `the lead reports ${JSON.stringify((HJ.spend || {}).render)} credit(s) on the homepage render - the footer figure is what settles the 1-versus-5 rate against the dashboard`);
+    ok(/SITE LOOKS \[[^\]]*\]: bad to a visitor/.test(srv.log().slice(hLog0)), 'the visual verdict never reaches the log, so a batch cannot be read for it');
+    ok(/of them the homepage render/.test(srv.log().slice(hLog0)), 'the FIND CONTACT footer does not carry what the render cost this lead');
     ok(HJ.sizeLookup && HJ.sizeLookup.bought === false && /team page lists 3 people/.test(String(HJ.sizeLookup.why || '')), `the size lookup on a three-person team page reads ${JSON.stringify(HJ.sizeLookup)} - it must be not bought, and name the reason`);
     ok(/SIZE LOOKUP \[[^\]]*\]: not bought - their own team page lists 3 people/.test(srv.log().slice(hLog0)), 'the size search was stood down and no line says why - a saving the operator cannot see reads as a broken feature');
     // The BUY path still has to be DRIVEN, or a source needle is all that is
@@ -791,7 +841,56 @@ const runLead = async (b, over, capMs) => {
     ok(Hbuy.code === 200, `the second contact read answered ${Hbuy.code}: ${String(HbuyJ.error || '').slice(0, 160)}`);
     ok(hbSize >= 1 && hbSize <= 2, `the size lookup bought ${hbSize} search(es) on a lead that published no size and whose two-name team page settles nothing - it should buy one, and a second only on a miss`);
     ok(HbuyJ.sizeLookup && HbuyJ.sizeLookup.bought === true, 'the size lookup was not bought on a lead whose pages published no size and whose team page names two people, so the sheet guesses off the review count');
-    ok((HJ.spend || {}).firecrawl === hFcSize * 2, `the contact read reports ${(HJ.spend || {}).firecrawl} Firecrawl credit(s) on a plainly readable site where the size lookup bought ${hFcSize} search(es) at 2 each - a page was bought, or the ledger missed the lookup`);
+    ok((HJ.spend || {}).firecrawl === hFcSize * 2 + (HJ.spend || {}).render, `the contact read reports ${(HJ.spend || {}).firecrawl} Firecrawl credit(s) on a plainly readable site where the size lookup bought ${hFcSize} search(es) at 2 each and the homepage render cost ${(HJ.spend || {}).render} - a page was bought, or the ledger missed one of them`);
+
+    // ══ ROUND 141a: A PICTURE THAT DID NOT COME BACK KEEPS THE LEAD ═══════
+    // Vin's ruling: an unreadable site is KEPT and marked unknown. Driven, not
+    // asserted from a fixture: the render request RUNS and Firecrawl answers
+    // with no picture, which is the commonest live shape there is.
+    {
+      state.noShot = true;
+      const nsBiz = bizReg('Hns'); state.biz = nsBiz;
+      const nsReq0 = state.requests.length;
+      const NS = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+        company: { name: nsBiz.company, website: `https://${nsBiz.host}`, phone: '(214) 555-0188',
+                   location: 'Dallas, TX', industry: 'roofer', reviewCount: 180, rating: 4.6 },
+        keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test', verifierKey: '' },
+      });
+      state.noShot = false;
+      const NSJ = NS.json || {}; const NSS = NSJ.site || {};
+      const nsShot = state.requests.slice(nsReq0).filter(q => q.host === 'api.firecrawl.dev' && _isRender(q)).length;
+      ok(NS.code === 200 && NSJ.notIcp !== true, `a lead whose homepage render came back empty was dropped instead of kept: ${NS.code} ${JSON.stringify(NSJ.icpWhy || '').slice(0, 120)}`);
+      ok(nsShot === 1, `the render was asked for ${nsShot} time(s) on a site that answered with no picture - once, and never retried`);
+      ok(NSS.looks === 'unknown' && NSS.looksMeasured === false, `a homepage nobody could see came back looks=${NSS.looks} measured=${NSS.looksMeasured} - unknown is not modern`);
+      ok(/no picture/.test(String(NSS.looksWhy || '')), `the row is not told WHY nobody could see their homepage: ${JSON.stringify(NSS.looksWhy)}`);
+      ok(NSS.measured === true && NSS.word === HSite.word && NSS.gap === HSite.gap, `the same build graded ${NSS.word}/${NSS.gap} with no picture and ${HSite.word}/${HSite.gap} with one - the markup read never needed a render`);
+      ok((NSJ.spend || {}).render === 0, `a render that returned no picture was billed ${JSON.stringify((NSJ.spend || {}).render)} credit(s)`);
+    }
+
+    // ══ ROUND 141b: A FRANCHISE NEVER PAYS FOR A PICTURE ══════════════════
+    // The rule the chain read states where it sits, pointed at the render: the
+    // site read is already spent and cannot be refunded, everything after it
+    // can. Their own homepage sells franchises, so the drop fires on the FIRST
+    // page read and the render must never be asked for at all.
+    {
+      state.franchise = true;
+      const frBiz = bizReg('Hfr'); state.biz = frBiz;
+      const frReq0 = state.requests.length; const frLog0 = srv.log().length;
+      const FR = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+        company: { name: frBiz.company, website: `https://${frBiz.host}`, phone: '(214) 555-0188',
+                   location: 'Dallas, TX', industry: 'roofer', reviewCount: 180, rating: 4.6 },
+        keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test', verifierKey: '' },
+      });
+      state.franchise = false;
+      const FRJ = FR.json || {}; const FRS = FRJ.site || {};
+      const frShot = state.requests.slice(frReq0).filter(q => q.host === 'api.firecrawl.dev' && _isRender(q)).length;
+      ok(FR.code === 200 && FRJ.notIcp === true && FRJ.icpReason === 'chain', `a homepage selling franchises was not dropped: ${FR.code} notIcp=${FRJ.notIcp} reason=${FRJ.icpReason}`);
+      ok(frShot === 0, `a lead dropped as a franchise still bought ${frShot} homepage render(s) - the drop exists to stop the spend after it`);
+      ok((FRJ.spend || {}).render === 0, `a dropped lead reports ${JSON.stringify((FRJ.spend || {}).render)} credit(s) of render`);
+      ok(FRS.looks === 'unknown' && FRS.looksMeasured === false, `a dropped lead carries a visual verdict (${FRS.looks}/${FRS.looksMeasured}) nobody bought a picture for`);
+      ok(/0 of them on a homepage render/.test(srv.log().slice(frLog0)), 'the drop line does not print the render cost of a dropped lead, which is the line that shows it is zero');
+      state.biz = hBiz;
+    }
     ok(/plain fetch/.test(String(HJ.readVia || '')), `readVia says "${HJ.readVia}" rather than naming the free read`);
     // Their own navigation, not a paid sitemap: the team, contact and careers
     // pages must all have been found from the homepage's own links.
@@ -1157,15 +1256,20 @@ const runLead = async (b, over, capMs) => {
     // the background (the Find-door test submits one and never waits), and
     // its scrapes landed in this window on the first run of this scenario.
     const _r1Mine = (q) => /scenario ?r1[abcd]/i.test(String(q.query || '') + ' ' + String(q.url || ''));
-    const r1Free = state.requests.slice(r1Req0).filter(q => q.host === 'api.firecrawl.dev' && _r1Mine(q) && !_isSizeQ(q.query));
+    const _r1IsRender = (q) => Array.isArray(q.formats) && q.formats.length === 1 && q.formats[0] === 'screenshot';
+    const r1Free = state.requests.slice(r1Req0).filter(q => q.host === 'api.firecrawl.dev' && _r1Mine(q) && !_isSizeQ(q.query) && !_r1IsRender(q));
+    const r1Shots = state.requests.slice(r1Req0).filter(q => q.host === 'api.firecrawl.dev' && _r1Mine(q) && _r1IsRender(q)).length;
     const r1Size = state.requests.slice(r1Req0).filter(q => q.host === 'api.firecrawl.dev' && _r1Mine(q) && _isSizeQ(q.query)).length;
     ok(r1Free.length === 0, `the background read made ${r1Free.length} Firecrawl call(s) beyond the size lookup on sites that answer a plain fetch: ${[...new Set(r1Free.map(q => q.path + (q.query ? ' "' + q.query.slice(0, 60) + '"' : '')))].slice(0, 6).join(' | ')} - FC PAID lines: ${(srv.log().slice(r1Log0).match(/FC PAID[^\n]{0,120}/g) || []).slice(0, 6).join(' || ')}`);
     // Round 129: these three leads publish a three-person team page, so none of
     // them buys a size search at all and the run's Firecrawl meter is zero. The
     // meter must still EQUAL the ledger - that is the assertion - and the run
     // has to be able to say zero rather than insisting something was bought.
-    ok(R1done && typeof R1done.credits_used === 'number' && R1done.credits_used === r1Size * 2, `credits_used is ${R1done && R1done.credits_used} against ${r1Size} size search(es) at 2 each - the run's meter and the ledger disagree`);
+    ok(R1done && typeof R1done.credits_used === 'number' && R1done.credits_used === r1Size * 2 + r1Shots, `credits_used is ${R1done && R1done.credits_used} against ${r1Size} size search(es) at 2 each and ${r1Shots} homepage render(s) at 1 - the run's meter and the ledger disagree`);
     ok(r1Size === 0, `the run bought ${r1Size} size search(es) on leads whose own team page lists three people - the four-credit directory search has no record of a three-person roofer`);
+    // Round 141: one picture per LEAD on a run nobody is watching, so a batch's
+    // render bill is the number of leads and not the number of pages read.
+    ok(r1Shots === 3, `the background run took ${r1Shots} homepage render(s) across three leads - one picture each, never one a page`);
     ok(/SIZE LOOKUP \[[^\]]*\]: not bought - their own team page lists 3 people/.test(srv.log().slice(r1Log0)), 'the read run stood the size search down on every lead and no line says why - a saving the operator cannot see reads as a broken feature');
     ok(R1done && R1done.withEmail === 3 && R1done.live === false && R1done.finished_at, `the run card reads ${JSON.stringify(R1done && [R1done.withEmail, R1done.live, !!R1done.finished_at])} for with-email/live/finished on three leads whose contact page publishes the owner's address`);
     const L1 = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/read-runs/${r1id}/leads`);

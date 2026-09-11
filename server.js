@@ -164,7 +164,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261016;
+const CONTRACT_VERSION = 20261017;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -15017,6 +15017,230 @@ ABOUT THE EMAIL — this matters a lot:
     return parsed;
   } catch(e) {
     console.log('visionAuditPage failed (non-fatal):', e.message);
+    return null;
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WHAT A VISITOR SEES — a SECOND verdict, beside the technical grade
+// ═══════════════════════════════════════════════════════════════════════════
+// Vin, 2026-09-11: "a toggle switch that just picks up businesses with fair and
+// bad websites — if I toggle that on we only target businesses with bad
+// websites. So we have to make sure the website grading signal is accurate."
+//
+// readSiteBuild cannot serve that toggle, and it is not changed to try. Its ten
+// faults are worth 34 points and NINETEEN of those points are invisible to a
+// human being: a noindex tag, missing schema, a JavaScript shell, robots.txt,
+// the title tag, alt text. noSchema alone is worth 5 and 4 is where "strong"
+// becomes "fair", so a business whose homepage looks perfectly fine to the
+// person who paid for it lands in the band the toggle would collect. The one
+// large LOOKS-old signal it holds, datedBuild, needs two age markers with at
+// least one of them visible — Flash, a table layout, a font or marquee tag, a
+// fixed-width block, no viewport tag, plain http, or a copyright line three
+// years stale — and a template built in 2014 and left alone carries none.
+//
+// site.word feeds the audit's findings and the Find score and is UNTOUCHED.
+// site.looks is new, is judged from a picture, and feeds the rep's toggle.
+//
+//   site.word    strong / fair / weak / poor      markup, technical, the audit
+//   site.looks   modern / dated / bad / unknown   a render, visual, the toggle
+//
+// UNKNOWN IS NOT MODERN. A render nobody took, a block page, a shot caught
+// mid-load and a model that answered nothing all settle on 'unknown' with
+// looksMeasured false, because "we could not look" has never meant "it looks
+// fine" anywhere else in this file.
+const SITE_LOOKS_WORDS = ['modern', 'dated', 'bad', 'unknown'];
+// Default ON, and OFF is a Render setting rather than a code change — the same
+// direction every other buy on this route defaults in: an absent flag BUYS,
+// because the honest reading of nothing is "the build that expected a verdict",
+// not "the operator asked us to save a credit".
+const FIND_SITE_LOOKS = String(process.env.FIND_SITE_LOOKS || 'on').toLowerCase();
+// A viewport render, not the full page. The question this verdict asks is what
+// a stranger sees when he ARRIVES, which is the first screen — and a viewport
+// PNG is about a megabyte, so it needs no decode, no dimension read and no
+// second copy of the audit's 7,800px ceiling. The full-page render stays where
+// it is earned: on the audit, where the footer is where the proof lives.
+const SITE_LOOKS_SHOT_EDGE = 1600;
+// Weighted, not counted: a design that is plainly old says more about the sale
+// than stock photography does, and two middling faults are what separates a
+// site a rep should call about from one he should not.
+const SITE_LOOKS_FAULTS = [
+  { id: 'oldDesign', points: 3, say: 'the design looks years out of date' },
+  { id: 'agingDesign', points: 1, say: 'the design is starting to show its age' },
+  { id: 'template', points: 2, say: 'it is an off-the-shelf template nobody has made their own' },
+  { id: 'desktopOnly', points: 2, say: 'the page is laid out for a desktop screen, so a phone gets it shrunk down' },
+  { id: 'cheapPhotos', points: 1, say: 'the pictures are stock, stretched or blurry' },
+  { id: 'notCredible', points: 2, say: 'a stranger landing here would not trust them with the job' },
+];
+// The verdict, PURE, over the answers the eyes returned. A boot check executes
+// this on fixtures rather than reading it, and every consumer reads this one
+// derivation — the rep's cell, the row, the toggle and the log line cannot
+// disagree about a business the way two hand-kept copies always do.
+const readSiteLooks = (v, notLookedWhy) => {
+  const _unknown = (why) => ({ looks: 'unknown', measured: false, score: null, faults: [], why });
+  // The SECOND argument is the reason nobody looked - a drop, a switched-off
+  // setting, a dead site, the per-lead credit cap. It reaches the row instead of
+  // one flat sentence, because "we chose not to buy a picture" and "we bought
+  // one and it was a block page" are different facts about this business.
+  if (!v || typeof v !== 'object') return _unknown(String(notLookedWhy || '').trim()
+    || 'nobody looked at their homepage, so nothing about how it looks is claimed either way');
+  if (v.isRealHomepage === false) return _unknown('the picture that came back was a block, error or parking page and not their homepage, so nothing about their design is claimed');
+  if (v.fullyRendered === false) return _unknown('the picture caught their page still loading, so nothing missing from it may be called missing');
+  const _era = String(v.designEra || '').toLowerCase();
+  if (!['current', 'aging', 'old'].includes(_era)) return _unknown('the eyes came back with no verdict on the design, so how their site looks is unmeasured');
+  const _hit = {
+    oldDesign: _era === 'old',
+    agingDesign: _era === 'aging',
+    // An absent answer is NOT a fault. Only an explicit true (and, for
+    // credibility, an explicit false) may score against a business.
+    template: v.templateUntouched === true,
+    desktopOnly: v.desktopOnlyLayout === true,
+    cheapPhotos: v.photosLookCheap === true,
+    notCredible: v.looksCredible === false,
+  };
+  const _faults = SITE_LOOKS_FAULTS.filter(f => _hit[f.id] === true);
+  const _score = _faults.reduce((n, f) => n + f.points, 0);
+  const _seen = String(v.whatAVisitorSees || '').trim();
+  return {
+    looks: _score >= 5 ? 'bad' : _score >= 2 ? 'dated' : 'modern',
+    measured: true,
+    score: _score,
+    faults: _faults.map(f => f.id),
+    why: (_faults.length ? _faults.map(f => f.say).join('; ')
+      : 'a visitor lands on a current-looking page with nothing plainly wrong with it')
+      + (_seen ? ` — ${_seen}` : ''),
+  };
+};
+// Whether THIS lead earns the render, decided in one place and named when the
+// answer is no. notIcp is tested FIRST and on purpose: a franchise, a branch
+// outlet or a chain is refused before a credit can move, which is the rule the
+// chain read already states where it sits — the site read is already spent and
+// cannot be refunded, and everything after it can.
+const siteLooksBuy = ({ notIcp, website, pagesRead, fcKey, apiKey, setting } = {}) => {
+  if (notIcp === true) return { render: false, reason: 'dropped', why: 'this lead was dropped before the render, so the picture of their homepage cost 0 Firecrawl credit(s)' };
+  if (String(setting === undefined || setting === null ? 'on' : setting).toLowerCase() !== 'on') return { render: false, reason: 'off', why: 'the homepage render is switched off in Settings, so how their site looks was not measured' };
+  if (!website) return { render: false, reason: 'nosite', why: 'they have no website for anybody to look at' };
+  if (!fcKey) return { render: false, reason: 'nokey', why: 'no Firecrawl key, so no picture of their homepage could be taken' };
+  if (!apiKey) return { render: false, reason: 'nomodel', why: 'no Anthropic key, so nothing could look at a picture of their homepage' };
+  if (!(Number(pagesRead) > 0)) return { render: false, reason: 'sitedown', why: 'their site returned nothing when we read it, so a render would have photographed the same nothing' };
+  return { render: true, reason: 'buy', why: '' };
+};
+// ONE render, and nothing else in the request: no markdown, no rawHtml, no map.
+// The contact read's page fetches stay FREE — a plain fetch first with Firecrawl
+// only as the fallback — so this is asked for, priced and logged on its own
+// instead of being folded into a page read that would then cost a render rate.
+const fcHomeShot = async (website, fcKey, timeout = 25000) => {
+  if (!website || !fcKey) return { shot: null, paid: false, credits: 0, why: 'no website or no Firecrawl key, so no picture was asked for' };
+  if (fcCreditsBlocked()) return { shot: null, paid: false, credits: 0, why: 'the Firecrawl account is out of credits, so no picture of their homepage could be taken' };
+  const _url = String(website).startsWith('http') ? String(website) : 'https://' + String(website);
+  if (fcHostNotAnswering(_url)) return { shot: null, paid: false, credits: 0, why: 'their host has already stopped answering on this lead, so no picture was bought' };
+  try {
+    const r = await fcCall('https://api.firecrawl.dev/v1/scrape', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${fcKey}`, 'Content-Type': 'application/json' },
+      // waitFor 3000 for the reason the audit's own render states beside it:
+      // hero sliders and widgets populate two to four seconds after load, and a
+      // shot taken at 1.5s photographs an empty slot where the page is.
+      body: JSON.stringify({ url: _url, formats: ['screenshot'], onlyMainContent: false, waitFor: 3000, location: { country: 'US', languages: ['en'] } }),
+    }, timeout);
+    const d = await r.json();
+    const _shot = (d && d.data && d.data.screenshot) || (d && d.screenshot) || null;
+    if (!_shot) return { shot: null, paid: false, credits: 0, why: `their homepage returned no picture when we rendered it (HTTP ${r && r.status})` };
+    // shot: true — this request asked for a render, so it is priced as one at
+    // whatever FC_SCREENSHOT_CREDITS says a render costs, and files under the
+    // byKind.screenshot bucket that settles that rate against the dashboard.
+    fcNote(true, 'scrape+screenshot', _url, true);
+    const _credits = fcCreditCost('scrape+screenshot', true);
+    // Firecrawl hands back a SIGNED URL, not the bytes. Reading it is a plain
+    // HTTP fetch and costs no credit. A signed URL expires, and an expired one
+    // answers with an HTML error body that would be base64'd into the request
+    // labelled image/png — so the status is read before the bytes are.
+    if (/^data:image\//i.test(String(_shot))) {
+      return { shot: String(_shot).replace(/^data:image\/[a-z]+;base64,/i, ''), paid: true, credits: _credits, why: '' };
+    }
+    const _img = await fetchT(String(_shot), {}, 15000);
+    if (!_img || !_img.ok) return { shot: null, paid: true, credits: _credits, why: `the picture of their homepage answered HTTP ${_img ? _img.status : 'nothing'} when we went to read it` };
+    let _buf = await _img.buffer();
+    if (_buf.length >= PNG_BYTE_BUDGET) {
+      const _fit = await fitPngToBudget(_buf, SITE_LOOKS_SHOT_EDGE, SITE_LOOKS_SHOT_EDGE);
+      if (_fit.skip) return { shot: null, paid: true, credits: _credits, why: `the picture of their homepage was too heavy to send (${_fit.skip})` };
+      _buf = _fit.buffer;
+    }
+    return { shot: _buf.toString('base64'), paid: true, credits: _credits, why: '' };
+  } catch (e) {
+    if (/timeout|abort|ETIMEDOUT|socket hang up/i.test(String(e && e.message))) fcNoteHostTimeout(_url);
+    return { shot: null, paid: false, credits: 0, why: `the render of their homepage failed (${(e && e.message) || 'no answer'})` };
+  }
+};
+// The eyes, pointed at ONE question: what does a stranger see. A SIBLING of
+// visionAuditPage rather than an extension of it, for three reasons. That call
+// GRADES the audit — the score's first-screen component and two absence gates
+// read its answers — so widening its prompt changes what live audits claim,
+// which is the one thing this round may not do. It asks nothing at all about a
+// phone, a template, photography or credibility, which is four of the five
+// things the toggle needs, and its one adjacent answer feeds the dated_site
+// family. And it reads emails and phone numbers off the image, which the
+// contact read has already found for free out of markup it already holds.
+const SITE_LOOKS_MODEL = 'claude-haiku-4-5-20251001';
+const visionSiteLooks = async (screenshotBase64, companyName, apiKey) => {
+  if (!screenshotBase64 || !apiKey) return null;
+  try {
+    const r = await anthropicFetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({
+        model: SITE_LOOKS_MODEL,
+        // Eight short fields and one sentence. The thinking mode is STATED from
+        // the declared table rather than inherited, so pointing this at a model
+        // that reasons cannot silently spend the answer's ceiling on reasoning.
+        max_tokens: 500,
+        temperature: 0.2,
+        messages: [{ role: 'user', content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: screenshotBase64 } },
+          { type: 'text', text: `This is a screenshot of the first screen of ${companyName}'s homepage — what a visitor sees when he arrives, before scrolling.
+
+You are that visitor. Judge ONLY what you can SEE: the design, the layout, the pictures, whether it looks like somewhere to spend money. Say nothing about code, search wording, schema, alt text or robots files — other measurements own those.
+
+Return ONLY JSON:
+{
+  "isRealHomepage": true/false,
+  "fullyRendered": true/false,
+  "designEra": "current|aging|old",
+  "templateUntouched": true/false,
+  "desktopOnlyLayout": true/false,
+  "photosLookCheap": true/false,
+  "looksCredible": true/false,
+  "whatAVisitorSees": "one factual sentence describing what the page looks like"
+}
+
+What each one means:
+- isRealHomepage — FALSE when this is not a business homepage at all: an error page (403 or 404, "Access Forbidden"), a bot check or CAPTCHA, a domain parking page, or a blank document. When it is false nothing else in this image is a fact about their site.
+- fullyRendered — FALSE when the page is plainly still loading: blank panels, a spinner, skeleton placeholders, pictures not yet in.
+- designEra — "current" means it could have been built this year. "aging" means a few years old but not embarrassing. "old" means it plainly predates 2020: dated type, bevels and gradients, a cluttered sidebar, tiny text, a busy patterned background.
+- templateUntouched — TRUE only when you can SEE that nobody made it their own: visible stock or demo photography, placeholder or filler copy, a generic hero that says nothing about this business.
+- desktopOnlyLayout — TRUE only when the layout you can see is desktop-only: a narrow fixed block centred in wide empty margins, or dense multi-column navigation set in type far too small to read on a phone. A fluid layout with large type is false.
+- photosLookCheap — TRUE when the pictures are obvious stock, stretched out of shape, pixelated or watermarked.
+- looksCredible — would you hand this business a job on the strength of this page alone?
+
+Answer about what is ACTUALLY VISIBLE, so that a person looking at this same image agrees with every answer. When you cannot tell, answer false rather than inventing a fault: we would far rather miss a bad-looking site than accuse a good one.` },
+        ] }],
+      }, THINKING_FOR(SITE_LOOKS_MODEL) ? { thinking: THINKING_FOR(SITE_LOOKS_MODEL) } : {})),
+    }, 30000, 'site-looks');
+    const d = await r.json();
+    let text = anthropicText(d).replace(/```json|```/g, '').trim();
+    const _fb = text.indexOf('{'), _lb = text.lastIndexOf('}');
+    if (_fb >= 0 && _lb > _fb) text = text.slice(_fb, _lb + 1);
+    const parsed = parseLLMJSON(text) || {};
+    // The model returns "true"/"false" as STRINGS often enough that the audit's
+    // own vision call carries the same coercion: a string answer reads as
+    // neither true nor false, so the fault leaves the denominator in silence.
+    for (const _bf of ['isRealHomepage', 'fullyRendered', 'templateUntouched', 'desktopOnlyLayout', 'photosLookCheap', 'looksCredible']) {
+      if (parsed[_bf] === 'true') parsed[_bf] = true;
+      else if (parsed[_bf] === 'false') parsed[_bf] = false;
+    }
+    return parsed;
+  } catch (e) {
+    console.log(`visionSiteLooks failed (non-fatal): ${(e && e.message) || e}`);
     return null;
   }
 };
@@ -63661,6 +63885,159 @@ app.listen(PORT, () => {
     console.log(`\u26d4 WEBSITE BUILD CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
 
+  // ---- ROUND 141: THE SECOND VERDICT, AND THE FIRST ONE LEFT ALONE -------
+  // Vin, 2026-09-11: "a toggle switch that just picks up businesses with fair
+  // and bad websites ... so we have to make sure the website grading signal is
+  // accurate." The grade above cannot serve that toggle - 19 of its 34 points
+  // are invisible to a human being, and missing schema alone (5) crosses
+  // strong into fair - so a SECOND verdict is read off a picture of the page.
+  //
+  // The assertion this check exists for is the one in the middle: THE
+  // TECHNICAL GRADE IS UNCHANGED. site.word, site.gap and site.faults feed the
+  // audit's findings and the Find score, and a round that quietly moved them
+  // would change what a live email claims about a real business. So the grader
+  // is EXECUTED here on two fixtures and its numbers are pinned, beside the new
+  // verdict's own fixtures and the call sites that carry it.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _src = selfSourceNoCommentsLF();
+    const _body = 'We install and repair roofs across the whole metro area and we answer the phone ourselves. Call today for a free estimate on your roof. '.repeat(12);
+    const _homeHtml = (withSchema) => '<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width">'
+      + '<title>Roof Repair in Dallas | Pinned Roofing</title>'
+      + (withSchema ? '<script type="application/ld+json">{"@type":"RoofingContractor","name":"Pinned Roofing","telephone":"214-555-0100","address":{"@type":"PostalAddress","addressLocality":"Dallas"}}</script>' : '')
+      + '</head><body><a href="tel:2145550100">Call</a><a href="/about">About</a><a href="/contact">Contact</a>'
+      + '<form action="/enquire"><input name="e"></form>'
+      + '<img src="a.jpg" alt="a new roof"><img src="b.jpg" alt="a crew"><img src="c.jpg" alt="shingles"><img src="d.jpg" alt="a finished job">'
+      + '<p>' + _body + '</p><p>&copy; ' + new Date().getFullYear() + ' Pinned Roofing</p></body></html>';
+    const _pages = (withSchema) => [
+      { url: 'https://pinned.com/', intent: 'home', text: _body, html: _homeHtml(withSchema) },
+      { url: 'https://pinned.com/contact', intent: 'contact', text: _body, html: '<html><body>' + _body + '<form><input></form></body></html>' },
+    ];
+    const _grade = (withSchema) => readSiteBuild({ pages: _pages(withSchema), website: 'https://pinned.com/',
+      companyName: 'Pinned Roofing', city: 'Dallas, TX', trade: 'Roofing', robots: 'User-agent: *\nAllow: /' });
+
+    // ── 1. THE BLAST RADIUS. Executed, and pinned to exact numbers. ────────
+    const _keep = _grade(true);
+    if (_keep.measured !== true || _keep.gap !== 0 || _keep.word !== 'strong' || _keep.faults.length !== 0 || _keep.grade !== 10) {
+      _fails.push(`the technical website grade MOVED on a clean build: gap ${_keep.gap}/${_keep.word}/${_keep.grade} on ${_keep.faults.map(f => f.id).join(',') || 'no faults'} where it has always been 0/strong/10 on none - every audit finding and the Find score read these three`);
+    }
+    // The whole of Vin's complaint, executed: one invisible fault, five points,
+    // and the band the toggle would have collected on.
+    const _oneFault = _grade(false);
+    if (_oneFault.faults.length !== 1 || _oneFault.faults[0].id !== 'noSchema' || _oneFault.gap !== 5) {
+      _fails.push(`the same page with only its schema removed reads as ${_oneFault.faults.map(f => f.id).join(',') || 'no faults'} at gap ${_oneFault.gap}, not as noSchema at 5 - the technical grade has been rewritten underneath the audit`);
+    }
+    if (_oneFault.word !== 'fair') {
+      _fails.push(`missing schema alone now grades "${_oneFault.word}" rather than "fair" - the bands moved, and the audit's findings and the rep's cell both read that word`);
+    }
+    // The visual verdict is attached by the ROUTE, never by the grader: the
+    // grader stays pure over markup we already hold, which is what makes it
+    // free and what keeps it out of this round's way.
+    if ('looks' in _keep) _fails.push('the markup grader is now producing the visual verdict itself, so one function decides both and the audit can no longer be changed without changing the toggle');
+    if (/visionSiteLooks|fcHomeShot/.test(String(readSiteBuild))) _fails.push('the free markup read now renders or looks at a picture - it must stay pure over markup already in hand');
+
+    // ── 2. THE NEW VERDICT, EXECUTED, IN EVERY DIRECTION ───────────────────
+    const _eyes = (o) => Object.assign({ isRealHomepage: true, fullyRendered: true, designEra: 'current',
+      templateUntouched: false, desktopOnlyLayout: false, photosLookCheap: false, looksCredible: true,
+      whatAVisitorSees: 'a clean page with a photograph of a crew and a quote button' }, o || {});
+    const _modern = readSiteLooks(_eyes());
+    if (_modern.looks !== 'modern' || _modern.measured !== true) _fails.push(`a current design with nothing wrong with it reads as "${_modern.looks}"`);
+    const _dated = readSiteLooks(_eyes({ designEra: 'old' }));
+    if (_dated.looks !== 'dated') _fails.push(`a design a visitor can see is years out of date reads as "${_dated.looks}"`);
+    const _bad = readSiteLooks(_eyes({ designEra: 'old', templateUntouched: true, looksCredible: false }));
+    if (_bad.looks !== 'bad') _fails.push(`an old, untouched template a stranger would not trust reads as "${_bad.looks}"`);
+    if (!/out of date/.test(_bad.why) || !/template/.test(_bad.why)) _fails.push('the visual verdict names no reason a person could check, so the rep is handed a word and nothing behind it');
+    // THE RULING (Vin): an unreadable site is KEPT and marked unknown, and
+    // unknown must never be mistakable for modern.
+    for (const [_v, _what] of [
+      [null, 'no picture at all'],
+      [_eyes({ isRealHomepage: false }), 'a block or error page'],
+      [_eyes({ fullyRendered: false }), 'a page caught still loading'],
+      [_eyes({ designEra: '' }), 'a model that answered nothing about the design'],
+    ]) {
+      const _u = readSiteLooks(_v);
+      if (_u.looks !== 'unknown' || _u.measured !== false) _fails.push(`${_what} produces "${_u.looks}" (measured ${_u.measured}) instead of an unmeasured unknown - "we could not look" would be read as "it looks fine"`);
+    }
+    if (readSiteLooks(null).looks === readSiteLooks(_eyes()).looks) _fails.push('a site nobody looked at and a site that looked fine produce the same word');
+    // An absent answer is not a fault: only an explicit one may score.
+    if (readSiteLooks({ isRealHomepage: true, fullyRendered: true, designEra: 'current' }).looks !== 'modern') {
+      _fails.push('a model that answered the design question and skipped the rest is scoring faults it never reported');
+    }
+    for (const _w of [_modern.looks, _dated.looks, _bad.looks, readSiteLooks(null).looks]) {
+      if (!SITE_LOOKS_WORDS.includes(_w)) _fails.push(`the visual verdict produced "${_w}", which is not one of the ${SITE_LOOKS_WORDS.length} declared words the row and the toggle know`);
+    }
+    for (const t of SITE_LOOKS_FAULTS) {
+      if (!(t.points > 0) || !t.say || !t.id) _fails.push(`the visual fault "${t.id}" is declared without its points or its sentence`);
+      if (/schema|alt text|robots|noindex|title tag/i.test(t.say)) _fails.push(`the visual fault "${t.id}" is describing something invisible - those already have a home in the markup grade`);
+    }
+
+    // ── 3. WHO PAYS FOR A RENDER, EXECUTED ────────────────────────────────
+    const _full = { notIcp: false, website: 'https://pinned.com', pagesRead: 3, fcKey: 'k', apiKey: 'a', setting: 'on' };
+    if (siteLooksBuy(_full).render !== true) _fails.push('a kept lead with a readable site and both keys buys no render, so the toggle has nothing to read on any lead');
+    const _dropped = siteLooksBuy(Object.assign({}, _full, { notIcp: true }));
+    if (_dropped.render !== false || _dropped.reason !== 'dropped') _fails.push('a lead already DROPPED as a franchise, a branch or a chain still buys a picture of its homepage - the drop exists to stop the spend after it');
+    const _refusals = [
+      [{ setting: 'off' }, 'off'],
+      [{ website: '' }, 'nosite'],
+      [{ fcKey: '' }, 'nokey'],
+      [{ apiKey: '' }, 'nomodel'],
+      [{ pagesRead: 0 }, 'sitedown'],
+    ];
+    for (const [_o, _reason] of _refusals) {
+      const _r = siteLooksBuy(Object.assign({}, _full, _o));
+      if (_r.render !== false || _r.reason !== _reason) _fails.push(`a lead that should refuse the render as "${_reason}" answered ${_r.render ? 'buy' : _r.reason}`);
+      if (!_r.why) _fails.push(`the render was refused as "${_reason}" and the row is told nothing about why nobody looked`);
+    }
+    // Every refusal says something different, or the row cannot tell a lead we
+    // chose not to look at from one whose site was down.
+    const _whys = new Set(_refusals.map(([_o]) => siteLooksBuy(Object.assign({}, _full, _o)).why));
+    if (_whys.size !== _refusals.length) _fails.push('two different reasons for not looking at their homepage print the same sentence');
+
+    // ── 4. THE CALL SITES, assembled at runtime ───────────────────────────
+    // ONE needle for the buy, split so that NEITHER half contains the whole:
+    // the first cut of this check wrote the same text twice at two different
+    // split points, and the ordering scan below found the other one's literal
+    // half in this check's own source and reported the render sitting 20,000
+    // lines earlier than it does. The twenty-second self-matching needle here.
+    const _buyNeedle = _n('const _buy = siteLooksBuy({ notIcp: out.notIcp', ' === true, website, pagesRead: pages.length,');
+    for (const [_needle, _msg] of [
+      [_buyNeedle, 'the render no longer reads whether this lead was already dropped, so a franchise, a branch outlet and a chain network each pay for a picture of a homepage nobody will ever call'],
+      [_n('out.site.looks = _looksSaw', '.looks;'), 'the visual verdict is computed and never reaches the lead - computed-but-not-passed, the class this file produces most'],
+      [_n('out.site.looksMeasured = _looksSaw.measured', ' === true;'), 'whether anybody actually looked no longer travels, so unknown and modern arrive identical'],
+      [_n('leadCapRefuse(', "'the homepage render')"), 'the render is bought past the per-lead credit ceiling, and the row cannot say it was skipped'],
+      [_n('const _shot = await fcHomeShot(website,', ' fcKey);'), 'the homepage render is no longer taken, so nothing has looked at the page'],
+      [_n('await visionSiteLooks(_shot.shot,', ' name, apiKey)'), 'the picture is bought and nothing looks at it - a credit spent and discarded'],
+      [_n('render: Math.round(_renderCredits', ' * 100) / 100,'), "the render's share of the Firecrawl bill never reaches the spend, so the 1-versus-5 credit rate cannot be settled from a batch"],
+      [_n('(${out.spend.render} of them the homepage', ' render)'), 'the FIND CONTACT footer no longer prints what the render cost this lead'],
+      [_n('${out.spend.render} of them on a homepage render,', ' rather than'), 'the drop line no longer prints the render cost of a dropped lead, which is the line that shows it is zero'],
+      [_n('contactSiteLooks: (d.site && SITE_LOOKS_WORDS.includes(d.site.looks))', " ? d.site.looks : 'unknown',"), 'the visual verdict never reaches the row the client reads, so the fair-and-bad toggle has nothing to filter on'],
+      [_n('formats: [', "'screenshot'], onlyMainContent: false, waitFor: 3000,"), 'the render asks for something other than one picture of the first screen, so it is priced as a page read or costs more than it needs to'],
+      [_n("fcNote(true, 'scrape+screenshot',", ' _url, true);'), 'the homepage render is not filed as a RENDER, so it is billed at the plain scrape rate and byKind.screenshot cannot settle the real one'],
+    ]) if (!_src.includes(_needle)) _fails.push(_msg);
+    // Through fcCall, like every other outbound Firecrawl call, and named to
+    // the model meter, like every other Anthropic call.
+    if (!/fcCall\(/.test(String(fcHomeShot))) _fails.push('the homepage render does not go through fcCall, so it is outside the pacing, the retry and the per-endpoint gate every other Firecrawl call sits behind');
+    if (String(visionSiteLooks).indexOf(_n('site-', 'looks')) < 0) _fails.push('the visual read no longer names itself to the spend meter, so it prints as "anthropic" and the cost line cannot say which call it is');
+
+    // ── 5. AND IT SITS WHERE IT CANNOT SPEND ON A LEAD ALREADY DROPPED ────
+    const _iFranchise = _src.indexOf(_n('out.icpReason = out.tells', '.reason;'));
+    const _iOutlet = _src.indexOf(_n("out.notIcp = true; out.icpReason = 'chain'; out.icpWhy = out.outlet", '.why;'));
+    const _iBuy = _src.indexOf(_buyNeedle);
+    const _iWave = _src.indexOf(_n('const dm = await findDecisionMaker', '({'));
+    if (_iFranchise < 0 || _iOutlet < 0 || _iBuy < 0 || _iWave < 0) {
+      _fails.push('the order of the drops, the render and the paid owner wave cannot be read from this file any more, so nothing here is asserting where the spend sits');
+    } else {
+      if (!(_iOutlet < _iBuy) || !(_iFranchise < _iBuy)) _fails.push('the render is bought BEFORE the branch and franchisee drops have run, so a chain outlet pays for a picture of a homepage nobody will ever call');
+      if (!(_iBuy < _iWave)) _fails.push('the render sits after the paid owner wave, so a lead that drops between them has already bought both');
+    }
+
+    if (_fails.length) console.log(`⛔ SITE LOOKS CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
+    else console.log(`✓ SITE LOOKS CHECK: the website now carries TWO verdicts and this check exists to keep them apart. The technical one is executed and pinned - a clean build still reads gap 0, strong, ${_keep.grade} of 10, and the same page with only its schema removed still reads noSchema at 5 and the word "fair", which is exactly the defect Vin asked about: one fault no visitor and no owner can see, crossing a band. Nothing in the audit's findings or the Find score moves. The NEW verdict is read off one render of the first screen by one cheap model call and says ${SITE_LOOKS_WORDS.join(' / ')}: a current page is modern, a plainly old one is dated, an old untouched template a stranger would not trust is bad, and a picture nobody took, a block page, a shot caught mid-load and a model that answered nothing are all UNKNOWN and measured false - kept, never dropped, and never mistakable for a site that passed. Five refusals (dropped, switched off, no website, no key, site down) each name themselves in their own words, the drop is tested FIRST, and the source order proves the render sits after the branch and franchisee drops and before the paid owner wave. FIND_SITE_LOOKS=${FIND_SITE_LOOKS}; the picture is priced through fcCreditCost at ${fcCreditCost('scrape+screenshot', true)} credit(s) and printed on the FIND CONTACT footer, which is how the 1-versus-5 rate gets settled against the dashboard. HONEST SHAPE: no render has been taken against a live business from this build - the verdict's mapping is proven here, what the model answers about a real homepage is not.`);
+  } catch (e) {
+    console.log(`⛔ SITE LOOKS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
   // ══ ROUND 131: THE ADDRESS THAT IS ONLY EVER IN AN href ══════════════════
   // Disclosed in Round 130 as a yield risk and left open. The free pages carry
   // TEXT, and the tags are gone by then, so a business whose only published
@@ -84390,6 +84767,14 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   } else if (website) {
     console.log(`\u{1F5A5} SITE [${name}]: not judged — ${out.site.why}. Nothing about their build is claimed either way.`);
   }
+  // The visual verdict exists on EVERY lead from this line on, set to unknown
+  // until something has actually looked. A field that appears only on the leads
+  // that were rendered reads as false on every other one, and this file records
+  // unmeasured-treated-as-zero more often than any other class.
+  out.site.looks = 'unknown';
+  out.site.looksMeasured = false;
+  out.site.looksWhy = 'nobody has looked at their homepage yet on this lead';
+  out.site.looksFaults = [];
   // ══ ROUND 139 (Vin, 2026-09-11): A NONPROFIT IS KEPT AND WORKED ════════
   // This sat in the same seat as the chain read and DROPPED the lead, on the
   // reasoning that a nonprofit has no owner whose own money is on the line.
@@ -84429,6 +84814,52 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   out.product = readProductCompanyTells({ pages, links });
   signals.productCompany = out.product.isProduct === true;
   if (signals.productCompany) notes.push(`a product company - ${out.product.why}. Kept as an email lead: the phone is a sales line, not the founder's desk.`);
+
+  // ══ AND WHAT DOES IT LOOK LIKE TO SOMEBODY STANDING IN FRONT OF IT? ══════
+  // Vin, 2026-09-11, asking for a toggle that collects only the businesses with
+  // fair and bad websites. The read above is markup and cannot answer that: on
+  // the ten-lead run of the same day, three leads graded "fair" on missing
+  // schema alone - a fault no visitor and no owner can see - and the one large
+  // looks-old fault fired on none of the ten, including a site this system had
+  // itself called poor.
+  //
+  // So: ONE render of the first screen, one cheap model call to look at it, and
+  // a SECOND verdict. site.word, site.gap and site.faults are untouched - they
+  // feed the audit's findings and the Find score, and a round that quietly
+  // moved them would change what a live email claims about a real business.
+  //
+  // It sits HERE, after every free drop and before the paid owner wave, for the
+  // reason the chain read states in the same function: a franchise, a branch
+  // outlet and a chain network are all already marked by this line, and a lead
+  // we have decided not to keep may not buy a picture of its homepage.
+  let _renderCredits = 0;
+  let _looksSaw = readSiteLooks(null);
+  {
+    const _buy = siteLooksBuy({ notIcp: out.notIcp === true, website, pagesRead: pages.length,
+      fcKey, apiKey, setting: FIND_SITE_LOOKS });
+    if (!_buy.render) {
+      _looksSaw = readSiteLooks(null, _buy.why);
+    } else if (leadCapRefuse('the homepage render')) {
+      _looksSaw = readSiteLooks(null, `no picture of their homepage was bought - this lead had already spent its ${FIND_LEAD_CREDIT_CAP} Firecrawl credits`);
+    } else {
+      const _shot = await fcHomeShot(website, fcKey);
+      _renderCredits += Number(_shot.credits) || 0;
+      _looksSaw = _shot.shot
+        ? readSiteLooks(await visionSiteLooks(_shot.shot, name, apiKey),
+            'we rendered their homepage and the read of it came back empty, so how it looks is unmeasured')
+        : readSiteLooks(null, _shot.why);
+    }
+  }
+  out.site.looks = _looksSaw.looks;
+  out.site.looksMeasured = _looksSaw.measured === true;
+  out.site.looksWhy = _looksSaw.why;
+  out.site.looksFaults = Array.isArray(_looksSaw.faults) ? _looksSaw.faults : [];
+  if (out.site.looksMeasured) {
+    console.log(`\u{1F441} SITE LOOKS [${name}]: ${out.site.looks} to a visitor — ${out.site.looksWhy}. The code read is a separate verdict and still says ${out.site.measured ? out.site.word : 'not judged'}; this one is what the fair-and-bad toggle collects on.`);
+  } else if (!out.notIcp) {
+    console.log(`\u{1F441} SITE LOOKS [${name}]: unknown — ${out.site.looksWhy}. Unknown is not modern: this lead is kept and the toggle is told nobody looked, rather than being shown a site that passed.`);
+    if (website) notes.push(`nobody has seen what their website looks like — ${out.site.looksWhy}. That is a gap in what we looked at, not a finding about them.`);
+  }
 
 
   // ══ A LEAD WITH NO GOOGLE LISTING GETS THE SAME READ ══════════════════════
@@ -85022,6 +85453,11 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   out.spend = {
     firecrawl: Math.round((led.spent || 0) * 100) / 100,
     anthropicUsd: Math.round((led.anthropicUsd || 0) * 10000) / 10000,
+    // Round 141: the render's OWN share, so the 1-versus-5 credit question the
+    // dial has carried as a guess since §48 is settled by adding this
+    // column across a batch and reading the dashboard's delta beside it. Priced
+    // through fcCreditCost like everything else, never a typed number.
+    render: Math.round(_renderCredits * 100) / 100,
   };
   // Round 121 (Vin: "cap it, and say so on the row"). A lead that stopped
   // buying says so, and names what it did not buy - so a batch answers whether
@@ -85044,7 +85480,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   out.tookMs = Date.now() - t0;
   if (out.notIcp) {
     const _dropAs = ({ nonprofit: 'as a nonprofit', owned: 'as a business somebody else owns', franchise: 'as a franchisee', national: 'as a national operator' })[out.icpReason] || 'as a branch of a larger operation';
-    console.log(`\u{1F517} FIND CONTACT [${name}]: DROPPED ${_dropAs} \u2014 ${out.icpWhy}. Stopped before the owner wave and the address lookup, so this cost ${out.spend.firecrawl} Firecrawl credit(s) rather than the ~8-16 a full read costs. The site read was already spent and cannot be refunded; everything after it can.`);
+    console.log(`\u{1F517} FIND CONTACT [${name}]: DROPPED ${_dropAs} \u2014 ${out.icpWhy}. Stopped before the owner wave and the address lookup, so this cost ${out.spend.firecrawl} Firecrawl credit(s), ${out.spend.render} of them on a homepage render, rather than the ~8-16 a full read costs. The site read was already spent and cannot be refunded; everything after it can.`);
     return out;
   }
   // == WHAT THE PAID WAVE COST, AGAINST WHAT THE FREE READ HAD ============
@@ -85091,7 +85527,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
       + (_ownerWaveLectured ? '' : ' Grep this line across a batch: how often the free sources alone produce a buyer IS the free-settle rate, and that rate is what decides the Firecrawl plan. The searches: line names WHICH paid search ran, so the next round cuts on evidence rather than on a hunch.'));
     _ownerWaveLectured = true;
   }
-  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | address source ${_addressSource} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s), $${out.spend.anthropicUsd.toFixed(4)} of model, ${verifierLeadSpendSay(_ledFrame ? (Number(_ledFrame.verifier) || 0) : null)}, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerHeadOffice === true ? 'FREE STAGE ONLY (a branch of a bigger operation - the signer is at head office)' : out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
+  console.log(`\u{1F4C7} FIND CONTACT [${name}]: ICP ${out.icp.score === null ? 'not scored' : out.icp.score + '/100'} (${out.icp.measured} of ${out.icp.of} signals) | owner ${(out.owner && out.owner.name) || 'none'} | email ${(out.email && out.email.address) ? (out.email.sendable ? out.email.address : `${out.email.address} (BLOCKED: ${out.email.blockReason || out.email.grade || 'not sendable'})`) : 'none'} | address source ${_addressSource} | phone ${out.phone || 'none'} | size ${(out.size && out.size.band) || 'not measured'} | target ${out.target || 'none'} | lane ${laneWord(out.lanes)} | ${out.spend.firecrawl} Firecrawl credit(s) (${out.spend.render} of them the homepage render), $${out.spend.anthropicUsd.toFixed(4)} of model, ${verifierLeadSpendSay(_ledFrame ? (Number(_ledFrame.verifier) || 0) : null)}, ${Math.round(out.tookMs / 1000)}s | owner lookup: ${out.paidOwnerHeadOffice === true ? 'FREE STAGE ONLY (a branch of a bigger operation - the signer is at head office)' : out.paidOwnerLookup === false ? 'FREE STAGE ONLY (the paid search is switched off in Settings)' : 'free stage, then the paid search if it did not settle'}`);
   return out;
 };
 
@@ -85377,6 +85813,14 @@ const contactFieldsFrom = (data) => {
     contactSiteMeasured: !!(d.site && d.site.measured === true),
     contactSitePlatform: (d.site && d.site.platform) || '',
     contactSiteGrade: (d.site && typeof d.site.grade === 'number') ? d.site.grade : null,
+    // Round 141: the SECOND verdict, kept apart from the first. The four words
+    // are the only ones readSiteLooks can produce, and 'unknown' is one of them
+    // on purpose - a lead nobody rendered must never arrive looking like a lead
+    // that was rendered and passed.
+    contactSiteLooks: (d.site && SITE_LOOKS_WORDS.includes(d.site.looks)) ? d.site.looks : 'unknown',
+    contactSiteLooksMeasured: !!(d.site && d.site.looksMeasured === true),
+    contactSiteLooksWhy: (d.site && d.site.looksWhy) || '',
+    contactSpendRender: (d.spend && typeof d.spend.render === 'number') ? d.spend.render : 0,
     contactLayers: (d.layers && d.layers.verdict) || '',
     contactTarget: d.target || '',
     contactTargetWhy: d.targetWhy || '',

@@ -241,6 +241,11 @@ const persistedFieldsFrom = (l) => ({
       contactOnly: l.contactOnly ?? null,
       contactRank: l.contactRank ?? null,
       contactRankWhy: l.contactRankWhy ?? null,
+      // Round 141: the website-looks verdict. Measured once, on a paid read,
+      // and the toggle that reads it is worthless the moment a reload blanks
+      // it - the same shape as reachPredict and the other five above.
+      contactSiteLooks: l.contactSiteLooks ?? null,
+      contactSiteLooksWhy: l.contactSiteLooksWhy ?? null,
       // ── THE AUDIT'S OWN CONTEXT ──────────────────────────────────────
       // auditedWebsite and domainMatch were merged onto the lead and never
       // saved, so after a reload the Research tab reported "No website audited
@@ -916,6 +921,8 @@ const rowToLead = (r) => ({
   contactOnly: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactOnly) === true,
   contactRank: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactRank) ?? null,
   contactRankWhy: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactRankWhy) || '',
+  contactSiteLooks: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactSiteLooks) || '',
+  contactSiteLooksWhy: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactSiteLooksWhy) || '',
   auditedWebsite: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.auditedWebsite) ?? null,
   homepageContent: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.homepageContent) || '',
   valueEquation: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.valueEquation) || null,
@@ -1341,7 +1348,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261016;
+const CLIENT_CONTRACT = 20261017;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5657,6 +5664,50 @@ const siteCell = (c) => !c.contactReadOk ? ''
 // be the absence claim this whole read exists to refuse.
 const siteGradeCell = (c) => (!c.contactReadOk || c.contactSiteMeasured !== true
   || typeof c.contactSiteGrade !== 'number') ? '' : String(c.contactSiteGrade);
+
+// ══ ROUND 141: WHAT A VISITOR SEES IS NOT WHAT THE GRADE MEASURES ═════════
+// Vin, 2026-09-11: "the only adjustment I want to make is a toggle switch
+// that just picks up businesses with fair and bad websites - like if I toggle
+// that on we only target businesses with bad websites."
+//
+// It cannot be built on contactSiteWord above. That verdict is 56% faults
+// nobody can see - schema tags, alt text, robots.txt - so on the run of
+// 2026-09-11 three leads graded "fair" on nothing a human could look at and 7
+// of 10 landed in the one bucket. A toggle reading it would hand the rep a
+// list chosen by invisible markup. So there is a SECOND verdict,
+// contactSiteLooks, measured by rendering their homepage and looking at it:
+// modern / dated / bad / unknown. The two are never mixed: the grade feeds
+// the audit, this feeds the toggle.
+//
+// "unknown" is the one that decides whether this filter is honest. It means we
+// could not look - the page would not load, or it paints itself with
+// JavaScript - and Vin ruled that such a lead is KEPT and marked, never
+// hidden. Never-looked is not looks-fine. A lead carrying no verdict at all
+// (an older read, a lead nobody has read yet) is in the same state and answers
+// the same way here.
+const SITE_LOOKS = ['modern', 'dated', 'bad', 'unknown'];
+const siteLooksOf = (c) => {
+  const v = String((c && c.contactSiteLooks) || '').toLowerCase();
+  return SITE_LOOKS.indexOf(v) >= 0 ? v : 'unknown';
+};
+// The words, in one place. "not checked" is the house wording for a signal we
+// do not hold (contactYesNo says it the same way): it is the absence of a
+// verdict about their website, never a verdict that their website is bad.
+const SITE_LOOKS_SAY = { modern: 'looks modern', dated: 'looks dated', bad: 'looks bad', unknown: 'site not checked' };
+// Empty on a lead nobody read, exactly as siteCell is: a row we never looked
+// at claims nothing at all.
+const siteLooksCell = (c) => (!c || c.contactReadOk !== true) ? '' : SITE_LOOKS_SAY[siteLooksOf(c)];
+// The toggle's rule, read by the rows, by the count of what they hid and by
+// nothing else: everything except a site we looked at and found modern. Two
+// hand-kept copies of one rule is the class this repo records most.
+const siteLooksWanted = (c) => siteLooksOf(c) !== 'modern';
+const siteLooksFilter = (leads, on) => on === true ? (leads || []).filter(siteLooksWanted) : (leads || []).slice();
+const siteLooksHidden = (leads, on) => (leads || []).length - siteLooksFilter(leads, on).length;
+// A filter that silently shrinks a list is how somebody concludes a press
+// returned nothing. Same shape as exportWithheldSay: how many, why, and how to
+// get them back.
+const siteLooksHiddenSay = (n) => !Number(n) ? ''
+  : Number(n) + ' row(s) are hidden because their website looks modern. Untick "bad websites only" to see them.';
 // Round 117: a name and one flag of three words, nothing else. The title is
 // already its own lean column (marketingLeadTitle / ownerTitle), the owner is
 // already the owner column, and the provenance moved to the website cell - so
@@ -5814,7 +5865,17 @@ const FIND_CSV_COLUMNS = [
   ['sizeConfidence', 'How sure we are of the size'],
   // Round 118: how much of the website work we sell is missing.
   ['site', 'Their website (strong / fair / weak / poor)'],
+  // Round 141: the second verdict, and the one the toggle filters on. The
+  // column is LEAN because the rows in the file were chosen by it - a sheet
+  // filtered on a signal it does not print is a list a rep cannot check.
+  ['siteLooks', 'What their website looks like to a visitor (modern / dated / bad)'],
   ['siteWhy', 'What is missing from their website, in full'],
+  // Round 141: the REASON behind the visitor verdict, and the column that
+  // makes the verdict auditable. Vin's ask was "make sure the website
+  // grading signal is accurate" - which nobody can check from a one-word
+  // answer. Full set, same as siteWhy beside site: the short word rides the
+  // lean file, the sentence is one tick away.
+  ['siteLooksWhy', 'Why their website looks that way to a visitor, in full'],
   ['target', 'Who to go to'],
   // Round 117: the sentence the short cell replaced. Full file only.
   ['targetWhy', 'Why that person, in full'],
@@ -5945,7 +6006,7 @@ const FIND_CSV_PREFIX = ['batchId', 'exportedDate', 'company', 'owner', 'ownerTi
 // declaration order below IS the emitted order, and the generated reference
 // executes findCsvColumns rather than transcribing either list.
 const FIND_CSV_ESSENTIAL = FIND_CSV_PREFIX.concat([
-  'icp', 'sizeConfidence', 'site', 'target', 'marketingLead', 'marketingLeadTitle',
+  'icp', 'sizeConfidence', 'site', 'siteLooks', 'target', 'marketingLead', 'marketingLeadTitle',
   'marketingLeadEmail', 'siteGrade',
   // exported is lean because it answers the one question the file could not:
   // has this row already been handed out.
@@ -6150,6 +6211,8 @@ const findContactRows = (companies) => {
     size: sizeCell(c),
     sizeConfidence: c.contactReadOk ? (c.contactSizeConfidence || 'unknown') : '',
     site: siteCell(c),
+    siteLooks: siteLooksCell(c),
+    siteLooksWhy: !c.contactReadOk ? '' : (c.contactSiteLooksWhy || ''),
     siteWhy: !c.contactReadOk ? '' : (c.contactSiteWhy || ''),
     target: targetCell(c),
     targetWhy: targetWhyCell(c),
@@ -6475,6 +6538,11 @@ const leadFromCompany = (company) => {
       contactOwnerCanBuy: company.contactOwnerCanBuy === true,
       contactSize: company.contactSize || '',
       contactSizeConfidence: company.contactSizeConfidence || '',
+      // Round 141: what their website LOOKS like, carried with the rest of
+      // the read. A field returned by the server and read by nothing is the
+      // class this repo records most, and this one decides a filter.
+      contactSiteLooks: company.contactSiteLooks || '',
+      contactSiteLooksWhy: company.contactSiteLooksWhy || '',
       contactLayers: company.contactLayers || '',
       contactTarget: company.contactTarget || '',
       contactTargetWhy: company.contactTargetWhy || '',
@@ -6780,6 +6848,10 @@ function FindView({
   // Screen B.
   const [batch, setBatch] = React.useState(null);      // { run, leads } or { missing: true }
   const [chip, setChip] = React.useState('email');
+  // Round 141, Vin's toggle. OFF by default and deliberately NOT saved with
+  // the rest of the view: a switch that hides businesses must be pressed on
+  // purpose, not remembered from last week.
+  const [looksOnly, setLooksOnly] = React.useState(false);
   const [sortBy, setSortBy] = React.useState('fit');
   const [picked, setPicked] = React.useState(() => new Set());
   // The archive.
@@ -7066,8 +7138,8 @@ function FindView({
   const readDisabled = !summary || unread === 0 || !!running || busy === 'read';
 
   // ── SCREEN B ───────────────────────────────────────────────────────────
-  function visibleOf(leads, chipKey, sort) {
-    const pick = batchChipFilter(leads, chipKey);
+  function visibleOf(leads, chipKey, sort, looksOnly) {
+    const pick = siteLooksFilter(batchChipFilter(leads, chipKey), looksOnly);
     const fit = (l) => (typeof l.contactIcp === 'number') ? l.contactIcp : -1;
     // Every state emailStatusOf can return has a rank here: a state missing
     // from this map ranks undefined and the whole comparison collapses to NaN,
@@ -7085,11 +7157,15 @@ function FindView({
     const leads = batch.leads || [];
     const stats = batchCardStats(leads);
     const counts = batchChipCounts(leads);
-    const rows = visibleOf(leads, chip, sortBy);
+    const rows = visibleOf(leads, chip, sortBy, looksOnly);
+    // The rows and the number the toggle removed come out of the SAME filter
+    // on the SAME base, so the count on screen can never be the size of a
+    // different set of rows - the rule the chips already follow.
+    const looksHidden = siteLooksHidden(batchChipFilter(leads, chip), looksOnly);
     const selectable = rows.filter(l => queueStateOf(l) === 'read' || queueStateOf(l) === 'failed');
     const sel = new Set(Array.from(picked).filter(id => selectable.some(l => l.id === id)));
     const allOn = selectable.length > 0 && selectable.every(l => sel.has(l.id));
-    const setChipAnd = (k) => { setChip(k); setPicked(new Set(visibleOf(leads, k, sortBy).filter(l => queueStateOf(l) === 'read').map(l => l.id))); };
+    const setChipAnd = (k) => { setChip(k); setPicked(new Set(visibleOf(leads, k, sortBy, looksOnly).filter(l => queueStateOf(l) === 'read').map(l => l.id))); };
     const chipEl = (k, label, n) => h('button', {
       onClick: () => setChipAnd(k),
       style: { fontFamily: 'Inter,sans-serif', fontSize: 11, padding: '4px 9px', borderRadius: 5, cursor: 'pointer',
@@ -7113,6 +7189,11 @@ function FindView({
       const fitColor = fit === null ? T.text3 : fit >= 70 ? T.lime : fit >= 40 ? T.text : T.text2;
       const who = l.contactOwner ? (l.contactOwner + (l.contactOwnerTitle ? ', ' + l.contactOwnerTitle : '')) : 'no owner named';
       const where = shortLocation(l.location);
+      // Round 141: what their website looks like, understated, beside where
+      // they are. A rep glancing down a filtered list can see why a business
+      // is in it, and a lead we could not look at says "site not checked".
+      const looks = siteLooksCell(l);
+      const looksWhy = String(l.contactSiteLooksWhy || '');
       // Two honest marks the old card carried and the sheet still does: a name
       // the read could not confirm, and pages that name a different business.
       const held = emailHeldBackOf(l);
@@ -7141,7 +7222,10 @@ function FindView({
         h('div', { style: { fontWeight: 500, color: fitColor } }, fit === null ? '—' : fit),
         h('div', { style: { minWidth: 0 } },
           h('div', { style: Object.assign({ color: nameColor }, ell) }, l.name || ''),
-          h('div', { style: Object.assign({ fontSize: 11, color: T.text3 }, ell) }, who + (where ? ' · ' + where : ''),
+          // Round 141: the verdict reads on the row, and the SENTENCE behind
+          // it is on hover. A one-word judgement nobody can question is the
+          // thing this round exists to replace, so the reason travels with it.
+          h('div', { title: looksWhy || undefined, style: Object.assign({ fontSize: 11, color: T.text3 }, ell) }, who + (where ? ' · ' + where : '') + (looks ? ' · ' + looks : ''),
             flags.length ? h('span', { style: { color: T.amberDim } }, ' · ' + flags.join(' · ')) : null)),
         h('div', { style: Object.assign({ fontSize: 10 }, ell) }, emailCell),
         h('div', { style: { textAlign: 'right' } }, action));
@@ -7161,6 +7245,14 @@ function FindView({
         h('div', { style: { display: 'flex', gap: 6, alignItems: 'center' } }, columnsToggle, btn('tertiary', 'CSV', () => exportCsv(rows), { disabled: !exportable.length || busy === 'csv' }))),
       h('div', { style: { padding: '11px 16px', borderBottom: '1px solid ' + T.borderSubtle, display: 'flex', gap: 5, flexWrap: 'wrap', alignItems: 'center', fontSize: 11 } },
         chipEl('email', 'Confirmed', counts.email), chipEl('company', 'Company mailbox', counts.company), chipEl('shared', 'Shared inbox', counts.shared), chipEl('sendable', 'Unconfirmed', counts.sendable), chipEl('held', 'Held back', counts.held), chipEl('noemail', 'No email', counts.noemail), chipEl('unreadable', 'Could not check', counts.unreadable), chipEl('all', 'All', counts.all), chipEl('fit', 'Fit 70+', counts.fit),
+        // ══ ROUND 141: THE TOGGLE ══════════════════════════════════════
+        // Built exactly as the "include exported" tick box is built (same
+        // _toggleStyle, same box glyph, same amber when it is on), and seated
+        // in the chip row because it filters ROWS on the screen, not the file.
+        h('button', { onClick: () => setLooksOnly(v => !v),
+          style: Object.assign({}, _toggleStyle, looksOnly ? { color: T.amber, borderColor: T.amber } : null),
+          title: 'Only businesses whose website looks dated or bad to a visitor. A site we could not look at is kept and marked "site not checked", never hidden.',
+        }, (looksOnly ? '\u2611' : '\u2610') + ' bad websites only'),
         h('div', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 } },
           h('span', { style: { color: T.text2 } }, 'Sort'),
           h('select', { value: sortBy, onChange: e => setSortBy(e.target.value),
@@ -7169,6 +7261,7 @@ function FindView({
       h('div', { style: Object.assign({}, grid, { padding: '9px 16px 7px', borderBottom: '1px solid ' + T.borderSubtle, fontSize: 10, letterSpacing: '.06em', color: T.text3 }) },
         box(allOn, () => setPicked(allOn ? new Set() : new Set(selectable.map(l => l.id))), !selectable.length),
         'FIT', 'BUSINESS', 'EMAIL', ''),
+      looksHidden ? h('div', { style: { padding: '8px 16px', borderBottom: '1px solid ' + T.rowDivider, fontSize: 11, color: T.amberDim } }, siteLooksHiddenSay(looksHidden)) : null,
       rows.length ? rows.map(row) : h('div', { style: { padding: '18px 16px', fontSize: 12, color: T.text3 } }, 'Nothing under this filter.'),
       h('div', { style: { background: T.surface, borderTop: '1px solid ' + T.border, padding: '12px 16px', display: 'flex', gap: 7, flexWrap: 'wrap', alignItems: 'center' } },
         h('span', { style: { fontSize: 12, color: T.text2 } }, sel.size ? h(React.Fragment, null, h('span', { style: { color: T.text, fontWeight: 500 } }, sel.size), ' selected') : 'Nothing selected'),
