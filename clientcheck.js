@@ -2766,7 +2766,26 @@ let contactTally = null;
               // either way. A guard no fixture can reach is the class this repo
               // records, and this round created one for an hour.
               { contactEmail: 'lucas@b.com', contactEmailGrade: 'published_personal', contactEmailSendable: true, contactEmailTier: 1 },
+              // Round 136, shape 9: the SMTP-verified COMPANY mailbox. Live
+              // 2026-09-10, contact@coloradoinjurylaw.com sat under Confirmed
+              // beside jeff@thebentonlawfirm.com; one is the man's own desk and
+              // one is his firm's front desk, and the grader returned
+              // smtp_confirmed for both on its fourth line. Vin, 2026-09-11:
+              // "we should never email shared inbox unless its a very small
+              // crew" - a rule the rep cannot follow if the row will not say
+              // which kind of mailbox it is holding.
+              { contactEmail: 'contact@b.com', contactEmailGrade: 'company_mailbox', contactOwner: 'Keith Fuicelli', contactEmailSendable: true, contactEmailTier: 2, contactEmailCompanyMailbox: true },
+              // Round 136, shape 10: a graded row the two halves used to split
+              // on. The server has had `if (g) return false` since Round 133;
+              // the page kept a wider tier fallback that called any sendable
+              // tier-1/2 row verified. Nothing reached it THROUGH the grader,
+              // which is exactly why it survived - an unreachable divergence
+              // still reads as agreement. This fixture makes it reachable, the
+              // same lesson shape 8 was added for one round earlier.
+              { contactEmail: 'a@b.com', contactEmailGrade: 'catch_all', contactEmailSendable: true, contactEmailTier: 2 },
             ];
+            if (M.emailStatus(_shapes[9]) !== 'company') fails.push('an SMTP-verified COMPANY mailbox does not read "company" on the review screen, so the firm\u2019s front desk is shown to the rep as the owner\u2019s own desk and Vin\u2019s small-crew rule cannot be applied at all');
+            if (M.emailStatus(_shapes[10]) === 'verified') fails.push('a graded row the server refuses to call verified still reads Confirmed on the page, so the batch card count and the review filter are two different numbers again');
             if (M.emailStatus(_shapes[8]) !== 'shared') fails.push('a personal mailbox on a lead where nobody was named still reads Confirmed on the review screen, so the rep is told he has the owner and cannot say who');
             if (M.emailStatus(_shapes[0]) !== 'verified' || M.emailStatus(_shapes[1]) !== 'verified') fails.push('a published personal or SMTP-confirmed address is not "verified" on the review screen');
             if (M.emailStatus(_shapes[2]) !== 'unverified') fails.push('an address the checker never confirmed shows as verified - the unmeasured-as-measured class, on the one column the rep moves on');
@@ -3687,7 +3706,11 @@ let contactTally = null;
     ["findApi('/api/read-runs/' + encodeURIComponent(id) + '/leads')", "", 'Screen B never loads a batch'],
     // Round 129: the card prints what can be sent to, and the bulk move offers
     // that same set. Either one back on the confirmed count is the live defect.
-    ["stats.withEmail + ' confirmed · ' + stats.sharedInbox + ", "' shared inbox · ' + stats.sendableOnly + ' more we can send to · ' + stats.heldBack + ' held back'", 'the batch card does not print the four counters the chips below it show, so a run of sendable or shared addresses still reads as no email at all'],
+    // Round 136 RE-AIMED, not retired: the card gained a fifth counter when the
+    // company mailbox stopped being graded as the owner's own desk. The old
+    // needle named four counters and would have matched nothing, which is a
+    // disarmed check reading as coverage. It now asserts all five, in order.
+    ["stats.withEmail + ' confirmed · ' + stats.companyMailbox + ' company mailbox · ' + stats.sharedInbox + ", "' shared inbox · ' + stats.sendableOnly + ' more we can send to · ' + stats.heldBack + ' held back'", 'the batch card does not print the five counters the chips below it show, so a run of front-desk, sendable or shared addresses still reads as no email at all'],
     ["(latest.sendableEmail > 0) ? btn('research', 'Move ' + latest.sendableEmail", " + ' to Research', () => moveSendableOfRun(latest.id)", 'the Move-to-Research button counts only the confirmed addresses, so it offers nothing on a run whose addresses the engine said we can send to'],
     ["filter(l => l && queueStateOf(l) === 'read' && emailSendableOf(l))", ".map(l => l.id)", 'the bulk move filters on the confirmed rule again, so the button moves fewer leads than the card counts'],
     // Round 134: the many-batch buttons must be the SAME two functions the
@@ -3731,7 +3754,12 @@ let contactTally = null;
     // Round 133: SIX buckets. "Shared inbox" sits between Confirmed and
     // Unconfirmed because that is what it is - a real published address that
     // is not the owner's mailbox.
-    ["chipEl('email', 'Confirmed', counts.email),", " chipEl('shared', 'Shared inbox', counts.shared), chipEl('sendable', 'Unconfirmed', counts.sendable)", 'the "Shared inbox" chip is not sitting between Confirmed and Unconfirmed, so a run of info@ addresses is being handed to the rep as owner addresses again'],
+    // Round 136 RE-AIMED: "Company mailbox" now sits between Confirmed and
+    // Shared inbox, because an SMTP-verified front desk is a real mailbox that
+    // is nobody's own desk - a different claim from both of its neighbours.
+    // The original intent is unchanged and still asserted: Confirmed must not
+    // sit directly beside Unconfirmed with the not-their-own states missing.
+    ["chipEl('email', 'Confirmed', counts.email),", " chipEl('company', 'Company mailbox', counts.company), chipEl('shared', 'Shared inbox', counts.shared), chipEl('sendable', 'Unconfirmed', counts.sendable)", 'the "Company mailbox" and "Shared inbox" chips are not sitting between Confirmed and Unconfirmed, so a run of front-desk addresses is being handed to the rep as owner addresses again'],
     ["chipEl('noemail', 'No email',", " counts.noemail), chipEl('unreadable', 'Could not check', counts.unreadable), chipEl('all', 'All', counts.all)", 'the six buckets are no longer together with All after them, so nothing on the screen shows the operator that the six numbers add up'],
     ["chipEl('sendable', 'Unconfirmed',", " counts.sendable)", 'the unconfirmed chip is labelled "Can send" again while Screen A offers "Move N to Research" on a bigger number - one screen contradicting itself about how many leads the rep can write to'],
   ]) {
@@ -3908,7 +3936,7 @@ let findStat = null;
 // send on and the CSV prints "NO - do not send" for. Executed, because a source
 // read cannot tell a missing key from one spelled differently.
 {
-  const _need = ['leadFromCompany'];
+  const _need = ['leadFromCompany', 'emailStatusOf', 'emailLookupUnavailable'];
   const _got = {};
   walk(ast, (n) => {
     if (n.type === 'VariableDeclarator' && n.id && _need.includes(n.id.name) && n.init) {
@@ -3954,6 +3982,38 @@ let findStat = null;
       }
       if (_lead.contactPhoneOnSite !== false) {
         fails.push('whether their own site prints the number is dropped on promotion');
+      }
+      // ══ ROUND 136: THE CHIP MUST SURVIVE THE PROMOTION ════════════════
+      // The server writes twenty-one contact fields and this carried ten. The
+      // email GRADE was not among them, so emailStatusOf - which reads the
+      // grade FIRST and falls back to the tier only when there is none - took
+      // the fallback on every promoted lead. A published_role info@ that read
+      // "Shared inbox" on the Find tab read "Confirmed, grade A" in Research:
+      // the stage that writes the cold email. Not one row per run, every row.
+      //
+      // Asserted as the BEHAVIOUR, not as a field list: the word the rep sees
+      // before the promotion and the word after it must be the same word. A
+      // field list would pass the day someone adds a field and forgets it here;
+      // this fails whenever any field the chip depends on stops travelling.
+      if (_got.emailStatusOf && _got.emailLookupUnavailable) {
+        let _st = null;
+        try {
+          _st = new Function(_got.emailLookupUnavailable + '\n' + _got.emailStatusOf + '\nreturn emailStatusOf;')();
+        } catch (e) { fails.push('emailStatusOf does not compile standalone: ' + e.message); }
+        if (_st) {
+          const _rows = [
+            { what: 'a shared inbox', row: { contactReadOk: true, name: 'C Co', contactOwner: 'Dana Reed', contactEmail: 'info@c.com', contactEmailGrade: 'published_role', contactEmailSendable: true, contactEmailTier: 1, contactEmailKind: 'role' } },
+            { what: "the firm's front desk", row: { contactReadOk: true, name: 'D Co', contactOwner: 'Keith Fuicelli', contactEmail: 'contact@d.com', contactEmailGrade: 'company_mailbox', contactEmailSendable: true, contactEmailTier: 2, contactEmailCompanyMailbox: true } },
+            { what: "the owner's own mailbox", row: { contactReadOk: true, name: 'E Co', contactOwner: 'Jeff Benton', contactEmail: 'jeff@e.com', contactEmailGrade: 'smtp_confirmed', contactEmailSendable: true, contactEmailTier: 2 } },
+          ];
+          for (const { what, row } of _rows) {
+            const before = _st(row);
+            const after = _st(_mk(row));
+            if (before !== after) {
+              fails.push('promoting ' + what + ' to Research changes what the row claims about it - "' + before + '" on the Find tab becomes "' + after + '" in the stage that writes the cold email, because the grade does not travel');
+            }
+          }
+        }
       }
       // And the direction that must not drift: a company with NO contact read
       // must not arrive claiming one.

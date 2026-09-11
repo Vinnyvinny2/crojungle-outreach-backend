@@ -1,0 +1,68 @@
+// Round 136 — the decision-maker's own mailbox is asked for before the front desk
+// is accepted, and the row stops calling a front desk his own.
+module.exports = [
+  {
+    name: '136-a-the-hunter-key-is-never-handed-over',
+    path: 'src/all.js',
+    old: "        hunterKey,\n        siteConfirmed,\n        siteIsDown: pages.length === 0,",
+    new: "        siteConfirmed,\n        siteIsDown: pages.length === 0,",
+    prove: 'boot',
+    mustPrint: /called WITHOUT hunterKey again/,
+  },
+  {
+    name: '136-b-the-front-desk-returns-early-again',
+    path: 'src/all.js',
+    old: "          _companyMailboxFallback = {\n            email: candidate, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null,",
+    new: "          return {\n            email: candidate, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null,",
+    prove: 'boot',
+    mustPrint: /RETURNS again instead of holding its answer/,
+  },
+  {
+    name: '136-c-a-front-desk-grades-as-the-owners-own-desk',
+    path: 'src/all.js',
+    old: "  if (tier === 2 && e.companyMailbox === true) {",
+    new: "  if (false) {",
+    prove: 'boot',
+    mustPrint: /the same verdict as the owner's own desk/,
+  },
+  {
+    name: '136-d-an-unmeasured-crew-reads-as-a-small-one',
+    path: 'src/all.js',
+    old: "      : _crew === null\n",
+    new: "      : false\n",
+    prove: 'boot',
+    mustPrint: /UNMEASURED crew no longer has its own arm/,
+  },
+  {
+    name: '136-e-a-one-word-owner-builds-nothing-again',
+    path: 'src/all.js',
+    old: "  if (parts.length === 1) return [{ pattern: 'first', email: `${parts[0]}@${domain}` }];",
+    new: "  if (parts.length === 1) return [];",
+    prove: 'boot',
+    mustPrint: /builds NO candidate, so no mailbox is ever asked about/,
+  },
+  {
+    name: '136-f-the-front-desk-word-list-loses-the-me-spellings',
+    path: 'src/all.js',
+    old: "|contactme|emailme|reachme|writeus|talktous|talktome|",
+    new: "|",
+    prove: 'boot',
+    mustPrint: /still reads as a person/,
+  },
+  {
+    name: '136-g-the-grade-stops-travelling-to-research',
+    path: 'index.html',
+    old: "      contactEmailGrade: company.contactEmailGrade || '',\n",
+    new: "",
+    prove: 'clientcheck',
+    mustPrint: /changes what the row claims about it/,
+  },
+  {
+    name: '136-h-the-two-halves-disagree-about-the-front-desk',
+    path: 'index.html',
+    old: "  if (g === 'company_mailbox') return sendableT12 ? 'company' : 'unverified';",
+    new: "  if (false) return 'unverified';",
+    prove: 'clientcheck',
+    mustPrint: /does not read "company" on the review screen/,
+  },
+];

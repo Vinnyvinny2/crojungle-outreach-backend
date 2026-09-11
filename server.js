@@ -164,7 +164,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261015;
+const CONTRACT_VERSION = 20261016;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -10727,7 +10727,20 @@ const buildCandidates = (fullName, domain) => {
     // Drop middle initials and middle names — "Jeffrey R Jewett" must yield
     // jeffrey.jewett@, never jeffrey.r@. Keep only first and last.
     .filter((p, i, arr) => i === 0 || i === arr.length - 1 || p.length > 1);
-  if (parts.length < 2 || !domain) return [];
+  if (!parts.length || !domain) return [];
+  // ══ ROUND 136: A ONE-WORD OWNER TURNED THE WHOLE ENGINE OFF ═══════════
+  // This returned [] for any name with fewer than two parts, and _findEmail-
+  // FireproofCore gives up on an empty candidate list - so a business whose
+  // own team page names its owner by first name only never had a single
+  // mailbox asked about. Live, 2026-09-10: EEC Windows, whose team page says
+  // Kenny is "Owner & President", spent five Firecrawl credits and zero
+  // mailbox checks and shipped no address at all.
+  //
+  // One token yields exactly one candidate, first@, and it is the SAME
+  // 'first' pattern the eponymous route already uses. Nothing is relaxed
+  // downstream: it still has to be SMTP-confirmed to ship, so a mononym
+  // produces a confirmed mailbox or nothing, never a guess.
+  if (parts.length === 1) return [{ pattern: 'first', email: `${parts[0]}@${domain}` }];
   const first = parts[0];
   const last = parts[parts.length - 1];
   const fi = first[0];
@@ -10779,6 +10792,23 @@ const inferPattern = (email, fullName) => {
 // repo records most. Settable on Render so the cost can be dialled without a
 // rebuild, which is the shape Round 133 established for the checker itself.
 const SHARED_INBOX_TRY_MAX = Math.max(0, Number(process.env.VERIFIER_PATTERN_TRIES || 3) || 0);
+
+// ══ HOW SMALL A CREW STILL READS ITS OWN FRONT DESK ═══════════════════════
+// Vin, 2026-09-11: "never email a front desk lead unless its a very small crew
+// ... so we avoid the brutal ratio". The ratio he means is the deliverability
+// one: an email to info@ read by five people needs one of them to press spam
+// to register a complaint, and the denominator is still one send. The damage
+// lands on the sending DOMAIN, so it is charged to every future lead rather
+// than to this one. Google's enforcement line is a 0.3% complaint rate.
+//
+// Ten is the cut because that is where the measured reply rate actually breaks
+// (0-10 employees 0.72%, 11-50 0.49%), not because it is a round number.
+// Above it the front desk is a receptionist: Fuicelli & Lee is 31 people per
+// LinkedIn, and contact@ there is not Keith's desk by any reading.
+//
+// A crew we never measured is NOT a small crew. "We did not look" must never
+// resolve to the permissive side of a rule about what may be sent.
+const FRONT_DESK_CREW_MAX = Math.max(0, Number(process.env.FRONT_DESK_CREW_MAX || 10) || 0);
 const applyPattern = (pattern, fullName, domain) => {
   const c = buildCandidates(fullName, domain).find(x => x.pattern === pattern);
   return c ? c.email : '';
@@ -11802,7 +11832,7 @@ const MAILBOX_JUNK_RE = /^(?:noreply|donotreply|postmaster|hostmaster|maildaemon
 // The recruiting subset of the role list: graded and scored as a careers-page
 // address wherever it is found, and picked last among shared inboxes.
 const RECRUIT_LOCAL_RE = /^(?:jobs?|careers?|recruit|recruiting|recruitment|recruiter|hiring|talent|apply|applications?|employment|hr|humanresources)$/;
-const MAILBOX_ROLE_RE = /^(?:info|contact|hello|hi|hey|ask|team|office|attorneys|lawyers|doctors|dentists|staff|clinic|admin|administration|sales|support|help|helpdesk|service|services|customer|customers|customerservice|customercare|care|enquiry|enquiries|inquiry|inquiries|mail|general|reception|frontdesk|frontoffice|mainoffice|account|accounts|accounting|billing|invoice|invoices|payment|payments|finance|hr|humanresources|jobs|job|careers|career|recruit|recruiting|recruitment|recruiter|hiring|talent|apply|application|applications|employment|press|media|marketing|compliance|order|orders|shop|store|studio|book|booking|bookings|schedule|scheduling|appointment|appointments|estimate|estimates|quote|quotes|dispatch|newpatient|newpatients|patient|patients|client|clients|connect|talk|reach|getstarted|contactus|emailus|callus|getintouch|letstalk|scheduler|estimator|requestaquote|getaquote|freequote|freeestimate)$/;
+const MAILBOX_ROLE_RE = /^(?:info|contact|hello|hi|hey|ask|team|office|attorneys|lawyers|doctors|dentists|staff|clinic|admin|administration|sales|support|help|helpdesk|service|services|customer|customers|customerservice|customercare|care|enquiry|enquiries|inquiry|inquiries|mail|general|reception|frontdesk|frontoffice|mainoffice|account|accounts|accounting|billing|invoice|invoices|payment|payments|finance|hr|humanresources|jobs|job|careers|career|recruit|recruiting|recruitment|recruiter|hiring|talent|apply|application|applications|employment|press|media|marketing|compliance|order|orders|shop|store|studio|book|booking|bookings|schedule|scheduling|appointment|appointments|estimate|estimates|quote|quotes|dispatch|newpatient|newpatients|patient|patients|client|clients|connect|talk|reach|getstarted|contactus|emailus|callus|getintouch|letstalk|contactme|emailme|reachme|writeus|talktous|talktome|scheduler|estimator|requestaquote|getaquote|freequote|freeestimate)$/;
 // ══ THE COMPANY'S OWN MAILBOX IS NOT A PERSON'S ═══════════════════════════
 // Live, 2026-09-02: cpa@jtccpas.com, aardconcrete@aol.com (Aard Cement),
 // parklanedentalortho@d4c.com and aanddcontracting@aol.com all printed as
@@ -35752,10 +35782,11 @@ const _unvouchedSendGuard = (r, args) => {
 // Graded HERE, at the single wrapper every one of the core's ~20 returns
 // passes through, and never at a return site: one derivation, so the card,
 // the CSV and the Google Sheet cannot describe one address three ways.
-const EMAIL_GRADES = ['published_personal', 'smtp_confirmed', 'published_role', 'catch_all', 'pattern_guess', 'verifier_down', 'none'];
+const EMAIL_GRADES = ['published_personal', 'smtp_confirmed', 'company_mailbox', 'published_role', 'catch_all', 'pattern_guess', 'verifier_down', 'none'];
 const EMAIL_GRADE_SAY = {
   published_personal: 'Published on their own site, and it is a person, not a department.',
   smtp_confirmed:     'We checked the mailbox and it exists.',
+  company_mailbox:    'We checked this mailbox and it exists, but it is the company\u2019s front desk, not their own. Somebody else opens it first.',
   published_role:     'Real and published, but not the owner\u2019s own mailbox \u2014 a shared, recruiting or somebody else\u2019s inbox, so somebody other than the owner reads it first.',
   catch_all:          'Their domain accepts everything, so this cannot bounce \u2014 but we could not confirm it is his mailbox. Use his name in the first line.',
   pattern_guess:      'Built from a pattern, not confirmed. It may bounce.',
@@ -35769,6 +35800,26 @@ const emailConfidenceGrade = (r, opts) => {
   // typeof-guarded rather than truthy: Number(null) is 0 and 0 is finite, and
   // an unmeasured tier read as tier 0 would grade as a guess.
   if (typeof e.tier !== 'number' || !Number.isFinite(tier)) return 'pattern_guess';
+  // ══ ROUND 136: A FRONT DESK IS NOT THE OWNER'S OWN DESK ══════════════
+  // This returned 'smtp_confirmed' on its fourth line, before any owner or
+  // mailbox-kind logic, so every tier-2 address graded identically. The
+  // company-mailbox probe writes `companyMailbox: true` on its result and
+  // says in its own comment "we do not claim this is his personal box" -
+  // and that field was written in one place and read in NONE, so the only
+  // fact separating the two rows was thrown away here.
+  //
+  // Executed on the 2026-09-10 run, all four returned smtp_confirmed / A /
+  // CONFIRMED: Keith Fuicelli's front desk, a plain info@, the owner's own
+  // SMTP-probed mailbox, and a company mailbox at a business where nobody
+  // was named at all.
+  //
+  // Vin, 2026-09-11: "we should never email shared inbox unless its a very
+  // small crew". The row cannot honour that rule if it cannot see which
+  // kind of mailbox it is holding. With nobody named it is not a front desk
+  // we can address either - it is just a shared inbox.
+  if (tier === 2 && e.companyMailbox === true) {
+    return (opts && opts.ownerName && String(opts.ownerName).trim()) ? 'company_mailbox' : 'published_role';
+  }
   if (tier === 2) return 'smtp_confirmed';
   if (tier === 1) {
     // mailboxKind is what the tier-1 return actually writes; `kind` is set
@@ -36513,6 +36564,21 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // Honesty is preserved by labelling: we do not claim this is his personal box.
     // We say it is the company's, that he runs the company, and that the mail
     // should open with his name.
+    // ══ ROUND 136: THE FRONT DESK IS HELD, NOT RETURNED ══════════════════
+    // Vin, 2026-09-11: "we should never email shared inbox unless its a very
+    // small crew and the owner only checks his shared inbox". This block used
+    // to RETURN on the first live company mailbox, which ended the lookup - so
+    // the Hunter finder below, the one route that asks for the owner's OWN
+    // address by name, was never reached on any lead whose front desk answered.
+    // Live, 2026-09-10: Fuicelli & Lee returned contact@ here and Hunter was
+    // never asked whether it held Keith Fuicelli's own mailbox.
+    //
+    // The rung does NOT move - Round 121 put the Hunter finder below on purpose,
+    // outside the SMTP-gated block, so it stays reachable on a domain whose
+    // catch-all verdict came back UNKNOWN. All that changes is that the front
+    // desk is now a FALLBACK held in hand rather than a final answer: a personal
+    // mailbox found below wins, and if none is found this is still returned.
+    let _companyMailboxFallback = null;
     if (verifierKey && name && verifierMayTry()) {
       // WHICH four boxes to probe depends on the trade. A plumbing shop lives in
       // info@/office@/service@; a chiropractic or dental practice answers from
@@ -36530,12 +36596,13 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
         const candidate = `${box}@${domain}`;
         const v = await verifyEmailSMTP(candidate, verifierKey);
         if (v.valid === true) {
-          console.log(`✓ EMAIL [${domain}] T2 COMPANY MAILBOX (SMTP-verified): ${candidate} — ${name}'s personal address does not resolve, but this mailbox is real. At an owner-run business it reaches him.`);
-          return {
+          console.log(`✓ EMAIL [${domain}] T2 COMPANY MAILBOX (SMTP-verified): ${candidate} — ${name}'s personal address does not resolve, but this mailbox is real. At an owner-run business it reaches him. Held while the owner's own mailbox is asked for.`);
+          _companyMailboxFallback = {
             email: candidate, ...EMAIL_TIERS.SMTP_VERIFIED, name, pattern: null,
             companyMailbox: true,
             label: `Company mailbox, SMTP-verified. ${name}'s personal address could not be resolved; at an owner-operated business this inbox is their own desk. Open the email with their name.`,
           };
+          break;
         }
         if (v.error) break;   // verifier died mid-loop — stop, do not draw conclusions
         await new Promise(r => setTimeout(r, 200));
@@ -36596,6 +36663,16 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
         }
         console.log(`EMAIL [${domain}]: Hunter Finder returned ${hf.email} at confidence ${hf.score} but it is unsourced/unverified \u2014 not sendable`);
       }
+    }
+
+    // \u2550\u2550 ROUND 136: NO PERSONAL MAILBOX, SO THE HELD FRONT DESK STANDS \u2550\u2550\u2550\u2550
+    // Every route to this person's OWN address has now run and failed. The
+    // company mailbox probed above is real and SMTP-verified, so it is a true
+    // answer and it ships - but it ships SAYING it is the front desk, and the
+    // row decides separately whether a crew this size may be emailed there.
+    if (_companyMailboxFallback) {
+      console.log(`EMAIL [${domain}]: no personal mailbox for ${name} could be found by any route, so the company mailbox ${_companyMailboxFallback.email} stands. It is a real mailbox; it is not ${name}'s own desk.`);
+      return _companyMailboxFallback;
     }
 
     // Genuinely nothing left. Say WHICH kind of nothing: a server that actively
@@ -78747,6 +78824,103 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
   }
 
 
+  // ══ THE OWNER'S OWN MAILBOX, AND A FRONT DESK THAT SAYS SO ══════════════
+  // Round 136. Vin, 2026-09-11: "we need to figure out how to always hit
+  // decision makers personal email ... we should never email shared inbox
+  // unless its a very small crew".
+  //
+  // Three live defects on the 2026-09-10 ten-lead run, all of them about the
+  // same confusion between a man's own desk and his company's front desk:
+  //
+  //   1. hunterFindPersonEmail is the ONE route that asks for the owner's own
+  //      address by name, and the Find read never handed it the key it was
+  //      already holding - so `worthACredit` could not be true and the route
+  //      had never run in this tab. Computed and not passed.
+  //   2. The company-mailbox probe RETURNED on the first live front desk, so
+  //      even with a key that route was unreachable on any lead whose info@
+  //      answered. contact@coloradoinjurylaw.com shipped without Hunter ever
+  //      being asked whether it held Keith Fuicelli's own mailbox.
+  //   3. emailConfidenceGrade returned smtp_confirmed on its fourth line, so a
+  //      front desk and the owner's own desk graded identically - and the
+  //      companyMailbox flag that separates them was written in one place and
+  //      read in none.
+  //
+  // Executed against the real functions wherever the rule is a function, and
+  // pinned by position where the rule is an argument or an early return - the
+  // defect in 1 and 2 is which side of a call a value sits on, and no fixture
+  // can see that.
+  try {
+    const _fails = [];
+    const _src = selfSourceNoCommentsLF();
+    const _n = (a, b) => a + b;
+
+    // ── the grade tells three states apart, executed on the live shapes ──
+    const _grade = (r, owner) => emailConfidenceGrade(r, { ownerName: owner || '' });
+    const _own = _grade({ email: 'jeff@thebentonlawfirm.com', tier: 2 }, 'Jeff Benton');
+    const _desk = _grade({ email: 'contact@coloradoinjurylaw.com', tier: 2, companyMailbox: true }, 'Keith Fuicelli');
+    const _nobody = _grade({ email: 'info@example.com', tier: 2, companyMailbox: true }, '');
+    if (_own !== 'smtp_confirmed') _fails.push(`the owner's own SMTP-probed mailbox grades ${_own}, not smtp_confirmed`);
+    if (_desk !== 'company_mailbox') _fails.push(`an SMTP-verified COMPANY mailbox grades ${_desk} - the same verdict as the owner's own desk, which is the 2026-09-10 defect: the probe writes companyMailbox and the grader reads straight past it`);
+    if (_nobody !== 'published_role') _fails.push(`a company mailbox on a lead where NOBODY was named grades ${_nobody} - with no name it is not a front desk we can address, it is a shared inbox`);
+    if (_own === _desk) _fails.push('the owner’s own desk and his company’s front desk still grade the same, so Vin’s small-crew rule cannot be applied to either');
+    if (!EMAIL_GRADES.includes('company_mailbox')) _fails.push('company_mailbox is not a declared grade, so nothing downstream can render it');
+    if (!EMAIL_GRADE_SAY.company_mailbox) _fails.push('the company_mailbox grade has no sentence, so the row shows a state it cannot explain');
+
+    // ── a one-word owner name builds a candidate, executed ──
+    const _mono = buildCandidates('Kenny', 'eeckc.com');
+    if (!_mono.length) _fails.push('an owner named by one word builds NO candidate, so no mailbox is ever asked about - live 2026-09-10, EEC Windows named Kenny as "Owner & President", spent five Firecrawl credits and zero mailbox checks, and shipped no address');
+    else if (_mono[0].email !== 'kenny@eeckc.com') _fails.push(`a one-word owner builds ${_mono[0].email}, not the plain first-name mailbox`);
+    if (buildCandidates('Jeff Benton', 'x.com').length < 8) _fails.push('a full name no longer builds the full pattern list, so the mononym arm has eaten the normal one');
+
+    // ── the front-desk word list, executed ──
+    for (const _l of ['contactme', 'emailme', 'reachme', 'talktous']) {
+      if (mailboxKind(_l + '@x.com') !== 'role') _fails.push(`${_l}@ still reads as a person - the list carries the "us" spellings and not the "me" ones, and contactme@solartimeusa.com was graded on 2026-09-10 as a human being`);
+    }
+    for (const _l of ['griffin', 'nparadiso', 'jeff', 'kenny']) {
+      if (mailboxKind(_l + '@x.com') !== 'person') _fails.push(`${_l}@ now reads as a front desk, so the list has swallowed real people - the one-word owner arm depends on this`);
+    }
+
+    // ── the key is actually handed over (the whole of defect 1) ──
+    if (_src.indexOf(_n('        verifierKey,\n        hunterKey,\n', '        siteConfirmed,')) < 0) {
+      _fails.push('the owner’s address lookup is called WITHOUT hunterKey again, so worthACredit can never be true and the one paid route that asks for the decision-maker’s own mailbox by name is switched off in the Find tab - the key is held two hundred lines above and handed only to the marketing lookup');
+    }
+    // ── the front desk is held, not returned (the whole of defect 2) ──
+    if (_src.indexOf(_n('          _companyMailboxFallback = {', '\n            email: candidate,')) < 0) {
+      _fails.push('the company-mailbox probe RETURNS again instead of holding its answer, so every route below it - the Hunter finder included - is unreachable on any lead whose front desk answers, and a front desk beats the owner’s own mailbox by arriving first');
+    }
+    if (_src.indexOf(_n('    if (_companyMailboxFallback) {', '\n      console.log')) < 0) {
+      _fails.push('the held company mailbox is never returned, so a lead with a real front desk and no personal mailbox now ships NO address at all - holding an answer and then dropping it is worse than returning it early');
+    }
+    // ── the crew-size rule, and that an unmeasured crew is refused ──
+    if (_src.indexOf(_n('out.email.companyMailbox === true &&', ' out.email.sendable === true')) < 0) {
+      _fails.push('the crew-size rule is gone, so a front desk at a business of any size is sent to again - a complaint from a shared inbox is charged to the sending domain and costs every later lead');
+    }
+    if (_src.indexOf(_n('      : _crew === null\n', '        ? ')) < 0) {
+      _fails.push('an UNMEASURED crew no longer has its own arm, so "we did not look" resolves to the permissive side of a rule about what may be sent - the unmeasured-as-measured class, on a decision that reaches a prospect');
+    }
+    if (!(FRONT_DESK_CREW_MAX > 0 && FRONT_DESK_CREW_MAX <= 50)) _fails.push(`the front-desk crew ceiling is ${FRONT_DESK_CREW_MAX}, which is not a very small crew by any reading of the ruling`);
+
+    // ── the tripwire on the fallback path nobody has wired yet ──
+    // Widening this query names non-owners at owner-run businesses, which sets
+    // target 'marketing', opens the email lane and exports the row - and the
+    // compose path resolves its recipient from the OWNER chain only, greets
+    // nobody, and sends to the owner-side address. Opening the query without
+    // wiring the recipient ships an owner-voiced email to a company mailbox.
+    if (_src.indexOf(_n('department=marketing&seniority=', 'executive,senior')) < 0
+      && _src.indexOf(_n('contactMarketingLead ||', ' company.verifiedCEO')) < 0) {
+      _fails.push('Hunter is now asked for everybody at the domain, which names non-owners at owner-run businesses - but the compose path still resolves its recipient from the owner chain alone, so those leads become an owner-voiced, greeting-less email sent to a company mailbox. Wire the recipient before opening the query');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ OWNER MAILBOX FIRST CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ OWNER MAILBOX FIRST CHECK: the decision-maker's own mailbox is asked for before his company's front desk is accepted. The Find read hands over the Hunter key it was already holding, so the one route that asks for a named person's own address can run at all; the company-mailbox probe HOLDS its answer instead of returning it, so every route below it stays reachable; and the grade tells three states apart that were one - his own desk (smtp_confirmed), his firm's front desk (company_mailbox), and a shared inbox nobody is named against (published_role). A front desk ships sendable only at an owner-run business with a named owner and a measured crew of ${FRONT_DESK_CREW_MAX} or fewer; an unmeasured crew is refused, because we did not look is not the same as the owner reading it himself. An owner named by one word now builds kenny@, which is SMTP-confirmed or dropped, never guessed.`);
+    }
+  } catch (e) {
+    console.log(`⛔ OWNER MAILBOX FIRST CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+
   // ══ A LEAD WAS KILLED FOR TIME IT SPENT STANDING IN LINE ════════════════
   // Doc Tony, live, 2026-08-17: third lead of three, queued behind two working
   // runs, declared "exceeded 8 minutes and was abandoned" without ever making a
@@ -83606,6 +83780,26 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         fcKey: allowBuy ? fcKey : '',
         homepageContent: homeText,
         verifierKey,
+        // ══ ROUND 136: THE ONE ROUTE BUILT FOR THIS WAS NEVER HANDED THE KEY ══
+        // Vin, 2026-09-11: "we need to figure out how to always hit decision
+        // makers personal email". hunterFindPersonEmail takes the name we have
+        // CONFIRMED and asks Hunter for that person's own mailbox - the only
+        // route that needs neither a published address nor an SMTP answer, so
+        // it is the only one that survives a mail host that stalls probes.
+        // Its own credit guard describes this lead exactly: "we have a
+        // confirmed decision-maker, no address yet, and every free route has
+        // already failed".
+        //
+        // The read has held the key the whole time (`const hunterKey` above)
+        // and hands it to the MARKETING lookup, and to nothing else. So
+        // `worthACredit` could never be true on the owner's own address and
+        // the paid personal-mailbox route has never run in the Find tab.
+        // Computed and not passed, the first class in `bug-classes`.
+        //
+        // Live, 2026-09-10: Keith Fuicelli was confirmed, keith@ was refused by
+        // his mail server, and the row fell back to the firm's front desk
+        // without Hunter ever being asked whether it held his address.
+        hunterKey,
         siteConfirmed,
         siteIsDown: pages.length === 0,
         industry: (company && company.industry) || '',
@@ -83637,6 +83831,11 @@ const runFindContactRead = async (company, keys, opts = {}) => {
           kind: em.mailboxKind || (em.email ? mailboxKind(em.email) : ''),
           offDomain: em.offDomain === true,
           fromCareersPage: em.fromCareersPage === true,
+          // Round 136: written by the company-mailbox probe since it was built
+          // and read by nothing until now, which is why a front desk and the
+          // owner's own desk graded the same. It travels so the row, the chip
+          // and the crew-size rule can all read the one fact.
+          companyMailbox: em.companyMailbox === true,
           // How sure, from the one place it is decided. The client used to
           // derive this by regex over the LABEL, which is a fourth copy of a
           // rule that already had three.
@@ -83843,6 +84042,33 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     _layers = { verdict: 'layered', why: `${signals.branchNetwork ? 'a branch network' : signals.peOwned ? 'PE-owned' : 'a national operator'} - the decision is at head office${_layers.why ? ' (their page: ' + _layers.why + ')' : ''}` };
   }
   out.layers = { verdict: _layers.verdict, why: _layers.why };
+  // ══ ROUND 136: A FRONT DESK IS SENDABLE ONLY AT A VERY SMALL CREW ═════
+  // Decided HERE rather than in the email engine because the engine runs
+  // before the size lookup - at address time the crew is genuinely not known
+  // yet, and a rule that reads an unmeasured number would be deciding on a
+  // null. Both facts exist by this line and nothing has been written yet.
+  //
+  // The address itself is untouched: it is real, it is SMTP-verified and it
+  // stays on the row for the rep to phone against. Only the permission to
+  // SEND to it moves, and the row says why in words.
+  if (out.email && out.email.address && out.email.companyMailbox === true && out.email.sendable === true) {
+    const _crew = Number.isFinite(Number(signals.directoryEmployees)) && Number(signals.directoryEmployees) > 0
+      ? Number(signals.directoryEmployees)
+      : (Number.isFinite(Number(signals.teamCount)) && Number(signals.teamCount) > 0 ? Number(signals.teamCount) : null);
+    const _ownerRun = _layers.verdict === 'owner' && !!(out.owner && out.owner.name);
+    const _why = !_ownerRun
+      ? 'it is a shared inbox at a business we cannot call owner-run with a named owner, so nobody we can name reads it first'
+      : _crew === null
+        ? 'nobody published a crew size for this business, and an unmeasured crew is not a small one - we did not look is not the same as the owner reading it himself'
+        : _crew > FRONT_DESK_CREW_MAX
+          ? `${_crew} people work here, so this inbox is a front desk somebody is employed to screen, not the owner's own`
+          : '';
+    if (_why) {
+      out.email.sendable = false;
+      out.email.blockReason = `no email is sent to ${out.email.address}: ${_why}. The address is real and it is on the row - call it instead.`;
+      console.log(`\u{1F4EA} FRONT DESK [${name}]: ${out.email.address} is a real mailbox and it is NOT being sent to - ${_why}. A complaint from a shared inbox is charged to the sending domain, so it costs every later lead, not this one.`);
+    }
+  }
   let _ml = pickMarketingLead(signals.teamNames, signals.teamTitles);
   // ══ ROUND 121: ASK WHEN WE HAVE NOBODY, NOT ONLY WHEN THEY HAVE AN ORG ══
   // This read `_layers.verdict === 'layered'` and nothing else, so the one
@@ -84236,6 +84462,7 @@ const contactFieldsFrom = (data) => {
     contactEmailKind: em.kind || '',
     contactEmailOffDomain: em.offDomain === true,
     contactEmailFromCareers: em.fromCareersPage === true,
+    contactEmailCompanyMailbox: em.companyMailbox === true,
     contactEmailGrade: em.grade || '',
     contactEmailGradeSay: em.gradeSay || '',
     contactEmailVerifierDown: em.verifierDown === true,
