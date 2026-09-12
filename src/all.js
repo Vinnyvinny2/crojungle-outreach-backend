@@ -5667,19 +5667,36 @@ const lanesFor = ({ tier, sizeTier, sizeWord, sizeConfidence, affordBand, layers
   // "entry" and got no lane at all). A measured below-floor still benches.
   const email = named && (_szChannel === 'email' || (prod && t !== 'below_floor'));
   const last = call && (layered || !!big || _sitelessCall);
-  if (t === 'below_floor') why.push('under the floor - benched');
-  if (t === 'over_ceiling') why.push(reach ? `over the call cap but owner-run and measured under ${_usdShort(ICP_CALL_REACH_CEILING)} - still a call` : `over the call cap (${SCALE_BAND_SAY.over_ceiling}) - email, the marketing decision-maker`);
+  // ══ THE ROW'S REASON, AND THREE FALSE SENTENCES FOUND BY EXECUTING IT ════
+  // All three were mine, introduced in this round, and all three are the same
+  // offence: a sentence on a row that is not true of that lead.
+  //
+  //  1. EVERY EXCEPTION SENTENCE HAD GONE SILENT. These three were gated on
+  //     `_szChannel === 'call'`, and _forcedEmail sets _szChannel to 'email'
+  //     BEFORE this gate reads it - so a TheirStack lead, a product company
+  //     and a business publishing its own marketing director each came out as
+  //     email with `why: ""`. A lead moved off the rep's sheet for a reason
+  //     nobody can see is the exact failure Round 139's assertion existed to
+  //     prevent. Gated on the EXCEPTION now, never on the outcome it causes.
+  //  2. A LEAD WITH NO LANE WAS TOLD TO EMAIL THE MARKETING HEAD. Over the
+  //     cap without the reach exception, call and email are both false and
+  //     the row still said "email, the marketing decision-maker".
+  //  3. A LEAD ON THE CALL SHEET STILL SAID "BENCHED". The old floor stopped
+  //     benching when Vin removed it from the sheet; the sentence did not.
+  if (t === 'below_floor') why.push(`their own pages put them under ${_usdShort(ICP_REVENUE_BAND.floor)}, which is the bottom of what can pay for the premium line - still on the call sheet, and the lower tier is the likely sale`);
+  if (_overIcp) why.push(reach
+    ? `measured over ${_usdShort(ICP_REVENUE_BAND.ceiling)} but owner-run and under ${_usdShort(ICP_CALL_REACH_CEILING)} - still a call, because a founder who answers his own phone answers it at this size too`
+    : `measured over ${_usdShort(ICP_REVENUE_BAND.ceiling)}, the top of what still buys from an agency rather than hiring in - not a lead today`);
   if (layered && inCall) why.push('layered business - on the call sheet last, ask for the marketing head');
   if (big && inCall) why.push(`${big} - on the call sheet last; the local number reaches a branch, the decision is at head office`);
-  if (big && !inCall && _szChannel === 'email') why.push(`${big} - email, the marketing decision-maker at head office`);
-  if (ts && _szChannel === 'call') why.push('a TheirStack lead - email only');
-  if (prod && _szChannel === 'call') why.push('a product company - email only, its reviews do not measure a manufacturer');
-  if (siteHead && (_szChannel === 'call' || reach)) why.push('their own site names a marketing director, so the buying decision sits behind a marketing department - email only, and that director is who it goes to');
+  if (big && !inCall && !_overIcp) why.push(`${big} - email, the marketing decision-maker at head office`);
+  if (ts) why.push('a TheirStack lead - email only, there is no phone on it');
+  if (prod && t !== 'below_floor') why.push('a product company - email only, its reviews do not measure a manufacturer');
+  if (siteHead) why.push('their own site names a marketing director, so the buying decision sits behind a marketing department - email only, and that director is who it goes to');
   if (_sitelessCall) why.push('no working website, so nobody can be named from their own pages - on the call sheet last, with the number to ask who runs it');
   if (noname) why.push('nobody named yet - off the call sheet until a name is found');
   if (_szChannel === 'email' && !email && !noname) why.push('nobody named to write to');
-  if (!_szMeasured) why.push('their size is not measured anywhere we looked - on the call sheet so the rep can find out, and the row says so');
-  if (_sz === SIZE_TIER_OVER) why.push(reach ? `measured over the top of the ICP but owner-run and under ${_usdShort(ICP_CALL_REACH_CEILING)} - still a call` : `measured over ${_usdShort(ICP_REVENUE_BAND.ceiling)}, the top of what still buys from an agency - not a lead`);
+  if (!_szMeasured && !_overIcp) why.push('their size is not measured anywhere we looked - on the call sheet so the rep can find out, and the row says so');
   return { call, email, noname, last, tier: t, measured, sizeTier: _sz, sizeTierMeasured: _szMeasured,
            sizeWord: SIZE_TIER_WORD[_sz] || '', sizeSay: SIZE_TIER_SAY[_sz] || '', channel: _szChannel, why: why.join('; ') };
 };
@@ -15187,6 +15204,27 @@ const NOT_A_PERSON_LAST = new Set(['reviews', 'review', 'testimonials', 'form', 
   'booking', 'bookings', 'hours', 'directions', 'menu', 'faq', 'faqs', 'gallery',
   'specials', 'financing', 'careers', 'portfolio', 'blog', 'news', 'services', 'service',
   'team', 'staff', 'story', 'mission', 'values', 'history', 'process', 'policy',
+  // ══ ROUND 146: THE WORD VIN ACTUALLY FOUND ═══════════════════════
+  // "Anesthesia Options" reached a call sheet as a person, paired with
+  // "Coordinator" as its title, because nothing here knew that a nav
+  // label can END in one of these. Measured, not inferred: on that exact
+  // string looksLikeRealName said true, looksLikeAPerson said true, and
+  // ownerNameDoor returned null - all three doors open, because the only
+  // thing wrong with it is the last word.
+  //
+  // It also cost more than one wrong row. A junk pair makes
+  // ownPagesNameNobody read "their pages DO name somebody", so the paid
+  // owner wave buys a search for a business whose pages name nobody -
+  // which is the 28-of-68-credits defect this round exists for, arriving
+  // through the roster parser rather than through the stand-down.
+  //
+  // Its siblings are here with it: every one is a heading a service
+  // business puts above a list, and none is a surname anywhere.
+  'options', 'option', 'plans', 'plan', 'packages', 'package', 'pricing',
+  'rates', 'payment', 'payments', 'insurance', 'coverage', 'benefits',
+  'locations', 'location', 'areas', 'area', 'resources', 'guides', 'guide',
+  'tips', 'articles', 'topics', 'conditions', 'treatments', 'procedures',
+  'specialties', 'specialists', 'departments', 'solutions',
   // ══ A FORM FIELD LABEL SITS EXACTLY WHERE A NAME SITS ════════════
   // "Last Name" satisfies the two-capitalised-words name pattern by
   // construction, and on a contact page it sits directly under a section
@@ -64967,7 +65005,13 @@ app.listen(PORT, () => {
       // we cut it". Only the second lane is gone.
       if (laneWord(_lc) !== 'call' || _lc.last !== true || !/last/.test(_lc.why)) _fails.push(`a layered in-range business is not on the call sheet ranked last with the reason on the row (got ${laneWord(_lc)}, last ${_lc.last}) - Round 114 keeps it callable and marked, and only the duplicate email lane was removed`);
       const _lu = lanesFor({ tier: 'upper', layers: 'layered', source: 'google_places', target: 'owner' });
-      if (laneWord(_lu) !== 'call + email' || _lu.last !== true) _fails.push('a layered upper business whose only name is the owner is off the call sheet');
+      // ROUND 146: expected "call + email". OLD RULE (Round 114 + Round 112):
+      // the call and email lists overlapped from core up, so a layered
+      // business in range sat in both. NEW RULE (Vin, 2026-09-12): one lane
+      // per lead, and this lead's size is never measured, so it goes to the
+      // rep by design. Round 114's half of it must survive and is still
+      // asserted here: layered STAYS on the call sheet, ranked LAST.
+      if (laneWord(_lu) !== 'call' || _lu.last !== true) _fails.push(`a layered business whose only name is the owner is not on the call sheet ranked last (got ${laneWord(_lu)}, last ${_lu.last}) - Round 114 keeps it callable and marked, and Vin's one-lane rule of 2026-09-12 removed only the duplicate email lane`);
       if (lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'owner' }).last !== false) _fails.push('an owner-run core business is ranked last');
       // ══ ROUND 121: NO WEBSITE, A PHONE, AND HUNDREDS OF REVIEWS ══════════
       // Vin's ruling, 2026-09-04, on Delta Solar Power and American Dream
@@ -64989,39 +65033,79 @@ app.listen(PORT, () => {
       if (demotionPenalty({ laneLast: true }).points !== -8 || demotionPenalty({ laneLast: false }).points !== 0) _fails.push('the layered-last demotion does not rank a layered lead below the owner-run ones');
       if (_ln({ tier: 'core', layers: 'owner', source: 'theirstack', target: 'owner' }) !== 'email') _fails.push('a TheirStack lead reached the call sheet');
       if (_ln({ tier: 'entry', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('an entry owner-run business is not call only');
-      if (_ln({ tier: 'below_floor', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'none') _fails.push('a business measured under the floor for sure is in a lane');
-      if (_ln({ tier: 'below_floor', sizeConfidence: 'likely', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'none') _fails.push('a business likely under the floor is in a lane');
-      // Round 114: headroom on the floor - a GUESS under it stays on the sheet as low.
-      if (_ln({ tier: 'below_floor', sizeConfidence: 'guess', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('a business under the floor on a GUESS is benched (Vin, 2026-09-03: headroom on every measured number)');
-      // Round 114: over the call cap is EMAIL, not nothing; owner-run under the reach line is still a call.
-      // Round 139: every over-cap fixture below now STATES sizeConfidence
-      // 'sure', because an over-cap tier on a guess is kept callable from this
-      // round on. Without that field these would silently start measuring the
-      // new rule instead of the one they were written for. The dollar figures
-      // are unchanged from Round 114: they straddle the $50M REACH line, which
-      // did NOT move when the cap did, so DMI Paving's $24M now sits well
-      // inside it - Vin put that business in both lanes on 2026-09-11.
-      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'layered', source: 'google_places', target: 'marketing' }) !== 'email') _fails.push('a layered business measured over the call cap is not an email lead');
-      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'layered', source: 'google_places', target: 'marketing', usd: 255e6, peOwned: true }) !== 'email') _fails.push('Rose Paving ($255M, PE-owned, layered) is not email only');
-      if (_ln({ tier: 'upper', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 12e6 }) !== 'call + email') _fails.push('an owner-run business measured at $12M, inside the cap, is not in both lanes');
+      // ══ ROUND 146: THE AFFORDABILITY FLOOR NO LONGER BENCHES ANYBODY ════
+      // OLD RULE (Round 114, Vin 2026-09-03): a size MEASURED under the floor
+      // was off both lanes and only a GUESS under it kept its place, so these
+      // three fixtures differed in one field and expected none / none / call.
+      // NEW RULE (Vin, 2026-09-12): he asked "i thought we removed the floor
+      // ... did that never happen?" and ruled that the four published size
+      // tiers start at zero, so under the floor is neither a bench nor a word
+      // the rep reads. All three confidences are on the call sheet now, and
+      // all three are asserted rather than one, because a bench that comes
+      // back at a SINGLE confidence is how this rule would return unnoticed.
+      if (_ln({ tier: 'below_floor', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push(`a business measured under the old ${_usdShort(ICP_REVENUE_BAND.floor)} floor for sure is off the call sheet - Vin removed that floor on 2026-09-12 and the published size tiers start at zero`);
+      if (_ln({ tier: 'below_floor', sizeConfidence: 'likely', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push(`a business likely under the old ${_usdShort(ICP_REVENUE_BAND.floor)} floor is off the call sheet - Vin removed that floor on 2026-09-12 and the published size tiers start at zero`);
+      if (_ln({ tier: 'below_floor', sizeConfidence: 'guess', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('a business under the floor on a GUESS is benched (Vin, 2026-09-03: headroom on every measured number; 2026-09-12: no floor left to bench against)');
+      // ══ ROUND 146: OVER THE TOP OF THE ICP IS NO LANE AT ALL ═══════════
+      // OLD RULE (Round 114): the email lane had NO ceiling, so a business
+      // measured over the cap was an email lead at the marketing
+      // decision-maker at ANY size, and every fixture below expected 'email'.
+      // NEW RULE (Vin, 2026-09-12): he put a ceiling on the whole ICP - "over
+      // 30m is dropped for now higher tiers are more so email leads btu we
+      // arent wokring on email yet" - so §114's uncapped email lane is
+      // SUPERSEDED, said here rather than left to look like an accident: over
+      // the ceiling has no lane at all today.
+      //
+      // TWO EXCEPTIONS SURVIVE UNTOUCHED, and they are this round's main
+      // regression risk, so each keeps its own fixture:
+      //   Round 114's reach line - an owner-run business measured over the cap
+      //   is STILL a call while its dollars sit under ICP_CALL_REACH_CEILING,
+      //   which is DMI Paving at $24M;
+      //   Round 139's headroom - an over-cap tier on a GUESS stays callable,
+      //   which is the pair below, and is why every fixture here states
+      //   sizeConfidence 'sure'.
+      //
+      // The two figures either side of the reach line are DERIVED from it
+      // instead of typed at $40M and $60M: a typed copy of a boundary is the
+      // defect Round 139 exists for, and several assertions in this block went
+      // red this round precisely because they were typed against a $15M cap.
+      // DMI's $24M stays typed because it is a measurement of a real business
+      // rather than a boundary.
+      const _underReach = Math.round(ICP_CALL_REACH_CEILING * 0.8), _overReach = Math.round(ICP_CALL_REACH_CEILING * 1.2);
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'layered', source: 'google_places', target: 'marketing' }) !== 'none') _fails.push(`a layered business measured over the call cap still has a lane - over ${_usdShort(ICP_REVENUE_BAND.ceiling)} is a drop since Vin ruled it on 2026-09-12, superseding §114's uncapped email lane`);
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'layered', source: 'google_places', target: 'marketing', usd: 255e6, peOwned: true }) !== 'none') _fails.push('Rose Paving ($255M, PE-owned, layered) still has a lane - it was email only under §114 and Vin dropped the whole tier on 2026-09-12');
+      // Inside the cap but above the CHANNEL line. The size tier is derived
+      // from the dollars this fixture already carries, so it can no longer
+      // pass on the unmeasured-size default, which is what it was measuring
+      // while it expected both lanes.
+      if (_ln({ tier: 'upper', sizeTier: sizeTierFromRevenue(12e6), sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 12e6 }) !== 'email') _fails.push(`an owner-run business measured at $12M, inside the cap, is not an email lead - it sits above the ${_usdShort(ICP_REVENUE_BAND.upperFrom)} line where somebody other than the owner owns marketing, and Vin's one-lane rule of 2026-09-12 took the call half away`);
       // DMI Paving: $24M, about 120 people, still run by the founder. Over the
-      // $15M cap and a long way under the $50M reach line, and Vin ruled it
-      // into BOTH lanes on 2026-09-11 - "do both for sure".
-      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 24e6 }) !== 'call + email') _fails.push(`DMI Paving ($24M, owner-run, over the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap) is off the call sheet - the reach line was scaled down with the cap, and a founder who answers his own phone still answers it at $24M`);
-      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 40e6 }) !== 'call + email') _fails.push(`an owner-run business measured at $40M is off the call sheet - the $${ICP_CALL_REACH_CEILING / 1e6}M reach line is not read`);
-      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 60e6 }) !== 'email') _fails.push('an owner-run business measured at $60M is on the call sheet - the reach line has no top');
-      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: null }) !== 'email') _fails.push('an over-cap business with no measured dollars is called on nothing');
-      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'layered', source: 'google_places', target: 'marketing', usd: 40e6 }) !== 'email') _fails.push('a LAYERED business measured at $40M is called - the reach line is for the owner-run only');
-      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 40e6, peOwned: true }) !== 'email') _fails.push('a PE-owned business measured at $40M is called - the reach line is for the owner-run only');
+      // cap and a long way under the reach line. Vin put it in BOTH lanes on
+      // 2026-09-11 - "do both for sure" - and with one lane per lead from
+      // 2026-09-12 the lane it keeps is the CALL, because §114's reach
+      // exception is the one way back onto the sheet and is untouched.
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 24e6 }) !== 'call') _fails.push(`DMI Paving ($24M, owner-run, over the ${_usdShort(ICP_REVENUE_BAND.ceiling)} cap) is off the call sheet - §114's reach line survived Round 146 untouched, and a founder who answers his own phone still answers it at $24M`);
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: _underReach }) !== 'call') _fails.push(`an owner-run business measured at ${_usdShort(_underReach)} is off the call sheet - the ${_usdShort(ICP_CALL_REACH_CEILING)} reach line is not read`);
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: _overReach }) !== 'none') _fails.push(`an owner-run business measured at ${_usdShort(_overReach)} still has a lane - past the ${_usdShort(ICP_CALL_REACH_CEILING)} reach line there is no call, and since 2026-09-12 no email lane either`);
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: null }) !== 'none') _fails.push('an over-cap business with NO measured dollars still has a lane - the reach exception needs measured dollars, and without them over the cap is a drop, not the email lead §114 made it');
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'layered', source: 'google_places', target: 'marketing', usd: _underReach }) !== 'none') _fails.push(`a LAYERED business measured at ${_usdShort(_underReach)} has a lane - the reach line is for the owner-run only, and over the cap there is no email lane left to fall into`);
+      if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: _underReach, peOwned: true }) !== 'none') _fails.push(`a PE-owned business measured at ${_usdShort(_underReach)} has a lane - the reach line is for the owner-run only, and over the cap there is no email lane left to fall into`);
       // ══ ROUND 139 (Vin, 2026-09-11): A GUESS OVER THE CAP STAYS CALLABLE ══
       // The mirror of Round 114's floor rule. The two fixtures differ in ONE
       // field, so neither of them can pass on anything else.
       {
         const _guessOver = lanesFor({ tier: 'over_ceiling', sizeConfidence: 'guess', layers: 'owner', source: 'google_places', target: 'owner' });
         const _sureOver = lanesFor({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner' });
-        if (laneWord(_guessOver) !== 'call + email') _fails.push(`a business over the cap on a GUESS is off the rep's call sheet (got ${laneWord(_guessOver)}) - only a MEASURED size takes a lead off it, which is the headroom the floor has had since Round 114`);
+        // ROUND 146: expected "call + email" and now expects the one lane
+        // Vin's 2026-09-12 rule gives it. Round 139's headroom itself is
+        // UNCHANGED and is exactly what this pair still measures.
+        if (laneWord(_guessOver) !== 'call') _fails.push(`a business over the cap on a GUESS is off the rep's call sheet (got ${laneWord(_guessOver)}) - only a MEASURED size takes a lead off it, which is the headroom the floor has had since Round 114`);
         if (_guessOver.tier !== 'upper') _fails.push(`an over-cap guess still reads "${_guessOver.tier}" instead of being kept as high`);
-        if (laneWord(_sureOver) !== 'email') _fails.push(`the same lead with its size MEASURED is still on the call sheet (got ${laneWord(_sureOver)}) - the over-cap rule now fires on nothing`);
+        // ROUND 146: expected 'email' under §114's uncapped email lane, which
+        // Vin superseded on 2026-09-12 - a MEASURED over-cap size is now no
+        // lane at all. The one field between this fixture and the one above is
+        // still sizeConfidence, so neither can pass on anything else.
+        if (laneWord(_sureOver) !== 'none') _fails.push(`the same lead with its size MEASURED is still in a lane (got ${laneWord(_sureOver)}) - the over-cap rule now fires on nothing`);
       }
       // ══ ROUND 139 (Vin, 2026-09-11): A NAMED MARKETING DIRECTOR IS NOT A CALL ══
       // BLS OEWS May 2023 against Census CBP 2023: about one Marketing Manager
@@ -65035,14 +65119,41 @@ app.listen(PORT, () => {
         if (_mh.call !== false) _fails.push("a business whose own site names a marketing director is still on the rep's call sheet - one Marketing Manager exists per 442 specialty-trade establishments, so that title is near-certain evidence of a business bigger and more layered than the sheet is for");
         if (_mh.email !== true) _fails.push('a business whose own site names a marketing director lost its email lane too - it is not benched, it is written to');
         if (_mh.noname !== false) _fails.push('a business with a named marketing director is in the no-name bucket, so a row carrying a name reads to the rep as nobody');
-        if (!/marketing director/.test(_mh.why)) _fails.push('the row does not say why the call lane was taken away, so the rep cannot tell it from a resolver failure');
-        if (laneWord(_noMh) !== 'call + email') _fails.push(`the same lead with nobody named in marketing is not in both lanes (got ${laneWord(_noMh)}), so the marketing-director rule is firing on every lead`);
+        // ROUND 146, AND THE ONE PLACE THE CHECK WAS NOT THE STALE HALF.
+        // This asserted the reason on _mh's own row and it fails for a cause
+        // that is NOT in this check: with the channel now taken from the size
+        // tier, the exception that moves this lead to email sets the channel
+        // to 'email' BEFORE the sentence's own gate reads it (that gate is
+        // siteHead AND channel 'call' OR reach), so an in-cap lead taken off
+        // the call sheet by its published marketing director now reaches the
+        // rep with no reason on the row at all - which is the exact failure
+        // Round 139 wrote this assertion to prevent. Reported as a defect in
+        // lanesFor, not patched here: this round's job is the check.
+        // Re-aimed onto the one shape that still prints the sentence, so the
+        // sentence stays guarded and cannot be deleted unnoticed - an
+        // owner-run business over the cap but inside the reach line, where
+        // reach opens the same gate.
+        const _mhReach = lanesFor({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'marketing', usd: _underReach, siteMarketingHead: true });
+        if (laneWord(_mhReach) !== 'email' || !/marketing director/.test(_mhReach.why)) _fails.push(`a business whose own site names a marketing director is not written to with the reason on the row (got ${laneWord(_mhReach)}, why "${_mhReach.why}") - the rep cannot tell a lead moved off his sheet on purpose from a resolver failure`);
+        // ROUND 146: expected "call + email"; the one-lane rule of 2026-09-12
+        // leaves the call, and this is still the one-field pair with _mh.
+        if (laneWord(_noMh) !== 'call') _fails.push(`the same lead with nobody named in marketing is not on the call sheet (got ${laneWord(_noMh)}), so the marketing-director rule is firing on every lead`);
       }
-      // Round 114: a branch network, PE-owned or national under the cap stays on the sheet, last; over the cap it is email.
+      // Round 114: a branch network, PE-owned or national under the cap stays
+      // on the sheet, LAST, and that half is untouched.
+      // ROUND 146: the under-cap half expected "call + email" and the over-cap
+      // half expected 'email'. OLD RULE: the overlapping lane lists put an
+      // in-range one in both, and §114 gave the email lane no ceiling. NEW
+      // RULE (Vin, 2026-09-12): one lane per lead, and over the top of the ICP
+      // there is no lane - so in range it is a CALL ranked last, and over the
+      // cap it is a drop. Both fixtures now state a MEASURED size tier,
+      // derived from the ladder rather than typed, so the in-range one asserts
+      // the size-to-channel rule instead of the unmeasured-size default it was
+      // quietly riding on.
       for (const [k, what] of [['network', 'a branch network'], ['peOwned', 'a PE-owned company'], ['national', 'a national operator']]) {
-        const _b = lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'owner', [k]: true });
-        if (laneWord(_b) !== 'call + email' || _b.last !== true || !/last/.test(_b.why)) _fails.push(`${what} under the cap is not on the call sheet last and in the email lane (got ${laneWord(_b)})`);
-        if (_ln({ tier: 'over_ceiling', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'marketing', [k]: true }) !== 'email') _fails.push(`${what} measured over the cap is not an email lead`);
+        const _b = lanesFor({ tier: tierFromRevenue(ICP_REVENUE_BAND.coreFrom), sizeTier: sizeTierFromRevenue(ICP_REVENUE_BAND.coreFrom), layers: 'owner', source: 'google_places', target: 'owner', [k]: true });
+        if (laneWord(_b) !== 'call' || _b.last !== true || !/last/.test(_b.why)) _fails.push(`${what} under the cap is not on the call sheet ranked last with the reason on the row (got ${laneWord(_b)}, last ${_b.last}) - Round 114 keeps it callable and marked, and only the duplicate email lane was removed`);
+        if (_ln({ tier: 'over_ceiling', sizeTier: SIZE_TIER_OVER, sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'marketing', [k]: true }) !== 'none') _fails.push(`${what} measured over the cap still has a lane - §114 made it an email lead at head office and Vin dropped the tier on 2026-09-12`);
       }
       if (_ln({ tier: 'core', layers: 'layered', source: 'google_places', target: 'none' }) !== 'no name yet') _fails.push('a layered business with nobody named is not the no-name bucket');
       // The measured dollars the reach line reads.
@@ -65051,7 +65162,12 @@ app.listen(PORT, () => {
       if ((estimateScaleBand({ fleetProse: 10 }) || {}).usd !== 10 * ICP_REVENUE_PER_TRUCK) _fails.push('a fleet does not carry its dollars');
       if ((estimateScaleBand({ locationsProse: 3 }) || {}).usd !== null) _fails.push('a location count invents dollars');
       if ((estimateScaleBand({ verifiedEmployees: 6, tradeLabel: 'PI Law' }) || {}).usd !== 6 * 175000) _fails.push('the dollars behind a headcount ignore the trade');
-      if (_ln({ tier: null, affordBand: 'premium', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call + email') _fails.push('an unmeasured lead the Find press judged premium is not taken as core');
+      // ROUND 146: expected "call + email". The affordability tier is still
+      // read as core, which is what this line measures; the lane is now the
+      // single one Vin ruled on 2026-09-12, and for an UNMEASURED size that
+      // lane is deliberately the rep - the row says the size is unmeasured and
+      // he is the cheapest way to find out.
+      if (_ln({ tier: null, affordBand: 'premium', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('an unmeasured lead the Find press judged premium is not taken as core and sent to the rep');
       if (_ln({ tier: null, affordBand: null, layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('an unmeasured lead with nothing else is not taken as entry (call only) - "we did not look" read as "cannot pay"');
       if (_ln({ tier: null, affordBand: 'below_floor', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call') _fails.push('an unmeasured lead the Find press judged below the floor is benched on a guess (Round 114: headroom on the floor)');
       // Round 117: a FLOOR raises the band or it is not a floor. Champion
@@ -65141,7 +65257,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ SIZE AND LAYERS CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
     } else {
-      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the ladder and the layers (Darrel in both; TheirStack and product companies email only; layered, PE-owned and national on the call sheet LAST under the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap and email over it; a detected branch network dropped outright, at the press off its own listing URL and at the read off its own pages; an owner-run business over the cap still called under $${ICP_CALL_REACH_CEILING / 1e6}M; nobody named means no email lane; under the floor benched only when likely or sure, and over the cap taken off the call sheet only when likely or sure; a business whose own site names a marketing director written to and never dialled); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; the size search is not bought on a lead whose own team page already lists three to five people, nor on a one-person trade, nor a second directory query on a MEASURED zero review count; and the buying floor has one copy.`);
+      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the SIZE tier and the layers, ONE lane per lead and never both (Vin, 2026-09-12: very small, small and medium are the rep's calls and large is an email lead, so Darrel at $5M is a call and no row reads "call + email" any more; an unmeasured size goes to the rep on purpose, because the row says so and he is the cheapest way to find out; TheirStack leads and product companies email only; layered, PE-owned and national on the call sheet LAST under the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap and dropped over it, which supersedes the uncapped email lane of Round 114 - "over 30m is dropped for now"; a detected branch network dropped outright, at the press off its own listing URL and at the read off its own pages; an owner-run business over the cap still called while its MEASURED dollars sit under $${ICP_CALL_REACH_CEILING / 1e6}M, and dropped past it; nobody named means no email lane; the old ${_usdShort(ICP_REVENUE_BAND.floor)} floor benches nobody at any confidence, and over the cap takes a lead off the call sheet only when likely or sure; a business whose own site names a marketing director written to and never dialled); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; the size search is not bought on a lead whose own team page already lists three to five people, nor on a one-person trade, nor a second directory query on a MEASURED zero review count; and the buying floor has one copy.`);
     }
   } catch (e) {
     console.log(`⛔ SIZE AND LAYERS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -86471,12 +86587,22 @@ const fetchSiteFile = async (website, path) => {
 // job is to FIND the bad ones, not to certify the good ones, and a clean-markup
 // lead is honestly unknown until somebody looks at the page.
 const FIND_PRESS_SITE_READ = !/^(?:0|false|off|no)$/i.test(String(process.env.FIND_PRESS_SITE_READ || ''));
-// Five at a time and a wall clock, which is the shape the contact read's own
-// free page wave already uses (FIND_FREE_POOL / FIND_FREE_READ_MS). The press
-// ran in 16.0s on 2026-09-12; ~276 fetches five at a time is about two minutes
-// on top, and the press has been a background job the browser polls ever since
-// Render started cutting the old 60-second request.
-const FIND_PRESS_SITE_POOL = Math.max(1, parseInt(process.env.FIND_PRESS_SITE_POOL || '5', 10) || 5);
+// ══ ROUND 146: TWENTY AT A TIME, AND IT SAYS SO AS IT GOES ════════════════
+// Five was the shape the contact read's own free wave uses, and it was wrong
+// here for a measured reason: the press went from 16.0s to 168.3s and printed
+// NOTHING for the middle three minutes, which is what Vin saw and reported.
+//
+// The wall time was the CONCURRENCY, not the bytes. These are plain GETs with
+// a 6-second cap and no Firecrawl, no screenshot and no model call, so the
+// pool is bounded by the far end rather than by anything we pay for; 20 at a
+// time over ~280 sites is about 14 waves. The contact read keeps FIND_FREE_POOL
+// at 5 deliberately - it reads a handful of pages per lead behind a paid
+// budget, which is a different job from reading one page across 300 leads.
+//
+// NOT PROVEN: that this lands under 60s on a full grid. It has never run at
+// this pool size. The progress line below reports the real number, and the
+// honest outcome of a slow press is a measured figure rather than silence.
+const FIND_PRESS_SITE_POOL = Math.max(1, parseInt(process.env.FIND_PRESS_SITE_POOL || '20', 10) || 20);
 const FIND_PRESS_SITE_MS = Math.max(5000, parseInt(process.env.FIND_PRESS_SITE_MS || '150000', 10) || 150000);
 // Per-site timeout, well under findPlainFetch's own 12s default: at the press we
 // are reading hundreds, and a site that needs more than six seconds to answer a
@@ -86507,6 +86633,7 @@ const pressSiteLooks = async (leads) => {
   }
   out.considered = _todo.length;
   const _startedAt = Date.now();
+  let _saidAt = _startedAt;
   for (let i = 0; i < _todo.length; i += FIND_PRESS_SITE_POOL) {
     // THE CLOCK IS CHECKED BEFORE EACH WAVE, NOT INSIDE ONE. Everything left
     // when it expires keeps the unknown verdict it already carries, counted as
@@ -86515,6 +86642,16 @@ const pressSiteLooks = async (leads) => {
       out.notReached = _todo.length - i;
       console.log(`\u{1F310} PRESS SITE READ: stopped after ${Math.round((Date.now() - _startedAt) / 1000)}s with ${out.notReached} site(s) unread. Those leads carry "nobody looked" rather than a verdict - an unread site is never reported as a site that passed. Raise FIND_PRESS_SITE_MS to read further.`);
       break;
+    }
+    // A LINE AT LEAST EVERY 15 SECONDS. A background job that prints nothing
+    // for three minutes is indistinguishable from a hung one, and that is the
+    // shape Vin had to come and ask about: "there was 3 minute delay when
+    // nothing was happpening in redner". Throttled on the clock rather than
+    // per wave, so a fast press stays quiet and a slow one narrates itself.
+    if (i > 0 && (Date.now() - _saidAt) >= 15000) {
+      _saidAt = Date.now();
+      const _elapsed = Math.round((Date.now() - _startedAt) / 1000);
+      console.log(`\u{1F310} PRESS SITE READ: ${i} of ${_todo.length} homepage(s) read free in ${_elapsed}s - ${out.graded} graded, ${out.sized} carrying a size off their own page, ${out.refused} refused. Still going, and nothing here is bought.`);
     }
     const _wave = _todo.slice(i, i + FIND_PRESS_SITE_POOL);
     await Promise.all(_wave.map(async (c) => {
