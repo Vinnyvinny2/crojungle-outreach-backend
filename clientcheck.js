@@ -1928,9 +1928,15 @@ const mergeStat = runMergeCheck();
       // Measured once, on a paid read, and it decides which rows the rep is
       // shown. Blanked on a reload it would read as "we never looked" on every
       // lead in the pipeline, which is the exact shape of reachPredict.
-      const _looksBack = trip({ id: 'find-2', name: 'Dated Co', contactReadOk: true, contactSiteLooks: 'dated' });
-      if (_looksBack.contactSiteLooks !== 'dated') {
-        fails.push(`the website-looks verdict does not survive a save and reload (${JSON.stringify(_looksBack.contactSiteLooks)} came back for "dated") - the toggle that reads it would treat every reloaded lead as one nobody looked at`);
+      // ══ ROUND 146: THE SAME ASSERTION, IN THE NEW VOCABULARY ═══════════
+      // OLD RULE (Round 141): the verdict was modern / dated / bad, so the
+      // fixture round-tripped 'dated'. NEW RULE (Vin, 2026-09-12): the grade
+      // is poor / bad / fair / good. The persistence fact is unchanged, but a
+      // fixture carrying a word the app retired reads as coverage of a
+      // vocabulary nothing produces any more.
+      const _looksBack = trip({ id: 'find-2', name: 'Fair Co', contactReadOk: true, contactSiteLooks: 'fair' });
+      if (_looksBack.contactSiteLooks !== 'fair') {
+        fails.push(`the website-looks verdict does not survive a save and reload (${JSON.stringify(_looksBack.contactSiteLooks)} came back for "fair") - the toggle that reads it would treat every reloaded lead as one nobody looked at`);
       }
 
       // ── 2. AND IT IS NOT AUDITED ───────────────────────────────────────
@@ -2464,6 +2470,17 @@ let contactTally = null;
     // exactly how the sheet and the ladder would come to disagree.
     _lift(/const ICP_REVENUE_BAND = \{[\s\S]*?\};/, 'ICP_REVENUE_BAND'),
     _lift(/const _usdShort = \(n\) => [^\n]*\n/, '_usdShort'),
+    // ══ ROUND 146: THE SIZE LADDER ITSELF, LIFTED ═════════════════════════
+    // Vin's four size words and the dollar range under each are DERIVED on the
+    // server from ICP_SIZE_TIERS, whose cuts are $1.5M / $4M / $10M / $20M and
+    // two of those are read out of ICP_REVENUE_BAND. The fixtures below need
+    // the words and the ranges, and a retyped '$4M-$10M' in this file would be
+    // a third copy of the ladder that still passes the day he moves a cut.
+    // These come after ICP_REVENUE_BAND and _usdShort because they read both.
+    _lift(/const ICP_SIZE_TIERS = \[[\s\S]*?\n\];/, 'ICP_SIZE_TIERS'),
+    _lift(/const SIZE_TIER_OVER = [^\n]+\n/, 'SIZE_TIER_OVER'),
+    _lift(/const SIZE_TIER_WORD = Object\.assign\([\s\S]*?\);/, 'SIZE_TIER_WORD'),
+    _lift(/const SIZE_TIER_SAY = Object\.assign\([\s\S]*?\]\)\)\);/, 'SIZE_TIER_SAY'),
     _lift(/const SCALE_BAND_SAY = \{[\s\S]*?\n\};/, 'SCALE_BAND_SAY'),
     _lift(/const contactFieldsFrom = \(data\) => \{[\s\S]*?\n\};/, 'contactFieldsFrom'),
     _lift(/const contactFailureFields = \(status, body\) => \{[\s\S]*?\n\};/, 'contactFailureFields'),
@@ -2514,6 +2531,14 @@ let contactTally = null;
         + ' cityState: cityStateCell, split: exportSplit, withheldSay: exportWithheldSay,'
         + ' mergeView: mergeFindView, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
         + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, siteCell,'
+        // ══ ROUND 146: THE VOCABULARIES, SO A FIXTURE CAN BE DERIVED ═══════
+        // srvTierWord / srvTierSay are the SERVER's size ladder (lifted above)
+        // and tierWord is the page's own typed copy of the same words, so the
+        // two are COMPARED below rather than both trusted - two hand-kept
+        // copies of one rule is the class this repo records most. looks and
+        // looksSayMap are the four website grades and the words they print.
+        + ' tierWord: TIER_SHEET_WORD, srvTierWord: SIZE_TIER_WORD, srvTierSay: SIZE_TIER_SAY, notMeasured: SIZE_NOT_MEASURED,'
+        + ' looks: SITE_LOOKS, looksSayMap: SITE_LOOKS_SAY,'
         + ' looksOf: siteLooksOf, looksCell: siteLooksCell, looksFilter: siteLooksFilter, looksHidden: siteLooksHidden, looksSay: siteLooksHiddenSay, looksWanted: siteLooksWanted,'
         + ' targetCell, targetWhyCell, shortCell, SHORT_CELL_MAX, laneOf, laneChip, exportableContact, laneHas, laneKey, laneTabs: LANE_TABS, bestTime: bestTimeCell, exportedDate: exportedDateCell,'
         + ' fields: contactFieldsFrom, failureFields: contactFailureFields,'
@@ -2713,14 +2738,69 @@ let contactTally = null;
             const _wireGuess = M.fields({ lanes: { call: true, email: false, noname: false, last: false, tier: 'entry', measured: false } });
             if (_wireGuess.contactTier !== 'entry') fails.push('the server sends no tier at all on a GUESSED lead - that is four of the eight rows in the last live batch, and the TARGET line prints a tier for every one of them');
             if (_wireGuess.contactTierBand !== '') fails.push(`the server sends a dollar range for a lead whose size was guessed off a review count (got ${JSON.stringify(_wireGuess.contactTierBand)}) - that is a number nobody measured on a row a human reads`);
+            // ══ ROUND 146: AND THE SIZE LADDER AT THE SAME SEAM ═══════════
+            // Every re-aimed fixture below supplies contactSizeTier by hand,
+            // so all of them would stay green on the day the server stopped
+            // sending it - which is exactly what happened to contactTier in
+            // Round 144 (lanesFor returned seven keys and contactFieldsFrom
+            // copied four, so the log printed a tier the row did not carry).
+            // d.size is the object a read builds, and the channel rides the
+            // lanes: Vin, 2026-09-12, "size kind of decides reachability wise
+            // and also decides which channel we use".
+            const _wireSize = M.fields({ size: { sizeTier: 'medium', sizeTierMeasured: true, sizeSay: M.srvTierSay.medium }, lanes: { call: true, email: false, noname: false, last: false, channel: 'call' } });
+            if (_wireSize.contactSizeTier !== 'medium') fails.push(`the server stops sending the SIZE tier the rep filters on (got ${JSON.stringify(_wireSize.contactSizeTier)}) - it is measured on every read, and without it every row on his sheet reads "${M.notMeasured}"`);
+            if (_wireSize.contactSizeTierMeasured !== true) fails.push('the server stops sending whether the SIZE was measured, so a business nobody could size arrives looking exactly like one we read a headcount for');
+            if (_wireSize.contactSizeTierSay !== M.srvTierSay.medium) fails.push(`the server sends no dollar range for a measured size (got ${JSON.stringify(_wireSize.contactSizeTierSay)}) - SIZE_TIER_SAY is derived from the ladder's own cuts and the sheet has no other source for it`);
+            if (_wireSize.contactChannel !== 'call') fails.push(`the server stops sending the channel the size decides (got ${JSON.stringify(_wireSize.contactChannel)}) - the rep's file then cannot say whether a row is his to dial or one queued for email`);
           }
-          const _m = _tierRow({ contactTier: 'core', contactTierMeasured: true, contactTierBand: '$1.2M-$10M' });
-          if (_m.tier !== 'MEDIUM') fails.push(`a measured core lead exports tier "${_m.tier}" and not MEDIUM`);
-          if (_m.band !== '$1.2M-$10M') fails.push(`a measured core lead exports revenue_band "${_m.band}" and not the server's own band`);
+          // ══ ROUND 146: RE-AIMED ONTO VIN'S FOUR-WORD SIZE LADDER ════════
+          // OLD RULE (Round 144): the tier column printed LOW / LOW / MEDIUM /
+          // HIGH / TOO BIG off the five AFFORDABILITY ids, so a row carrying
+          // 'core' was expected to export MEDIUM.
+          // NEW RULE (Vin, 2026-09-12: "break catgeroize that pool into 4
+          // teirs very small , small, meidum large"): the column prints his
+          // four size words, carried on contactSizeTier, and the affordability
+          // ids are not size words at all. Left as it was, this pair asserted
+          // a mapping the app no longer has - a guard nobody can trip.
+          //
+          // The WORD is compared against the server's own SIZE_TIER_WORD and
+          // the RANGE against its SIZE_TIER_SAY, both lifted above: a retyped
+          // '$4M-$10M' here would be a copy of the ladder that still passes
+          // the day Vin moves a cut.
+          const _m = _tierRow({ contactSizeTier: 'medium', contactSizeTierMeasured: true, contactSizeTierSay: M.srvTierSay.medium });
+          if (_m.tier !== M.srvTierWord.medium) fails.push(`a measured medium lead exports tier "${_m.tier}" and not "${M.srvTierWord.medium}"`);
+          if (_m.band !== M.srvTierSay.medium) fails.push(`a measured medium lead exports revenue_band "${_m.band}" and not the server's own band "${M.srvTierSay.medium}"`);
+          // The page types the four words and the server derives them from the
+          // cuts, so the two copies of one ladder are compared rather than
+          // both trusted. Order-independent: a reorder is not a drift.
+          {
+            const _flat = (o) => Object.keys(o || {}).sort().map(k => k + '=' + o[k]).join(', ');
+            if (_flat(M.tierWord) !== _flat(M.srvTierWord)) fails.push(`the page's size words (${_flat(M.tierWord)}) are not the server's (${_flat(M.srvTierWord)}) - one ladder kept in two places, and the column the rep filters on is the copy that rots`);
+          }
 
-          const _g = _tierRow({ contactTier: 'entry', contactTierMeasured: false, contactTierBand: '' });
-          if (_g.tier !== 'LOW (guess)') fails.push(`a lead whose size was GUESSED off a review count exports tier "${_g.tier}" - without the marker a rep reads a guess as a measurement, and four of eight rows in the last live batch were guesses`);
-          if (_g.band !== 'not measured') fails.push(`a guessed lead exports revenue_band "${_g.band}" - a dollar range there is a number nobody measured, which is the one thing this system must never do`);
+          // ══ A RETIRED AFFORDABILITY ID IS REFUSED BY VALUE ══════════════
+          // The fixture the pair above used to run on. 'core' still arrives in
+          // this field on every lead an older build read, and it is no longer a
+          // size: the honest answer is that nobody measured the size. A size
+          // word picked because the field merely had something in it would be
+          // the unmeasured-treated-as-measured class, one field further along.
+          const _stale = _tierRow({ contactSizeTier: 'core', contactSizeTierMeasured: true, contactSizeTierSay: '$1.2M-$10M' });
+          if (_stale.tier !== M.notMeasured) fails.push(`a lead carrying the retired affordability id 'core' exports tier "${_stale.tier}" - an old id is not one of Vin's four sizes and has to be refused by VALUE, not trusted because the field is populated`);
+          if (_stale.band !== M.notMeasured) fails.push(`a lead carrying the retired affordability id 'core' exports revenue_band "${_stale.band}" - the old ladder's dollar range under the new column is a figure nobody measured about a business nobody sized`);
+
+          // ══ NOBODY MEASURED IT ═════════════════════════════════════════
+          // OLD RULE (Round 144): the tier could be GUESSED off a review count
+          // and the cell marked the guess - "LOW (guess)".
+          // NEW RULE (Round 146): a review count does not size a business at
+          // all, so there is no guessed size to mark. sizeTierMeasured false
+          // means NOBODY MEASURED IT, the cell says so in words, and no dollar
+          // range is printed. The fixture carries a size word AND a range in
+          // the fields, so the assertion fails the moment the page trusts a
+          // populated field over the measured flag beside it - which is the
+          // whole reason this round exists.
+          const _g = _tierRow({ contactSizeTier: 'small', contactSizeTierMeasured: false, contactSizeTierSay: M.srvTierSay.small });
+          if (_g.tier !== M.notMeasured) fails.push(`a lead whose size NOBODY MEASURED exports tier "${_g.tier}" - without the marker a rep reads a guess as a measurement, and four of eight rows in the last live batch were guesses`);
+          if (_g.band !== M.notMeasured) fails.push(`a lead nobody sized exports revenue_band "${_g.band}" - a dollar range there is a number nobody measured, which is the one thing this system must never do`);
 
           // Never looked is not measured zero. A lead read by an OLDER build
           // carries no tier token at all, and an empty cell is the only honest
@@ -2729,8 +2809,15 @@ let contactTally = null;
           const _old = _tierRow({});
           if (_old.tier !== '' || _old.band !== '') fails.push(`a lead read before the tier existed exports tier "${_old.tier}" / revenue_band "${_old.band}" - both must be empty, because never looked is not measured zero`);
 
-          const _big = _tierRow({ contactTier: 'over_ceiling', contactTierMeasured: true, contactTierBand: 'over $15M' });
-          if (_big.tier !== 'TOO BIG') fails.push(`a business measured over the ceiling exports tier "${_big.tier}" - HIGH there hides the one distinction the column exists to make, and the rep calls a company we cannot serve`);
+          // ══ ROUND 146: RE-AIMED - OVER THE TOP OF THE ICP ═══════════════
+          // OLD RULE (Round 144): the affordability id 'over_ceiling' printed
+          // TOO BIG. NEW RULE (Vin, 2026-09-12): the size ladder's fifth key
+          // is over_icp, over $20M, and its word is "over the ICP". Same fact
+          // and the same danger - a business we MEASURED as too big must not
+          // read as the largest size we sell to, or the rep dials a company we
+          // cannot serve. Both words come from the server, not retyped.
+          const _big = _tierRow({ contactSizeTier: 'over_icp', contactSizeTierMeasured: true, contactSizeTierSay: M.srvTierSay.over_icp });
+          if (_big.tier !== M.srvTierWord.over_icp) fails.push(`a business measured over the ICP exports tier "${_big.tier}" - "${M.srvTierWord.large}" there hides the one distinction the column exists to make, and the rep calls a company we cannot serve`);
 
           // ══ THE GRADE THAT USED TO BE ITS OWN COLUMN ═══════════════════
           // owner_confidence is gone, so the qualifier rides the HEAD of this
@@ -3355,18 +3442,44 @@ let contactTally = null;
         // Round 118: the website read is on the sheet, and it says nothing at
         // all on a lead whose site we could not read.
         const _siteRows = M.rows([
-          { name: 'Poor Co', contactReadOk: true, contactOwner: 'P Q', contactPhone: '5551110000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: true, contactSiteWord: 'poor', contactSiteShort: 'poor (DIY build, no schema)', contactSiteGap: 22, contactSiteGrade: 2, contactSiteWhy: 'it is a DIY website-builder template; no business schema in their code' },
-          { name: 'Good Co', contactReadOk: true, contactOwner: 'G H', contactPhone: '5552220000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: true, contactSiteWord: 'strong', contactSiteShort: 'strong', contactSiteGap: 0, contactSiteGrade: 10, contactSiteWhy: 'nothing wrong with their site that we can see from its code' },
-          { name: 'Unread Co', contactReadOk: true, contactOwner: 'U V', contactPhone: '5553330000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: false, contactSiteWhy: 'we could not read enough of their site to judge the build' },
+          // ══ ROUND 146: THE GRADE FIELDS THE PAGE ACTUALLY READS ═════════
+          // contactSiteWord is still on every fixture ON PURPOSE and is no
+          // longer what the cell prints. It carries the TECHNICAL ladder
+          // (poor / weak / fair / strong) counted off their markup, and the
+          // page deliberately does not read it: two of its words also exist in
+          // the new visitor vocabulary meaning something else. Left as the
+          // only grade on the row, 'strong' was being asserted as the word for
+          // a good website - a word the new ladder does not contain.
+          { name: 'Poor Co', contactReadOk: true, contactOwner: 'P Q', contactPhone: '5551110000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: true, contactSiteGradeWord: 'poor', contactSiteGradeMeasured: true, contactSiteWord: 'poor', contactSiteShort: 'poor (DIY build, no schema)', contactSiteGap: 22, contactSiteGrade: 2, contactSiteWhy: 'it is a DIY website-builder template; no business schema in their code' },
+          { name: 'Good Co', contactReadOk: true, contactOwner: 'G H', contactPhone: '5552220000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: true, contactSiteGradeWord: 'good', contactSiteGradeMeasured: true, contactSiteWord: 'strong', contactSiteShort: 'strong', contactSiteGap: 0, contactSiteGrade: 10, contactSiteWhy: 'nothing wrong with their site that we can see from its code' },
+          // The unreadable site carries a LEFTOVER grade word whose own
+          // measured flag is false, and the technical ladder's 'poor' beside
+          // it. Both have to be refused or the row claims a verdict about a
+          // website nobody could look at.
+          { name: 'Unread Co', contactReadOk: true, contactOwner: 'U V', contactPhone: '5553330000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteMeasured: false, contactSiteGradeWord: 'bad', contactSiteGradeMeasured: false, contactSiteWord: 'poor', contactSiteWhy: 'we could not read enough of their site to judge the build' },
         ]);
         const _byName = (n) => _siteRows.find(r => r.company === n) || {};
         // Round 120, Vin: "dont need a descritpion on why theyre good or bad,
         // just good fair bad." The verdict is a token; the sentence lives one
         // tick box away in siteWhy, and the grade beside it carries the detail.
-        if (_byName('Poor Co').site !== 'poor') fails.push(`the website verdict is not a plain token on the sheet (got ${JSON.stringify(_byName('Poor Co').site)})`);
+        // ROUND 146 re-aimed the SOURCE of this word, not the rule. OLD: the
+        // cell printed contactSiteWord, the markup ladder. NEW (Vin,
+        // 2026-09-12): one grade, poor / bad / fair / good, read off
+        // contactSiteGradeWord. 'poor' survives in both vocabularies, so the
+        // fixture above is what makes this bite rather than the expectation.
+        if (_byName('Poor Co').site !== M.looksSayMap.poor) fails.push(`the website verdict is not a plain token on the sheet (got ${JSON.stringify(_byName('Poor Co').site)})`);
         if (/\(/.test(String(_byName('Poor Co').site))) fails.push('the website cell is carrying its own explanation again - a sentence pretending to be a token, in a column a rep scans');
-        if (_byName('Good Co').site !== 'strong') fails.push('a business with a good website does not say so');
-        if (_byName('Unread Co').site !== 'not read') fails.push('a lead whose website we could not read is given a verdict on it anyway - the absence claim this system exists to refuse');
+        // OLD RULE: a good website read 'strong', the top of the markup
+        // ladder. NEW RULE (Vin, 2026-09-12): the four words are poor / bad /
+        // fair / good and the best of them is 'good'. Taken from the page's own
+        // SITE_LOOKS_SAY so the word cannot be retyped wrong here.
+        if (_byName('Good Co').site !== M.looksSayMap.good) fails.push('a business with a good website does not say so');
+        // OLD RULE: a site nobody could read said 'not read'. NEW RULE (Vin,
+        // 2026-09-12): it says "not graded" - the absence of a verdict about
+        // their website, never a verdict that it is bad. The fixture carries a
+        // stale grade word with measured false AND the markup ladder's 'poor',
+        // so this goes red if either is ever read as the grade.
+        if (_byName('Unread Co').site !== M.looksSayMap.unknown) fails.push('a lead whose website we could not read is given a verdict on it anyway - the absence claim this system exists to refuse');
         if (!/DIY website-builder/.test(String(_byName('Poor Co').siteWhy))) fails.push('the full file lost the sentence saying what is missing from the website - the lean cell dropped the why on the understanding that this column keeps it');
         if (/converts badly|conversion rate/i.test(String(_byName('Poor Co').site) + String(_byName('Poor Co').siteWhy))) fails.push('the website cell claims something about how their site CONVERTS, which is their analytics and not our markup read');
         // Round 119, Vin: "a grade on the website 1-10, lower being worse, in a
@@ -3386,7 +3499,10 @@ let contactTally = null;
           // the lean file, which is what the rep opens.
           if (M.lean.indexOf('siteGrade') < 0) fails.push('the website grade is not in the lean file the rep actually opens');
         }
-        if (M.siteCell({ name: 'Never Read Co', contactSiteMeasured: true, contactSiteShort: 'poor' }) !== '') fails.push('a lead that was never read gets a website verdict');
+        // Re-aimed onto the field the grade travels in now (Round 146): a
+        // fixture whose only grade sits in contactSiteWord could not produce a
+        // verdict even if the guard were gone, so it proved nothing.
+        if (M.siteCell({ name: 'Never Read Co', contactSiteGradeWord: 'poor', contactSiteGradeMeasured: true }) !== '') fails.push('a lead that was never read gets a website verdict');
         // ══ ROUND 141: THE BAD-WEBSITES TOGGLE, EXECUTED ═══════════════════
         // Vin, 2026-09-11: "a toggle switch that just picks up businesses with
         // fair and bad websites - like if I toggle that on we only target
@@ -3395,10 +3511,22 @@ let contactTally = null;
         // quietly claim a website is fine when nobody ever looked at it. Every
         // rule below is RUN on the real functions the screen calls.
         {
+          // ══ ROUND 146: THE SAME TOGGLE, THE NEW FOUR WORDS ══════════════
+          // OLD RULE (Round 141): the grades were modern / dated / bad and the
+          // toggle meant "everything except MODERN". NEW RULE (Vin,
+          // 2026-09-12): the grades are poor / bad / fair / good and it means
+          // everything except a site graded GOOD. A fixture still built out of
+          // 'modern' and 'dated' cannot trip this filter at all - siteLooksOf
+          // refuses both words, every row reads "not graded", and the toggle
+          // keeps all five, which reads as coverage of the one control that
+          // can make a press look like it returned nothing.
+          //
+          // One row per grade, so no two rows share a reason for surviving.
           const _looks = [
-            { id: 'm', name: 'Modern Co', contactReadOk: true, contactSiteLooks: 'modern' },
-            { id: 'd', name: 'Dated Co', contactReadOk: true, contactSiteLooks: 'dated' },
+            { id: 'g', name: 'Good Co', contactReadOk: true, contactSiteLooks: 'good' },
+            { id: 'f', name: 'Fair Co', contactReadOk: true, contactSiteLooks: 'fair' },
             { id: 'b', name: 'Bad Co', contactReadOk: true, contactSiteLooks: 'bad' },
+            { id: 'p', name: 'Poor Co', contactReadOk: true, contactSiteLooks: 'poor' },
             { id: 'u', name: 'Could Not Look Co', contactReadOk: true, contactSiteLooks: 'unknown' },
             { id: 'o', name: 'Older Read Co', contactReadOk: true },
           ];
@@ -3406,17 +3534,25 @@ let contactTally = null;
           // shortens the list is how an operator concludes a press found nothing.
           const _off = M.looksFilter(_looks, false);
           if (_off.length !== _looks.length) fails.push(`the website toggle is OFF and the list is already shorter (${_off.length} of ${_looks.length}) - a filter nobody switched on is a press that silently returned less`);
-          if (_off.map(l => l.id).join('') !== 'mdbuo') fails.push('the website toggle is off and the rows came back in a different order or set');
-          // 2. ON shows dated, bad and the ones we could not look at - and NOT
-          // the business whose website looks modern.
+          if (_off.map(l => l.id).join('') !== 'gfbpuo') fails.push('the website toggle is off and the rows came back in a different order or set');
+          // 2. ON shows poor, bad, fair and the ones we could not look at - and
+          // NOT the business whose website is graded good. Re-aimed from
+          // "dated or bad" (Round 141's words) to Vin's 2026-09-12 grades; the
+          // ruling itself is his and unchanged, including the one below it.
           const _on = M.looksFilter(_looks, true);
-          if (_on.map(l => l.id).join('') !== 'dbuo') fails.push(`the website toggle keeps ${JSON.stringify(_on.map(l => l.id))} - Vin asked for the businesses whose website is dated or bad, and a site we could not look at may not be dropped with the good ones`);
-          if (_on.some(l => l.id === 'm')) fails.push('a business whose website looks modern survives the bad-websites toggle, so the rep is still being handed the leads he switched it on to lose');
+          if (_on.map(l => l.id).join('') !== 'fbpuo') fails.push(`the website toggle keeps ${JSON.stringify(_on.map(l => l.id))} - Vin asked for every business except the ones whose website is graded good, and a site we could not look at may not be dropped with them`);
+          if (_on.some(l => l.id === 'g')) fails.push('a business whose website is graded good survives the bad-websites toggle, so the rep is still being handed the leads he switched it on to lose');
           // 3. "unknown" survives AND is labelled as not-checked, never as bad.
           // Never-looked is not looks-fine and it is not looks-bad either.
           const _uCell = M.looksCell({ contactReadOk: true, contactSiteLooks: 'unknown' });
-          if (!/not checked/.test(_uCell)) fails.push(`a website we could not look at reads as "${_uCell}" on the row - never-looked is not a verdict, and asserting one is the absence claim this system exists to refuse`);
-          if (/\bbad\b|\bdated\b|\bmodern\b/.test(_uCell)) fails.push(`a website we could not look at is described as bad, dated or modern: "${_uCell}"`);
+          // OLD RULE: the cell said "not checked". NEW RULE (Vin, 2026-09-12):
+          // it says "not graded", the house wording for a signal we do not
+          // hold. The rule - never-looked is not a verdict - is unchanged.
+          if (!/not graded/.test(_uCell)) fails.push(`a website we could not look at reads as "${_uCell}" on the row - never-looked is not a verdict, and asserting one is the absence claim this system exists to refuse`);
+          // And it carries none of the four grades. The list is the page's own
+          // SITE_LOOKS, so a fifth word added to the ladder is covered here
+          // without anybody remembering to retype it.
+          if (new RegExp('\\b(' + M.looks.join('|') + ')\\b').test(_uCell)) fails.push(`a website we could not look at is described with one of the four grades (${M.looks.join(', ')}): "${_uCell}"`);
           if (M.looksCell({ contactReadOk: true, contactSiteLooks: 'bad' }) === _uCell) fails.push('a website we looked at and found bad reads identically to one we never managed to look at');
           if (M.looksFilter([{ id: 'u2', contactReadOk: true, contactSiteLooks: 'unknown' }], true).length !== 1) fails.push('a website we could not look at is hidden by the toggle - the owner ruled that an unreadable site is kept and marked, never hidden');
           if (M.looksCell({ name: 'Never Read Co', contactSiteLooks: 'bad' }) !== '') fails.push('a lead that was never read gets a website-looks verdict');
@@ -3425,17 +3561,29 @@ let contactTally = null;
             const _n = M.looksHidden(_looks, _o);
             if (_n !== _looks.length - M.looksFilter(_looks, _o).length) fails.push(`the hidden count says ${_n} and the toggle actually removed ${_looks.length - M.looksFilter(_looks, _o).length} - a list that shrinks without saying by how much is how a press reads as having returned nothing`);
           }
-          if (M.looksHidden(_looks, true) !== 1) fails.push(`the toggle hid ${M.looksHidden(_looks, true)} of the fixture rather than the one business whose website looks modern`);
+          // Re-aimed from "looks modern" to "graded good" (Vin, 2026-09-12);
+          // one row of the six is the hidden one and the arithmetic is the same.
+          if (M.looksHidden(_looks, true) !== 1) fails.push(`the toggle hid ${M.looksHidden(_looks, true)} of the fixture rather than the one business whose website is graded good`);
           if (M.looksHidden(_looks, false) !== 0) fails.push('the toggle is off and the screen still claims it hid rows');
-          if (!/1 row/.test(M.looksSay(1)) || !/modern/.test(M.looksSay(1))) fails.push(`the hidden-rows line does not say how many were hidden or why: "${M.looksSay(1)}"`);
+          // The line on screen has to name the REASON, not just the count, and
+          // the reason word moved with the ladder: "modern" became "graded
+          // good". Left testing /modern/ this could not pass on any correct
+          // build - the shape from §81, a needle that fails a right answer.
+          if (!/1 row/.test(M.looksSay(1)) || !/graded good/.test(M.looksSay(1))) fails.push(`the hidden-rows line does not say how many were hidden or why: "${M.looksSay(1)}"`);
           if (M.looksSay(0) !== '') fails.push('the screen prints a hidden-rows line when nothing was hidden');
           // 5. The column. The rows in the file were chosen by this signal, so
           // the file has to print it or the rep cannot check the list he was given.
           if (M.lean.indexOf('siteLooks') < 0) fails.push('the website-looks verdict is not in the lean file the rep opens, so a list filtered on it exports without the column that chose the rows');
-          const _lrow = M.rows([{ name: 'Dated Co', contactReadOk: true, contactOwner: 'D E', contactPhone: '5554440000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteLooks: 'dated' }])[0];
-          if (!_lrow || !/dated/.test(String(_lrow.siteLooks))) fails.push(`the CSV does not carry what their website looks like (got ${JSON.stringify(_lrow && _lrow.siteLooks)})`);
+          // Re-aimed from 'dated' to 'fair' (Vin, 2026-09-12). The fact is
+          // unchanged - the rows in the file were chosen by this signal, so the
+          // file has to print it - but a cell holding a retired word came out
+          // as "not graded" and this assertion could never have gone green.
+          const _lrow = M.rows([{ name: 'Fair Co', contactReadOk: true, contactOwner: 'D E', contactPhone: '5554440000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteLooks: 'fair' }])[0];
+          if (!_lrow || !/fair/.test(String(_lrow.siteLooks))) fails.push(`the CSV does not carry what their website looks like (got ${JSON.stringify(_lrow && _lrow.siteLooks)})`);
           const _urow = M.rows([{ name: 'Could Not Look Co', contactReadOk: true, contactOwner: 'U V', contactPhone: '5555550000', contactLanes: { call: true, email: false, noname: false, last: false }, contactSiteLooks: 'unknown' }])[0];
-          if (!_urow || !/not checked/.test(String(_urow.siteLooks))) fails.push(`the CSV describes a website we could not look at as ${JSON.stringify(_urow && _urow.siteLooks)} instead of saying it was not checked`);
+          // Re-aimed from "not checked" to "not graded" (Vin, 2026-09-12) - the
+          // same house wording as the cell on screen, and the same rule.
+          if (!_urow || !/not graded/.test(String(_urow.siteLooks))) fails.push(`the CSV describes a website we could not look at as ${JSON.stringify(_urow && _urow.siteLooks)} instead of saying it was not graded`);
           // 6. And the toggle is WIRED to the screen. A pure rule nothing calls
           // is a check that cannot fail: pin the call sites too.
           if (src.indexOf('siteLooksFilter(batchChipFilter(') < 0) fails.push('the batch review table no longer filters its rows through siteLooksFilter, so the toggle changes nothing on screen');
@@ -3464,8 +3612,19 @@ let contactTally = null;
         }
         if (!/ask who is/.test(String(_rows[0].ownerHowSure || ''))) fails.push('the held-back owner lost the ask-rather-than-assert sentence in the full export');
         // The two new cells, executed.
-        const _dar = M.rows([{ contactReadOk: true, name: 'Darrel Co', contactOwner: 'Darrel Jones', contactSize: 'high', contactSizeConfidence: 'sure', contactTarget: 'owner', contactLayers: 'owner' }])[0];
-        if (!_dar || _dar.size !== 'high' || _dar.sizeConfidence !== 'sure' || !/^Owner: Darrel Jones/.test(String(_dar.target))) fails.push(`Darrel at a high size does not export as the owner target (got ${JSON.stringify(_dar && [_dar.size, _dar.sizeConfidence, _dar.target])})`);
+        // ══ ROUND 146: RE-AIMED ONTO THE SIZE LADDER ══════════════════════
+        // OLD RULE: the size cell printed contactSize, the scale ladder's
+        // low / medium / high, so this fixture said 'high'.
+        // NEW RULE (Vin, 2026-09-12, the four size tiers; and the standing
+        // rule in PART 3, "a business doing $5M could be a guy named
+        // Darrel"): the cell prints his size word off contactSizeTier, and
+        // $5M is MEDIUM - under the $10M line, so Darrel still answers his own
+        // phone, is still a call and is still the target. The confidence
+        // beside it only prints when the size was MEASURED, which is why the
+        // measured flag is part of the fixture and not decoration: without it
+        // the row would read "not measured" in both cells.
+        const _dar = M.rows([{ contactReadOk: true, name: 'Darrel Co', contactOwner: 'Darrel Jones', contactSizeTier: 'medium', contactSizeTierMeasured: true, contactSizeTierSay: M.srvTierSay.medium, contactSizeConfidence: 'sure', contactTarget: 'owner', contactLayers: 'owner' }])[0];
+        if (!_dar || _dar.size !== M.srvTierWord.medium || _dar.sizeConfidence !== 'sure' || !/^Owner: Darrel Jones/.test(String(_dar.target))) fails.push(`Darrel at a measured medium size does not export as the owner target (got ${JSON.stringify(_dar && [_dar.size, _dar.sizeConfidence, _dar.target])})`);
         const _layLead = { contactReadOk: true, name: 'Layer Co', contactOwner: 'Pat Roe', contactTarget: 'marketing', contactLayers: 'layered', contactMarketingLead: 'Jane Smith', contactMarketingLeadTitle: 'Director of Marketing', contactMarketingLeadEmail: 'jane@layer.co', contactMarketingLeadEmailSendable: true };
         // Round 111: a layered business is email only, so it is NOT a row on the rep sheet; the cells are read directly.
         if (M.rows([_layLead]).length) fails.push('a layered business reached the rep sheet - it is email only');
