@@ -230,8 +230,11 @@ const GP_FIND_CAST = [
   // floor. It can no longer separate the trade floor from the base floor,
   // because for Plumbing they are the same number - and since the cap makes 15
   // the ceiling on every floor, no trade can separate them any more.
+  // noYear: its own pages state no founding year, which is the ONLY case in
+  // which the press asks a domain registry how old the business is. Every other
+  // site in the cast dates itself, so without this the fallback is unreachable.
   { tag: 'floorsep', name: 'Turtle Creek Plumbing', cities: ['Dallas TX'], reviews: 28, rating: 4.5,
-    site: 'https://turtlecreekplumbing.example', phone: '+1 214-555-0102',
+    site: 'https://turtlecreekplumbing.example', phone: '+1 214-555-0102', noYear: true,
     expect: 'kept', why: '28 reviews clears Plumbing\'s 15-review floor, so it is a plain in-band lead and carries no thin-review mark - the negative case for the demotion above' },
   // A FAKE-LISTING NETWORK: one phone number, two different trade names, two
   // metros. Round 143A reads the number and drops both halves.
@@ -243,6 +246,19 @@ const GP_FIND_CAST = [
     site: 'https://bluebonnetdrainpros.example', phone: '+1 214-555-0777',
     expect: 'dropped', dropBy: 'phone',
     why: 'the twin of fakeA - same number, a different name, another metro, and both halves go' },
+  // ROUND 143B: ONE TRACKING ACCOUNT, TWO NAMES, TWO METROS. This pair could
+  // not exist before this round: the id is in the HOMEPAGE, and until the free
+  // read moved to the press nothing had ever opened one. Their PHONES differ on
+  // purpose, so the phone rule cannot fire and the run has to name this cause
+  // rather than that one.
+  { tag: 'trackA', name: 'Oak Cliff Sewer Experts', cities: ['Dallas TX'], reviews: 44, rating: 4.4,
+    site: 'https://oakcliffsewerexperts.example', phone: '+1 214-555-0411', ga: 'G-NETWORK111',
+    expect: 'dropped', dropBy: 'tracking',
+    why: 'its homepage reports to the same analytics property as a differently-named business in another metro - one operator wearing local clothes, not two businesses' },
+  { tag: 'trackB', name: 'Barton Springs Drain Co', cities: ['Austin TX'], reviews: 39, rating: 4.5,
+    site: 'https://bartonspringsdrainco.example', phone: '+1 512-555-0412', ga: 'G-NETWORK111',
+    expect: 'dropped', dropBy: 'tracking',
+    why: 'the twin of trackA - the same tracking id, a different name, another metro, and both halves go' },
   // AND THE NEGATIVE CASE, WHICH MATTERS AS MUCH: one phone number, ONE name,
   // two metros. A legitimate two-branch plumber. A rule that drops the pair
   // above must not touch these two, and the check says so out loud.
@@ -466,6 +482,42 @@ const gpFindAnswer = (textQuery, mask, pageSize) => {
   return { places: rows.slice(0, Math.max(1, Number(pageSize) || 20)).map(c => gpFindPlace(c, city, mask)) };
 };
 
+// ── ROUND 143B: WHAT THE PRESS'S FREE READ FINDS ON A CAST SITE ────────────
+// The press reads the homepage, the team page and the contact page of every
+// business it keeps, over a plain fetch, before a credit moves. Until this
+// round no cast business had a site of its own: every .example host fell
+// through to the contact-read fixture, whose navigation points at a DIFFERENT
+// host, so the press would have read one page, found no navigation and graded
+// a site nobody could have graded.
+//
+// Deliberately DATED markup - font tags, layout tables, a 2015 jQuery and a
+// 2016 copyright - because the verdict this round feeds into the score is what
+// a VISITOR meets, and a modern fixture would let every assertion about it pass
+// on a business the read could not have separated from any other.
+const GP_SITE_BY_HOST = {};
+for (const c of GP_FIND_CAST) {
+  if (!c.site) continue;
+  GP_SITE_BY_HOST[String(c.site).replace(/^https?:\/\//, '').replace(/\/.*$/, '').toLowerCase()] = c;
+}
+const GP_PRESS_BODY = (c) => `${c.name} repairs and replaces water heaters, drains and sewer lines right across the metro, and somebody here answers our own telephone every day of the week. `;
+const GP_PRESS_PAGE = (c, path) => {
+  const _p = String(path || '/').split('?')[0];
+  const _body = GP_PRESS_BODY(c);
+  if (_p && _p !== '/') {
+    return `<html><head><title>${c.name}</title></head><body><h1>${c.name}</h1><p>${_body.repeat(8)}</p></body></html>`;
+  }
+  return `<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Home</title><meta name="keywords" content="plumbing">`
+    + `<script src="//static.parastorage.com/services/wix-thunderbolt/dist/main.js"></script>`
+    + `<script src="/js/jquery-1.11.3.min.js"></script>`
+    + (c.ga ? `<script>gtag('config', '${c.ga}');</script>` : '')
+    + `</head><body><font size="3">Welcome</font><center>${c.name}</center>`
+    + `<table width="600" border="1"><tr><td>x</td></tr></table><table width="600" cellpadding="2"><tr><td>y</td></tr></table>`
+    + `<a href="/our-team">Our team</a><a href="/contact">Contact</a><a href="/careers">Careers</a><a href="/about-us">About us</a>`
+    + `<img src="a.jpg"><img src="b.jpg"><img src="c.jpg"><img src="d.jpg">`
+    + `<p>${c.name}${c.noYear ? '' : ' has been serving this city since 2001'}. ${_body.repeat(8)}</p>`
+    + `<p>&copy; 2016 ${c.name}</p></body></html>`;
+};
+
 // One Anthropic responder, keyed on marker strings the contract map read off
 // each call site's own prompt. Unmatched calls answer benign empty JSON so a
 // new model call fails soft here and loud in its own boot check.
@@ -592,7 +644,7 @@ const FIND_CAREERS_HTML = (b) => `<!doctype html><html><body><h1>Careers</h1><p>
 // row rather than none, so a helper this fake has not met reads the whole
 // table and the assertion on the ROW says what went wrong.
 const SB_COLUMNS = {
-  discovered_queue: ['id', 'name', 'website', 'icp_score', 'source', 'signals', 'job_title', 'location', 'manual_role_count', 'stacked', 'reachability', 'size_verified', 'size_unverified', 'verified_employees', 'extra', 'batch_id', 'read_at', 'read_failed', 'fail_reason', 'moved_to_research_at', 'ruled_out_at', 'ruled_out_why', 'from_trigger_source', 'reach_predict', 'exported_at', 'exported_to'],
+  discovered_queue: ['id', 'name', 'website', 'icp_score', 'source', 'signals', 'job_title', 'location', 'manual_role_count', 'stacked', 'reachability', 'size_verified', 'size_unverified', 'verified_employees', 'extra', 'batch_id', 'read_at', 'read_failed', 'fail_reason', 'moved_to_research_at', 'ruled_out_at', 'ruled_out_why', 'from_trigger_source', 'reach_predict', 'exported_at', 'exported_to', 'site_verdict'],
   read_runs: ['id', 'started_at', 'finished_at', 'progress_at', 'status', 'requested_count', 'read_count', 'failed_count', 'ruled_out_count', 'credits_estimated', 'credits_used', 'scope', 'error'],
   user_settings: ['id', 'data', 'updated_at'],
 };
@@ -813,6 +865,22 @@ const fake = http.createServer(async (req, res) => {
   if (host === 'api.thecompaniesapi.com') {
     if (/by-name/.test(path)) return send(res, 200, { companies: (state.mode === 'findtwin' || state.mode === 'findnoresolve') ? [] : [{ about: { name: b.company }, domain: { domain: b.host } }] });
     return send(res, 404, {});
+  }
+
+  // Round 143B: a cast business's OWN site, read free by the press. Tested
+  // BEFORE the shared .example fallback and never reachable from a contact-read
+  // scenario, which runs against the biz hosts rather than the cast's.
+  if (GP_SITE_BY_HOST[host]) return send(res, 200, GP_PRESS_PAGE(GP_SITE_BY_HOST[host], path));
+
+  // The public domain registry, in its own shape: an events list carrying a
+  // registration date and a last-changed date, which is exactly the pair the
+  // parser has to tell apart. FREE and keyless in real life; whether Render can
+  // REACH it is the one thing this fixture cannot answer.
+  if (host === 'rdap.org') {
+    return send(res, 200, { objectClassName: 'domain', ldhName: path.replace('/domain/', ''), events: [
+      { eventAction: 'last changed', eventDate: '2026-01-04T00:00:00Z' },
+      { eventAction: 'registration', eventDate: '2004-06-01T00:00:00Z' },
+    ] });
   }
 
   if (host === b.host || /\.example$/.test(host)) {
@@ -1494,10 +1562,16 @@ const runLead = async (b, over, capMs) => {
 
     let _findResult = null;
     let _findLog0 = 0;
+    // Round 143B: where the press's own NETWORK window starts and ends. The
+    // load-bearing claim of that round is that a press buys nothing, and a
+    // count over the whole run would be measuring every other scenario.
+    let _findReq0 = 0;
+    let _findReq1 = 0;
     console.log('── scenario I: the Find run outlives the request that started it');
     {
       // Where the press's own log lines start, for scenario P below.
       _findLog0 = srv.log().length;
+      _findReq0 = state.requests.length;
       const _t0 = Date.now();
       const I = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/discover-async`, {
         // Round 143: the spellings the server's OWN tables use - GP_CATEGORIES'
@@ -1539,6 +1613,7 @@ const runLead = async (b, over, capMs) => {
           if (Date.now() - _p0 > 120000) break;
           await sleep(1000);
         }
+        _findReq1 = state.requests.length;
         ok(done && done.status === 'done',
           `the Find job never reported done: ${JSON.stringify(done && { s: done.status, e: done.error }).slice(0, 200)}`);
         ok(done && done.result && Array.isArray(done.result.companies),
@@ -1627,14 +1702,14 @@ const runLead = async (b, over, capMs) => {
       // and each time the ordering assertion below quietly measured the wrong
       // pool. A field the app derives cannot go stale that way.
       const _dem = (c) => Number((c || {}).demotionPoints) < 0;
-      const _demFlags = ['outsideBand', 'aboveSizeCeiling', 'thinReviews', 'listingRisk'];
+      const _demFlags = ['outsideBand', 'aboveSizeCeiling', 'thinReviews', 'listingRisk', 'nameNotOnSite'];
       // EVERY CASE THIS SCENARIO ASSERTS ON STILL EXISTS. A business nobody
       // declared can never be found in the answer, so a deleted or renamed cast
       // entry would turn each "was it dropped?" assertion below into a green
       // line about nothing.
       const _tags = ['quiet', 'floorsep', 'fakeA', 'fakeB', 'chainA', 'chainB', 'closedperm', 'closedtemp',
         'nosite', 'multi', 'busy', 'band49', 'huge', 'branch', 'alert', 'alertneutral', 'alertpolicy',
-        'puresab', 'inside', 'insidetext', 'moved', 'movedonly'];
+        'puresab', 'inside', 'insidetext', 'moved', 'movedonly', 'trackA', 'trackB'];
       ok(_tags.every(t => GP_FIND_CAST.some(c => c.tag === t)),
         `the cast no longer carries ${JSON.stringify(_tags.filter(t => !GP_FIND_CAST.some(c => c.tag === t)))}, so the assertions about those businesses are passing on a business that was never served`);
 
@@ -1825,6 +1900,82 @@ const runLead = async (b, over, capMs) => {
       ok(_an && _an.listingRisk && !/polic|violat/i.test(String(_an.googleAlertText || '')),
         `${_ct('alertneutral').name} came back as ${JSON.stringify(_an ? { listingRisk: _an.listingRisk || null, googleAlertText: String(_an.googleAlertText || '').slice(0, 80) } : { there: false })} - it must be marked from its alert like any other, and the words carried with it must be its own prose and not the policy wording of the help link`);
 
+
+      // ── ROUND 143B: THE FREE READ AT THE PRESS, AND WHAT IT COST ───────
+      // THE LOAD-BEARING CLAIM OF THE ROUND, and the one no boot fixture can
+      // see: the press opens their homepage, their team page and their contact
+      // page and buys NOTHING. A press that quietly bought one Firecrawl page
+      // or one model call per business would cost money on every lead instead
+      // of saving it on most, and only a run over a whole cast with the network
+      // in view can say so.
+      {
+        const _win = state.requests.slice(_findReq0, _findReq1 || state.requests.length);
+        const _fc = _win.filter(q => q.host === 'api.firecrawl.dev');
+        const _an2 = _win.filter(q => q.host === 'api.anthropic.com');
+        ok(_fc.length === 0,
+          `the press made ${_fc.length} Firecrawl call(s) over ${_served} listings (${_fc.slice(0, 3).map(q => q.path).join(', ')}) - the free read exists BECAUSE a press over three hundred businesses cannot buy a page each, so one call here is the whole round inverted`);
+        ok(_an2.length === 0,
+          `the press made ${_an2.length} model call(s) over ${_served} listings - the same claim and the more expensive half of it`);
+        // And it really did read, or the two zeros above are zero because
+        // nothing happened at all - a fixture that measures nothing.
+        const _readHosts = [...new Set(_win.filter(q => GP_SITE_BY_HOST[q.host]).map(q => q.host))];
+        ok(_readHosts.length >= 5,
+          `the press opened the pages of ${_readHosts.length} business(es) - the two zero-spend assertions above are worth nothing unless the free read actually ran, and this is the line that says it did`);
+        // THREE PAGES A BUSINESS, MEASURED AT THE WIRE rather than in a
+        // fixture that supplies its own links. The bound IS the round.
+        const _perHost = {};
+        for (const q of _win) if (GP_SITE_BY_HOST[q.host]) _perHost[q.host] = (_perHost[q.host] || 0) + 1;
+        const _over = Object.entries(_perHost).filter(([, n]) => n > 3);
+        ok(!_over.length,
+          `the press fetched ${JSON.stringify(_over)} - more than three pages of one business. At three hundred businesses every extra page is three hundred more fetches, which is the number the twenty-page contact read cannot be used for`);
+        const _freeLine = (_log.match(/FREE READ \[Places\]: (\d+) business/) || []);
+        ok(Number(_freeLine[1] || 0) > 0,
+          'the press printed no FREE READ line naming what it read, so a run cannot say what it looked at or what it cost');
+        ok(/DOMAIN AGE \[Places\]/.test(_log),
+          'the press printed no DOMAIN AGE line, so the one thing about the registry lookup that is unproven - whether this server can reach it at all - cannot be read off a live run');
+      }
+
+      // ── ONE TRACKING ACCOUNT, TWO NAMES, TWO METROS ────────────────────
+      // The drop the homepage made possible. Their phones differ, so this can
+      // only have fired on the tracking id, and the log line has to name that
+      // cause rather than the phone rule's.
+      ok(!_rows('trackA').length && !_rows('trackB').length,
+        `${_ct('trackA').name} and/or ${_ct('trackB').name} reached the queue - two differently-named businesses in two metros reporting to ONE analytics property is one operator wearing local clothes, and the rep would work both halves of it as separate leads`);
+      {
+        const _tl = (_log.match(/TRACKING COLLISION \[Places\]: (\d+) listing/) || []);
+        ok(Number(_tl[1] || 0) === _dropsBy('tracking'),
+          `the tracking-collision line reports ${_tl[1] === undefined ? 'nothing at all' : _tl[1]} where the cast declares ${_dropsBy('tracking')} - a drop nobody prints is a drop nobody can audit, and a different number means another rule took them first and the run names the wrong cause`);
+      }
+      // AND THE NEGATIVE CASE: the two-branch business under ONE name shares
+      // nothing and must survive, exactly as it does under the phone rule.
+      ok(_rows('chainA').length + _rows('chainB').length > 0,
+        `the one-name two-metro operator was deleted by the new rule - that is a real multi-branch business and the exact operator the coverage-gap finding is built on`);
+
+      // ── THE VERDICT REACHES THE ROW, OR THE ROUND IS DARK ──────────────
+      {
+        const _qv = sbTable('discovered_queue').filter(r => r.website);
+        ok(_qv.some(r => r.site_verdict && r.site_verdict.measured === true),
+          'not one queue row carries a site_verdict the press measured, so everything the free read found dies with the run and the rep sees none of it');
+        ok(_qv.every(r => r.extra && r.extra.pressSite),
+          'a queue row with a website carries no press verdict in its extra blob - the column may not exist on a database yet, and the blob is what keeps the round working until the ALTER runs');
+        const _qq = sbTable('discovered_queue').find(r => r.name === _ct('quiet').name);
+        ok(_qq && _qq.site_verdict && _qq.site_verdict.ageBasis === 'their own pages' && _qq.site_verdict.ageYears > 0,
+          `${_ct('quiet').name} publishes its founding year on its own homepage and the row says ${JSON.stringify(_qq && _qq.site_verdict && { basis: _qq.site_verdict.ageBasis, years: _qq.site_verdict.ageYears })} - their own page is the first source and a registry may never overrule it`);
+        const _qf = sbTable('discovered_queue').find(r => r.name === _ct('floorsep').name);
+        ok(_qf && _qf.site_verdict && _qf.site_verdict.ageBasis === 'domain registration' && _qf.site_verdict.domainYear === 2004,
+          `${_ct('floorsep').name} states no founding year anywhere on its site and the row says ${JSON.stringify(_qf && _qf.site_verdict && { basis: _qf.site_verdict.ageBasis, year: _qf.site_verdict.domainYear })} - the registry is the fallback, and a business whose own pages say nothing is the only lead that reaches it`);
+        ok(_qq && _qq.site_verdict && _qq.site_verdict.looksMeasured === true && _qq.site_verdict.looks !== 'unknown',
+          `the free read graded ${_ct('quiet').name} as ${JSON.stringify(_qq && _qq.site_verdict && _qq.site_verdict.looks)} - a site built out of font tags, layout tables and a 2016 copyright has to come back as something a visitor would recognise, or the verdict the score now reads is empty on every lead`);
+        const _qn = sbTable('discovered_queue').find(r => r.name === _ct('nosite').name);
+        ok(_qn && _qn.site_verdict && _qn.site_verdict.noWebsite === true,
+          `the business with no website at all is not marked as one on its row (${JSON.stringify(_qn && _qn.site_verdict)}), so it cannot be drawn as the separate call list Vin asked for`);
+        // The DRAW ORDER over these rows is deliberately NOT asserted here: a
+        // sort transcribed into this harness is a second hand-kept copy of a
+        // rule, which is the disease the server file records most. Every term
+        // of orderUnread is executed against the LIVE function, on rows of
+        // exactly this shape, by FREE VERDICT WIRING CHECK at boot.
+      }
+
       // ── WHAT THE PRESS MEASURED HAS TO SURVIVE THE QUEUE WRITE ─────────
       const _qm = sbTable('discovered_queue').find(r => r.name === _ct('multi').name);
       ok(_qm && _qm.extra && _qm.extra.marketCount === 3 && _qm.source === 'google_places',
@@ -1848,6 +1999,7 @@ const runLead = async (b, over, capMs) => {
           notIcp: get('not our ICP by name'), franchise: get('franchise or chain outlet'),
           owned: get('already in the pipeline'), catCap: get('per-category cap'),
           risk: get('dropped on a listing risk - closed, moved or flagged by Google'),
+          tracking: get('dropped on a shared tracking account'),
           phone: get('dropped on a phone collision'),
           demoted: get('demoted to the bench'), returned: get('returned') };
       };
@@ -1900,7 +2052,14 @@ const runLead = async (b, over, capMs) => {
         // original defect and will catch the next one.
         const _keptRows = ['seen from Google', 'bench served', 'returned', 'demoted to the bench',
           'demoted for a thin review count', 'no website at all - the call lane',
-          'on a free page builder - the rebuild lane', 'large companies served for the email lane'];
+          'on a free page builder - the rebuild lane', 'large companies served for the email lane',
+          // Round 143B: five more rows that count leads we KEPT. A demotion is
+          // not a loss and neither is a shape of the run, and naming one as the
+          // run's largest loss sends somebody hunting for businesses that are
+          // sitting on the bench waiting to be worked.
+          'demoted - their own site never names them', 'graded free at the press',
+          'site would not open for a free read', 'site reads bad to a visitor',
+          'site reads dated to a visitor'];
         const _said = (_y.line.match(/The largest single loss[^.]*\./) || ['(the sentence never printed)'])[0];
         const _named = (_y.line.match(/The largest single loss is "([^"]+)" at (\d+)\./) || []).slice(1);
         ok(_named.length === 2,
@@ -1918,6 +2077,7 @@ const runLead = async (b, over, capMs) => {
           ['franchise or chain outlet', _y.franchise],
           ['dropped on a listing risk - closed, moved or flagged by Google', _y.risk],
           ['dropped on a phone collision', _y.phone],
+          ['dropped on a shared tracking account', _y.tracking],
         ].filter((r) => typeof r[1] === 'number');
         const _biggest = _delRows.slice().sort((a, b) => b[1] - a[1])[0];
         ok(!_named.length || (!!_biggest && _named[0] === _biggest[0] && Number(_named[1]) === _biggest[1]),
@@ -1930,7 +2090,7 @@ const runLead = async (b, over, capMs) => {
         // the assertion after it names the gap between it and the line.
         const _mergedAway = GP_FIND_CAST.reduce((n, c) => n + (c.expect === 'dropped' ? 0 : c.cities.length - 1), 0)
           + (_listings(c => c.tag === 'chainB'));   // chainB merges into chainA by NAME, after the press
-        const _deleted = _dropsBy('branch') + _dropsBy('risk') + _dropsBy('phone');
+        const _deleted = _dropsBy('branch') + _dropsBy('risk') + _dropsBy('phone') + _dropsBy('tracking');
         ok(_y.seen - _deleted - _mergedAway === _y.returned,
           `the run does not add up: ${_y.seen} seen − ${_deleted} deleted − ${_mergedAway} merged (a business found in several metros is ONE lead, and two branches under one name are one company) = ${_y.seen - _deleted - _mergedAway}, and the report returned ${_y.returned}. Some listing Google handed the press has no outcome, which means a business vanished between the search and the queue with no rule to point at`);
         // AND THE GAP BETWEEN THAT AND THE LINE ITSELF, stated rather than
@@ -1948,9 +2108,9 @@ const runLead = async (b, over, capMs) => {
         // rather than only against the cast. A run that adds up is the whole
         // point of the line - every listing Google handed the press reaches one
         // outcome and the outcome is named.
-        ok(_y.risk === _dropsBy('risk') && _y.phone === _dropsBy('phone'),
-          `the report prints ${_y.risk} listing-risk and ${_y.phone} phone-collision deletions against the ${_dropsBy('risk')} and ${_dropsBy('phone')} the cast declares - a counter is being incremented somewhere the report cannot see it again`);
-        const _lineDeleted = (_y.franchise || 0) + (_y.risk || 0) + (_y.phone || 0);
+        ok(_y.risk === _dropsBy('risk') && _y.phone === _dropsBy('phone') && _y.tracking === _dropsBy('tracking'),
+          `the report prints ${_y.risk} listing-risk, ${_y.phone} phone-collision and ${_y.tracking} tracking-collision deletions against the ${_dropsBy('risk')}, ${_dropsBy('phone')} and ${_dropsBy('tracking')} the cast declares - a counter is being incremented somewhere the report cannot see it again`);
+        const _lineDeleted = (_y.franchise || 0) + (_y.risk || 0) + (_y.phone || 0) + (_y.tracking || 0);
         ok(_y.seen - _lineDeleted - _mergedAway === _y.returned,
           `the printed line does not add up: ${_y.seen} seen \u2212 ${_lineDeleted} deleted across its own rows \u2212 ${_mergedAway} merged = ${_y.seen - _lineDeleted - _mergedAway}, and it says it returned ${_y.returned}. A business went missing between the search and the queue with no row to point at`);
       }

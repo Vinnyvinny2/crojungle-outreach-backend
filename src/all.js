@@ -7824,6 +7824,12 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   const _riskWhy = [];
   let skippedListingPhone = 0;
   const _phoneWhy = new Map();
+  // ROUND 143B: the free page read at the press, and the two rules that only
+  // become possible once a homepage has been read.
+  let skippedListingAnalytics = 0;
+  const _analyticsWhy = new Map();
+  let demotedNameNotOnSite = 0;
+  let _pressRead = null;
   let skippedBranchUrl = 0;
   const _branchWhy = [];
   // The review floor is now the gate that decides whether a business is
@@ -8362,6 +8368,75 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
       benched.length = 0; benched.push(..._benchP);
     }
   }
+  // ══ THE FREE READ, BEFORE A SINGLE CREDIT IS SPENT ══════════════════════
+  // Vin, 2026-09-12: "cut it with the free read first". Everything above this
+  // line decided which businesses to keep from their LISTING; this reads their
+  // own homepage, team page and contact page for nothing and grades the thing
+  // we actually sell. It buys no Firecrawl page, no render and no model call -
+  // there is a boot check and a whole servercheck scenario whose only job is
+  // that sentence - so a press costs exactly what it cost before.
+  //
+  // It runs HERE, after every free drop: a business the press has already
+  // decided not to keep may not cost us three fetches, exactly as it may not
+  // cost us a render on the contact read.
+  if (FIND_PRESS_READ === 'on') {
+    _pressHostAt.clear();
+    const _toRead = [...out, ...benched].slice(0, FIND_PRESS_MAX_LEADS);
+    const _skippedForCap = (out.length + benched.length) - _toRead.length;
+    _pressRead = await pressSiteRead(_toRead, {});
+    console.log(`\u{1F4D6} FREE READ [Places]: ${_pressRead.read} business(es) read over ${_pressRead.pages} page(s) in ${Math.round(_pressRead.ms / 1000)}s - ${_pressRead.measured} graded, ${_pressRead.unread} refused us or returned nothing${_pressRead.outOfTime ? ` (${_pressRead.outOfTime} of those because the read hit its ${Math.round(FIND_PRESS_READ_MS / 1000)}s ceiling)` : ''}, ${_pressRead.noWebsite} publish no website at all${_skippedForCap > 0 ? `, ${_skippedForCap} past the ${FIND_PRESS_MAX_LEADS}-business ceiling and unread` : ''}. ` +
+      `How they look to a visitor, read off their own code: ${_pressRead.bad} bad, ${_pressRead.dated} dated, ${_pressRead.modern} modern. ` +
+      `This cost 0 Firecrawl credits and 0 model calls, at most ${FIND_PRESS_MAX_PAGES} page(s) a business, and it is what orders the paid reads that follow. Set FIND_PRESS_READ=off to go back to reading nothing until a lead is paid for.`);
+    console.log(`\u{1F4C5} DOMAIN AGE [Places]: ${_pressRead.ageOwnPage} business(es) date themselves on their own pages, ${_pressRead.ageDomain} were dated by their domain registration instead, ${_pressRead.ageNone} could not be dated at all. ` +
+      `The registry lookup is free and keyless and has never been proven reachable from this server: if the middle number is 0 on a run where the last one is large, it is not reaching ${FIND_RDAP_BASE} and age falls back to their own page alone, which is what it already does on every failure. FIND_DOMAIN_AGE=${FIND_DOMAIN_AGE}.`);
+    // ══ ONE TRACKING ACCOUNT, MANY NAMES, MANY METROS ═════════════════════
+    // Needs the homepage, which is why it waited for this round. Same shape as
+    // the phone rule directly above, same bar, same one-listing-counted-once
+    // guard, and the bench passed in for the same reason: a network that
+    // surfaces one listing per run is invisible to a rule that can only see
+    // the query it arrived on.
+    {
+      const _priorForTag = Array.isArray(filters.priorLeads) ? filters.priorLeads : [];
+      const _tagColl = detectAnalyticsCollisions([...out, ...benched, ..._priorForTag]);
+      if (_tagColl.groups.size) {
+        const _keepT = (arr) => arr.filter((l) => {
+          const r = _tagColl.reasonFor(l);
+          if (!r) return true;
+          skippedListingAnalytics++;
+          if (!_analyticsWhy.has(r)) _analyticsWhy.set(r, []);
+          if (_analyticsWhy.get(r).length < 3) _analyticsWhy.get(r).push(l.name);
+          return false;
+        });
+        const _outT = _keepT(out), _benchT = _keepT(benched);
+        out.length = 0; out.push(..._outT);
+        benched.length = 0; benched.push(..._benchT);
+      }
+    }
+    if (skippedListingAnalytics) {
+      console.log(`\u{1F4CA} TRACKING COLLISION [Places]: ${skippedListingAnalytics} listing(s) dropped for reporting to a tracking account that already belongs to a differently-named business in another metro \u2014 ${[..._analyticsWhy.entries()].slice(0, 3).map(([r, names]) => `${r} (${names.join(', ')})`).join(' | ')}. One analytics property across several names in several metros is one operator wearing local clothes, not several businesses. A single name across several metros is a real multi-branch business and is untouched.`);
+    }
+    // ══ THEIR OWN SITE NEVER NAMES THEM: DEMOTED, NEVER DELETED ═══════════
+    // A trading name that differs from the registered one, a rebrand and a
+    // header that is a logo and no text all read exactly like this, and all
+    // three are real businesses. So this ranks them last and says why, which
+    // is what the review floor was changed to do for the same reason.
+    {
+      const _moved = out.filter(l => l && l.nameNotOnSite === true);
+      if (_moved.length) {
+        const _kept = out.filter(l => !(l && l.nameNotOnSite === true));
+        out.length = 0; out.push(..._kept);
+        benched.push(..._moved);
+        demotedNameNotOnSite = _moved.length;
+        console.log(`\u{26A0} NAME NOT ON SITE [Places]: ${demotedNameNotOnSite} business(es) whose own website never prints a distinctive word of their name \u2014 ${_moved.slice(0, 4).map(l => `${l.name} (${l.website})`).join(', ')}. KEPT and ranked behind every other lead, never deleted: a trading name, a rebrand and a logo-only header all look like this from the outside. Worth a look before anyone dials.`);
+      }
+    }
+    if (keptNoWebsite) {
+      const _noSite = [...out, ...benched].filter(l => l && l.noWebsite === true);
+      console.log(`\u{260E} CALL LIST [Places]: ${_noSite.length} business(es) carry no website at all and are kept on their own list, drawn after the businesses that have one \u2014 ${_noSite.slice(0, 4).map(l => l.name).join(', ')}. They need no audit and no page read; the finding is the absence and Mike has the number. They are marked on their row rather than mixed in, so the rep works them as the different call they are.`);
+    }
+  } else {
+    console.log('\u{1F4D6} FREE READ [Places]: switched off (FIND_PRESS_READ), so no business had its own pages read at this press and every website verdict waits for the paid contact read, exactly as it did before. Nothing below is ordered by the state of their site.');
+  }
   if (skippedListingRisk) {
     console.log(`\u{1F6AB} LISTING RISK [Places]: ${skippedListingRisk} listing(s) dropped before anything was spent on them \u2014 ${_riskWhy.join(' | ')}. There is nobody at that listing to sell to, so the drop costs the run nothing and saves a read.`);
   }
@@ -8491,6 +8566,16 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
     // records more than any other.
     tally.skippedListingRisk = skippedListingRisk;
     tally.skippedListingPhone = skippedListingPhone;
+    // Round 143B: the drop and the demotion the free read makes possible. Both
+    // are assigned HERE, in this same block, for the reason the note below
+    // gives: a counter that never reaches the tally has its row dropped from
+    // the yield line before it prints, which is the class this file records
+    // most. skippedListingAnalytics is a DELETION and can be named as the
+    // run's worst loss; demotedNameNotOnSite is a lead we KEPT and ranked
+    // last, so it is declared not a loss and never can be.
+    tally.skippedListingAnalytics = skippedListingAnalytics;
+    tally.demotedNameNotOnSite = demotedNameNotOnSite;
+    tally.freeRead = _pressRead;
     tally.franchise = skippedFranchise + skippedChain + skippedBranchUrl;
     tally.alreadyOwned = skippedAlreadyOwned;
     tally.catCap = skippedCatCap;
@@ -15872,10 +15957,23 @@ const readSiteLooks = (v, notLookedWhy, codeFaults) => {
 // outlet or a chain is refused before a credit can move, which is the rule the
 // chain read already states where it sits — the site read is already spent and
 // cannot be refunded, and everything after it can.
-const siteLooksBuy = ({ notIcp, website, pagesRead, fcKey, apiKey, setting } = {}) => {
+const siteLooksBuy = ({ notIcp, website, pagesRead, fcKey, apiKey, setting, pressLooks } = {}) => {
   if (notIcp === true) return { render: false, reason: 'dropped', why: 'this lead was dropped before the render, so the picture of their homepage cost 0 Firecrawl credit(s)' };
   if (String(setting === undefined || setting === null ? 'on' : setting).toLowerCase() !== 'on') return { render: false, reason: 'off', why: 'the homepage render is switched off in Settings, so how their site looks was not measured' };
   if (!website) return { render: false, reason: 'nosite', why: 'they have no website for anybody to look at' };
+  // ══ THE PRESS ALREADY LOOKED, AND IT LOOKED FOR NOTHING ════════════════
+  // Round 143B reads their markup at the press, and the free half of this
+  // verdict is decided there. When that half has already found a fault a
+  // VISITOR meets, a picture cannot move the verdict - dated stays dated and
+  // bad stays bad, because the code faults are added to whatever the eyes
+  // return - so the render would be a paid confirmation of a free answer.
+  //
+  // The picture is still bought on 'modern' and on 'unknown', which is the
+  // case it was built for: a site whose code reads clean can still look
+  // terrible, and only a render can say so.
+  if (pressLooks === 'dated' || pressLooks === 'bad') {
+    return { render: false, reason: 'presslooks', why: `the free read at the press already found faults on their homepage that a visitor meets, so no picture was bought - this site reads ${pressLooks} either way` };
+  }
   if (!fcKey) return { render: false, reason: 'nokey', why: 'no Firecrawl key, so no picture of their homepage could be taken' };
   if (!apiKey) return { render: false, reason: 'nomodel', why: 'no Anthropic key, so nothing could look at a picture of their homepage' };
   if (!(Number(pagesRead) > 0)) return { render: false, reason: 'sitedown', why: 'their site returned nothing when we read it, so a render would have photographed the same nothing' };
@@ -40222,6 +40320,19 @@ const sbRest = async (path, options = {}) => {
 // the boot verdict settles, one line naming every missing piece, nothing fatal:
 // a server without Supabase runs exactly as before, and sbRest's own per-table
 // diagnosis prints the specific reason above the summary.
+// ══ WHAT THE PROBE FOUND, KEPT INSTEAD OF PRINTED AND DROPPED ══════════════
+// The probe named every missing column at boot and threw the answer away, so
+// the only thing that could act on one was a person reading the log. PostgREST
+// refuses the WHOLE row on ONE unknown key (§42), so a round that adds a column
+// and ships before its ALTER runs does not lose that column - it loses every
+// lead in the run. This keeps the answer and a writer asks it.
+//
+// AFFIRMED, never assumed: sbColumnReady is false until the probe has actually
+// watched the column answer. Before the probe settles, with no Supabase, or on
+// a database where the ALTER has not run, the new column is simply not written
+// and the row still lands with everything else on it.
+const SB_SCHEMA_SEEN = new Map();
+const sbColumnReady = (table, col) => SB_SCHEMA_SEEN.get(String(table) + '.' + String(col)) === true;
 const SB_EXPECTED_SCHEMA = [
   ['places_query_state', 'q'], ['lead_bench', 'id'], ['business_observations', 'biz'],
   ['call_outcomes', 'outcome'], ['lead_pages', 'token'], ['send_log', 'email'],
@@ -40231,6 +40342,10 @@ const SB_EXPECTED_SCHEMA = [
   // Round 129: what we have learned about a domain's mail, and the day counter
   // that lets a slept instance resume the free hundred instead of restarting it.
   ['domain_mail_facts', 'domain'], ['api_day_spend', 'day'],
+  // Round 143B: what the free page read at the press decided about their
+  // website, one jsonb column so a lead can be drawn by it in SQL rather than
+  // by unpacking every row's extra blob.
+  ['discovered_queue', 'site_verdict'],
 ];
 
 // ══ ONE FREE CALL THAT SETTLES "IS THE DATAFORSEO PASSWORD RIGHT" ═══════════
@@ -40280,6 +40395,7 @@ const probeSupabaseSchema = async () => {
   const missing = [];
   for (const [t, c] of SB_EXPECTED_SCHEMA) {
     const rows = await sbRest(`/${t}?select=${c}&limit=1`, { prefer: 'return=representation' });
+    SB_SCHEMA_SEEN.set(t + '.' + c, rows !== null);
     if (rows === null) missing.push(`${t}.${c}`);
   }
   if (missing.length) {
@@ -42515,8 +42631,13 @@ const WEIGHTS = {
         // in-band lead here on ICP score alone. A reason missing from this term
         // is a demotion that survives the press and dies in the sort, which is
         // the one way the bench promise can be broken without any gate changing.
-        const ba = (a.outsideBand || a.aboveSizeCeiling || a.thinReviews || a.listingRisk) ? 1 : 0;
-        const bb = (b.outsideBand || b.aboveSizeCeiling || b.thinReviews || b.listingRisk) ? 1 : 0;
+        // Round 143B adds the fifth reason: a business whose own website never
+        // prints a distinctive word of its name. It is DEMOTED at the press and
+        // would otherwise climb straight back over an in-band lead here, which
+        // is the one way the bench promise breaks with every gate still right.
+        // BOTH HALVES, changed together and pinned together below.
+        const ba = (a.outsideBand || a.aboveSizeCeiling || a.thinReviews || a.listingRisk || a.nameNotOnSite) ? 1 : 0;
+        const bb = (b.outsideBand || b.aboveSizeCeiling || b.thinReviews || b.listingRisk || b.nameNotOnSite) ? 1 : 0;
         if (ba !== bb) return ba - bb;
         const ta = tier(a), tb = tier(b);
         if (ta !== tb) return tb - ta;
@@ -42670,6 +42791,9 @@ const WEIGHTS = {
         // on the bench - so each can be named as the worst one.
         _row('dropped on a listing risk - closed, moved or flagged by Google', _y.skippedListingRisk, true),
         _row('dropped on a phone collision', _y.skippedListingPhone, true),
+        // Round 143B: the third listing drop, and the first one that needed a
+        // homepage to be readable. A DELETION, so it can be named as the worst.
+        _row('dropped on a shared tracking account', _y.skippedListingAnalytics, true),
         // ══ KEPT, AND SORTED LOWER ═══════════════════════════
         // A demotion is not a loss. These leads are on the bench, they are
         // returned behind every in-band lead, and the run can serve them
@@ -42679,6 +42803,21 @@ const WEIGHTS = {
         // it would let a subset outrank the total it belongs to.
         _row('demoted to the bench', _y.demoted, false),
         _row('demoted for a thin review count', _y.demotedUnderFloor, false),
+        // KEPT and ranked last, never deleted: a trading name, a rebrand and a
+        // logo-only header all look like this from the outside, so this row is
+        // declared not a loss and can never be named as the run's largest one.
+        _row('demoted - their own site never names them', _y.demotedNameNotOnSite, false),
+        // ══ WHAT THE FREE READ AT THE PRESS SAW ════════════════════════════
+        // Shapes of the run, never losses: every one of these businesses was
+        // RETURNED. They are here because the state of their website is what
+        // the rep opens on and what orders the paid reads, so a run has to add
+        // it up somewhere.
+        ...(_y.freeRead ? [
+          _row('graded free at the press', _y.freeRead.measured, false),
+          _row('site would not open for a free read', _y.freeRead.unread, false),
+          _row('site reads bad to a visitor', _y.freeRead.bad, false),
+          _row('site reads dated to a visitor', _y.freeRead.dated, false),
+        ] : []),
         // ══ AND THE TWO WEBSITE LANES, WHICH ARE THE PITCH ══════════════
         // Leads we RETURNED, counted here because the rep opens on their
         // website: a business with no site at all is the purest prospect this
@@ -64889,6 +65028,10 @@ app.listen(PORT, () => {
       [{ fcKey: '' }, 'nokey'],
       [{ apiKey: '' }, 'nomodel'],
       [{ pagesRead: 0 }, 'sitedown'],
+      // Round 143B: the sixth, and the only one that is not about money or
+      // about a missing key - the press already answered this question for
+      // free, so the picture would be a paid confirmation.
+      [{ pressLooks: 'dated' }, 'presslooks'],
     ];
     for (const [_o, _reason] of _refusals) {
       const _r = siteLooksBuy(Object.assign({}, _full, _o));
@@ -72404,13 +72547,20 @@ app.listen(PORT, () => {
       // the press's two arrays and then climbs back over an in-band lead in
       // the sort, which is the one way the bench promise breaks with every
       // gate still correct.
-      const _n = _needle('const ba = (a.', 'outsideBand || a.aboveSizeCeiling || a.thinReviews || a.listingRisk) ? 1 : 0');
+      // ── RE-AIMED AGAIN IN ROUND 143B, AND THE REVERSAL RECORDED ───────
+      // Same shape as the re-aim above it: the name-not-on-site demotion is the
+      // FIFTH reason, and this needle pinned the exact four-reason text, so the
+      // correct five-flag term would have failed it. Re-aimed at five. What the
+      // assertion is actually for has not moved an inch: every kind of demoted
+      // lead sorts behind every in-band one, and a reason left out of this term
+      // is a demotion that survives the press and dies in the sort.
+      const _n = _needle('const ba = (a.', 'outsideBand || a.aboveSizeCeiling || a.thinReviews || a.listingRisk || a.nameNotOnSite) ? 1 : 0');
       // BOTH HALVES, because only one of them was pinned and the two drifted
       // apart inside one round: ba grew a fourth reason and bb did not, so a
       // listing Google itself flags sorted FIRST whenever it happened to arrive
       // before an in-band lead. A comparator is two reads of one rule and a
       // check that pins one of them is half a check.
-      const _nb = _needle('const bb = (b.', 'outsideBand || b.aboveSizeCeiling || b.thinReviews || b.listingRisk) ? 1 : 0');
+      const _nb = _needle('const bb = (b.', 'outsideBand || b.aboveSizeCeiling || b.thinReviews || b.listingRisk || b.nameNotOnSite) ? 1 : 0');
       const _i = _src.indexOf(_n);
       if (_src.indexOf(_nb) < 0) {
         _fails.push('the two halves of the demotion comparator read different lists of reasons, so a lead demoted for the reason only one half knows sorts FIRST whenever it arrives before an in-band one - the bench promise is broken by the comparator rather than by any gate');
@@ -72707,7 +72857,7 @@ app.listen(PORT, () => {
         'the review floor deletes on every run again rather than only when GP_FLOOR_MODE=cut is set - the businesses a five-figure engagement is for are the ones with the thinnest review counts'],
       [_n('thinReviews: true, thinReview', 'Note: _underFloorWhy'),
         'the thin-review mark and its sentence no longer travel on the lead, so the sort cannot put it last and the call sheet cannot say why it is'],
-      [_n('(a.outsideBand || a.aboveSizeCeiling || a.', 'thinReviews || a.listingRisk) ? 1 : 0'),
+      [_n('(a.outsideBand || a.aboveSizeCeiling || a.', 'thinReviews || a.listingRisk || a.nameNotOnSite) ? 1 : 0'),
         'the discovery sort no longer reads the thin-review demotion, so a lead the press put on the bench climbs straight back over an in-band lead on ICP score'],
       // ── THE TWO COUNTERS THAT REACHED NOTHING, PINNED ────────────────
       // Both were incremented in the press loop and printed on their own log
@@ -77679,6 +77829,374 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ PHONE COLLISION CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE FREE READ AT THE PRESS, DRIVEN OVER A REAL SOCKET ════════════════
+  // Vin, 2026-09-12: "cut it with the free read first". The whole round rests
+  // on one claim - that this read costs nothing - and on one bound: three pages
+  // a business rather than twenty.
+  //
+  // EXECUTED, not read. The check stands a fixture site up on a loopback port
+  // and drives the REAL function through the real fetch, the real page picker,
+  // the real build verdict and the real signals reader, because every part of
+  // this is only interesting at the wire: a picker bounded in a fixture and
+  // unbounded at the call site is the shape this file records most.
+  bootHold();
+  (async () => {
+  const _pfSrv = require('http').createServer((req, res) => {
+    const _p = String(req.url || '').split('?')[0];
+    const _body = 'We repair and replace water heaters, drains and sewer lines across the metro and we answer our own telephone every day of the week. ';
+    const _nav = ['/dated/our-team', '/dated/about-us', '/dated/our-story', '/dated/leadership', '/dated/meet-the-team',
+      '/dated/contact', '/dated/get-in-touch', '/dated/reach-us', '/dated/careers', '/dated/jobs']
+      .map(u => '<a href="' + u + '">' + u + '</a>').join('');
+    const _send = (code, html) => { res.writeHead(code, { 'Content-Type': 'text/html' }); res.end(html); };
+    if (_p === '/blocked/') return _send(403, '<html><body>Access Denied. You have been blocked.</body></html>');
+    if (_p === '/stranger/') {
+      return _send(200, '<html><head><title>Blue Horizon Dental</title></head><body><p>'
+        + 'Blue Horizon Dental has looked after families in this city for many years and our dentists are accepting new patients this month. '.repeat(12)
+        + '</p></body></html>');
+    }
+    if (_p === '/thin/') {
+      return _send(200, '<html><head><title>x</title><script>' + 'var a=1;'.repeat(90) + '</script></head><body><p>'
+        + 'A short page with very little on it at all. '.repeat(8) + '</p></body></html>');
+    }
+    if (_p === '/noyear/') {
+      return _send(200, '<html><head><title>Kessler Park Plumbing</title></head><body><p>'
+        + 'Kessler Park Plumbing. ' + _body.repeat(10) + '</p><p>&copy; 2016 Kessler Park Plumbing</p></body></html>');
+    }
+    if (_p.indexOf('/dated/') !== 0) return _send(404, '<html><body>no</body></html>');
+    if (_p === '/dated/') {
+      return _send(200, '<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Home</title>'
+        + '<meta name="keywords" content="plumbing">'
+        + '<script src="//static.parastorage.com/services/wix-thunderbolt/dist/main.js"></script>'
+        + '<script src="/js/jquery-1.11.3.min.js"></script>'
+        + '<script>gtag(\'config\', \'G-ABC1234567\');</script>'
+        + '</head><body><font size="3">Welcome</font><center>Kessler Park Plumbing</center>'
+        + '<table width="600" border="1"><tr><td>x</td></tr></table><table width="600" cellpadding="2"><tr><td>y</td></tr></table>'
+        + _nav + '<img src="a.jpg"><img src="b.jpg"><img src="c.jpg"><img src="d.jpg">'
+        + '<p>Kessler Park Plumbing has been serving Dallas since 1998. ' + _body.repeat(8) + '</p>'
+        + '<p>&copy; 2016 Kessler Park Plumbing</p></body></html>');
+    }
+    return _send(200, '<html><head><title>Kessler Park Plumbing</title></head><body><p>'
+      + 'Kessler Park Plumbing ' + _p + '. ' + _body.repeat(8) + '</p></body></html>');
+  });
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _src = selfSource();
+    await new Promise((ok, no) => { _pfSrv.once('error', no); _pfSrv.listen(0, '127.0.0.1', ok); });
+    _pfSrv.unref();
+    const _base = 'http://127.0.0.1:' + _pfSrv.address().port;
+    const _lead = (site) => ({ name: 'Kessler Park Plumbing', website: site, location: 'Dallas, TX', industry: 'Plumbing', placeId: 'pf1', marketsSeen: ['Dallas TX'] });
+
+    // ── 1. THREE PAGES, AND NOT ONE MORE ──────────────────────────────────
+    const _v = await pressSiteVerdict(_lead(_base + '/dated/'), { domainAge: false });
+    if (_v.pages.length !== FIND_PRESS_MAX_PAGES) _fails.push(`the press read ${_v.pages.length} page(s) where the bound is ${FIND_PRESS_MAX_PAGES} - at three hundred businesses every extra page is three hundred more fetches`);
+    if (!_v.pages.some(p => p.intent === 'team') || !_v.pages.some(p => p.intent === 'contact')) {
+      _fails.push(`the three pages are ${JSON.stringify(_v.pages.map(p => p.intent))} - Vin asked for the homepage plus their team page plus their contact page, and two of one family answers one question twice`);
+    }
+    // A FIXTURE THAT COULD NOT FAIL IS NOT A FIXTURE: prove the site really
+    // offers more pages than the bound allows, or the cap is measuring nothing.
+    {
+      const _home = await findPlainFetch(_base + '/dated/', 8000);
+      const _all = pickFindPages(sameHostLinks(_home.html, _home.url), _home.url, FIND_MAX_FREE_PAGES);
+      if (_all.length <= FIND_PRESS_MAX_PAGES) _fails.push(`the fixture site only offers ${_all.length} readable page(s), so the three-page bound is not being tested by anything`);
+    }
+
+    // ── 2. THE THREE ANSWERS ──────────────────────────────────────────────
+    if (_v.measured !== true) _fails.push(`a site we read three pages of is not judged - "${_v.why}"`);
+    if (_v.looksMeasured !== true || _v.looks === 'unknown') _fails.push(`the visible verdict off their own code came back "${_v.looks}" (measured ${_v.looksMeasured}) on a page built out of font tags, layout tables and a 2016 copyright`);
+    if (!SITE_LOOKS_WORDS.includes(_v.looks)) _fails.push(`the press produced "${_v.looks}", which is not one of the ${SITE_LOOKS_WORDS.length} declared words the row and the score know`);
+    if (_v.ageYears === null || _v.ageBasis !== 'their own pages') _fails.push(`"serving Dallas since 1998" on their own homepage did not date the business (${_v.ageYears} / "${_v.ageBasis}") - their own page must be asked before any registry is`);
+    if (!_v.analyticsIds.includes('ga4:G-ABC1234567')) _fails.push(`the tracking account on their homepage was not read (${JSON.stringify(_v.analyticsIds)}), so the collision rule below has nothing to compare`);
+    if (_v.nameOnSite !== true) _fails.push('a site that prints the business name in its own markup is recorded as not naming them, which would DEMOTE a business for our own misreading');
+
+    // ── 3. EVERY FAILURE IS A NAMED REFUSAL AND THE LEAD IS KEPT ──────────
+    const _blocked = await pressSiteVerdict(_lead(_base + '/blocked/'), { domainAge: false });
+    if (_blocked.measured !== false || _blocked.word || _blocked.looksMeasured !== false) _fails.push('a site that refuses us is still graded, so our own blindness is scored as their gap - and Vin ruled a blocked site reads unknown and is kept');
+    if (!/could not be read/.test(_blocked.why)) _fails.push(`a blocked site says "${_blocked.why}" instead of naming the refusal, and a row cannot tell "they refused us" from "there is nothing wrong"`);
+    if (_blocked.noWebsite === true) _fails.push('a business with a website we could not open is filed as a business with no website - two different facts, and only one of them is about them');
+    const _none = await pressSiteVerdict({ name: 'Walnut Hill Plumbing', website: '' }, { domainAge: false });
+    if (_none.noWebsite !== true || _none.measured !== false) _fails.push('a business that publishes no website at all is not marked as one, so it cannot be drawn on its own list');
+    if (!/absence/.test(_none.why)) _fails.push('the no-website row does not say that the absence IS the finding, so it reads as a lead we failed to read');
+    const _late = await pressSiteVerdict(_lead(_base + '/dated/'), { deadlineAt: Date.now() - 1, domainAge: false });
+    if (_late.measured !== false || !/time/.test(_late.why)) _fails.push(`a business the read ran out of time for reports "${_late.why}" instead of an unmeasured lead we never reached`);
+    if (_late.pages.length) _fails.push('the phase deadline is checked after the fetches rather than before them, so a run past its ceiling keeps spending wall clock');
+
+    // ── 4. AN ABSENCE NEEDS A PAGE WE ACTUALLY READ ───────────────────────
+    const _stranger = await pressSiteVerdict(_lead(_base + '/stranger/'), { domainAge: false });
+    if (_stranger.nameOnSite !== false) _fails.push('a site whose every word is another business is read as naming this one, so the one demotion this round adds can never fire');
+    // ══ Number(null) IS 0 AND 0 IS FINITE ════════════════════════════════
+    // The first cut of the age read used Number(), so a page stating NO
+    // founding year came back as a business founded THIS YEAR, stamped "their
+    // own pages" - and the registry fallback under it was unreachable on every
+    // lead in the system. The null-laundering class, caught by the harness on
+    // the one fixture site built to say nothing about its age.
+    const _noYear = await pressSiteVerdict(_lead(_base + '/noyear/'), { domainAge: false });
+    if (_noYear.ageYears !== null || _noYear.ageBasis) _fails.push(`a page that states no founding year is dated to ${_noYear.ageYears} year(s) from "${_noYear.ageBasis}" - Number(null) is 0 and 0 is finite, and a laundered null here both invents an age and makes the registry fallback unreachable`);
+    if (!/no founding year/.test(_noYear.ageWhy)) _fails.push('a business we could not date does not say so, so a row cannot tell an undated business from a new one');
+    const _thin = await pressSiteVerdict(_lead(_base + '/thin/'), { domainAge: false });
+    if (_thin.nameOnSite !== null) _fails.push(`a page with barely any readable text answers "${_thin.nameOnSite}" about whether it names the business - below the ${FIND_ABSENCE_TEXT_FLOOR}-character floor the honest answer is that we did not look hard enough, and a DEMOTION off our own blindness is the recorded class`);
+
+    // ── 5. THE PHASE: A POOL, A DEADLINE, AND NOTHING PER LEAD ────────────
+    const _batch = [_lead(_base + '/dated/'), _lead(_base + '/blocked/'), { name: 'Walnut Hill Plumbing', website: '' }];
+    const _tally = await pressSiteRead(_batch, { pool: 2, domainAge: false });
+    if (_tally.measured !== 1 || _tally.unread !== 1 || _tally.noWebsite !== 1) _fails.push(`the phase tally reads ${JSON.stringify({ measured: _tally.measured, unread: _tally.unread, noWebsite: _tally.noWebsite })} over one readable site, one that refused us and one with no site - a counter that never reaches the tally is the class this file records most`);
+    if (!_batch.every(l => l.pressSite && typeof l.pressSite === 'object')) _fails.push('the verdict is computed and never put on the lead, so nothing downstream can persist it, order by it or score it');
+    if (_batch[2].noWebsite !== true) _fails.push('the no-website mark never reaches the lead, so the separate list cannot be drawn');
+    if (_batch[1].nameNotOnSite === true) _fails.push('a site we could not open demotes the business for not naming itself - unmeasured treated as a value');
+    {
+      // THE POSITIVE, which is the half a revert can go red on: a site that
+      // reads well and never names this business must set the flag the press
+      // demotes on. Without this line the flag could be hard-false and every
+      // assertion above would still pass.
+      const _one = [_lead(_base + '/stranger/')];
+      await pressSiteRead(_one, { pool: 1, domainAge: false });
+      if (_one[0].nameNotOnSite !== true) _fails.push('a business whose own site never prints a word of its name is not marked, so the demotion this round adds can never reach the sort and the lead ranks as though nothing were odd about it');
+      if ((_one[0].pressSite || {}).nameOnSite !== false) _fails.push('the verdict does not carry the answer, so the row cannot say why the lead was ranked last');
+    }
+
+    // ── 6. IT BUYS NOTHING. This is the load-bearing claim of the round. ──
+    const _paid = /fcCall|firecrawlScrape|firecrawlSearch|fcHomeShot|visionSiteLooks|anthropicFetch|callAnthropic/;
+    if (_paid.test(String(pressSiteVerdict)) || _paid.test(String(pressSiteRead))) _fails.push('the free read at the press now buys something - it must stay a plain fetch over markup, or a press over three hundred businesses costs money instead of saving it');
+    {
+      const _at = _src.indexOf(_n('if (FIND_PRESS_READ ===', " 'on') {"));
+      if (_at < 0) _fails.push('the press read is no longer behind its switch, so there is no way to put the old path back without a deploy');
+      else if (_paid.test(_src.slice(_at, _at + 6000))) _fails.push('the press block itself reaches a paid call, so the switch guards a phase that spends');
+    }
+
+    // ── 7. PER-HOST POLITENESS, EXECUTED ──────────────────────────────────
+    _pressHostAt.clear();
+    const _g1 = await pressHostGate('https://gapcheck.example/a', 40);
+    const _g2 = await pressHostGate('https://gapcheck.example/b', 40);
+    const _g3 = await pressHostGate('https://othergap.example/a', 40);
+    if (_g1 !== 0 || _g3 !== 0) _fails.push('the first request to a host waits, so every business on the run pays a gap it does not owe');
+    if (!(_g2 > 0)) _fails.push('two requests to ONE host go out together, so a small shared host meets the whole pool at once and blocks us');
+    {
+      // The reserve-before-await guard: two workers racing for one host must
+      // not both read the same stamp and both decide they are first.
+      _pressHostAt.clear();
+      const _race = await Promise.all([pressHostGate('https://race.example/a', 40), pressHostGate('https://race.example/b', 40)]);
+      if (_race.filter(w => w === 0).length !== 1) _fails.push(`two workers reaching one host at the same moment both went first (${JSON.stringify(_race)}) - the slot has to be reserved before the wait, not after it`);
+    }
+
+    // ── 8. THE CALL SITES, assembled at runtime from two non-empty halves ─
+    for (const [_needle, _msg] of [
+      [_n('_pressRead = await pressSiteRead(', '_toRead, {});'), 'the press no longer reads a single page for free, so every website verdict waits for the paid read again and nothing orders it'],
+      [_n('const _toRead = [...out, ...benched].slice(0,', ' FIND_PRESS_MAX_LEADS);'), 'the free read is unbounded in businesses, or it has stopped covering the bench - one of those is an unbounded press and the other is a bench nobody graded'],
+      [_n('lead.pressSite = ', 'v;'), 'the verdict never reaches the lead - computed-but-not-passed, the class this file produces most'],
+      [_n('const _tagColl = detectAnalyticsCollisions([...out, ...benched,', ' ..._priorForTag]);'), 'the tracking-collision rule is built and called by nothing inside the press, so no shared analytics account is dropped from a real run - and the bench is where the cross-run memory lives, so a network surfacing one listing a run stays invisible'],
+      [_n('lead.nameNotOnSite = v.nameOnSite === ', 'false;'), 'a business whose own site never names it is no longer marked, so the demotion never reaches the sort'],
+      [_n('lead.noWebsite = v.noWebsite === ', 'true;'), 'the no-website mark never reaches the lead, so the separate call list cannot be drawn anywhere downstream'],
+      [_n('tally.freeRead = ', '_pressRead;'), 'what the free read found never reaches the yield report, so a run prints its own lines and then adds itself up as though the read never happened'],
+      [_n('row.site_verdict = (c && c.pressSite &&', " typeof c.pressSite === 'object') ? c.pressSite : null;"), 'the verdict is no longer written to its own column, so nothing can draw a queue by it in SQL'],
+      [_n("sbColumnReady('discovered_queue',", " 'site_verdict')"), 'the verdict column is written without asking whether it exists - PostgREST refuses the WHOLE row on one unknown key, so a press before the ALTER loses every lead in the run, not one column'],
+      [_n('|| (pressDrawRank(queueSiteVerdict(b)) -', ' pressDrawRank(queueSiteVerdict(a)))'), 'the unread queue no longer draws by what the free read found, so the paid reads are ordered by a guess about the business name again'],
+      [_n('|| (queueHasSite(b) -', ' queueHasSite(a))'), 'the no-website leads are mixed back in with the rest instead of being drawn as their own list'],
+      [_n('signals.siteLooks = (out.site &&', ' SITE_LOOKS_WORDS.indexOf(out.site.looks) >= 0)'), 'the visual verdict never reaches the Fit score, so the score reads the technical grade while the row reads the visual one and the two disagree about the same business'],
+      [_n('pressLooks: (company && company.pressSite &&', ' company.pressSite.looksMeasured === true)'), 'the contact read stopped asking what the press already found, so it pays for a picture of a homepage whose faults are already on the row'],
+    ]) if (_src.indexOf(_needle) < 0) _fails.push(_msg);
+
+    if (_fails.length) {
+      console.log(`⛔ PRESS FREE READ CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
+    } else {
+      console.log(`✓ PRESS FREE READ CHECK: the press now reads their own homepage, team page and contact page over a plain fetch before a credit moves - driven here against a real site on a loopback socket, not a fixture handed to the parser. EXACTLY ${FIND_PRESS_MAX_PAGES} pages a business, proven against a site offering more, and one of each family rather than three of one: twenty pages is right for one lead and is six thousand fetches at a press. It buys NOTHING - no Firecrawl page, no render, no model call - asserted against the function's own source and against the whole press block. Every failure is a named refusal that KEEPS the lead: a site that refuses us reads unknown and is never graded, a business with no website is marked as one and the absence is the finding, and a business the phase ran out of time for is unmeasured rather than poor. An absence needs readable text: below ${FIND_ABSENCE_TEXT_FLOOR} characters "their site never names them" is not a claim we may make, because that one demotes a real business. The pool is polite per HOST with the slot reserved before the wait, so two workers cannot both go first. FIND_PRESS_READ=${FIND_PRESS_READ}, at most ${FIND_PRESS_MAX_LEADS} businesses, ${Math.round(FIND_PRESS_READ_MS / 1000)}s on the whole phase. HONEST SHAPE: no live press has run through this - what it costs in wall clock against three hundred real hosts is the one thing only a real run can say.`);
+    }
+  } catch (e) {
+    console.log(`⛔ PRESS FREE READ CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  } finally { bootRelease(); }
+  // The fixture site is closed AFTER the release and unref'd the moment it
+  // listens, so a check that dies mid-run cannot hold the process open - the
+  // recorded failure where a check that hangs is quieter than one that fails.
+  try { _pfSrv.close(); } catch (e) { void e; }
+  })();
+
+  // ══ ONE TRACKING ACCOUNT WEARING SEVERAL NAMES ═══════════════════════════
+  // The sibling the phone rule could not have: the id is in the homepage, and
+  // until this round the press had never read one. Same bar, same shape, and
+  // the same reason the negatives matter more than the positives - a rule that
+  // eats a real multi-branch operator is the more expensive failure, and the
+  // DO-NOT-BUILD list beside the field mask is a list of rules that did.
+  try {
+    const _fails = [];
+    const _mk = (name, ids, city, placeId) => ({ name, analyticsIds: ids, marketsSeen: [city], placeId });
+
+    // ── 1. THE READER ─────────────────────────────────────────────────────
+    const _html = '<script>gtag(\'config\', \'G-ZZ1234567\');</script><script src="https://www.googletagmanager.com/gtm.js?id=GTM-AB12CD"></script>'
+      + '<script>fbq(\'init\', \'1234567890123\');</script><script>gtag(\'config\', \'AW-987654321\');</script>';
+    const _ids = readAnalyticsIds(_html);
+    for (const _want of ['ga4:G-ZZ1234567', 'gtm:GTM-AB12CD', 'meta:1234567890123', 'ads:AW-987654321']) {
+      if (!_ids.includes(_want)) _fails.push(`the tracking id ${_want} is published in their markup and was not read (${JSON.stringify(_ids)})`);
+    }
+    if (readAnalyticsIds('<p>a page with no tracking on it at all</p>').length) _fails.push('an id is invented on a page that publishes none');
+    // The lastIndex trap: a module-level /g regex would start the second
+    // business halfway down its own markup and quietly lose the id.
+    if (JSON.stringify(readAnalyticsIds(_html)) !== JSON.stringify(_ids)) _fails.push('the same markup read twice produces two different answers - a global regex is carrying its lastIndex between businesses, so every second lead loses its ids');
+    // Two products can wear the same digits. Kinding them apart is what stops
+    // a GA4 property and a Meta pixel colliding on a number.
+    if (readAnalyticsIds('<p>GTM-AB12CD</p>').includes('ga4:GTM-AB12CD')) _fails.push('the ids are not kinded, so two different products carrying the same characters read as one account');
+
+    // ── 2. THE NETWORK, AND EVERY SHAPE THAT MUST SURVIVE ─────────────────
+    const _fake = [
+      _mk('Levine Heating and Cooling', ['ga4:G-AA1111111'], 'Charlotte NC', 'a1'),
+      _mk('Horton Electrical Service', ['ga4:G-AA1111111'], 'Phoenix AZ', 'a2'),
+    ];
+    const _dFake = detectAnalyticsCollisions(_fake);
+    if (!_dFake.reasonFor(_fake[0]) || !_dFake.reasonFor(_fake[1])) _fails.push('two differently-named businesses in two metros reporting to ONE tracking account are not caught, which is the whole rule');
+    if (!/2 metros/.test(_dFake.reasonFor(_fake[0]))) _fails.push(`the reason does not name the spread, so the log line says nothing a person could check - it reads "${_dFake.reasonFor(_fake[0])}"`);
+    const _branch = [
+      _mk('Blue Ridge Plumbing', ['ga4:G-BB2222222'], 'Charlotte NC', 'b1'),
+      _mk('Blue Ridge Plumbing', ['ga4:G-BB2222222'], 'Raleigh NC', 'b2'),
+    ];
+    if (detectAnalyticsCollisions(_branch).reasonFor(_branch[0])) _fails.push('a business trading under ONE name in two cities measuring itself in one analytics property is dropped as a network - that is a real multi-branch company and the exact operator the ICP is made of');
+    const _oneMetro = [
+      _mk('Levine Heating', ['ga4:G-CC3333333'], 'Charlotte NC', 'c1'),
+      _mk('Horton Electric', ['ga4:G-CC3333333'], 'Charlotte NC', 'c2'),
+    ];
+    if (detectAnalyticsCollisions(_oneMetro).reasonFor(_oneMetro[0])) _fails.push('two names on one account in ONE metro is dropped - that is one owner with two trades run from one office, and metro-variance is half the rule');
+    const _samePlace = [
+      { name: 'Peters Roofing', analyticsIds: ['ga4:G-DD4444444'], marketsSeen: ['Indianapolis IN'], placeId: 'same9' },
+      { name: 'Peters Brothers Roofing', analyticsIds: ['ga4:G-DD4444444'], marketsSeen: ['Columbus OH'], placeId: 'same9' },
+    ];
+    if (detectAnalyticsCollisions(_samePlace).reasonFor(_samePlace[0])) _fails.push('one Google listing held twice - the bench row under an older name and market beside this run\'s row - supplies both variances on its own and the business is dropped for colliding with itself');
+    const _noMetro = [
+      { name: 'A Roofing', analyticsIds: ['ga4:G-EE5555555'], placeId: 'e1' },
+      { name: 'B Plumbing', analyticsIds: ['ga4:G-EE5555555'], placeId: 'e2' },
+    ];
+    if (detectAnalyticsCollisions(_noMetro).reasonFor(_noMetro[0])) _fails.push('two leads carrying NO metro at all are dropped for differing in one - unmeasured treated as a value, the recorded class');
+    const _noIds = [_mk('A Roofing', [], 'Charlotte NC', 'n1'), _mk('B Roofing', [], 'Dallas TX', 'n2')];
+    if (detectAnalyticsCollisions(_noIds).groups.size) _fails.push('leads publishing no tracking id at all are being grouped, so two businesses collide on emptiness');
+    for (const _bad of [null, undefined, 'x', 42, [null, 'x', 7]]) {
+      if (detectAnalyticsCollisions(_bad).groups.size) _fails.push(`detectAnalyticsCollisions(${JSON.stringify(_bad)}) invents a group`);
+    }
+    if (detectAnalyticsCollisions(_fake, 3).reasonFor(_fake[0])) _fails.push('the threshold is not a knob, so it cannot be raised the way the phone rule\'s can if two ever proves too tight');
+    // The verdict travels on the lead the press wrote, not only on a field a
+    // caller remembered to copy across.
+    const _onVerdict = [
+      { name: 'Levine Heating and Cooling', pressSite: { analyticsIds: ['ga4:G-FF6666666'] }, marketsSeen: ['Charlotte NC'], placeId: 'v1' },
+      { name: 'Horton Electrical Service', pressSite: { analyticsIds: ['ga4:G-FF6666666'] }, marketsSeen: ['Phoenix AZ'], placeId: 'v2' },
+    ];
+    if (!detectAnalyticsCollisions(_onVerdict).reasonFor(_onVerdict[0])) _fails.push('a lead carrying its ids only inside the press verdict is invisible to the rule, so a bench row restored from the queue supplies no evidence');
+
+    if (_fails.length) {
+      console.log(`⛔ TRACKING COLLISION CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
+    } else {
+      console.log(`✓ TRACKING COLLISION CHECK: one analytics, tag-manager, ads or pixel account reporting for several differently-named businesses in several metros is caught from the run's own results and the bench, over ids read free from markup the press is already holding. It follows the phone rule exactly, and the negatives are the point: one name across two metros (a real multi-branch business), two names inside one metro, one listing held twice under a stale name, leads with no metro and leads with no id all survive. The ids are KINDED, so a GTM container and a GA4 property carrying the same characters are two accounts; the reader builds a fresh regex per business, because a module-level global one carries its lastIndex and loses every second lead's ids; and the threshold is a knob with a floor of two. HONEST SHAPE: the one case this cannot tell apart is a marketing agency that puts ONE container across several clients - that would read exactly like a network, and no live run has yet said how often it happens.`);
+    }
+  } catch (e) {
+    console.log(`⛔ TRACKING COLLISION CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ WHAT THE FREE VERDICT IS WORTH ONCE IT LEAVES THE PRESS ══════════════
+  // Three separate wires, and every one of them is the same class: a thing
+  // measured and then read by nobody. The verdict has to reach the ROW (or it
+  // is gone by the time the rep sees the lead), the DRAW ORDER (or the paid
+  // reads are still ordered by a guess) and the SCORE (or the number and the
+  // row disagree about the same business).
+  try {
+    const _fails = [];
+
+    // ── 1. THE ROW, AND THE COLUMN THAT MAY NOT EXIST YET ─────────────────
+    const _verdict = { measured: true, looks: 'dated', looksMeasured: true, noWebsite: false, gap: 6 };
+    const _co = { name: 'Kessler Park Plumbing', website: 'https://kpp.example', source: 'google_places', reachPredict: 22, pressSite: _verdict };
+    SB_SCHEMA_SEEN.delete('discovered_queue.site_verdict');
+    const _rowBefore = queueRowFromCompany(_co);
+    if ('site_verdict' in _rowBefore) _fails.push('the verdict column is written before the boot probe has seen it answer - PostgREST refuses the WHOLE row on one unknown key, so a press that runs before the ALTER loses every lead in it');
+    if (!_rowBefore.extra || !_rowBefore.extra.pressSite) _fails.push('with the column outstanding the verdict is lost entirely, so nothing can order or score by it until somebody runs SQL');
+    SB_SCHEMA_SEEN.set('discovered_queue.site_verdict', true);
+    const _rowAfter = queueRowFromCompany(_co);
+    if (!_rowAfter.site_verdict || _rowAfter.site_verdict.looks !== 'dated') _fails.push('the probe has seen the column and the verdict still is not written to it, so the queue can only be drawn by unpacking every row');
+    SB_SCHEMA_SEEN.delete('discovered_queue.site_verdict');
+    if (sbColumnReady('discovered_queue', 'site_verdict')) _fails.push('a column nobody has probed reads as ready, which is the assumption this guard exists to refuse');
+
+    // ── 2. ONE READER, WHICHEVER HALF OF THE ROW HOLDS IT ─────────────────
+    if (queueSiteVerdict({ site_verdict: _verdict }).looks !== 'dated') _fails.push('the verdict column is not read back');
+    if (queueSiteVerdict({ site_verdict: JSON.stringify(_verdict) }).looks !== 'dated') _fails.push('a verdict stored as a JSON string is not read - the extra column has held both shapes for the life of this table');
+    if (queueSiteVerdict({ extra: { pressSite: _verdict } }).looks !== 'dated') _fails.push('the verdict is unreachable while the column is outstanding, so the whole round is dark until somebody runs SQL');
+    if (queueSiteVerdict({}) !== null) _fails.push('a row with no verdict on it answers with something other than null, so unread and graded are the same shape downstream');
+
+    // ── 3. THE DRAW ORDER ─────────────────────────────────────────────────
+    if (pressDrawRank(null) !== -1) _fails.push('a lead nobody read ranks at or above a modern site - the _qnum -1 convention exists so an unmeasured lead is never dressed as a poor one, nor as a good one');
+    if (pressDrawRank({ looks: 'bad', looksMeasured: false }) !== -1) _fails.push('a verdict that was never measured still carries its word into the draw order');
+    if (!(pressDrawRank({ looks: 'bad', looksMeasured: true }) > pressDrawRank({ looks: 'dated', looksMeasured: true }))) _fails.push('a site a visitor would call bad does not outrank a merely dated one');
+    if (!(pressDrawRank({ looks: 'modern', looksMeasured: true }) > pressDrawRank(null))) _fails.push('a modern site and a site nobody could read draw in the same place');
+    {
+      const _q = (id, v, reach) => ({ id, website: 'https://' + id + '.example', reach_predict: reach, icp_score: 50, site_verdict: v });
+      const _order = orderUnread([
+        _q('modernhighreach', { looks: 'modern', looksMeasured: true }, 39),
+        _q('datedlowreach', { looks: 'dated', looksMeasured: true }, 4),
+        _q('nosite', { noWebsite: true }, 40),
+        _q('unread', null, 30),
+      ]).map(r => r.id);
+      if (_order[0] !== 'datedlowreach') _fails.push(`the queue draws ${JSON.stringify(_order)} - a business whose site a visitor can see is out of date must be worked before one that merely has a promising NAME, which is what reach_predict is`);
+      if (_order[_order.length - 1] !== 'nosite') _fails.push(`the no-website lead is mixed in rather than drawn as its own list after the rest - ${JSON.stringify(_order)}`);
+      // THE -1 CONVENTION, WHICH IS THE EXISTING ONE AND NOT A NEW ONE: a
+      // lead nobody could read draws BELOW every measured site, exactly as a
+      // missing reach_predict already does. It is not given a made-up middle
+      // place, and it is not promoted over a business we actually looked at.
+      if (_order.indexOf('unread') < _order.indexOf('modernhighreach')) _fails.push(`a lead nobody could read outranks a site we DID look at - ${JSON.stringify(_order)}. Unmeasured is -1 and draws last of the leads that have a website, which is the convention reach_predict already uses`);
+    }
+
+    // ── 4. THE SCORE READS WHAT A VISITOR MEETS ───────────────────────────
+    if (siteLift({ siteLooksMeasured: true, siteLooks: 'modern' }).points !== 0) _fails.push('a modern website lifts a lead, which is not what a modern website means');
+    if (!(siteLift({ siteLooksMeasured: true, siteLooks: 'bad' }).points > siteLift({ siteLooksMeasured: true, siteLooks: 'dated' }).points)) _fails.push('a site a stranger would not trust is worth no more to us than a slightly dated one');
+    if ((siteLift({ siteLooksMeasured: true, siteLooks: 'bad' }).terms[0] || {}).id !== 'siteLooks') _fails.push('the lift does not say which verdict it read, so a row cannot tell a visual grade from a technical one');
+    if (siteLift({ siteLooksMeasured: false, siteLooks: 'bad' }).points !== 0) _fails.push('an unmeasured visual verdict buys a lift anyway - unmeasured treated as a value, the recorded class');
+    if (siteLift({ siteLooksMeasured: true, siteLooks: 'unknown' }).points !== 0) _fails.push('"unknown" is priced, so a lead nobody looked at is lifted for it');
+    // THE FALLBACK IS STILL THERE. A lead the press could not read still has a
+    // technical grade from the contact read, and that is better than none.
+    {
+      const _fb = siteLift({ siteMeasured: true, siteGap: SITE_GAP_MAX, siteLooksMeasured: false });
+      if (!(_fb.points > 0) || (_fb.terms[0] || {}).id !== 'siteGap') _fails.push('the technical grade no longer lifts anything when the visual verdict is unmeasured, so a lead nobody could look at loses a measurement it has');
+    }
+    for (const _w of SITE_LOOKS_WORDS) {
+      if (!(_w in SITE_LOOKS_LIFT)) _fails.push(`the word "${_w}" can come out of the verdict and has no price, so it would lift nothing silently`);
+    }
+    {
+      // Two leads that differ ONLY in what their website looks like must score
+      // differently, or none of the above reaches the number.
+      // The same lead shape the website check next to siteLift uses, because a
+      // fit score needs at least ${FIND_ICP_MIN_TERMS} measured terms to exist at all and a
+      // thinner fixture returns null for both halves - which would compare
+      // nothing to nothing and pass.
+      const _base = { teamCount: 19, execTitles: [], adsCode: false, ownerNamedOnSite: true, founderPhrase: 'family-owned',
+        liveChat: true, reviewCount: 180, rating: 4.7, affordBand: 'premium', reachMeasured: true, ownerCanBuy: true, emailTier: 2,
+        siteMeasured: true, siteGap: 0 };
+      const _mod = findIcpScore(Object.assign({}, _base, { siteLooksMeasured: true, siteLooks: 'modern' }));
+      const _bad = findIcpScore(Object.assign({}, _base, { siteLooksMeasured: true, siteLooks: 'bad' }));
+      if (typeof _mod.score !== 'number' || typeof _bad.score !== 'number') _fails.push(`the fit fixture scores ${_mod.score} and ${_bad.score} - a fixture that measures nothing compares nothing, and this one exists to prove the verdict reaches the number`);
+      else if (!(_bad.score > _mod.score)) _fails.push(`two businesses alike in everything but their website score ${_mod.score} and ${_bad.score} - the thing we SELL being broken does not move the Fit score`);
+    }
+
+    // ── 5. THE READ STOPS RE-BUYING WHAT THE PRESS ALREADY ANSWERED ───────
+    {
+      const _full = { notIcp: false, website: 'https://pinned.example', pagesRead: 3, fcKey: 'k', apiKey: 'a', setting: 'on' };
+      if (siteLooksBuy(_full).render !== true) _fails.push('a lead the press never read buys no render, so nothing looks at a homepage whose code reads clean');
+      for (const _w of ['dated', 'bad']) {
+        const _r = siteLooksBuy(Object.assign({}, _full, { pressLooks: _w }));
+        if (_r.render !== false || _r.reason !== 'presslooks') _fails.push(`the press already found faults a visitor meets and the contact read still buys a picture to confirm them (${_w})`);
+      }
+      if (siteLooksBuy(Object.assign({}, _full, { pressLooks: 'modern' })).render !== true) _fails.push('a site whose CODE reads clean stops buying the one thing that can tell us it looks terrible anyway - that is the case the render exists for');
+      if (siteLooksBuy(Object.assign({}, _full, { pressLooks: 'unknown' })).render !== true) _fails.push('a lead the press could not read is treated as answered, so nobody ever looks at it');
+      if (siteLooksBuy(Object.assign({}, _full, { pressLooks: 'bad', notIcp: true })).reason !== 'dropped') _fails.push('a dropped lead is no longer refused FIRST, and the order of those two refusals is what the row says about a business we already refused');
+    }
+
+    // ── 6. HOW OLD THE BUSINESS IS ────────────────────────────────────────
+    const _nowY = new Date().getUTCFullYear();
+    if (rdapRegisteredYear({ events: [{ eventAction: 'registration', eventDate: '2004-03-11T05:00:00Z' }] }) !== 2004) _fails.push('the registry\'s own registration event is not read off its answer');
+    if (rdapRegisteredYear({ events: [{ eventAction: 'last changed', eventDate: '2024-03-11T05:00:00Z' }] }) !== null) _fails.push('a record whose only date is the last time somebody edited it is read as the registration date, so a domain registered in 1998 reports as new');
+    if (rdapRegisteredYear({}) !== null || rdapRegisteredYear(null) !== null) _fails.push('an empty or missing registry answer produces a year, which is a fabricated age on a real business');
+    if (rdapRegisteredYear({ events: [{ eventAction: 'registration', eventDate: 'not a date' }] }) !== null) _fails.push('an unparsable date produces a year');
+    if (rdapRegisteredYear({ events: [{ eventAction: 'registration', eventDate: (_nowY + 3) + '-01-01T00:00:00Z' }] }) !== null) _fails.push('a registration date in the future is accepted, so a clock-skewed record dates a business that does not exist yet');
+    if (String(FIND_RDAP_BASE).indexOf('http') !== 0) _fails.push('the registry door is not an address, so the lookup cannot be pointed elsewhere without a deploy');
+
+    if (_fails.length) {
+      console.log(`⛔ FREE VERDICT WIRING CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
+    } else {
+      console.log(`✓ FREE VERDICT WIRING CHECK: what the free read found reaches all three places it has to. THE ROW: the verdict rides the extra blob unconditionally and its own jsonb column only once the boot probe has WATCHED that column answer, because one unknown key refuses the whole row and a press before the ALTER would lose three hundred leads rather than one field; one reader covers the column, a string copy and the blob. THE DRAW: the unread queue is ordered by what a visitor meets ahead of reach_predict, which is a guess off the business NAME, with the no-website leads drawn as their own list after the rest and an unmeasured lead at -1, below a modern site. THE SCORE: the lift reads site.looks and keeps the technical grade as its fallback, every declared word has a price so none can be silently free, and two businesses alike in everything but their website now score differently - which they did not before this round. AND THE READ STOPS PAYING TWICE: a homepage the press already graded dated or bad buys no picture, while a clean-code site still does, because that is the only case a render can answer. The age is their own page first and the public registry second, and the registry parse refuses a last-changed date, an empty record and a date in the future.`);
+    }
+  } catch (e) {
+    console.log(`⛔ FREE VERDICT WIRING CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ AN INVENTED PRICE IS A FABRICATION WHEREVER IT SITS ═══════════════════
@@ -86023,23 +86541,48 @@ const FIND_ICP_MIN_TERMS = 6;
 const SITE_LIFT_BAND = { strong: 0, fair: 2, weak: 5, poor: 8 };
 const SITE_LIFT_MAX = 14;
 const SITE_LIFT_VOLUME = 150;
+// ══ WHAT A VISITOR MEETS, PRICED ═══════════════════════════════════════════
+// The lift read siteGap, which is the TECHNICAL grade - and more than half of
+// what siteGap measures is invisible to everybody who is not a crawler. A site
+// with perfect schema and a design from 2009 lifted nothing; a current site
+// missing one schema tag lifted 2. Round 142 built the verdict that answers the
+// question a rep actually opens on, and this is where it starts being worth
+// something.
+//
+// ONE declaration of the words: SITE_LOOKS_WORDS owns them and this prices
+// them, so a word added there arrives here as an undefined price rather than a
+// silent zero. 'unknown' is deliberately priced at null - a lead nobody could
+// judge falls through to the technical grade rather than being lifted or
+// punished for our blindness.
+const SITE_LOOKS_LIFT = { modern: 0, dated: 4, bad: 8, unknown: null };
 const siteLift = (signals) => {
   const d = signals || {};
   const none = { points: 0, terms: [] };
-  // A site we could not read lifts nothing. Our blindness is not their gap.
-  if (d.siteMeasured !== true) return none;
-  // strictNum, never Number: Number(true) is 1, and a stray boolean must not
-  // buy a lift off a measurement that never happened (§118 caught exactly that).
-  if (typeof d.siteGap !== 'number' || !Number.isFinite(d.siteGap) || d.siteGap < 0) return none;
-  const word = SITE_GAP_WORD(Math.min(SITE_GAP_MAX, d.siteGap));
-  const base = SITE_LIFT_BAND[word] || 0;
+  let word = '', base = 0, id = '';
+  // The visible verdict leads. It is measured or it is not; there is no
+  // half-measured state, and an unmeasured one may not reach the price table.
+  if (d.siteLooksMeasured === true && SITE_LOOKS_WORDS.indexOf(String(d.siteLooks)) >= 0) {
+    const p = SITE_LOOKS_LIFT[String(d.siteLooks)];
+    if (typeof p === 'number') { word = String(d.siteLooks); base = p; id = 'siteLooks'; }
+  }
+  if (!id) {
+    // THE FALLBACK, unchanged. A site we could not read lifts nothing: our
+    // blindness is not their gap.
+    if (d.siteMeasured !== true) return none;
+    // strictNum, never Number: Number(true) is 1, and a stray boolean must not
+    // buy a lift off a measurement that never happened (§118 caught exactly that).
+    if (typeof d.siteGap !== 'number' || !Number.isFinite(d.siteGap) || d.siteGap < 0) return none;
+    word = SITE_GAP_WORD(Math.min(SITE_GAP_MAX, d.siteGap));
+    base = SITE_LIFT_BAND[word] || 0;
+    id = 'siteGap';
+  }
   if (!base) return none;
   const bleed = [];
   if (d.adsCode === true) bleed.push('they are paying for the traffic landing on it');
   const _rev = d.reviewCount;
   if (typeof _rev === 'number' && Number.isFinite(_rev) && _rev >= SITE_LIFT_VOLUME) bleed.push(`${_rev} reviews of real volume landing on it`);
   const points = Math.min(SITE_LIFT_MAX, Math.round(base * (1 + 0.4 * bleed.length)));
-  return { points, terms: [{ id: 'siteGap', points, word,
+  return { points, terms: [{ id, points, word,
     why: `a ${word} website${bleed.length ? ' and ' + bleed.join(' and ') : ''}` }] };
 };
 const findIcpScore = (signals) => {
@@ -86109,6 +86652,387 @@ const findIcpScore = (signals) => {
        + (_marks.length ? `, then marked down ${Math.abs(_off)} for ${_marks.map(t => t.why).join(' and ')}` : '')
        + (_lift.points ? `, then lifted ${_lift.points} for ${_lift.terms[0].why}` : ''),
   };
+};
+
+
+// ══ THE FREE PAGE READ MOVES TO THE PRESS ══════════════════════════════════
+// Vin, 2026-09-12: "Yes - one free read, three answers"; "the full free read -
+// homepage plus their team and contact pages"; "cut it with the free read
+// first"; "keep the old path switchable".
+//
+// Everything below already existed and ran AFTER the money was spent: the same
+// plain fetch, the same page picker, the same build verdict, the same
+// visible-fault verdict, the same signals reader. Nothing here is rewritten and
+// nothing here buys anything - no Firecrawl call, no model call, no render - so
+// a press costs exactly what it cost before, and the paid read that follows it
+// is ordered by what the free one found instead of by a guess about the name.
+//
+// THREE PAGES, NOT TWENTY. FIND_MAX_FREE_PAGES is 20 and the contact read is
+// right to use it: there it is one lead and every page is free. Here it is
+// every business in the run, and twenty pages across three hundred businesses
+// is six thousand fetches at a press. The homepage plus their team page plus
+// their contact page is what the three answers need, and that is nine hundred.
+const FIND_PRESS_READ = String(process.env.FIND_PRESS_READ || 'on').toLowerCase();
+// NOT a knob, on purpose. The page count is the whole decision this round
+// makes, and a setting that can put it back to twenty is a six-thousand-fetch
+// press somebody turns on by accident. The switch is FIND_PRESS_READ, which
+// restores the old path in seconds and costs nothing else.
+const FIND_PRESS_MAX_PAGES = 3;
+// Which interior pages, read off the page table's own keys rather than a second
+// hand-kept list: an intent added to FIND_PAGE_INTENTS cannot quietly join the
+// press read, and a key renamed there stops matching here loudly.
+const FIND_PRESS_INTENTS = ['team', 'contact'];
+const FIND_PRESS_POOL = Math.max(1, parseInt(process.env.FIND_PRESS_POOL || '8', 10));
+const FIND_PRESS_PAGE_MS = Math.max(1000, parseInt(process.env.FIND_PRESS_PAGE_MS || '8000', 10));
+// The whole phase, not each page. A per-page timeout multiplied by three pages
+// multiplied by three hundred businesses is the number that makes a sequential
+// version impossible, which is the same lesson FIND_FREE_READ_MS records one
+// lead at a time. The press already runs as a background job that outlives its
+// request, so wall clock is affordable here - but it is bounded and measured.
+const FIND_PRESS_READ_MS = Math.max(10000, parseInt(process.env.FIND_PRESS_READ_MS || '600000', 10));
+// One request per host per gap, across the whole pool. A small business often
+// shares a host with its neighbours, and eight of our requests landing on one
+// box at once is the thing that gets a crawler blocked.
+const FIND_PRESS_HOST_GAP_MS = Math.max(0, parseInt(process.env.FIND_PRESS_HOST_GAP_MS || '700', 10));
+const FIND_PRESS_MAX_LEADS = Math.max(1, parseInt(process.env.FIND_PRESS_MAX_LEADS || '400', 10));
+// The sentence a row carries when nobody looked at the PICTURE. The press buys
+// no render and no model call by design, so the visual verdict here rests on
+// their markup alone and says so - never on silence.
+const PRESS_NO_PICTURE = 'the press reads their markup for free and buys no picture of the page, so this verdict rests on their own code';
+const _pressHostAt = new Map();
+const pressHostOf = (url) => { try { return new URL(String(url)).host.toLowerCase().replace(/^www\./, ''); } catch (e) { void e; return ''; } };
+const pressPause = (ms) => (Number(ms) > 0 ? new Promise(r => setTimeout(r, Number(ms))) : Promise.resolve());
+// The slot is RESERVED before the await, so two workers racing for one host
+// cannot both read the same stamp and both decide they are first. Same reason
+// the Firecrawl gate reserves rather than polls.
+const pressHostGate = async (url, gapMs) => {
+  const host = pressHostOf(url);
+  if (!host) return 0;
+  const gap = Number.isFinite(Number(gapMs)) ? Math.max(0, Number(gapMs)) : FIND_PRESS_HOST_GAP_MS;
+  const now = Date.now();
+  const at = Math.max(now, (Number(_pressHostAt.get(host)) || 0) + gap);
+  _pressHostAt.set(host, at);
+  if (at > now) await pressPause(at - now);
+  return at - now;
+};
+
+// ══ WHOSE TRACKING ACCOUNT IS THIS ═════════════════════════════════════════
+// The ids a site publishes in its own markup, kinded so two different products
+// carrying the same digits cannot be read as one account. PURE, so the
+// collision rule below can be executed on fixtures rather than read.
+const ANALYTICS_ID_KINDS = [
+  { kind: 'ga4', re: '\\bG-[A-Z0-9]{6,12}\\b' },
+  { kind: 'ua', re: '\\bUA-\\d{4,10}-\\d{1,4}\\b' },
+  { kind: 'gtm', re: '\\bGTM-[A-Z0-9]{4,10}\\b' },
+  { kind: 'ads', re: '\\bAW-\\d{6,12}\\b' },
+  { kind: 'meta', re: 'fbq\\(\\s*[\'"]init[\'"]\\s*,\\s*[\'"](\\d{9,20})[\'"]' },
+];
+// A FRESH RegExp per call. A module-level /g regex carries lastIndex between
+// calls, so the second business on a run would start matching halfway down its
+// own markup - the quietest way to under-report an id and lose a collision.
+const readAnalyticsIds = (html) => {
+  const h = String(html || '');
+  const out = [];
+  const seen = new Set();
+  for (const k of ANALYTICS_ID_KINDS) {
+    for (const m of h.matchAll(new RegExp(k.re, 'g'))) {
+      const id = String(m[1] || m[0] || '').trim();
+      if (!id) continue;
+      const key = k.kind + ':' + id.toUpperCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(key);
+      if (out.length >= 12) return out;
+    }
+  }
+  return out;
+};
+
+// ══ ONE TRACKING ACCOUNT, MANY NAMES, MANY METROS ══════════════════════════
+// The sibling of detectPhoneCollisions, and it follows that function's shape
+// exactly: pure, recomputed from the run's own results plus the bench, a Map of
+// the evidence and a reasonFor(lead) that returns a checkable sentence or ''.
+// It was deferred from the round that built the phone rule for one reason -
+// the id is in the HOMEPAGE, and until this round the press never read one.
+//
+// BOTH VARIANCES, NEVER THE SHARING. The same reasoning the phone rule states
+// at length: a shared id across metros under ONE name is a real multi-branch
+// business measuring itself in one property, and deleting it would delete
+// exactly the operator the coverage-gap finding is built on. Several NAMES in
+// several METROS on one account is one operator wearing local clothes.
+//
+// SEPARATE FROM THE PHONE RULE rather than folded into it, for the reason that
+// rule gives about the chain rule: one home for one rule, so a lead dropped
+// here is given this sentence and not the other one.
+const listingAnalyticsKeys = (lead) => {
+  const v = lead && lead.analyticsIds;
+  if (Array.isArray(v)) return v.map(x => String(x || '').trim()).filter(Boolean);
+  const p = lead && lead.pressSite && lead.pressSite.analyticsIds;
+  return Array.isArray(p) ? p.map(x => String(x || '').trim()).filter(Boolean) : [];
+};
+const detectAnalyticsCollisions = (leads, minDistinct) => {
+  const need = Math.max(2, Number(minDistinct) || 2);
+  const byId = new Map();
+  for (const l of (Array.isArray(leads) ? leads : [])) {
+    if (!l || typeof l !== 'object') continue;
+    const keys = listingAnalyticsKeys(l);
+    if (!keys.length) continue;
+    const pid = String(l.placeId || '');
+    const id = listingIdentityKey(l.name);
+    const metros = listingMetros(l);
+    for (const k of keys) {
+      let e = byId.get(k);
+      if (!e) { e = { id: k, names: new Set(), identities: new Set(), metros: new Set(), places: new Set() }; byId.set(k, e); }
+      // ONE LISTING COUNTED ONCE, the guard the phone rule earned: the bench
+      // and this run can both hold the same business, and one listing must
+      // never be evidence of a network of itself.
+      if (pid && e.places.has(pid)) continue;
+      if (pid) e.places.add(pid);
+      if (id) e.identities.add(id);
+      if (l.name) e.names.add(String(l.name).trim());
+      for (const m of metros) e.metros.add(m);
+    }
+  }
+  const groups = new Map();
+  for (const [k, e] of byId) if (e.identities.size >= need && e.metros.size >= need) groups.set(k, e);
+  const reasonFor = (lead) => {
+    for (const k of listingAnalyticsKeys(lead)) {
+      const e = groups.get(k);
+      if (!e) continue;
+      return `their site reports to the same ${String(k).split(':')[0].toUpperCase()} tracking account as ${e.identities.size} businesses under different names in ${e.metros.size} metros (${[...e.names].slice(0, 3).join(', ')})`;
+    }
+    return '';
+  };
+  return { groups, reasonFor };
+};
+
+// ══ HOW OLD IS THE BUSINESS ════════════════════════════════════════════════
+// Vin, 2026-09-12: "use how old their web domain is". Their own page first,
+// because a founding year they PUBLISHED is a fact about the business; the
+// domain is a fact about the domain, and a 2003 business that rebranded in 2019
+// registered its domain in 2019. So the domain answers only when their pages
+// state no year at all, and the row says which of the two answered.
+const FIND_DOMAIN_AGE = String(process.env.FIND_DOMAIN_AGE || 'on').toLowerCase();
+const FIND_RDAP_BASE = String(process.env.FIND_RDAP_BASE || 'https://rdap.org/domain/');
+// PURE, so the parse is executed on both real shapes at boot rather than read.
+const rdapRegisteredYear = (body, now) => {
+  const ev = (body && Array.isArray(body.events)) ? body.events : [];
+  const reg = ev.find(e => e && String(e.eventAction || '').toLowerCase() === 'registration');
+  const t = reg ? Date.parse(String(reg.eventDate || '')) : NaN;
+  if (!Number.isFinite(t)) return null;
+  const y = new Date(t).getUTCFullYear();
+  const thisYear = new Date(Number(now) || Date.now()).getUTCFullYear();
+  return (y >= 1985 && y <= thisYear) ? y : null;
+};
+// ══ NOT PROVEN REACHABLE, AND THE CODE SAYS SO RATHER THAN ASSUMING ═══════
+// RDAP is the protocol that replaced WHOIS, every gTLD registry serves it, and
+// it is free and keyless. What is NOT established is that this server can reach
+// it: no live press has run against it. So this is written to be WRONG SAFELY -
+// every failure is a named refusal, the founding year on their own page is the
+// answer whenever there is one, and the DOMAIN AGE line on a run says how many
+// businesses each source answered for. One live press settles it.
+const rdapDomainYear = async (website, timeoutMs) => {
+  const host = registrableHostOf(website);
+  if (!host) return { year: null, why: 'their address is not a plain domain we can ask a registry about' };
+  try {
+    const r = await fetchT(FIND_RDAP_BASE + encodeURIComponent(host), { headers: { 'Accept': 'application/rdap+json' } }, Math.max(1000, Number(timeoutMs) || 6000));
+    if (!r || !r.ok) return { year: null, why: `the public domain registry answered ${r ? r.status : 'nothing at all'} for ${host}` };
+    const y = rdapRegisteredYear(await safeJson(r), Date.now());
+    return y ? { year: y, why: '' } : { year: null, why: `the public domain registry answered for ${host} with no registration date on the record` };
+  } catch (e) {
+    return { year: null, why: `the public domain registry could not be reached for ${host} (${(e && e.message) || 'the request failed'})` };
+  }
+};
+
+// ONE BUSINESS, READ FREE. Everything it can go wrong with is a named refusal
+// and the lead is KEPT either way: a site that refuses us is a fact about our
+// reach, never a fact about the business, and this file records what it costs
+// to score the two the same.
+const pressSiteVerdict = async (lead, opts = {}) => {
+  const o = opts || {};
+  const nowMs = Number(o.now) || Date.now();
+  const name = String((lead && lead.name) || '');
+  const website = String((lead && lead.website) || '').trim();
+  const out = {
+    at: new Date(nowMs).toISOString(), measured: false, noWebsite: false, via: '', why: '',
+    pages: [], chars: 0, word: '', gap: null, grade: null, platform: '', isDiy: null, faults: [],
+    looks: 'unknown', looksMeasured: false, looksWhy: '', looksFaults: [],
+    nameOnSite: null, ageYears: null, ageBasis: '', ageWhy: '', domainYear: null,
+    analyticsIds: [], adsCode: null, analytics: null, teamCount: null, hiringAny: null,
+  };
+  if (!website) {
+    out.noWebsite = true;
+    out.why = 'this business publishes no website at all - there is nothing to grade, the absence IS the finding, and the number is on their listing';
+    return out;
+  }
+  const deadlineAt = Number.isFinite(Number(o.deadlineAt)) ? Number(o.deadlineAt) : Infinity;
+  if (Date.now() >= deadlineAt) {
+    out.why = 'the free read reached its time ceiling before this business was reached, so nothing about their site is claimed in either direction';
+    return out;
+  }
+  const pageMs = Math.max(1000, Number(o.pageMs) || FIND_PRESS_PAGE_MS);
+  await pressHostGate(website, o.hostGapMs);
+  const home = await findPlainFetch(website, pageMs);
+  if (!home.ok) {
+    // The §141 rule, unchanged: a blocked site reads UNKNOWN and the lead is
+    // kept. Vin, 2026-09-12, on blocked sites: "for now dont do anything".
+    out.why = `their site could not be read for free (${home.why}), so how it is built stays unknown and this lead is kept exactly as it was`;
+    return out;
+  }
+  const pages = [{ url: home.url, intent: 'home', html: home.html, text: home.text, finalUrl: home.finalUrl || '' }];
+  const links = sameHostLinks(home.html, home.url);
+  // The SAME picker, in its free round-robin mode, so the team-before-contact
+  // order and every asset and duplicate rule it already carries apply here
+  // untouched. One page per intent first - the homepage plus their team page
+  // plus their contact page is the read Vin asked for - and the remaining slot
+  // only then falls to whichever intent still has a page.
+  const ranked = pickFindPages(links, home.url, FIND_MAX_FREE_PAGES);
+  const room = Math.max(0, FIND_PRESS_MAX_PAGES - 1);
+  const picks = [];
+  for (const key of FIND_PRESS_INTENTS) {
+    if (picks.length >= room) break;
+    const p = ranked.find(x => x.intent === key && picks.indexOf(x) < 0);
+    if (p) picks.push(p);
+  }
+  for (const p of ranked) {
+    if (picks.length >= room) break;
+    if (FIND_PRESS_INTENTS.indexOf(p.intent) < 0 || picks.indexOf(p) >= 0) continue;
+    picks.push(p);
+  }
+  for (const pick of picks) {
+    if (Date.now() >= deadlineAt) break;
+    await pressHostGate(pick.url, o.hostGapMs);
+    const r = await findPlainFetch(pick.url, pageMs);
+    if (r.ok) pages.push({ url: pick.url, intent: pick.intent, html: r.html, text: r.text });
+  }
+  const site = readSiteBuild({
+    pages, links, website, companyName: name,
+    city: String((lead && lead.location) || ''),
+    trade: String((lead && (lead.industry || lead.trade)) || ''),
+    // The press does not fetch /robots.txt or /llms.txt. Two more requests per
+    // business is six hundred more at a press, and both feed the INVISIBLE half
+    // of the build read - the half no visitor and no owner has ever seen. The
+    // contact read still buys them on the lead it is spending on.
+    robots: null, llms: null,
+  });
+  const signals = readFindIcpSignals(pages);
+  const looks = readSiteLooks(null, PRESS_NO_PICTURE, (site.measured === true && Array.isArray(site.faults)) ? site.faults : []);
+  const corpus = pages.map(p => String(p.text || '')).join(' ').toLowerCase();
+  const own = leadNameTokens(name);
+  out.measured = site.measured === true;
+  out.via = 'a plain fetch (free)';
+  out.pages = pages.map(p => {
+    let path = '';
+    try { const u = new URL(p.url); path = u.pathname === '/' ? '/' : u.pathname.replace(/\/$/, ''); } catch (e) { void e; path = '?'; }
+    return { path, intent: p.intent, chars: String(p.text || '').length };
+  });
+  out.chars = corpus.length;
+  out.word = site.word || '';
+  out.gap = (typeof site.gap === 'number') ? site.gap : null;
+  out.grade = (typeof site.grade === 'number') ? site.grade : null;
+  out.platform = site.platform || '';
+  out.isDiy = site.isDiy === true ? true : site.isDiy === false ? false : null;
+  out.faults = (Array.isArray(site.faults) ? site.faults : []).map(f => f && f.id).filter(Boolean);
+  out.why = site.why || '';
+  out.looks = looks.looks;
+  out.looksMeasured = looks.measured === true;
+  out.looksWhy = looks.why || '';
+  out.looksFaults = Array.isArray(looks.faults) ? looks.faults : [];
+  // An absence needs readable text, the same floor every other absence claim on
+  // this path rides. Below it the answer is null: we did not look hard enough
+  // to say their name is missing, and a DEMOTION off our own blindness is the
+  // failure this file records most.
+  out.nameOnSite = (corpus.length >= FIND_ABSENCE_TEXT_FLOOR && own.length) ? own.some(w => corpus.indexOf(w) >= 0) : null;
+  out.analyticsIds = readAnalyticsIds(pages.map(p => String(p.html || '')).join('\n'));
+  out.adsCode = (signals.adsCode === true || signals.adsCode === false) ? signals.adsCode : null;
+  out.analytics = (signals.analytics === true || signals.analytics === false) ? signals.analytics : null;
+  out.teamCount = (typeof signals.teamCount === 'number') ? signals.teamCount : null;
+  out.hiringAny = (signals.hiringAny === true || signals.hiringAny === false) ? signals.hiringAny : null;
+  // ══ strictNum, NEVER Number() ═══════════════════════════════════════════
+  // Number(null) is 0 and 0 is finite, so `Number(signals.yearsInBusiness) >= 0`
+  // read a page that states NO founding year as a business founded this year,
+  // stamped "their own pages", and the registry fallback beneath it became
+  // unreachable on every lead. The harness caught it on the one cast site built
+  // to state no year. This is the null-laundering class, inside the fix for it.
+  const yrs = (typeof signals.yearsInBusiness === 'number') ? signals.yearsInBusiness : NaN;
+  if (Number.isFinite(yrs) && yrs >= 0) {
+    out.ageYears = Math.round(yrs);
+    out.ageBasis = 'their own pages';
+    out.ageWhy = `their own pages date the business to ${out.ageYears} year(s) ago`;
+  } else if (o.domainAge === false || FIND_DOMAIN_AGE !== 'on') {
+    out.ageWhy = 'their own pages state no founding year, and the domain registration lookup is switched off, so how old this business is stays unmeasured';
+  } else if (Date.now() >= deadlineAt) {
+    out.ageWhy = 'their own pages state no founding year and the free read was out of time before the registry could be asked, so how old this business is stays unmeasured';
+  } else {
+    const reg = await rdapDomainYear(website, o.rdapMs);
+    if (reg.year) {
+      out.domainYear = reg.year;
+      out.ageYears = Math.max(0, new Date(nowMs).getUTCFullYear() - reg.year);
+      out.ageBasis = 'domain registration';
+      out.ageWhy = `their own pages state no founding year; their domain was registered in ${reg.year}, which is a floor on the age of the business and not the same claim`;
+    } else {
+      out.ageWhy = `their own pages state no founding year and ${reg.why}, so how old this business is stays unmeasured`;
+    }
+  }
+  return out;
+};
+
+// THE PHASE. A pool over businesses, a deadline over the whole thing, and a
+// tally the caller prints - nothing in here logs per lead, because a press over
+// three hundred businesses would bury the run's own lines.
+const pressSiteRead = async (leads, opts = {}) => {
+  const o = opts || {};
+  const t0 = Number(o.now) || Date.now();
+  const deadlineAt = t0 + Math.max(1000, Number(o.readMs) || FIND_PRESS_READ_MS);
+  const list = (Array.isArray(leads) ? leads : []).filter(l => l && typeof l === 'object');
+  const tally = { leads: list.length, read: 0, measured: 0, unread: 0, noWebsite: 0, pages: 0,
+    outOfTime: 0, bad: 0, dated: 0, modern: 0, ageOwnPage: 0, ageDomain: 0, ageNone: 0, ms: 0 };
+  let at = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = at++;
+      if (i >= list.length) return;
+      const lead = list[i];
+      const outOfTime = Date.now() >= deadlineAt;
+      const v = await pressSiteVerdict(lead, {
+        deadlineAt, pageMs: o.pageMs, hostGapMs: o.hostGapMs, rdapMs: o.rdapMs,
+        now: o.now, domainAge: o.domainAge,
+      });
+      lead.pressSite = v;
+      lead.noWebsite = v.noWebsite === true;
+      lead.analyticsIds = Array.isArray(v.analyticsIds) ? v.analyticsIds : [];
+      // A DEMOTION, never a delete. A DBA, a rebrand and a logo-only header all
+      // read exactly like this, and every one of them is a real business.
+      lead.nameNotOnSite = v.nameOnSite === false;
+      lead.pressSiteLooks = v.looks;
+      lead.pressSiteLooksMeasured = v.looksMeasured === true;
+      if (v.noWebsite) tally.noWebsite++;
+      else if (v.measured) { tally.read++; tally.measured++; }
+      else { tally.read++; tally.unread++; if (outOfTime) tally.outOfTime++; }
+      tally.pages += (v.pages || []).length;
+      if (v.looksMeasured) { if (v.looks === 'bad') tally.bad++; else if (v.looks === 'dated') tally.dated++; else if (v.looks === 'modern') tally.modern++; }
+      if (v.ageBasis === 'their own pages') tally.ageOwnPage++;
+      else if (v.ageBasis === 'domain registration') tally.ageDomain++;
+      else if (!v.noWebsite) tally.ageNone++;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(Number(o.pool) || FIND_PRESS_POOL, list.length || 1)) }, worker));
+  tally.ms = Date.now() - t0;
+  return tally;
+};
+// THE DRAW ORDER THE FREE VERDICT BUYS. One declaration: the unread queue, the
+// press log and anything that sorts on it read THIS, so they cannot disagree
+// about which business is worked first. A site that visibly needs the work
+// outranks one that does not; a business nobody could read is -1, BELOW a
+// modern site, because an unmeasured lead must never be dressed as a poor one
+// and must never be dressed as a good one either.
+const PRESS_DRAW_RANK = { bad: 3, dated: 2, modern: 1 };
+const pressDrawRank = (verdict) => {
+  const v = verdict || null;
+  if (!v || typeof v !== 'object') return -1;
+  if (v.looksMeasured !== true) return -1;
+  const r = PRESS_DRAW_RANK[String(v.looks || '')];
+  return (typeof r === 'number') ? r : -1;
 };
 
 // ── ONE LEAD, READ AS CHEAPLY AS IT CAN HONESTLY BE READ ────────────────────
@@ -86862,7 +87786,8 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   let _looksSaw = readSiteLooks(null, '', _freeSeen);
   {
     const _buy = siteLooksBuy({ notIcp: out.notIcp === true, website, pagesRead: pages.length,
-      fcKey, apiKey, setting: FIND_SITE_LOOKS });
+      fcKey, apiKey, setting: FIND_SITE_LOOKS,
+      pressLooks: (company && company.pressSite && company.pressSite.looksMeasured === true) ? company.pressSite.looks : '' });
     if (!_buy.render) {
       // THE DROP REFUSES THE VERDICT EXACTLY AS IT REFUSES THE SPEND. A lead
       // dropped as a franchise, a branch or a chain is not worked, so it does
@@ -87477,6 +88402,14 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   signals.siteGap = (out.site && typeof out.site.gap === 'number') ? out.site.gap : null;
   signals.siteWord = (out.site && out.site.word) || '';
   signals.siteWhy = (out.site && out.site.why) || '';
+  // Round 143B: and the verdict a VISITOR would give, which Round 142 built and
+  // handed to nobody - the score read the technical grade and the row read the
+  // visual one, so the two disagreed about the same business by construction.
+  // The lift prefers this and keeps siteGap as its fallback; both are set here,
+  // in one place, because a measurement that never reaches the number is the
+  // computed-but-not-passed class this file produces more than any other.
+  signals.siteLooks = (out.site && SITE_LOOKS_WORDS.indexOf(out.site.looks) >= 0) ? out.site.looks : 'unknown';
+  signals.siteLooksMeasured = !!(out.site && out.site.looksMeasured === true);
   out.icp = findIcpScore(signals);
 
   // Round 130: the FRAME, not only its contents. `|| {}` cannot tell a lead
@@ -87931,6 +88864,10 @@ const readRunCompanyFrom = (company) => {
     jobPostingUrl: C.jobPostingUrl || '',
     marketCount: (typeof C.marketCount === 'number') ? C.marketCount : null,
     affordBand: C.affordBand || '',
+    // Round 143B: what the press already read off their site, free, hours or
+    // days before this run. It travels so the read does not pay to answer a
+    // question that is already answered on the row.
+    pressSite: (C.pressSite && typeof C.pressSite === 'object') ? C.pressSite : null,
     market: Array.isArray(C.marketsSeen) && C.marketsSeen.length ? String(C.marketsSeen[0] || '') : '',
   };
 };
@@ -87967,7 +88904,7 @@ const queueRowFromCompany = (c) => {
   const src = String((c && c.source) || '');
   const rp = (typeof c.reachPredict === 'number') ? c.reachPredict
     : predictReachability(c.name, c.website, { reviewCount: c.reviewCount }).score;
-  return {
+  const row = {
     id: queueIdOf(c),
     name: c.name || '', website: c.website || '',
     icp_score: c.icpScore || 0, source: src, signals: c.signals || {},
@@ -87980,6 +88917,34 @@ const queueRowFromCompany = (c) => {
     from_trigger_source: src !== 'google_places',
     reach_predict: rp,
   };
+  // ══ THE COLUMN IS WRITTEN ONLY ONCE THE PROBE HAS SEEN IT ═══════════════
+  // §42: one unknown key and PostgREST refuses the whole row, so a press that
+  // ran before the ALTER would write NOTHING - three hundred leads lost to a
+  // column. The verdict rides the extra blob unconditionally either way (it is part
+  // of c), so nothing is lost while the SQL is outstanding; the column is
+  // the queryable copy and it waits to be affirmed.
+  if (sbColumnReady('discovered_queue', 'site_verdict')) {
+    row.site_verdict = (c && c.pressSite && typeof c.pressSite === 'object') ? c.pressSite : null;
+  }
+  return row;
+};
+// ONE READER for the verdict, whichever half of the row is holding it: the
+// column when the ALTER has run, the extra blob when it has not. Two ways
+// of finding one fact is how one of them ends up wrong.
+const queueSiteVerdict = (row) => {
+  const v = row && row.site_verdict;
+  if (v && typeof v === 'object') return v;
+  if (typeof v === 'string' && v) { try { const o = JSON.parse(v); if (o && typeof o === 'object') return o; } catch (e) { void e; } }
+  const x = queueExtraOf(row) || {};
+  return (x.pressSite && typeof x.pressSite === 'object') ? x.pressSite : null;
+};
+// A business with no website is KEPT and drawn on its own list, after the ones
+// that have a site (Vin, 2026-09-12: "keep them, but separate from the rest").
+// It is a different call - there is nothing to audit and nothing to critique -
+// so it is a different run of rows, not a lead mixed in at a lower score.
+const queueHasSite = (row) => {
+  const v = queueSiteVerdict(row);
+  return (v && v.noWebsite === true) ? 0 : 1;
 };
 // The draw order the browser used (index.html, Round 105): a lead with
 // something to read sorts above one with nothing, then the free
@@ -87990,8 +88955,18 @@ const queueReadable = (row) => {
   const x = queueExtraOf(row) || {};
   return ((row && row.website) || x.website || x.placeId) ? 1 : 0;
 };
+// Round 143B: the FREE VERDICT decides the draw before the guess does.
+// reach_predict is a guess off the business NAME; the press has now actually
+// read their homepage, and a site a visitor can see is out of date is the lead
+// worth the paid read first. It sits ahead of reach_predict and behind the two
+// questions that are not about quality at all - is there anything to read, and
+// is this one of the no-website leads that are worked as their own list.
+// pressDrawRank keeps the _qnum convention: an unmeasured lead is -1, BELOW a
+// modern site, so blindness is never dressed as a poor site or a good one.
 const orderUnread = (rows) => (Array.isArray(rows) ? rows.slice() : []).sort((a, b) =>
   (queueReadable(b) - queueReadable(a))
+  || (queueHasSite(b) - queueHasSite(a))
+  || (pressDrawRank(queueSiteVerdict(b)) - pressDrawRank(queueSiteVerdict(a)))
   || (_qnum(b.reach_predict) - _qnum(a.reach_predict))
   || (_qnum(b.icp_score) - _qnum(a.icp_score)));
 // done: every claimed lead answered (read or a verdict); partial: something
@@ -88097,7 +89072,8 @@ const _runLog = (runId, msg) => console.log(`\u{1F4D6} READ RUN ${String(runId).
 // One queue row through the SAME gates /api/find-contact runs, in the same
 // order. Returns what the row's patch and the run's counters need.
 const readOneQueueRow = async (row, keys, opts) => {
-  const company = readRunCompanyFrom(Object.assign({}, queueExtraOf(row) || {}, { name: row.name || (queueExtraOf(row) || {}).name }));
+  const company = readRunCompanyFrom(Object.assign({}, queueExtraOf(row) || {},
+    { name: row.name || (queueExtraOf(row) || {}).name, pressSite: queueSiteVerdict(row) }));
   const who = String(company.name || 'lead');
   const oldExtra = queueExtraOf(row);
   if (oldExtra === null) return { kind: 'failed', why: 'the row could not be read (its stored company object is not valid JSON)', extra: null };

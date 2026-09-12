@@ -62,6 +62,13 @@ alter table discovered_queue add column if not exists from_trigger_source boolea
 alter table discovered_queue add column if not exists reach_predict int;
 alter table discovered_queue add column if not exists exported_at timestamptz;
 alter table discovered_queue add column if not exists exported_to text;
+-- Round 143B: what the press's FREE page read decided about their website,
+-- one jsonb column so the unread queue can be drawn by it in SQL instead of
+-- by unpacking every row's extra blob. The server writes it ONLY once the
+-- boot SCHEMA PROBE has watched it answer, because PostgREST refuses the
+-- whole row on one unknown key - so a press that runs before this statement
+-- keeps working and the verdict rides `extra` until the column exists.
+alter table discovered_queue add column if not exists site_verdict jsonb;
 create index if not exists discovered_queue_batch_id_idx on discovered_queue (batch_id);
 create table if not exists read_runs (
   id uuid primary key, started_at timestamptz not null default now(), finished_at timestamptz,
