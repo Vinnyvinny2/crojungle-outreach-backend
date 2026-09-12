@@ -2802,13 +2802,31 @@ const runLead = async (b, over, capMs) => {
     console.log('── scenario NOKEY: no key on Render — every paid door refuses by name and nothing is spent');
     state.mode = 'golden'; state.biz = biz('B');
     sbTable('user_settings')[0].data = { apiKey: 'k-in-the-row', firecrawlKey: 'fc-in-the-row', findPaidOwner: true };
-    srv = await bootServer({ ANTHROPIC_API_KEY: '', FIRECRAWL_KEY: '', APIFY_TOKEN: '' });
+    // ══ HUNTER_KEY IS BLANKED HERE TOO, AND THAT IS A CORRECTION ═════════
+    // Round 146 put HUNTER_KEY into bootServer's DEFAULT env so the email
+    // finder is reachable at all. That gave every scenario a keyed Hunter -
+    // including this one, whose entire premise is "no key on Render, every
+    // paid door refuses by name and nothing is spent". Hunter is a paid door,
+    // so leaving its key set made the scenario's own claim false.
+    //
+    // It also made the suite FLAKY, which is how it was found: the balance
+    // probe (api.hunter.io/v2/account) fires around this boot and sometimes
+    // lands inside the window where the next assertion counts calls. Green
+    // twice in three local runs, red in CI. The assertion below now names the
+    // endpoint it saw, because "still made 1 network call(s)" named nothing
+    // to go and look at and cost an hour.
+    srv = await bootServer({ ANTHROPIC_API_KEY: '', FIRECRAWL_KEY: '', APIFY_TOKEN: '', HUNTER_KEY: '' });
     // ── B: PREFLIGHT, ZERO NETWORK ──────────────────────────────────────
     console.log('── scenario B: preflight refusal, zero spend');
     const before = state.requests.length;
     const B = await runLead(biz('B'), { apiKey: 'sk-in-the-body' }, 30000);
     ok(/Anthropic/.test(String(B.error || '')), `a lead with no key on Render (and one in its body) was not refused by name — got: ${String(B.error || '(none)').slice(0, 120)}`);
-    ok(state.requests.length === before, `the preflight refusal still made ${state.requests.length - before} network call(s) — "nothing was spent" is false`);
+    // ROUND 146: this said HOW MANY and never WHICH, so a CI-only failure
+    // ("still made 1 network call(s)") named nothing to go and look at and
+    // could only be guessed at from here. It names the endpoints now: a check
+    // that fires without saying what it saw costs an hour every time it fires.
+    const _lateB = state.requests.slice(before).map(q => `${q.host}${String(q.path || '').slice(0, 90)}`);
+    ok(state.requests.length === before, `the preflight refusal still made ${state.requests.length - before} network call(s) — "nothing was spent" is false. They were: ${_lateB.join(' | ') || '(none recorded)'}`);
     // The SYNCHRONOUS route — the client's fallback when -async 404s — must
     // clear the same gates. Until 2026-08-22 it was a door around them: a
     // lead posted here started spending with no preflight and no ceiling.
