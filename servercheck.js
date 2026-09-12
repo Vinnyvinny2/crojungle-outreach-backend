@@ -44,6 +44,11 @@
 //   H3 no website at all — every site-derived signal is null, never false
 //   H4 the contact route refuses before it spends
 //   R0 (round 124) the Find press writes the server-owned queue
+//   P  (round 143) what the press DOES to each business Google hands it -
+//      the trade review floor, the closed listing, round 139's branch-URL
+//      drop, the rating ceiling, the multi-metro count, the call lead and
+//      the FIND YIELD report. Every one of those was merged and unexecuted
+//      while the press's own Google answered nothing.
 //   R1 a read run claims, reads, stamps and finishes with no browser
 //      attached; the four hand actions are stamps, never deletes
 //   R2 Cancel stops the draw and releases what was never reached
@@ -98,6 +103,10 @@ const state = {
   requests: [],             // every hit: {host, path}
   contract: [],             // request-contract violations (e.g. a missing field mask)
   unknown: [],
+  // Round 143: every Find-press search, with the city it resolved to and the
+  // field mask it arrived with. The mask rides along because the press is
+  // TOLD APART from the audit-path searches by what it asks for.
+  gpFind: [],
 };
 const readBody = (req) => new Promise((resolve) => {
   let b = ''; req.on('data', (c) => { b += c; }); req.on('end', () => resolve(b));
@@ -147,6 +156,283 @@ const apifyItems = (b) => REVIEWS.map((r, i) => ({
   name: 'Reviewer ' + i, reviewsCount: REVIEW_TOTAL, totalScore: 4.6,
   placeId: b.placeId, responseFromOwnerText: r.reply || null,
 }));
+
+// ── THE FIND PRESS'S GOOGLE (round 143) ─────────────────────────────────────
+// placesList above answers every OTHER searchText: the per-lead rank check, the
+// place-id recovery and the duplicate-listing search. THE PRESS had no fixture
+// at all, and it did not look like one - scenario I pressed Find, the press
+// answered 200, and it returned zero businesses, so every rule that fires
+// between Google's answer and the queue row was unmeasured: the branch-URL
+// drop, the trade review floor, the rating band, the multi-metro count, the
+// call lead, the closed listing and the whole FIND YIELD report.
+//
+// WHY IT RETURNED NOTHING, and it is spelling on both sides. searchGooglePlaces
+// narrows the grid by comparing filters.niches against GP_CATEGORIES' own LABEL
+// ('Plumbing') and filters.cities against GP_CITIES' own string ('Dallas TX',
+// no comma). Scenario I sent 'roofer' and 'Dallas, TX': neither matched, the
+// category list and the city list both came out empty, and the press dealt a
+// grid of nothing. It cost no Google calls and reported success, which is
+// exactly the shape a fixture cannot see and a driven route can.
+//
+// WHICH searchText IS THE PRESS: only searchGooglePlaces appends nextPageToken
+// to its field mask. Read off that call site rather than guessed from the query
+// text, so the three audit-path searches keep the twenty prominence-ordered
+// rivals placesList has always handed them and nothing above this line moves.
+//
+// The press sends textQuery `${cat.q} in ${city}`, one request per pair, so this
+// answers per CITY: a business is served in the cities its own cast entry
+// declares, and a pair this cast says nothing about answers with NO places
+// rather than with somebody else's fixture.
+//
+// NO nextPageToken is ever returned, deliberately. A second page is bought only
+// when a first page runs dry of new businesses, and paging would double the run
+// to measure nothing new here - while the ABSENCE of a token is the case that
+// has to terminate cleanly, which the press's own do/while then proves.
+const GP_FIND_QUERY = 'plumbing company';                          // GP_CATEGORIES' 'Plumbing' query, verbatim
+const GP_FIND_CITIES = ['Dallas TX', 'Austin TX', 'Houston TX'];   // GP_CITIES' spellings, verbatim
+// Plumbing is one of the trades HIGH_VOLUME_LOW_TICKET raises to a 40-review
+// floor (a service call earns a review, so volume is what tells a $600k
+// drain-cleaning shop from a $4M repipe contractor). That floor is what the
+// quiet-established case below exists to fail against.
+const GP_FIND_PLACE = {
+  'Dallas TX': { addr: '4114 Cedar Springs Rd, Dallas, TX 75219, USA', loc: { latitude: 32.81, longitude: -96.81 } },
+  'Austin TX': { addr: '2601 S Lamar Blvd, Austin, TX 78704, USA', loc: { latitude: 30.25, longitude: -97.77 } },
+  'Houston TX': { addr: '5100 Westheimer Rd, Houston, TX 77056, USA', loc: { latitude: 29.74, longitude: -95.46 } },
+};
+const GP_FIND_HOURS = { weekdayDescriptions: ['Monday: 7 AM–6 PM', 'Tuesday: 7 AM–6 PM', 'Wednesday: 7 AM–6 PM', 'Thursday: 7 AM–6 PM', 'Friday: 7 AM–6 PM', 'Saturday: 8 AM–2 PM', 'Sunday: Closed'] };
+
+// ── THE CAST, ONE BUSINESS PER CASE ─────────────────────────────────────────
+// `expect` is what TODAY'S code does with the business, and it is asserted in
+// scenario P: 'kept' reaches the queue, 'demoted' reaches it behind every
+// in-band lead, 'dropped' never reaches it. `why` says which rule decides, so a
+// round that changes a rule has one line to read and one line to change.
+const GP_FIND_CAST = [
+  // THE BUSINESS THIS ROUND EXISTS TO SAVE. A quiet, well-rated, established
+  // plumber with a real website and twelve reviews: the trade floor deletes him
+  // at the press, before a credit moves and before anybody can look at him.
+  // 12 sits below BOTH floors (the 15-review base and Plumbing's 40), so his
+  // deletion proves "a floor deleted him" and not which one - the separator
+  // below is the entry that isolates the trade floor on its own.
+  { tag: 'quiet', name: 'Kessler Park Plumbing', cities: ['Dallas TX'], reviews: 12, rating: 4.6,
+    site: 'https://kesslerparkplumbing.example', phone: '+1 214-555-0101',
+    expect: 'dropped', why: 'the trade review floor (Plumbing, 40) - and the 15-review base floor underneath it. EXPECTED TO BE INVERTED BY ROUND 143A: keeping this business is the whole point of that round' },
+  // The separator: 28 reviews clears the 15-review base floor, so ONLY
+  // Plumbing's 40 can delete it. Without this entry a round that lowered the
+  // trade floor and left the base floor alone would read as fixed.
+  { tag: 'floorsep', name: 'Turtle Creek Plumbing', cities: ['Dallas TX'], reviews: 28, rating: 4.5,
+    site: 'https://turtlecreekplumbing.example', phone: '+1 214-555-0102',
+    expect: 'dropped', why: 'the trade review floor (Plumbing, 40) ALONE - it clears the 15-review base floor. EXPECTED TO BE INVERTED BY ROUND 143A' },
+  // A FAKE-LISTING NETWORK: one phone number, two different trade names, two
+  // metros. Nothing at the press reads the phone today, so both arrive.
+  { tag: 'fakeA', name: 'Lone Star Drain Works', cities: ['Dallas TX'], reviews: 58, rating: 4.4,
+    site: 'https://lonestardrainworks.example', phone: '+1 214-555-0777',
+    expect: 'kept', why: 'nothing at the press compares phone numbers across listings yet' },
+  { tag: 'fakeB', name: 'Bluebonnet Drain Pros', cities: ['Austin TX'], reviews: 61, rating: 4.3,
+    site: 'https://bluebonnetdrainpros.example', phone: '+1 214-555-0777',
+    expect: 'kept', why: 'the twin of fakeA - same number, a different name, another metro' },
+  // AND THE NEGATIVE CASE, WHICH MATTERS AS MUCH: one phone number, ONE name,
+  // two metros. A legitimate two-branch plumber. A rule that drops the pair
+  // above must not touch these two, and the check says so out loud.
+  // Two hosts rather than one, on purpose: sharing a domain would merge them at
+  // the press's own domain dedupe and there would be no pair left for a
+  // phone rule to be wrong about.
+  { tag: 'chainA', name: 'Ridgeview Plumbing Co', cities: ['Dallas TX'], reviews: 120, rating: 4.5,
+    site: 'https://ridgeviewplumbing.example', phone: '+1 713-555-0311',
+    expect: 'kept', why: 'a two-branch chain under one name is a good lead, not a fake listing' },
+  { tag: 'chainB', name: 'Ridgeview Plumbing Co', cities: ['Houston TX'], reviews: 94, rating: 4.4,
+    site: 'https://ridgeviewplumbinghouston.example', phone: '+1 713-555-0311',
+    expect: 'kept', why: 'the second branch; it merges into chainA by name, so ONE row reaches the queue' },
+  // Shut for good, and shut for now. Both are dropped on businessStatus before
+  // the seen counter increments, so neither can be dialled and neither lands in
+  // the denominator of the yield report.
+  { tag: 'closedperm', name: 'Trinity Bend Plumbing', cities: ['Dallas TX'], reviews: 80, rating: 4.4,
+    site: 'https://trinitybendplumbing.example', phone: '+1 214-555-0103', status: 'CLOSED_PERMANENTLY',
+    expect: 'dropped', why: 'businessStatus is not OPERATIONAL' },
+  { tag: 'closedtemp', name: 'Cedar Hollow Plumbing', cities: ['Austin TX'], reviews: 75, rating: 4.5,
+    site: 'https://cedarhollowplumbing.example', phone: '+1 512-555-0104', status: 'CLOSED_TEMPORARILY',
+    expect: 'dropped', why: 'businessStatus is not OPERATIONAL - the same door as a permanent close today' },
+  // No website at all: 210 reviews and nothing to audit. The finding IS the
+  // absence, so it is kept and marked as a lead Mike dials.
+  { tag: 'nosite', name: 'Walnut Hill Plumbing', cities: ['Dallas TX'], reviews: 210, rating: 4.3,
+    site: '', phone: '+1 214-555-0105',
+    expect: 'kept', why: 'a business with no site is a CALL lead, keyed on its place id instead of a domain' },
+  // The same business in three metros. Google returns the same listing to three
+  // city queries, so the repeat sighting must ADD a market rather than be
+  // discarded: coverage across metros is the only size signal the press has.
+  { tag: 'multi', name: 'Alamo Ridge Plumbing', cities: ['Dallas TX', 'Austin TX', 'Houston TX'], reviews: 150, rating: 4.5,
+    site: 'https://alamoridgeplumbing.example', phone: '+1 214-555-0106',
+    expect: 'kept', why: 'merged by domain across the three city queries into one lead with marketCount 3' },
+  // Controls. 400 reviews is well under the 2000 ceiling, so volume alone must
+  // not bench a business; 4.9 stars is above the 4.85 ceiling, so it is kept,
+  // marked and returned behind every in-band lead.
+  { tag: 'busy', name: 'Pecan Grove Plumbing', cities: ['Dallas TX'], reviews: 400, rating: 4.4,
+    site: 'https://pecangroveplumbing.example', phone: '+1 214-555-0107',
+    expect: 'kept', why: 'a control: 400 reviews is inside the 2000 review ceiling' },
+  { tag: 'band49', name: 'Bishop Arts Plumbing', cities: ['Dallas TX'], reviews: 88, rating: 4.9,
+    site: 'https://bishopartsplumbing.example', phone: '+1 214-555-0108',
+    expect: 'demoted', why: 'above the 4.85 rating ceiling: demoted behind every in-band lead, never deleted' },
+  // And the OTHER ceiling, the only size ceiling the press can reach without
+  // paying a size lookup: 2400 reviews is past GP_MAX_REVIEWS, so the business
+  // is benched as an email lead (round 114 - a big company is an email lead,
+  // never deleted) and served in the large-company slice at the very end.
+  { tag: 'huge', name: 'Grapevine Plumbing Works', cities: ['Dallas TX'], reviews: 2400, rating: 4.4,
+    site: 'https://grapevineplumbingworks.example', phone: '+1 214-555-0114',
+    expect: 'demoted', why: 'above the 2000-review size ceiling: benched as an email lead, and sorted last of all' },
+  // ROUND 139's BRANCH TELL, which nothing has ever executed. Their own Google
+  // listing points at one location's page inside a bigger site.
+  { tag: 'branch', name: 'Comal Creek Plumbing', cities: ['Austin TX'], reviews: 65, rating: 4.4,
+    site: 'https://comalcreekplumbing.example/locations/austin', phone: '+1 512-555-0109',
+    expect: 'dropped', why: 'readOutletTell: a /locations/<city> path is a branch address, dropped before a credit moves' },
+  // ── CARRIERS FOR THE FIELDS ROUND 143 IS ADDING TO THE FIELD MASK ────────
+  // Nothing reads any of them today, so each is an ordinary lead and is
+  // asserted as one - a round that acts on one of these fields inverts the
+  // cast entry rather than discovering it has no fixture. The shapes are the
+  // documented ones (see the note under this array), and the alert carriers
+  // below are three DIFFERENT alerts on purpose, because the classifier that
+  // reads them can only be proven by a case it must drop and a case it must
+  // never touch.
+  //
+  // 1. A GENUINE REVIEW-ACTIVITY ALERT: the review wording is in the prose,
+  //    which is where a classifier is entitled to read it.
+  { tag: 'alert', name: 'Lakewood Rooter Service', cities: ['Dallas TX'], reviews: 70, rating: 4.4,
+    site: 'https://lakewoodrooter.example', phone: '+1 214-555-0110',
+    consumerAlert: {
+      overview: 'Recent reviews of this place show unusual activity and are being checked.',
+      details: {
+        title: 'Unusual review activity',
+        description: 'We noticed a burst of reviews that may not describe genuine customer visits, so those reviews are being checked.',
+        aboutLink: { title: 'About Google Maps content policies', uri: 'https://support.google.com/maps/answer/7400114?hl=en&topic=content-policies' },
+      },
+      languageCode: 'en',
+    },
+    expect: 'kept', why: 'consumerAlert is not in the field mask yet, so the press never sees it. A round that reads the field may legitimately act on THIS one - the review wording is in its own prose' },
+  // 2. THE TRAP, AND THE ONE BUSINESS THAT MUST SURVIVE EVERY ROUND. The
+  //    prose says nothing about reviews, ratings, stars, policies or
+  //    violations - the listing's hours are simply being confirmed - but the
+  //    "learn more" link points, as every alert's link does, at Google's
+  //    CONTENT POLICIES page. A classifier that collects every string leaf
+  //    sweeps aboutLink in with the prose, finds "polic" in the URL and the
+  //    link title, and reads an ordinary listing as a policy violation. If
+  //    such a lead is then dropped, the press deletes a business for the
+  //    wording of a Google help link. Nothing about this business is wrong.
+  { tag: 'alertneutral', name: 'Cochran Chapel Plumbing', cities: ['Dallas TX'], reviews: 64, rating: 4.5,
+    site: 'https://cochranchapelplumbing.example', phone: '+1 214-555-0115',
+    consumerAlert: {
+      overview: 'Some details about this place may be out of date and are being confirmed with the owner.',
+      details: {
+        title: 'Details may be out of date',
+        description: 'We are confirming this business\'s opening hours and address with its owner. The listing stays open while that check runs.',
+        // Modelled on Google's support-page pattern, not copied from a live
+        // response: what matters is that "polic" appears in the link title
+        // and the URL while appearing nowhere in the prose.
+        aboutLink: { title: 'Learn more about Google Maps content policies', uri: 'https://support.google.com/maps/answer/7400114?hl=en&topic=content-policies' },
+      },
+      languageCode: 'en',
+    },
+    expect: 'kept', why: 'THE NEGATIVE CASE, AND IT MUST STAY KEPT FOREVER: the only "policy" words are in the help link every alert carries. A round that drops this business has classified a Google support URL as the business\'s own conduct' },
+  // 3. A GENUINE POLICY ALERT: the violation is stated in the prose itself, so
+  //    a classifier reading only the prose still catches it. That is what
+  //    makes the trap above falsifiable - a rule cannot pass both by reading
+  //    the link and by ignoring it.
+  { tag: 'alertpolicy', name: 'Midway Hollow Plumbing', cities: ['Dallas TX'], reviews: 52, rating: 4.2,
+    site: 'https://midwayhollowplumbing.example', phone: '+1 214-555-0116',
+    consumerAlert: {
+      overview: 'This place is restricted for violating Google Maps content policies.',
+      details: {
+        title: 'Policy violation',
+        description: 'Content on this listing violates our policies, so some features have been turned off.',
+        aboutLink: { title: 'About Google Maps content policies', uri: 'https://support.google.com/maps/answer/7400114?hl=en&topic=content-policies' },
+      },
+      languageCode: 'en',
+    },
+    expect: 'kept', why: 'nothing reads consumerAlert yet. A round that drops policy-violating listings inverts THIS line and must leave alertneutral alone' },
+  { tag: 'puresab', name: 'Sabine Flats Plumbing', cities: ['Houston TX'], reviews: 55, rating: 4.2,
+    site: 'https://sabineflatsplumbing.example', phone: '+1 713-555-0111', noAddress: true,
+    pureServiceAreaBusiness: true,
+    expect: 'kept', why: 'a pure service-area business publishes no street address; nothing reads the flag yet' },
+  // containingPlaces AS GOOGLE ACTUALLY RETURNS IT: a resource name and an id,
+  // and no readable text anywhere. A rule that hopes to read "Northpark Mall"
+  // out of this field has nothing to match on, ever, and the fixture has to
+  // make that visible rather than hide it behind invented brand text.
+  { tag: 'inside', name: 'Oak Cliff Plumbing', cities: ['Dallas TX'], reviews: 65, rating: 4.4,
+    site: 'https://oakcliffplumbing.example', phone: '+1 214-555-0112',
+    containingPlaces: [{ name: 'places/ChIJexample123', id: 'ChIJexample123' },
+      { name: 'places/ChIJexample456', id: 'ChIJexample456' }],
+    expect: 'kept', why: 'containingPlaces is not in the field mask yet, and when it is, these two entries carry no readable words for any test to match' },
+  // HYPOTHETICAL, NOT OBSERVED FROM A LIVE RESPONSE. Kept separate and
+  // labelled so nobody reads it as evidence that Google returns readable text
+  // here: the entry above is the honest shape. This one exists only so a rule
+  // that WANTS readable text has something to run against, and any assertion
+  // resting on it must say it rests on an unobserved shape.
+  { tag: 'insidetext', name: 'Trinity Groves Plumbing', cities: ['Dallas TX'], reviews: 58, rating: 4.3,
+    site: 'https://trinitygrovesplumbing.example', phone: '+1 214-555-0117',
+    containingPlaces: [{ name: 'places/ChIJexample789', id: 'ChIJexample789', displayName: { text: 'Trinity Groves Market Hall' } }],
+    expect: 'kept', why: 'a hypothetical containingPlaces entry with readable text; nothing reads the field yet and no live response has been seen carrying displayName here' },
+  { tag: 'moved', name: 'Preston Hollow Plumbing', cities: ['Dallas TX'], reviews: 48, rating: 4.3,
+    site: 'https://prestonhollowplumbing.example', phone: '+1 214-555-0113',
+    movedPlaceId: 'ChIJ_p_moved_target',
+    expect: 'kept', why: 'movedPlaceId is not in the field mask yet' },
+  // THE SIBLING. movedPlace is a resource name and it can arrive when
+  // movedPlaceId does not, so a rule that reads only one of the two treats a
+  // moved listing as a live one - or a live one as moved.
+  { tag: 'movedonly', name: 'Casa Linda Plumbing', cities: ['Dallas TX'], reviews: 44, rating: 4.4,
+    site: 'https://casalindaplumbing.example', phone: '+1 214-555-0118',
+    movedPlace: 'places/ChIJ_p_moved_sibling',
+    expect: 'kept', why: 'movedPlace is set and movedPlaceId is absent, so a rule reading only movedPlaceId sees nothing on a listing that has moved' },
+];
+// THE SHAPES ARE VERIFIED, AND ONE FIELD MUST NEVER REACH A CLASSIFIER.
+// Every other shape in this file was copied from the code that consumes it.
+// Nothing consumes these five yet, so they were declared here from Google's
+// own documentation and then VERIFIED (2026-09-12) against the Place
+// resource's JSON representation in the Places API REST reference and the
+// IConsumerAlert / ConsumerAlert.IDetails / Details.ILink interfaces in the
+// Node client-library reference:
+//   consumerAlert             { overview?, details?: { title?, description?,
+//                               aboutLink?: { title?, uri? } }, languageCode? }
+//   movedPlaceId              a place id string
+//   movedPlace                a RESOURCE name string, and it can be present
+//                             when movedPlaceId is not
+//   containingPlaces          [ { name: 'places/ChIJ...', id } ] - name is a
+//                             resource name, NOT readable text
+//   pureServiceAreaBusiness   boolean
+//
+// consumerAlert.details.aboutLink IS NOT THE BUSINESS'S CONDUCT. It is the
+// "learn more" link Google puts on every alert, and it points at a content
+// POLICIES support page - so a classifier that walks every string leaf of the
+// alert finds "polic" in the link on an alert about nothing of the kind, and
+// silently reads an ordinary listing as a policy violation. Read the prose
+// (overview, details.title, details.description) and never the link. The cast
+// carries both cases: alertneutral must survive it, alertpolicy must not.
+const GP_FIND_NEW_FIELDS = ['consumerAlert', 'pureServiceAreaBusiness', 'containingPlaces', 'movedPlaceId', 'movedPlace'];
+const gpFindPlace = (c, city, mask) => {
+  const where = GP_FIND_PLACE[city] || GP_FIND_PLACE['Dallas TX'];
+  const p = {
+    id: c.id || ('ChIJ_p_' + c.tag),
+    displayName: { text: c.name },
+    rating: c.rating, userRatingCount: c.reviews,
+    businessStatus: c.status || 'OPERATIONAL',
+    internationalPhoneNumber: c.phone || '',
+    location: where.loc,
+    regularOpeningHours: GP_FIND_HOURS,
+  };
+  if (!c.noAddress) p.formattedAddress = where.addr;
+  if (c.site) p.websiteUri = c.site;
+  // Served ONLY when the mask asks, exactly as the real API answers: a fixture
+  // that hands back a field nobody requested would let a rule pass here while
+  // the mask that feeds it in production is still missing the field.
+  for (const f of GP_FIND_NEW_FIELDS) {
+    if (c[f] !== undefined && new RegExp('places\\.' + f + '(\\b|,|$)').test(mask)) p[f] = c[f];
+  }
+  return p;
+};
+const gpFindAnswer = (textQuery, mask, pageSize) => {
+  const m = String(textQuery || '').match(/^(.+) in (.+)$/);
+  const city = (m && m[1] === GP_FIND_QUERY && GP_FIND_CITIES.includes(m[2])) ? m[2] : '';
+  const rows = city ? GP_FIND_CAST.filter(c => c.cities.includes(city)) : [];
+  state.gpFind.push({ textQuery: String(textQuery || ''), city, served: rows.length, mask });
+  // pageSize is honoured, and no nextPageToken is ever sent - see the note above.
+  return { places: rows.slice(0, Math.max(1, Number(pageSize) || 20)).map(c => gpFindPlace(c, city, mask)) };
+};
 
 // One Anthropic responder, keyed on marker strings the contract map read off
 // each call site's own prompt. Unmatched calls answer benign empty JSON so a
@@ -428,7 +714,19 @@ const fake = http.createServer(async (req, res) => {
     // silently deletes measurements server-side when it goes missing, so its
     // absence is recorded and asserted after the golden lead.
     if (!req.headers['x-goog-fieldmask']) state.contract.push('places call without X-Goog-FieldMask: ' + path);
-    if (/searchText/.test(path)) return send(res, 200, placesList(b));
+    if (/searchText/.test(path)) {
+      const _mask = String(req.headers['x-goog-fieldmask'] || '');
+      // Round 143: the Find press, told apart by the one thing only
+      // searchGooglePlaces asks for - nextPageToken on the field mask. The
+      // rank check, the place-id recovery and the duplicate-listing search
+      // never ask for it, so they keep placesList exactly as before.
+      if (/nextPageToken/.test(_mask)) {
+        let _tq = '', _ps = 20;
+        try { const _j = JSON.parse(String(body || '{}')); _tq = String(_j.textQuery || ''); _ps = Number(_j.pageSize) || 20; } catch (e) { void e; }
+        return send(res, 200, gpFindAnswer(_tq, _mask, _ps));
+      }
+      return send(res, 200, placesList(b));
+    }
     return send(res, 200, placeDetails(b));   // details by place id
   }
 
@@ -530,6 +828,23 @@ const bootServer = (extraEnv) => new Promise((resolve, reject) => {
       // pins that setting.
       FC_CREDIT_WAIT_MS: '4000',
       RESEARCH_CONCURRENCY: '2',
+      // Round 143: the Google budget for a press, so scenario I's grid is the
+      // three category+city pairs it asks for and nothing else. A full grid is
+      // ~100 searches across 39 trades and 23 metros, which is minutes of
+      // fixture traffic to measure rules that fire on the first page. Nothing
+      // in the server pins this number - the boot checks read the setting
+      // rather than a default - and the press's own arithmetic is unchanged:
+      // placesBudgetFor still hands the search the whole cap when the bench is
+      // empty, which is what a real press with an empty bench does.
+      GP_QUERY_CAP: '4',
+      // And the per-category slot count, because the cast is bigger than the
+      // default 14 and a trade's cap is per RUN: without this the last
+      // business Google returns for Plumbing is dropped on a cap that is not
+      // the rule under test, and it reads as a rule deleting a lead. Raised,
+      // never removed - the cap still counts and its FIND YIELD row is still
+      // asserted, it just does not bite on a cast this size. (Nothing in the
+      // server pins the default; the press reads the setting.)
+      GP_PER_CATEGORY_CAP: '40',
       // Round 127: the keys are Render's. A key in a request body no longer counts,
       // so every scenario that spends runs with these; the NOKEY boot clears them.
       ANTHROPIC_API_KEY: 'sk-servercheck',
@@ -1146,11 +1461,21 @@ const runLead = async (b, over, capMs) => {
     }
 
     let _findResult = null;
+    let _findLog0 = 0;
     console.log('── scenario I: the Find run outlives the request that started it');
     {
+      // Where the press's own log lines start, for scenario P below.
+      _findLog0 = srv.log().length;
       const _t0 = Date.now();
       const I = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/discover-async`, {
-        keywords: ['roofing'], filters: { niches: ['roofer'], cities: ['Dallas, TX'] }, keys: {},
+        // Round 143: the spellings the server's OWN tables use - GP_CATEGORIES'
+        // label and GP_CITIES' city string. This press sent 'roofer' and
+        // 'Dallas, TX' for its whole life; searchGooglePlaces matches niches
+        // against the label and cities against GP_CITIES verbatim, so both
+        // lists came out empty, the grid was empty and the press returned no
+        // businesses at all - which is why every assertion about what a press
+        // DOES to a lead was unreachable until now.
+        keywords: ['plumbing'], filters: { niches: ['Plumbing'], cities: GP_FIND_CITIES }, keys: {},
       });
       const _submitMs = Date.now() - _t0;
       ok(I.code === 200 && I.json && I.json.jobId,
@@ -1214,14 +1539,292 @@ const runLead = async (b, over, capMs) => {
     {
       const _q = sbTable('discovered_queue');
       const _n = (_findResult && Array.isArray(_findResult.companies)) ? _findResult.companies.length : 0;
-      if (!_n) info('the Find press in scenario I returned no companies, so the queue write has nothing to be measured on here');
-      else {
+      // Round 143: this was a note, not an assertion - "the Find press returned
+      // no companies, so the queue write has nothing to be measured on here" -
+      // and it printed on every run for as long as the press had no Google to
+      // answer it. Every assertion below it was therefore dead. It is the
+      // assertion now: a press that comes back empty is a rep staring at an
+      // empty screen, and it must be red rather than noted.
+      ok(_n > 0, 'the Find press returned no businesses at all, so the rep has nothing to work and no rule the press applies is being measured');
+      if (_n) {
         ok(_findResult.queued === _n, `the Find payload says ${_findResult.queued} queued of ${_n} found - the queue write failed or is not reported`);
         ok(_q.length >= _n, `the Find press found ${_n} and discovered_queue holds ${_q.length} - the server-owned queue is not wired to runDiscovery`);
         ok(_q.every(r => r.extra && typeof r.extra === 'object'), 'a queue row the server wrote carries extra as something other than an object - the old page\'s JSON-string shape is back');
         ok(_q.every(r => typeof r.from_trigger_source === 'boolean' && typeof r.reach_predict === 'number'), 'a queue row the server wrote is missing from_trigger_source or reach_predict, so the summary and the draw order have nothing to read');
         ok(_q.some(r => r.source === 'google_places' && r.from_trigger_source === false), 'a Google listing row reads as a trigger-lane lead');
       }
+    }
+
+    // ── P: WHAT THE PRESS DID TO EACH BUSINESS GOOGLE HANDED IT ─────────
+    // Round 143. Every rule between Google's answer and the queue row: the
+    // trade review floor, the closed listing, the branch-URL drop of round
+    // 139, the rating ceiling, the multi-metro count, the call lead and the
+    // FIND YIELD report. All of them were merged and none of them had ever
+    // been executed, because the press in scenario I answered 200 and returned
+    // nothing. Each assertion names the business it is about, and the cast
+    // entry for that business says which rule decides it.
+    console.log('── scenario P: what the press did with each business Google returned');
+    {
+      const _ct = (tag) => GP_FIND_CAST.find(c => c.tag === tag) || {};
+      const _cos = (_findResult && Array.isArray(_findResult.companies)) ? _findResult.companies : [];
+      const _rows = (tag) => _cos.filter(c => String(c.name) === _ct(tag).name);
+      const _one = (tag) => _rows(tag)[0] || null;
+      const _log = srv.log().slice(_findLog0);
+      // Listings served, per city, exactly as the fixture dealt them.
+      const _served = GP_FIND_CAST.reduce((n, c) => n + c.cities.length, 0);
+      const _open = GP_FIND_CAST.reduce((n, c) => n + ((c.status && c.status !== 'OPERATIONAL') ? 0 : c.cities.length), 0);
+      // Counted off the cast rather than typed here, so the cast stays the one
+      // declaration of what the review floor is expected to delete.
+      const _floorDrops = GP_FIND_CAST.reduce((n, c) => n + ((c.expect === 'dropped' && /review floor/.test(c.why)) ? c.cities.length : 0), 0);
+      // EVERY CASE THIS SCENARIO ASSERTS ON STILL EXISTS. A business nobody
+      // declared can never be found in the answer, so a deleted or renamed cast
+      // entry would turn each "was it dropped?" assertion below into a green
+      // line about nothing.
+      const _tags = ['quiet', 'floorsep', 'fakeA', 'fakeB', 'chainA', 'chainB', 'closedperm', 'closedtemp',
+        'nosite', 'multi', 'busy', 'band49', 'huge', 'branch', 'alert', 'alertneutral', 'alertpolicy',
+        'puresab', 'inside', 'insidetext', 'moved', 'movedonly'];
+      ok(_tags.every(t => GP_FIND_CAST.some(c => c.tag === t)),
+        `the cast no longer carries ${JSON.stringify(_tags.filter(t => !GP_FIND_CAST.some(c => c.tag === t)))}, so the assertions about those businesses are passing on a business that was never served`);
+
+      // THE GRID ACTUALLY RAN, and in all three metros. Scoped to the press's
+      // own searches, so an audit-path search cannot be mistaken for one.
+      const _pq = state.gpFind.filter(q => q.city);
+      ok(new Set(_pq.map(q => q.city)).size === GP_FIND_CITIES.length,
+        `the press searched ${JSON.stringify([...new Set(_pq.map(q => q.city))])} of the ${GP_FIND_CITIES.length} metros it was asked for - a grid that misses a metro cannot measure coverage, and every "absent from" claim is then made about a market nobody looked in`);
+      // Which branch of scenario I's second-press check actually fired. A
+      // search outside the cast can only have come from the SECOND press, so
+      // its absence is the dedupe working rather than an assumption about it.
+      info(`the press made ${_pq.length} search(es) across the declared grid`
+        + (state.gpFind.length > _pq.length
+          ? ` and ${state.gpFind.length - _pq.length} outside it, so the second press in scenario I bought its own grid rather than being deduped onto the first job`
+          : ' and none outside it, so the second press in scenario I was deduped onto the running job and bought no Google calls of its own'));
+
+      // ── THE ROLL CALL. Each cast entry declares what today's code does with
+      //    it; this compares that against what came back, and the message
+      //    points at the entry rather than at a line number.
+      const _want = [...new Set(GP_FIND_CAST.filter(c => c.expect !== 'dropped').map(c => c.name))].sort();
+      const _got = [...new Set(_cos.map(c => String(c.name)))].sort();
+      const _lost = _want.filter(n => !_got.includes(n));
+      const _kept = _got.filter(n => !_want.includes(n));
+      ok(!_lost.length && !_kept.length,
+        `the press returned the wrong businesses out of the ${_served} listings Google handed it: it deleted ${JSON.stringify(_lost)} and admitted ${JSON.stringify(_kept)}. Every name in the cast says what happens to it and which rule decides, so a difference here is a rule that now keeps or deletes a different business - read the cast entry, not this line`);
+
+      // ── THE REVIEW FLOOR, AND THE TWO LINES ROUND 143A INVERTS ─────────
+      // TODAY a quiet, well-rated, established plumber with a real website is
+      // DELETED at the press for having 12 reviews, and a second one is deleted
+      // at 28 - above the 15-review base floor, so only Plumbing's 40 can have
+      // done it. Round 143A exists to keep both, and when it lands these two
+      // assertions flip to presence. They are written in today's direction on
+      // purpose: a rule nobody has asserted is a rule nobody can be shown to
+      // have changed.
+      ok(!_rows('quiet').length,
+        `${_ct('quiet').name} reached the queue with ${_ct('quiet').reviews} reviews - if the review floor no longer deletes a quiet established business, this is round 143A landing and this assertion is the one to invert (see its cast entry)`);
+      ok(!_rows('floorsep').length,
+        `${_ct('floorsep').name} reached the queue with ${_ct('floorsep').reviews} reviews, which clears the 15-review base floor - only Plumbing's 40-review trade floor deletes it today, so this is the line that proves WHICH floor moved`);
+
+      // ── A LISTING THAT HAS SHUT ────────────────────────────────────────
+      ok(!_rows('closedperm').length && !_rows('closedtemp').length,
+        `a listing Google marks ${_ct('closedperm').status} or ${_ct('closedtemp').status} reached the queue, so the rep dials a business that has shut and the read pays to look at it`);
+
+      // ── ROUND 139'S BRANCH DROP, EXECUTED FOR THE FIRST TIME ───────────
+      ok(!_rows('branch').length,
+        `${_ct('branch').name} reached the queue even though its own Google listing points at ${_ct('branch').site} - one location's page inside a bigger site rather than a home page of its own. The number on that listing reaches a branch whose marketing budget is set at head office, and the contact read that would have found that out costs about five Firecrawl credits`);
+      ok(/BRANCH URL \[Places\]/.test(_log) && _log.includes(_ct('branch').name),
+        `the press dropped a branch listing without the BRANCH URL line naming the business and the tell, so the only saving the operator can see is a lead that silently went missing: ${JSON.stringify((_log.match(/BRANCH URL[^\n]{0,180}/) || [''])[0])}`);
+
+      // ── A BUSINESS WITH NO WEBSITE IS A LEAD, NOT A REJECT ─────────────
+      const _call = _one('nosite');
+      ok(_call && _call.noWebsite === true && _call.leadChannel === 'call',
+        `${_ct('nosite').name} has ${_ct('nosite').reviews} reviews and no website at all, and arrived as ${JSON.stringify(_call && { noWebsite: _call.noWebsite, leadChannel: _call.leadChannel })} - it must arrive marked as a lead Mike dials, because the finding IS the absence and there is nothing to audit`);
+      ok(/CALL LEADS \[Places\]/.test(_log),
+        'the press kept a business with no website and never said so, so the operator cannot tell a call lead from a lead whose website read failed');
+
+      // ── THE SAME BUSINESS IN THREE METROS ──────────────────────────────
+      const _mm = _one('multi');
+      ok(_mm && _mm.marketCount === 3 && _ct('multi').cities.every(c => (_mm.marketsSeen || []).includes(c)),
+        `${_ct('multi').name} came back in all three metros and arrived as ${JSON.stringify(_mm && { marketCount: _mm.marketCount, marketsSeen: _mm.marketsSeen })} - a repeat sighting has to ADD a market to the lead, because coverage across metros is the only size signal the press has before a penny is spent`);
+      ok(/MULTI-MARKET \[Places\]/.test(_log) && _log.includes(_ct('multi').name),
+        'the press found an operator working three metros and the log never named it, so the lead nobody should work first is indistinguishable from a one-truck shop');
+
+      // ── ONE PHONE NUMBER, TWO SHAPES. The positive case and the negative
+      //    one, and the negative one matters as much: a rule that reads the
+      //    phone must drop the pair that trades under two names and must NOT
+      //    touch the plumber who runs two branches under his own.
+      ok(_rows('fakeA').length === 1 && _rows('fakeB').length === 1,
+        `two listings sharing one phone number under DIFFERENT trade names in different metros arrived as ${_rows('fakeA').length} and ${_rows('fakeB').length} row(s). Nothing at the press compares phone numbers today, so both are expected - a round that starts dropping this shape inverts this line`);
+      ok(_rows('chainA').length === 1,
+        `the two listings ${_ct('chainA').name} publishes for its two branches - one name, one phone number, two metros - arrived as ${_rows('chainA').length} row(s). One row is right (they merge by name) and zero is a two-branch plumber deleted as if he were a fake listing network, which is the expensive direction`);
+
+      // ── THE TWO CEILINGS DEMOTE, NEITHER DELETES ───────────────────────
+      // An in-band lead is one neither ceiling has demoted - the press's own
+      // test is "outside the band OR above the review ceiling", and asking only
+      // about the band would let a size-demoted lead count as in-band and make
+      // the ordering assertion below pass on the wrong pool.
+      const _bi = _cos.findIndex(c => String(c.name) === _ct('band49').name);
+      const _lastIn = _cos.reduce((acc, c, i) => ((c.outsideBand || c.aboveSizeCeiling) ? acc : i), -1);
+      ok(_bi >= 0 && _cos[_bi].outsideBand === true,
+        `the ${_ct('band49').rating}-star business arrived as ${JSON.stringify(_bi >= 0 ? { outsideBand: _cos[_bi].outsideBand } : null)} - above the 4.85 ceiling it is kept and MARKED, never deleted: Google bills per call, so deleting it saves nothing and the next press pays to find it again`);
+      // Scoped to the lead being THERE: its absence is the assertion above,
+      // which names that cause properly. A message that blames the ordering for
+      // a deleted lead sends the reader to the healthy half of the press.
+      ok(_bi < 0 || _bi > _lastIn,
+        `the ${_ct('band49').rating}-star business came back at position ${_bi + 1} of ${_cos.length}, ahead of an in-band lead at position ${_lastIn + 1} - a demoted lead must arrive behind every in-band one so it fills the bench instead of this run's queue`);
+      // The review ceiling, which is the press's other demote and a different
+      // claim: too big to call, so an EMAIL lead, kept and served last.
+      const _hi = _cos.findIndex(c => String(c.name) === _ct('huge').name);
+      ok(_hi >= 0 && _cos[_hi].aboveSizeCeiling === true && _cos[_hi].outsideBand !== true,
+        `the ${_ct('huge').reviews}-review business arrived as ${JSON.stringify(_hi >= 0 ? { aboveSizeCeiling: _cos[_hi].aboveSizeCeiling } : null)} - past the review ceiling it is an email lead kept behind the in-band ones, because review count measures whether a business ASKS for reviews and not how big it is, and 282 businesses we had already been billed for were deleted here on one live run`);
+      ok(_hi < 0 || _hi === _cos.length - 1,
+        `the ${_ct('huge').reviews}-review business came back at position ${_hi + 1} of ${_cos.length} - the large-company slice is appended behind every other lead, so a business too big to call cannot take a queue slot from one that is not`);
+      ok(/SIZE DEMOTED \[Places\]/.test(_log),
+        'a business past the review ceiling was benched and the log never said so, so an operator reading a thin run cannot tell a demote from a delete');
+
+      // ── THE CONSUMER ALERT, AND THE LEAD A LINK MUST NOT DELETE ────────
+      // The three alert carriers arrive as ordinary leads today, because
+      // consumerAlert is not in the field mask yet. Two of these lines are
+      // today's behaviour and will be inverted by the round that reads the
+      // field; the middle one is not. alertneutral carries no policy or
+      // review wording of its own - only the "learn more" link Google puts on
+      // every alert, which points at a content POLICIES page - so a
+      // classifier that reads the link along with the prose deletes a
+      // business for the wording of a Google help page. That lead must be in
+      // the answer on every round from here on.
+      ok(_rows('alertneutral').length === 1,
+        `${_ct('alertneutral').name} is not in the answer, and its listing carries an alert whose only "policy" words are in the Google help link every alert has - its own prose says the opening hours are being confirmed. Deleting it means a Google support URL was read as the business's own conduct. THIS LINE IS NOT AN "INVERT ME LATER" LINE: it is the case a review-alert or policy-alert rule must never touch`);
+      ok(_rows('alert').length === 1 && _rows('alertpolicy').length === 1,
+        `the review-activity and policy-violation alert carriers arrived as ${_rows('alert').length} and ${_rows('alertpolicy').length} row(s). Both state their reason in their own prose and nothing reads consumerAlert today, so both are expected - a round that drops either one inverts THIS line and must leave ${_ct('alertneutral').name} alone`);
+
+      // ── WHAT THE PRESS MEASURED HAS TO SURVIVE THE QUEUE WRITE ─────────
+      const _qm = sbTable('discovered_queue').find(r => r.name === _ct('multi').name);
+      ok(_qm && _qm.extra && _qm.extra.marketCount === 3 && _qm.source === 'google_places',
+        `the queue row for ${_ct('multi').name} reads ${JSON.stringify(_qm && { source: _qm.source, marketCount: _qm.extra && _qm.extra.marketCount })} - the coverage the press measured is lost between the run and the row the rep actually reads`);
+      const _qc = sbTable('discovered_queue').find(r => r.name === _ct('nosite').name);
+      ok(_qc && _qc.website === '' && _qc.extra && _qc.extra.phone,
+        `the queue row for the business with no website reads ${JSON.stringify(_qc && { website: _qc.website, phone: _qc.extra && _qc.extra.phone })} - a call lead with no number on its row cannot be called`);
+
+      // ── THE YIELD REPORT, WHICH NOTHING HAD EVER RUN ───────────────────
+      // Round 141/142 built the report and its "largest single loss" sentence
+      // on a press that was returning nothing, so every row was a zero.
+      const _parseYield = (line) => {
+        const m = line.match(/FIND YIELD: ([^.]+)\./);
+        if (!m) return null;
+        const rows = m[1].split(' → ').map(p => (p.match(/^(.+?) (-?\d+)$/) || []).slice(1)).filter(x => x.length === 2);
+        const get = (k) => { const r = rows.find(x => x[0] === k); return r ? Number(r[1]) : null; };
+        return { line, rows,
+          seen: get('seen from Google'), bench: get('bench served'), underFloor: get('under the trade review floor'),
+          notIcp: get('not our ICP by name'), franchise: get('franchise or chain outlet'),
+          owned: get('already in the pipeline'), catCap: get('per-category cap'),
+          demoted: get('demoted to the bench'), returned: get('returned') };
+      };
+      const _yAll = (_log.match(/FIND YIELD: [^\n]+/g) || []).map(_parseYield).filter(y => y && y.seen > 0);
+      const _y = _yAll.find(y => y.returned === _cos.length) || _yAll[0] || null;
+      ok(_y, `the press printed no FIND YIELD line with anything in it, so the one report that adds up a thin run cannot be read: ${JSON.stringify((_log.match(/FIND YIELD[^\n]{0,200}/) || ['(no line at all)'])[0])}`);
+      if (_y) {
+        ok(_y.seen >= _y.returned,
+          `the yield report says ${_y.seen} businesses seen from Google and ${_y.returned} returned - a run cannot return more businesses than it looked at, so one of the two counters is being written in the wrong place and every loss row between them is measured against the wrong total`);
+        ok(_y.seen === _open,
+          `the yield report counted ${_y.seen} businesses seen from Google against the ${_open} OPEN listings the fixture served (${_served} in all, ${_served - _open} of them closed) - a closed listing is dropped before the counter, so counting it would inflate the denominator every loss row is judged against`);
+        ok(_y.returned === _cos.length,
+          `the yield report says ${_y.returned} returned and the payload carries ${_cos.length} - the line the operator reads and the answer the rep works have come apart`);
+        ok(_y.underFloor === _floorDrops,
+          `the yield report blames the trade review floor for ${_y.underFloor} businesses; the fixture served ${_floorDrops} that only that floor can delete (${_ct('quiet').name} at ${_ct('quiet').reviews} and ${_ct('floorsep').name} at ${_ct('floorsep').reviews} reviews). ROUND 143A CHANGES THIS NUMBER, and this is the line that says by how much`);
+        ok(_y.franchise >= 1,
+          `the yield report blames franchises and chain outlets for ${_y.franchise} businesses - the branch dropped on its URL is counted there, so a 0 means round 139's drop either did not fire or is invisible to the report`);
+        ok(_y.demoted >= 2,
+          `the yield report says ${_y.demoted} lead(s) were demoted to the bench; the fixture served two (the ${_ct('band49').rating}-star business and the ${_ct('huge').reviews}-review one) - a lower number means one of the two ceilings is deleting again rather than benching`);
+        // ── THE SENTENCE AGAINST ITS OWN ROWS, AND A DEFECT THIS PRESS
+        //    EXPOSED THE FIRST TIME IT RETURNED ANYTHING ─────────────────
+        // The report ranks rows.slice(2, -1): everything except the first two
+        // rows and the LAST one. That is the loss window only while "returned"
+        // IS the last row. This run serves a large company, so round 114's
+        // "large companies served for the email lane" row is appended after
+        // it, "returned" falls inside the ranking window, and the run's
+        // largest single loss is reported as "returned" - a number that is not
+        // a loss at all. Same for a TheirStack tier row on a run with the
+        // extra lanes on. It is the defect round 141's yield check was written
+        // for (naming the biggest row it can REACH rather than the biggest
+        // loss), returned through a row appended after the anchor, and no
+        // check could see it while the press came back empty.
+        //
+        // ASSERTED IN TODAY'S DIRECTION, like the review floor above: the
+        // sentence must name the biggest row in the window the code actually
+        // ranks. Anchoring that window on the "returned" row instead of on the
+        // end of the array is a one-line fix in runDiscovery, and when it
+        // lands this assertion reads _worstLoss and the info line below stops
+        // printing.
+        const _rank = (rows) => rows.slice().sort((a, b) => Number(b[1]) - Number(a[1]))[0];
+        const _iRet = _y.rows.findIndex(r => r[0] === 'returned');
+        const _window = _y.rows.slice(2, -1);                                    // what the report ranks
+        const _losses = _y.rows.slice(2, _iRet < 0 ? _y.rows.length : _iRet);    // what a loss actually is
+        const _worst = _rank(_window), _worstLoss = _rank(_losses);
+        const _said = (_y.line.match(/The largest single loss[^.]*\./) || ['(the sentence never printed)'])[0];
+        if (_worst && Number(_worst[1]) > 0) {
+          ok(new RegExp('The largest single loss is "' + _worst[0] + '" at ' + Number(_worst[1]) + '\\.').test(_y.line),
+            `the yield report says ${JSON.stringify(_said)}, and the rows it ranks make "${_worst[0]}" the biggest at ${_worst[1]} (${JSON.stringify(_window)}) - a thin run is then diagnosed by reading the wrong gate`);
+        } else {
+          ok(!/largest single loss/.test(_y.line),
+            `the yield report named a largest single loss on a run that lost nothing: ${JSON.stringify(_said)}`);
+        }
+        if (_worst && _worstLoss && _worst[0] !== _worstLoss[0]) {
+          info(`LIVE DEFECT, not a harness problem: FIND YIELD calls "${_worst[0]}" (${_worst[1]}) this run's largest single loss, and "${_worst[0]}" is not a loss.`
+            + ` The genuine largest loss is "${_worstLoss[0]}" at ${_worstLoss[1]}.`
+            + ` The report ranks every row except the first two and the last, so any row appended after "returned" - round 114's large-company row here, a TheirStack tier row with the extra lanes on - pushes "returned" into the ranking.`
+            + ` The operator diagnosing a thin run is sent to the wrong gate. Anchor the window on the "returned" row in runDiscovery and this line stops printing.`);
+        }
+      }
+
+      // ── THE FIXTURE ITSELF, ON THE MASK IT IS NOT GIVEN TODAY ──────────
+      // When the round that reads these fields adds them to the mask, the cast
+      // has to hand them over in the documented shape. A fixture that served
+      // nothing, or served the wrong shape, would let that round's rule read a
+      // field that is never populated and report it as absent - the "mechanism
+      // no fixture can reach" trap, arriving from the fixture's side. Run on
+      // gpFindPlace directly so it is proven before anybody needs it.
+      {
+        const _full = 'places.id,places.displayName,places.consumerAlert,places.pureServiceAreaBusiness,places.containingPlaces,places.movedPlaceId,places.movedPlace,nextPageToken';
+        const _srv = (tag) => gpFindPlace(_ct(tag), 'Dallas TX', _full) || {};
+        const _bare = (tag) => gpFindPlace(_ct(tag), 'Dallas TX', 'places.id,places.displayName,nextPageToken') || {};
+        // THE TRAP, ASSERTED ON ITS OWN CONSTRUCTION: clean prose, a link that
+        // says "policies". If a later edit softens either half, the case stops
+        // proving anything and this line says so.
+        const _a = _srv('alertneutral').consumerAlert || {};
+        const _aProse = [_a.overview, _a.details && _a.details.title, _a.details && _a.details.description].join(' ');
+        const _aLink = (_a.details && _a.details.aboutLink) || {};
+        ok(/polic/i.test(String(_aLink.uri) + ' ' + String(_aLink.title)) && !/polic|violat|review|rating|star/i.test(_aProse),
+          `the trap alert has lost the shape it exists for - prose ${JSON.stringify(_aProse)}, link ${JSON.stringify(_aLink)}. Its own words must say nothing about policies, violations or reviews, and "polic" must appear only in the help link, or a classifier that reads the link cannot be caught by it`);
+        // And the two genuine alerts must state their reason in their own
+        // prose, so a rule that reads the prose alone still catches them -
+        // otherwise the trap could be "passed" by ignoring alerts entirely.
+        ok(/review/i.test([_srv('alert').consumerAlert.overview, _srv('alert').consumerAlert.details.description].join(' ')),
+          'the review-activity alert no longer says anything about reviews in its own prose, so a prose-only classifier has nothing to find and the trap case beside it proves nothing');
+        ok(/polic|violat/i.test([_srv('alertpolicy').consumerAlert.overview, _srv('alertpolicy').consumerAlert.details.description].join(' ')),
+          'the policy alert no longer states the violation in its own prose, so a prose-only classifier cannot tell it from the trap case');
+        // containingPlaces as Google returns it: a resource name and an id and
+        // no readable words. The hypothetical carrier is the only one with
+        // text on it, and it is labelled as unobserved.
+        const _cp = _srv('inside').containingPlaces || [];
+        ok(_cp.length >= 1 && _cp.every(x => /^places\/[A-Za-z0-9_-]+$/.test(String(x.name)) && Object.keys(x).sort().join(',') === 'id,name'),
+          `the honest containingPlaces carrier reads ${JSON.stringify(_cp)} - Google returns a resource name and an id with no readable text, and inventing words here would let a rule that reads brand names out of this field look like it works`);
+        ok(((_srv('insidetext').containingPlaces || [])[0] || {}).displayName,
+          'the hypothetical containingPlaces carrier has lost its readable text, so the entry labelled "not observed from a live response" no longer differs from the honest one');
+        // The moved pair: one of each, so a rule reading a single field is caught.
+        ok(_srv('moved').movedPlaceId && _srv('moved').movedPlace === undefined
+          && _srv('movedonly').movedPlace && _srv('movedonly').movedPlaceId === undefined,
+          `the moved carriers read ${JSON.stringify([_srv('moved').movedPlaceId, _srv('moved').movedPlace, _srv('movedonly').movedPlace, _srv('movedonly').movedPlaceId])} - one listing must carry movedPlaceId alone and the other movedPlace alone, or a rule that reads only one of the two is never caught`);
+        // AND NOTHING IS SERVED THAT THE MASK DID NOT ASK FOR.
+        ok(GP_FIND_NEW_FIELDS.every(f => _bare('alertneutral')[f] === undefined && _bare('movedonly')[f] === undefined && _bare('inside')[f] === undefined),
+          'the fixture handed back a field the mask never asked for, so a rule could pass here on data the real API would not have sent - which is how a measurement that does not exist in production gets proven in a harness');
+      }
+
+      // The five fields round 143 is adding to the press's field mask. A
+      // diagnostic and not an assertion: nothing reads them yet, so there is no
+      // behaviour to fail on - this line says whether the mask has grown, and
+      // the fixture serves each field the moment it does.
+      const _mask = (state.gpFind[0] || {}).mask || '';
+      const _asked = GP_FIND_NEW_FIELDS.filter(f => _mask.includes(f));
+      info(`the press's field mask asks for ${_asked.length} of the ${GP_FIND_NEW_FIELDS.length} fields round 143 is adding`
+        + (_asked.length ? ` (${_asked.join(', ')})` : '')
+        + `; still unasked: ${GP_FIND_NEW_FIELDS.filter(f => !_asked.includes(f)).join(', ') || 'none'}. The cast carries one business for each and serves it only when the mask names it, so a rule built on one of these is dark until then`);
     }
 
     console.log('── scenario R1: a read run claims, reads, stamps and finishes - with no browser attached');
