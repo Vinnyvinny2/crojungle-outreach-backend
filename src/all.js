@@ -72709,6 +72709,17 @@ app.listen(PORT, () => {
         'the thin-review mark and its sentence no longer travel on the lead, so the sort cannot put it last and the call sheet cannot say why it is'],
       [_n('(a.outsideBand || a.aboveSizeCeiling || a.', 'thinReviews || a.listingRisk) ? 1 : 0'),
         'the discovery sort no longer reads the thin-review demotion, so a lead the press put on the bench climbs straight back over an in-band lead on ICP score'],
+      // ── THE TWO COUNTERS THAT REACHED NOTHING, PINNED ────────────────
+      // Both were incremented in the press loop and printed on their own log
+      // lines, and neither was ever assigned to the tally the report reads - so
+      // a run that deleted seven listings reported losing one, and the rows
+      // were filtered out as unmeasured rather than showing a zero. The rows
+      // existed; only the assignment was missing. Found on 2026-09-12 by the
+      // harness asking whether the printed line adds up to the run it describes.
+      [_n('tally.skippedListingRisk = skipped', 'ListingRisk;'),
+        'the count of listings dropped as closed, moved or flagged by Google never reaches the yield report, so the run prints a line about them and then adds itself up as though they never happened'],
+      [_n('tally.skippedListingPhone = skipped', 'ListingPhone;'),
+        'the count of listings dropped for sharing a number with a differently-named business never reaches the yield report, so the deletions are invisible to the one line that adds a run up'],
       [_n('tally.demotedUnderFloor = demoted', 'UnderFloor;'),
         'the run no longer reports how many leads it ranked last for a thin review count, so the demotion is as invisible as the delete was'],
       [_n("_row('demoted for a thin review count', _y.", 'demotedUnderFloor, false)'),
