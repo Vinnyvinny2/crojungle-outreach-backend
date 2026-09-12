@@ -1272,6 +1272,14 @@ const findScoreLine = (co) => {
   const why = [
     c.outsideBand ? (c.bandNote || 'outside the star band we mine reviews in') : '',
     c.aboveSizeCeiling ? (c.sizeNote || 'above the review ceiling') : '',
+    // ROUND 143A: two more reasons, and the first of them sits next to a reason
+    // that is its exact opposite. 'above the review ceiling' is TOO MANY
+    // reviews; this one is TOO FEW. The comment at the top of this block
+    // records the last time two reasons here were worded alike and the column
+    // disagreed with the card about one lead - so the direction is said in the
+    // first two words of each, and clientcheck asserts they never read alike.
+    c.thinReviews ? (c.thinReviewNote || 'under the review count its trade needs') : '',
+    c.listingRisk ? (c.listingRiskNote || 'flagged by Google itself') : '',
   ].filter(Boolean).join(' and ');
   if (why) parts.push('sorted last: ' + why);
   return parts.join(' \u00b7 ');
@@ -1348,7 +1356,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261017;
+const CLIENT_CONTRACT = 20261018;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
