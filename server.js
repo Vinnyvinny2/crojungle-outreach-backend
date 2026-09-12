@@ -164,7 +164,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261020;
+const CONTRACT_VERSION = 20261021;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -5617,7 +5617,30 @@ const lanesFor = ({ tier, sizeTier, sizeWord, sizeConfidence, affordBand, layers
   // here: Round 114 keeps them on the call sheet ranked last under the cap,
   // which is a different ruling and still holds.
   const _forcedEmail = ts || siteHead || (prod && t !== 'below_floor');
-  const _szChannel = _forcedEmail ? 'email'
+  // ══ AND A BUSINESS MEASURED OVER THE TOP OF THE ICP IS NOT A LEAD ═══════
+  // Found by executing this function, and it was the round's worst bug: with
+  // the channel taken from the size tier alone, every lead whose size was
+  // UNMEASURED defaulted to 'call' - and that default outranked the rules that
+  // route a big company away from the phone. Rose Paving, PE-owned, layered,
+  // $255M, came back as a CALL for Vin's rep to dial.
+  //
+  // The measured size decides where it exists. Where it does not, what IS
+  // known still counts: the affordability tier is only ever set from a
+  // MEASURED size, so t === 'over_ceiling' is a measurement and must not be
+  // thrown away because a second ladder happens to be blank.
+  //
+  // ONE RECORDED RULE IS SUPERSEDED HERE, and it is named rather than buried.
+  // Round 114 said the email lane has NO ceiling - a big company is an email
+  // lead at the marketing decision-maker, at any size. Vin, 2026-09-12, put a
+  // ceiling on the whole ICP instead: "over 30m is dropped for now higher
+  // tiers are more so email leads btu we arent wokring on email yet". So over
+  // the ceiling is no lane at all today, not an uncapped email lane. The
+  // §114 REACH exception survives untouched and is the one way back onto the
+  // call sheet: an owner-run business with measured dollars under
+  // ICP_CALL_REACH_CEILING is still called, which is DMI Paving at $24M.
+  const _overIcp = (_sz === SIZE_TIER_OVER) || (t === 'over_ceiling');
+  const _szChannel = (_overIcp && !reach) ? ''
+    : _forcedEmail ? 'email'
     : _szMeasured ? (SIZE_TIER_CHANNEL[_sz] || '') : 'call';
   const inCall = (_szChannel === 'call' || reach) && !ts && !prod && !siteHead;
   // ══ ROUND 121: A BUSINESS WITH NO WEBSITE IS THE CLEAREST LEAD WE FIND ══
@@ -8164,7 +8187,7 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
         if (_flt.onlyNoWebsite && !_noWebsite) continue;
         if (_flt.onlyBuilderSite && !_builderSite) continue;
         if (_flt.excludeNoWebsite && _noWebsite) continue;
-        // ══ THE RATING BAND IS A SORT KEY NOW, NOT A DELETE ════════════════
+        // ══ THE RATING CEILING IS A COUNTER NOW, NOT A SORT KEY ════════════
         // A rating we cannot read tells us nothing either way, so it passes —
         // absence of a rating is not evidence of a clean record.
         //
@@ -8189,13 +8212,26 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
         // call returns twenty businesses whether we keep them or not. Deleting
         // them buys nothing and costs the run.
         //
-        // So they are DEMOTED rather than dropped: kept, marked, sorted behind
-        // every in-band lead, and left to fill the bench. The in-band lead still
-        // goes out first on every single run — that is guaranteed structurally
-        // below, not by a score that happens to come out lower.
+        // They were DEMOTED for a while: kept, marked, and sorted behind every
+        // other lead. That was measured on the press of 2026-09-12 17:33 and it
+        // was far too big a thing to do on this evidence — 259 of 480 businesses
+        // came back above the ceiling and every one of them was marked down ten
+        // points, the same penalty as being over the size cap, which is 259 of
+        // that run's 274 demotions. The sort was deciding the run on the one
+        // measurement the ladder above has already proved it does not use.
         //
-        // GP_BAND_MODE=cut restores the old hard delete exactly, for the day the
-        // evidence says the band was right after all.
+        // Vin, 2026-09-12, asked twice and confirmed twice: "trteat grate
+        // reviews as normal we dont not care fi there is anyhting abotu bad
+        // reviews that is irrlevant buisnesses … take that out completley."
+        //
+        // So a rating above the ceiling now moves nothing in either direction.
+        // It is COUNTED here and reported once per run, and the business goes on
+        // to every gate below exactly as a 4.4-star one does. Not a flag, not a
+        // note, not a sort position, and no bonus either: irrelevant is not the
+        // same as rewarded, so the Find score's high-rating bonus went with it.
+        //
+        // GP_BAND_MODE=cut restores the original hard delete exactly, for the day
+        // the evidence says the ceiling was right after all.
         // ══ AND THE FLOOR IS GONE ENTIRELY. VOLUME DECIDES. ════════════════
         // Vin, 2026-08-28, on the low side: "the ones with lower ratings have
         // way more pain, especially visibility pain - if they can afford us
@@ -8212,18 +8248,21 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
         // 16 is a business dying, and the floor already tells them apart. A
         // modest lift for the first shape lives in placesTriageScore.
         //
-        // The CEILING stays, and it is a different claim: at 4.9 there are
-        // almost no negative reviews on record to mine, which is a fact about
-        // what an AUDIT will find rather than about what the business can
-        // afford. Fourteen audits are behind it, and it demotes rather than
-        // deletes exactly as before.
-        let _outsideBand = false, _bandWhy = '', _lowRating = false;
+        // WHAT IS STILL TRUE ABOUT THE CEILING, AND WHAT IT NO LONGER BUYS US:
+        // at 4.9 there are almost no negative reviews on record to mine, so the
+        // review-pain finding is unlikely on that business. Fourteen audits are
+        // behind that. But it is a fact about what ONE of the forty-one findings
+        // will turn up, and the ladder returns the same sayable findings at 4.6,
+        // at 4.9 and at 5.0, so it was never worth a sort position, let alone
+        // the biggest single mark-down in the run. It is counted, said once on
+        // the run's own line, and that is all it does now.
+        let _lowRating = false;
         if (rating !== null && rating > PAIN_BAND_HIGH) {
           skippedNoPain++;
           skippedNearPerfect++;
           if (GP_BAND_HARD_CUT) { _missBand++; continue; }
-          _outsideBand = true;
-          _bandWhy = `${rating} stars, above the ${PAIN_BAND_HIGH} ceiling \u2014 at this average there are almost no negative reviews on record to mine, so the review-pain finding is unlikely. Every other finding is unaffected.`;
+          // And nothing else: the business falls through to every gate below on
+          // exactly the terms a 4.4-star one gets.
         } else if (rating !== null && rating < PAIN_BAND_LOW) {
           // Kept, ranked, and marked as what it is: a lead with visibility pain
           // whose star rating is now a REASON rather than a refusal.
@@ -8298,7 +8337,7 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
         // The floor joined them here rather than anywhere else for that reason:
         // one flag with three inputs cannot be fixed for two of them and left
         // open for the third.
-        const _demoted = _outsideBand || _tooBig || _underFloor || _risk.demote;
+        const _demoted = _tooBig || _underFloor || _risk.demote;
         if (!_demoted) {
           const catCount = perCat.get(cat.label) || 0;
           if (catCount >= PER_CAT_CAP) { skippedCatCap++; _capBlocked = true; _missCap++; continue; }    // one vertical must not flood the queue
@@ -8354,10 +8393,13 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
           builderSite: _builderSite ? (String(website).match(GP_FREE_BUILDER) || [''])[0].replace(/^\./, '') : null,
           placeId: p.id || null,
           // ══ CARRIED, NOT INFERRED ════════════════════════════════════════
-          // The screen, the sort and the audit all need to know this lead sits
-          // outside the band, and each of them recomputing it from the rating
-          // is three copies of one rule. It travels on the lead.
-          ...(_outsideBand ? { outsideBand: true, bandNote: _bandWhy } : {}),
+          // The screen, the sort and the audit each need to know why a lead is
+          // behind the queue, and each of them recomputing it from the review
+          // count is three copies of one rule. It travels on the lead instead.
+          //
+          // The star-rating mark used to be the first of these and Round 146
+          // removed it: nothing writes it, nothing reads it, and RATING BAND
+          // CHECK asserts both against the press's own source.
           ...(_tooBig ? { aboveSizeCeiling: true, sizeNote: _tooBigWhy } : {}),
           // Carried for the same reason as the two above: the sort, the screen
           // and the call sheet each need to know this lead is behind the queue
@@ -8538,7 +8580,7 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   // ══ WHAT THE RATING BAND AND THE WEBSITE READ ACTUALLY DID ═══════════════
   // Printed separately because these three numbers are the whole experiment:
   // whether filtering on what we can know BEFORE auditing changes the odds.
-  console.log(`\u2696 PAIN BAND [Places]: ${skippedNoPain} lead(s) ${GP_BAND_HARD_CUT ? 'DROPPED' : 'demoted behind every other lead'} for sitting ABOVE ${PAIN_BAND_HIGH} stars \u2014 at that average there are almost no negative reviews left on record, and the repeating complaint is one of only two findings that has ever earned a human reply. ${lowRatingKept} lead(s) below ${PAIN_BAND_LOW} stars were KEPT and ranked: the floor was retired on 2026-08-28 because rating is not a revenue signal and a low-rated business is genuinely harder to find on Google, which is a reason to buy rather than a reason to skip them. What decides now is the trade-aware review floor, which is a job count.`);
+  console.log(`\u2696 PAIN BAND [Places]: ${skippedNoPain} lead(s) sat ABOVE ${PAIN_BAND_HIGH} stars and were ${GP_BAND_HARD_CUT ? 'DROPPED, because GP_BAND_MODE=cut is set on this server' : 'KEPT and ranked exactly like every other lead, the rating moving their score by nothing in either direction'} \u2014 at that average there are almost no negative reviews left on record, so the repeating complaint is the one finding an audit is unlikely to turn up on them. It is also the only one of the 41 findings that reads the star rating at all, it can never be emailed, and the ladder returns the same sayable findings at 4.6, 4.9 and 5.0. Vin ruled on 2026-09-12 that a great rating is neither a penalty nor a reward, and the 10-point mark-down that fell on 259 of the 480 businesses in that day's 17:33 press is gone. ${lowRatingKept} lead(s) below ${PAIN_BAND_LOW} stars were KEPT and ranked: the floor was retired on 2026-08-28 because rating is not a revenue signal and a low-rated business is genuinely harder to find on Google, which is a reason to buy rather than a reason to skip them. What decides now is the trade-aware review floor, which is a job count.`);
   if (keptNoWebsite) console.log(`\u260e CALL LEADS [Places]: ${keptNoWebsite} business(es) with real review counts and NO WEBSITE AT ALL. These used to be discarded because Research needs a page to audit. They need no audit \u2014 the finding is the absence, and Mike has the number.`);
   if (keptBuilder) console.log(`\u{1F527} REBUILD LEADS [Places]: ${keptBuilder} business(es) running on a free page builder. They audit normally, but the fact that matters is already known before we spend anything.`);
   // ══ THE OPERATORS BIG ENOUGH TO FUND A FIX ═══════════════════════════════
@@ -8593,7 +8635,10 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   for (let i = 0; _bBuckets.some(b => i < b.length); i++) {
     for (const b of _bBuckets) if (i < b.length) _benchInterleaved.push(b[i]);
   }
-  const _bandDemoted = benched.filter(l => l.outsideBand).length;
+  // Two reasons, not three: the star ceiling stopped putting leads on the bench
+  // on 2026-09-12, so there is no third count to report and no line to print
+  // about it. What the ceiling still does is said once, above, on the run's own
+  // PAIN BAND line, and it is a count rather than a consequence.
   const _sizeDemoted = benched.filter(l => l.aboveSizeCeiling).length;
   const _floorDemoted = benched.filter(l => l.thinReviews).length;
   if (_floorDemoted) {
@@ -8601,9 +8646,6 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   }
   if (_sizeDemoted) {
     console.log(`\u{1F4CF} SIZE DEMOTED [Places]: ${_sizeDemoted} business(es) carry more than ${GP_MAX_REVIEWS} Google reviews. They are no longer deleted \u2014 they are returned behind every other lead and fill the bench, so we stop paying Google to rediscover the same businesses every run and delete them again. They are still never audited while a better lead exists, which is the only thing the ceiling was doing. Review count measures whether a business ASKS for reviews, not how big it is, and this file says so twenty lines above the ceiling itself. Set GP_SIZE_MODE=cut to restore the old delete.`);
-  }
-  if (_bandDemoted) {
-    console.log(`\u2696 BAND DEMOTED [Places]: ${_bandDemoted} qualified business(es) sit outside ${PAIN_BAND_LOW}-${PAIN_BAND_HIGH} stars. They are no longer deleted \u2014 they are returned behind every in-band lead, so they fill the bench instead of this run's queue. Only ONE of the 41 findings reads the star rating and it can never be emailed; the ladder produces the same two sayable findings at 4.6, 4.9 and 5.0, leading on the same one. Set GP_BAND_MODE=cut to restore the old delete.`);
   }
   // ══ WHAT THIS RUN LOST, AND WHERE ═══════════════════════════════════════
   // Written into an object the CALLER owns rather than a module global: two
@@ -15853,34 +15895,59 @@ ABOUT THE EMAIL — this matters a lot:
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// WHAT A VISITOR SEES — a SECOND verdict, beside the technical grade
+// WHAT A VISITOR SEES — the ONE website grade, and the only one published
 // ═══════════════════════════════════════════════════════════════════════════
 // Vin, 2026-09-11: "a toggle switch that just picks up businesses with fair and
 // bad websites — if I toggle that on we only target businesses with bad
 // websites. So we have to make sure the website grading signal is accurate."
+// Vin, 2026-09-12, asked what the grade is actually FOR: "overall just the
+// wbeistes bad if the design is outdated ... does it look otudated design wise
+// and is it outdated and how is it conversion wise like cta good".
 //
-// readSiteBuild cannot serve that toggle, and it is not changed to try. Its ten
-// faults are worth 34 points and NINETEEN of those points are invisible to a
-// human being: a noindex tag, missing schema, a JavaScript shell, robots.txt,
-// the title tag, alt text. noSchema alone is worth 5 and 4 is where "strong"
-// becomes "fair", so a business whose homepage looks perfectly fine to the
-// person who paid for it lands in the band the toggle would collect. The one
-// large LOOKS-old signal it holds, datedBuild, needs two age markers with at
-// least one of them visible — Flash, a table layout, a font or marquee tag, a
-// fixed-width block, no viewport tag, plain http, or a copyright line three
-// years stale — and a template built in 2014 and left alone carries none.
+// TWO QUESTIONS, then, and nothing else may decide this grade: DOES IT LOOK OUT
+// OF DATE, and CAN A VISITOR ASK FOR THE JOB.
 //
-// site.word feeds the audit's findings and the Find score and is UNTOUCHED.
-// site.looks is new, is judged from a picture, and feeds the rep's toggle.
+// ══ WHAT WAS WRONG, MEASURED ═══════════════════════════════════════════════
+// Round 142 added the picture's faults to the markup's and the markup won: the
+// eyes topped out at 9 points against the markup's 15. Executed on the run of
+// 2026-09-11, SLC Med Spa, Winn's Plumbing and Locust Pump were each graded
+// "bad" with ZERO vision faults, because diyBuilder (3) and noClickToCall (3)
+// hit the band exactly. Nobody alive can tell Squarespace from a custom build
+// by looking at a page, and a tel: link is not a thing anyone can see. So the
+// system said "bad website" about three real businesses on evidence no visitor
+// could ever meet.
 //
-//   site.word    strong / fair / weak / poor      markup, technical, the audit
-//   site.looks   modern / dated / bad / unknown   a render, visual, the toggle
+// ══ THE RULE NOW ═══════════════════════════════════════════════════════════
+// ONE grade in FOUR words - poor / bad / fair / good, poor worst - and only
+// things a visitor MEETS may move it. The technical gap (SITE_GAP_WORD,
+// site.gap, site.faults, site.grade) is UNTOUCHED and stays where it was
+// earned: the audit's findings and the Find score. It is no longer a second
+// published verdict about how a website is.
 //
-// UNKNOWN IS NOT MODERN. A render nobody took, a block page, a shot caught
-// mid-load and a model that answered nothing all settle on 'unknown' with
-// looksMeasured false, because "we could not look" has never meant "it looks
-// fine" anywhere else in this file.
-const SITE_LOOKS_WORDS = ['modern', 'dated', 'bad', 'unknown'];
+//   DESIGN AGE   with a picture: the eyes' designEra. Without one:
+//                readSiteAge's own `visible` markers - a table layout,
+//                <font>/<center>/bgcolor/<marquee>, Flash, a block pinned to
+//                750-1000px, no mobile viewport, plain http, a copyright line
+//                three years stale. That flag has existed since Round 100 and
+//                decided nothing at all until now.
+//   CONVERSION   with a picture: whether the first screen gives a visitor any
+//                way to ask for the job. Without one: the converts group, a
+//                missing enquiry form and a phone that will not dial.
+//
+// WHERE A PICTURE EXISTS THE EYES DECIDE ALONE. A person looked at the page;
+// a crawler that did not may not overrule him. The consequence is stated
+// rather than hidden: a build whose markers are old while the page still LOOKS
+// current grades good, because Vin's rule is what a visitor sees.
+//
+// AND A SITE NOBODY COULD READ IS NOT GRADED. Round 142 rescued a pictureless
+// lead with its markup faults; under a visitor-visible rule there is nothing
+// left in that pile to rescue with, because what remains is the invisible
+// half. measured false, 'unknown', and the row says why nobody looked.
+const SITE_LOOKS_GRADES = ['poor', 'bad', 'fair', 'good'];
+// 'unknown' is NOT a grade. It is the fifth word the row and the client accept
+// and it means nobody looked - kept, never dropped, and never mistakable for a
+// site that passed.
+const SITE_LOOKS_WORDS = SITE_LOOKS_GRADES.concat(['unknown']);
 // Default ON, and OFF is a Render setting rather than a code change — the same
 // direction every other buy on this route defaults in: an absent flag BUYS,
 // because the honest reading of nothing is "the build that expected a verdict",
@@ -15892,122 +15959,142 @@ const FIND_SITE_LOOKS = String(process.env.FIND_SITE_LOOKS || 'on').toLowerCase(
 // second copy of the audit's 7,800px ceiling. The full-page render stays where
 // it is earned: on the audit, where the footer is where the proof lives.
 const SITE_LOOKS_SHOT_EDGE = 1600;
-// Weighted, not counted: a design that is plainly old says more about the sale
-// than stock photography does, and two middling faults are what separates a
-// site a rep should call about from one he should not.
+// Weighted, not counted, and declared ONCE for both halves so the eyes and the
+// free code read cannot band the same business two different ways. `from` says
+// which half may raise a fault: 'eyes' needs a picture, 'markup' is what we can
+// still see in their own code when nobody took one.
+//
+// THE CALIBRATION IS THE POINT OF THIS ROUND. The two faults that graded three
+// real leads bad are not on this list at all - diyBuilder is invisible and has
+// no home here, and a phone that will not dial is worth ONE. One visible fault
+// is "fair"; a design a visitor can see is out of date, or a first screen with
+// nothing to click, is "bad"; and "poor" needs BOTH of Vin's questions
+// answered badly. A boot check executes every pair of the invisible faults and
+// demands the grade does not move at all.
 const SITE_LOOKS_FAULTS = [
-  { id: 'oldDesign', points: 3, say: 'the design looks years out of date' },
-  { id: 'agingDesign', points: 1, say: 'the design is starting to show its age' },
-  { id: 'template', points: 2, say: 'it is an off-the-shelf template nobody has made their own' },
+  { id: 'oldDesign',     from: 'eyes',   points: 4, say: 'the design looks years out of date' },
+  { id: 'agingDesign',   from: 'eyes',   points: 2, say: 'the design is starting to show its age' },
+  // Vin's second question, asked of the picture. Round 142 answered it from
+  // markup alone, on leads that had a picture nobody asked the question of.
+  { id: 'noAsk',         from: 'eyes',   points: 3, say: 'the first screen gives a visitor no way to ask for the job' },
+  { id: 'template',      from: 'eyes',   points: 2, say: 'it is an off-the-shelf template nobody has made their own' },
+  { id: 'notCredible',   from: 'eyes',   points: 2, say: 'a stranger landing here would not trust them with the job' },
+  { id: 'cheapPhotos',   from: 'eyes',   points: 1, say: 'the pictures are stock, stretched or blurry' },
   // ══ ROUND 142: THE MOBILE QUESTION LEFT THIS LIST ══════════════════════
   // It asked the eyes whether the page is laid out for a desktop only - from
   // a DESKTOP screenshot. The image cannot answer it, and on the 2026-09-11
   // run it never once fired: two of the eleven points here were dead.
   //
   // It is not lost. readSiteAge already marks a missing viewport meta as a
-  // VISIBLE age marker, read free from markup, and that feeds datedBuild in
-  // the code half which now lands in this verdict. The question is answered
-  // where it can be answered, and asked nowhere it cannot.
-  { id: 'cheapPhotos', points: 1, say: 'the pictures are stock, stretched or blurry' },
-  { id: 'notCredible', points: 2, say: 'a stranger landing here would not trust them with the job' },
+  // VISIBLE age marker, read free from markup, and that is exactly what the
+  // markup half below reads.
+  //
+  // ══ THE FREE HALF, and only where nobody took a picture ════════════════
+  // datedDesign is readSiteAge's VISIBLE markers, TWO of them, and it never
+  // travels without the two sentences that back it: Round 142 shipped "the
+  // build is years out of date" with its evidence field EMPTY.
+  { id: 'datedDesign',   from: 'markup', points: 4, say: 'the design is years out of date and a visitor can see it' },
+  { id: 'noForm',        from: 'markup', points: 3, say: 'there is no enquiry form anywhere we read' },
+  { id: 'noClickToCall', from: 'markup', points: 1, say: 'the phone number is not tappable on a phone' },
 ];
-// The verdict, PURE, over the answers the eyes returned. A boot check executes
-// this on fixtures rather than reading it, and every consumer reads this one
-// derivation — the rep's cell, the row, the toggle and the log line cannot
-// disagree about a business the way two hand-kept copies always do.
-// ══ ROUND 142: THE FREE READ ALREADY KNEW, AND THIS IGNORED IT ═══════════
-// Round 141 shipped this reading the picture alone, and on the ten-lead run
-// of 2026-09-11 it returned 'modern' on all nine leads it judged. The toggle
-// it exists for collected nothing.
-//
-// Two faults, and the second is the one that matters. The band started at 2
-// while 'the design is starting to show its age' is worth 1, so the three
-// leads the eyes DID flag still read modern - Tranquility Place was described
-// in its own verdict as a "clean but dated design" and graded modern.
-//
-// And the code read, which costs nothing and had already run, was saying so
-// out loud on the same leads: Brick and Stone "the build is years out of
-// date; it is a DIY website-builder template"; Tranquility Place "a DIY
-// website-builder template; there is no enquiry form"; Journey Treatment
-// "the build is years out of date". Every one of those is something a
-// VISITOR meets, measured for free, and thrown away by a verdict that only
-// looked at the picture. Vin, 2026-09-11: "are we reading the code of the
-// website - the code tells us a lot as well and it shouldn't cost anything
-// more".
-//
-// So the verdict is both halves. The free half is the build and converts
-// groups of SITE_GAP_TERMS - read from the group, never a hand-kept list of
-// ids, so a fault added to those groups arrives here by itself. The invisible
-// half (schema, alt text, robots, titles) stays out: it is real, it feeds the
-// audit, and no visitor can see it.
-//
-// DATED AT ONE POINT (Vin, 2026-09-11: "'Starting to show its age' counts as
-// dated"). He asked for the fair AND bad websites; a site with one visible
-// fault is not a modern one.
-const SITE_LOOKS_DATED = 1;
-const SITE_LOOKS_BAD = 6;
-// WHICH CODE FAULTS A VISITOR CAN SEE, declared once. The build group (a
-// build years out of date, an untouched DIY template) and the converts group
-// (no enquiry form, a phone that will not dial) are things a person meets on
-// the page. The geo and seo groups - schema, robots, titles, alt text - are
-// real, feed the audit, and are invisible to everybody who is not a crawler.
-const SITE_LOOKS_VISIBLE_GROUPS = ['build', 'converts'];
+// The three band edges, named. 0-1 good, 2-3 fair, 4-6 bad, 7+ poor.
+const SITE_LOOKS_FAIR = 2;
+const SITE_LOOKS_BAD = 4;
+const SITE_LOOKS_POOR = 7;
+// The worst a visible read can score: every eyes fault except agingDesign,
+// which oldDesign excludes. The markup half tops out at 8.
+const SITE_LOOKS_MAX = 12;
+const SITE_LOOKS_WORD = (n) => n >= SITE_LOOKS_POOR ? 'poor' : n >= SITE_LOOKS_BAD ? 'bad' : n >= SITE_LOOKS_FAIR ? 'fair' : 'good';
+// The same 1-10 shape the technical grade already publishes, off the SAME
+// score as the word, so the word and the number can never disagree about one
+// business. There is deliberately no number for a site nobody could read.
+const SITE_LOOKS_GRADE = (n) => Math.max(1, Math.min(10, 10 - Math.round((Math.min(SITE_LOOKS_MAX, Math.max(0, n)) * 9) / SITE_LOOKS_MAX)));
+// WHICH CODE FAULTS A VISITOR CAN SEE, declared once. The converts group only:
+// no enquiry form, a phone that will not dial. 'build' LEFT this list in Round
+// 146 and the reason is stated where the check asserts it - the group holds
+// diyBuilder, which is Squarespace-versus-custom and invisible to everybody,
+// and datedBuild, which is read here from readSiteAge's visible markers instead
+// so that the evidence a person could check travels with the claim. The geo and
+// seo groups - schema, robots, titles, alt text - are real, feed the audit, and
+// are invisible to everybody who is not a crawler.
+const SITE_LOOKS_VISIBLE_GROUPS = ['converts'];
 const readSiteLooks = (v, notLookedWhy, codeFaults) => {
-  // FILTERED HERE, not by the caller. This round's own check caught it: handed
-  // a schema fault the verdict counted it, because the function trusted
-  // whoever called it to have filtered first. A rule that depends on a caller
-  // remembering is the shape that breaks the day somebody adds a second call
-  // site - so the one declaration lives with the function that reads it, and
-  // the caller may now hand over every fault it has.
-  const _code = (Array.isArray(codeFaults) ? codeFaults : [])
-    .filter(f => f && SITE_LOOKS_VISIBLE_GROUPS.indexOf(f.group) >= 0);
-  const _codeScore = _code.reduce((n, f) => n + (Number(f && f.points) || 0), 0);
-  const _codeIds = _code.map(f => f && f.id).filter(Boolean);
-  const _codeSay = _code.map(f => f && f.say).filter(Boolean);
-  const _band = (n) => n >= SITE_LOOKS_BAD ? 'bad' : n >= SITE_LOOKS_DATED ? 'dated' : 'modern';
-  // The eyes could not judge. That is no longer blindness: if the free read
-  // found something a visitor meets, this lead is still judged, and the row
-  // says the verdict rests on their markup alone. Only when BOTH halves have
-  // nothing is it unknown - and a clean markup read with no picture IS
-  // unknown, because a site can have perfect code and still look terrible.
-  const _unknown = (why) => (_code.length
-    ? { looks: _band(_codeScore), measured: true, score: _codeScore, faults: _codeIds,
-        why: `${_codeSay.join('; ')} - all of it read free from their own markup. Nobody looked at the page itself: ${String(why || '').trim()}` }
-    : { looks: 'unknown', measured: false, score: null, faults: [], why });
   // The SECOND argument is the reason nobody looked - a drop, a switched-off
   // setting, a dead site, the per-lead credit cap. It reaches the row instead of
   // one flat sentence, because "we chose not to buy a picture" and "we bought
   // one and it was a block page" are different facts about this business.
-  if (!v || typeof v !== 'object') return _unknown(String(notLookedWhy || '').trim()
-    || 'nobody looked at their homepage, so nothing about how it looks is claimed either way');
-  if (v.isRealHomepage === false) return _unknown('the picture that came back was a block, error or parking page and not their homepage, so nothing about their design is claimed');
-  if (v.fullyRendered === false) return _unknown('the picture caught their page still loading, so nothing missing from it may be called missing');
-  const _era = String(v.designEra || '').toLowerCase();
-  if (!['current', 'aging', 'old'].includes(_era)) return _unknown('the eyes came back with no verdict on the design, so how their site looks is unmeasured');
-  const _hit = {
-    oldDesign: _era === 'old',
-    agingDesign: _era === 'aging',
-    // An absent answer is NOT a fault. Only an explicit true (and, for
-    // credibility, an explicit false) may score against a business.
-    template: v.templateUntouched === true,
-    cheapPhotos: v.photosLookCheap === true,
-    notCredible: v.looksCredible === false,
+  const _why = String(notLookedWhy || '').trim()
+    || 'nobody looked at their homepage, so nothing about how it looks is claimed either way';
+  // NOT GRADED, in one shape and one place, and never one of the four words.
+  const _notGraded = (why) => ({ looks: 'unknown', measured: false, score: null, grade: null,
+    faults: [], from: 'nobody', why });
+  // THE BAND, over declared fault ids. ONE derivation for both halves: the eyes
+  // and the free code read cannot hand a rep two different words for the same
+  // amount of visible damage, and the word and the 1-10 number come off the
+  // same score. Two hand-kept copies of one rule is the class this file records.
+  const _verdict = (ids, from, evidence, tail) => {
+    const _f = SITE_LOOKS_FAULTS.filter(t => ids.indexOf(t.id) >= 0);
+    const _score = _f.reduce((n, t) => n + t.points, 0);
+    const _says = [];
+    for (const t of _f) {
+      _says.push(t.say);
+      // The evidence sits against the fault it backs, not at the end of a
+      // sentence where a rep cannot tell what it is evidence of.
+      if (t.id === 'datedDesign') for (const s of (Array.isArray(evidence) ? evidence : [])) if (s) _says.push(s);
+    }
+    return {
+      looks: SITE_LOOKS_WORD(_score), measured: true, score: _score, grade: SITE_LOOKS_GRADE(_score),
+      faults: _f.map(t => t.id), from,
+      why: (_says.length ? _says.join('; ')
+        : 'a visitor lands on a current-looking page with nothing plainly wrong with it') + (tail || ''),
+    };
   };
-  const _faults = SITE_LOOKS_FAULTS.filter(f => _hit[f.id] === true);
-  const _score = _faults.reduce((n, f) => n + f.points, 0) + _codeScore;
-  const _seen = String(v.whatAVisitorSees || '').trim();
-  return {
-    looks: _band(_score),
-    measured: true,
-    score: _score,
-    faults: _faults.map(f => f.id).concat(_codeIds),
-    // Both halves in one sentence, the eyes first, so a rep reading the row
-    // sees what a visitor meets before what a crawler meets.
-    why: ((_faults.length || _codeSay.length)
-      ? _faults.map(f => f.say).concat(_codeSay).join('; ')
-      : 'a visitor lands on a current-looking page with nothing plainly wrong with it')
-      + (_seen ? ` — ${_seen}` : ''),
-  };
+  // ── THE FREE HALF, FILTERED HERE and not by the caller ───────────────────
+  // Round 142's own check caught the old shape handed a schema fault and
+  // counting it, because the function trusted whoever called it to filter
+  // first. A rule that depends on a caller remembering is the shape that breaks
+  // the day somebody adds a second call site, so the caller may hand over every
+  // fault it has and this is where they are refused.
+  const _all = (Array.isArray(codeFaults) ? codeFaults : []).filter(Boolean);
+  // DESIGN AGE, from readSiteAge's own `visible` flag. TWO markers, because
+  // readSiteAge says where it declares the rule that one marker is a quirk -
+  // and the sentences it wrote travel WITH the fault, so the claim cannot ship
+  // with nothing a person could go and check.
+  const _aged = _all.filter(f => f.id === 'datedBuild'
+    && Array.isArray(f.seen) && f.seen.filter(Boolean).length >= 2);
+  const _seen = _aged.length ? _aged[0].seen.filter(Boolean).slice(0, 2) : [];
+  // CONVERSION, read off the GROUP: a fault added to converts arrives here by
+  // itself, and a fault added to build, geo or seo cannot arrive at all.
+  const _conv = _all.filter(f => SITE_LOOKS_VISIBLE_GROUPS.indexOf(f.group) >= 0
+    && SITE_LOOKS_FAULTS.some(t => t.id === f.id && t.from === 'markup'));
+  const _markup = (_aged.length ? ['datedDesign'] : []).concat(_conv.map(f => f.id));
+  // ── WHERE A PICTURE EXISTS, THE EYES DECIDE ALONE ───────────────────────
+  const _era = String((v && typeof v === 'object' && v.designEra) || '').toLowerCase();
+  const _blind = (!v || typeof v !== 'object') ? _why
+    : v.isRealHomepage === false ? 'the picture that came back was a block, error or parking page and not their homepage, so nothing about their design is claimed'
+    : v.fullyRendered === false ? 'the picture caught their page still loading, so nothing missing from it may be called missing'
+    : ['current', 'aging', 'old'].indexOf(_era) < 0 ? 'the eyes came back with no verdict on the design, so how their site looks is unmeasured'
+    : '';
+  if (!_blind) {
+    const _ids = [];
+    if (_era === 'old') _ids.push('oldDesign');
+    if (_era === 'aging') _ids.push('agingDesign');
+    // An absent answer is NOT a fault. Only an explicit true (and, for the ask
+    // and for credibility, an explicit false) may score against a business.
+    if (v.hasVisibleAsk === false) _ids.push('noAsk');
+    if (v.templateUntouched === true) _ids.push('template');
+    if (v.looksCredible === false) _ids.push('notCredible');
+    if (v.photosLookCheap === true) _ids.push('cheapPhotos');
+    const _saw = String(v.whatAVisitorSees || '').trim();
+    return _verdict(_ids, 'eyes', [], _saw ? ` — ${_saw}` : '');
+  }
+  // ── NOBODY LOOKED. What is left is their own code, and only the parts of it
+  //    a visitor would have met. If that is nothing, this lead is NOT GRADED:
+  //    the pile that remains is the invisible one, and Round 142's rescue was
+  //    built out of exactly that.
+  if (!_markup.length) return _notGraded(_blind);
+  return _verdict(_markup, 'markup', _seen,
+    ` - all of it read free from their own markup, which is the most a visitor could have met without a picture. Nobody looked at the page itself: ${_blind}`);
 };
 // Whether THIS lead earns the render, decided in one place and named when the
 // answer is no. notIcp is tested FIRST and on purpose: a franchise, a branch
@@ -16122,6 +16209,7 @@ Return ONLY JSON:
   "desktopOnlyLayout": true/false,
   "photosLookCheap": true/false,
   "looksCredible": true/false,
+  "hasVisibleAsk": true/false,
   "whatAVisitorSees": "one factual sentence describing what the page looks like"
 }
 
@@ -16133,6 +16221,7 @@ What each one means:
 - desktopOnlyLayout — TRUE only when the layout you can see is desktop-only: a narrow fixed block centred in wide empty margins, or dense multi-column navigation set in type far too small to read on a phone. A fluid layout with large type is false.
 - photosLookCheap — TRUE when the pictures are obvious stock, stretched out of shape, pixelated or watermarked.
 - looksCredible — would you hand this business a job on the strength of this page alone?
+- hasVisibleAsk — TRUE when this first screen gives a visitor an obvious way to ask for the job without scrolling: a Call, Book, Quote, Estimate or Contact button, a phone number in the header, or a form already on screen. FALSE only when there is nothing to click and no number to ring anywhere in the image.
 
 Answer about what is ACTUALLY VISIBLE, so that a person looking at this same image agrees with every answer. When you cannot tell, answer false rather than inventing a fault: we would far rather miss a bad-looking site than accuse a good one.` },
         ] }],
@@ -16146,7 +16235,7 @@ Answer about what is ACTUALLY VISIBLE, so that a person looking at this same ima
     // The model returns "true"/"false" as STRINGS often enough that the audit's
     // own vision call carries the same coercion: a string answer reads as
     // neither true nor false, so the fault leaves the denominator in silence.
-    for (const _bf of ['isRealHomepage', 'fullyRendered', 'templateUntouched', 'desktopOnlyLayout', 'photosLookCheap', 'looksCredible']) {
+    for (const _bf of ['isRealHomepage', 'fullyRendered', 'templateUntouched', 'desktopOnlyLayout', 'photosLookCheap', 'looksCredible', 'hasVisibleAsk']) {
       if (parsed[_bf] === 'true') parsed[_bf] = true;
       else if (parsed[_bf] === 'false') parsed[_bf] = false;
     }
@@ -16281,6 +16370,32 @@ const sizeSecondQueryWorth = (reviewCount) => {
   const known = typeof reviewCount === 'number' && Number.isFinite(reviewCount);
   return !known || reviewCount >= SIZE_SECOND_QUERY_MIN_REVIEWS;
 };
+// ── THE FREE BBB PROFILE, MERGED ONLY WHEN IT ACTUALLY ANSWERED ───────
+// Round 146. fetchBbbProfile is retired behind a knob and answers
+// { ok: false, why: 'retired - ...' } with NO management key at all. The merge
+// beside it was guarded on the WHY starting with the word the refusal happens
+// to begin with instead of on ok, so the refusal fell through to the SUCCESS
+// arm, stored management: undefined, and the very next line asked it for a
+// length. Every lead whose size search surfaced a bbb.org URL threw away the
+// headcount and the revenue that one or two Firecrawl credits and a Haiku call
+// had already bought, and guessed its tier off a review count instead.
+//
+// One declaration, executed by the boot check on every shape that function can
+// return: a parsed profile, the retirement, an HTTP status, a thrown fetch and
+// nothing at all. A merge is attempted on ok and on nothing else, and the
+// management list is read through a default on both sides.
+const sizeBbbMerge = (parsed, bbbUrl, bbb) => {
+  const r = bbb || { ok: false, why: 'the BBB profile reader answered nothing at all' };
+  if (r.ok !== true) return { parsed: parsed, why: String(r.why || 'no reason given') };
+  const out = parsed || {};
+  if (!(Number(out.employees) > 0) && Number(r.employees) > 0) { out.employees = Number(r.employees); out.employeesFromRange = ''; out.source = 'BBB profile'; }
+  out.bbb = { url: bbbUrl, employees: r.employees, started: r.started, management: Array.isArray(r.management) ? r.management : [] };
+  return { parsed: out, why: '' };
+};
+const sizeBbbManagementCount = (parsed) => {
+  const m = parsed && parsed.bbb && parsed.bbb.management;
+  return Array.isArray(m) ? m.length : 0;
+};
 const findSizeViaSearch = async (companyName, website, fcKey, apiKey, location = '', opts = {}) => {
   if (!companyName || !fcKey || !apiKey) return null;
   const secondWorth = sizeSecondQueryWorth((opts || {}).reviewCount);
@@ -16354,15 +16469,13 @@ ${corpus}` }]
     const _dt = companyDistinctiveTokens(companyName);
     const bbbUrl = results.map(r => String((r && r.url) || '')).find(u => BBB_PROFILE_RE.test(u) && (!_dt.length || _dt.some(tok => u.toLowerCase().includes(tok))));
     if (bbbUrl) {
-      const bbb = await fetchBbbProfile(bbbUrl);
-      if (!bbb.ok && !/^retired/.test(String(bbb.why))) console.log(`SIZE [${companyName}]: BBB profile refused a plain fetch (${bbb.why}) - not bought`);
-      else {
-        parsed = parsed || {};
-        if (!(Number(parsed.employees) > 0) && Number(bbb.employees) > 0) { parsed.employees = Number(bbb.employees); parsed.employeesFromRange = ''; parsed.source = 'BBB profile'; }
-        parsed.bbb = { url: bbbUrl, employees: bbb.employees, started: bbb.started, management: bbb.management };
-      }
+      // The merge decides on ok. The retirement stays silent per lead - it says
+      // itself once per process - and a real refusal still names its status.
+      const _bbbMerge = sizeBbbMerge(parsed, bbbUrl, await fetchBbbProfile(bbbUrl));
+      parsed = _bbbMerge.parsed;
+      if (_bbbMerge.why && !/^retired/.test(_bbbMerge.why)) console.log(`SIZE [${companyName}]: BBB profile refused a plain fetch (${_bbbMerge.why}) - not bought`);
     }
-    if (!parsed || (!(Number(parsed.employees) > 0) && !parsed.revenue && !(parsed.bbb && parsed.bbb.management.length))) return null;
+    if (!parsed || (!(Number(parsed.employees) > 0) && !parsed.revenue && !(sizeBbbManagementCount(parsed) > 0))) return null;
     parsed.secondQuery = secondQuery;
     console.log(`SIZE [${companyName}]: emp=${parsed.employees || '?'}${parsed.employeesFromRange ? ' (from the range ' + parsed.employeesFromRange + ')' : ''} rev=${parsed.revenue || '?'} (${parsed.source || '?'}${secondQuery ? '; LinkedIn/BBB query bought' : ''})`);
     return parsed;
@@ -36227,11 +36340,29 @@ const DM_CHAMBER = /^(?:1|true|on|yes)$/i.test(String(process.env.DM_CHAMBER || 
 // §110 declined to act on a pair count from two leads in one afternoon and was
 // right to: "Two of two in one run is NOT evidence." This is a different
 // thing - a category flag declared in the source with its rationale, now three
-// of three in a second run - and it is still only half the rule. The category
-// alone never stands a lead down: Darrel owns a funeral home, and the whole
-// point of this system is finding Darrel. What stands the wave down is the
-// category AND their own pages naming nobody, which is the difference between
-// "this field is consolidated" and "we looked and there is no owner here".
+// of three in a second run.
+//
+// ══ ROUND 146: THE PAGES PREDICT IT, THE CATEGORY DOES NOT ═════════════════
+// Round 144 required BOTH halves - an ownerRisk category AND their own pages
+// naming nobody - and on Vin's read batch of 2026-09-12 the category half held
+// the stand-down shut. Glow Up, McCall and Bobcat named nobody between them,
+// and took 28 of that batch's 68 credits (41%) and about 620 seconds; not one
+// of the three sits in the twelve categories carrying the flag, so the wave
+// correctly did not stand down and correctly found nobody.
+//
+// A category says a FIELD is consolidated. Their own pages say whether there
+// is a name here to find, and that is the only fact the paid search wave
+// needs: a business publishing no roster, no names, no titles and no founder
+// sentence gives a search index nothing to corroborate, whatever trade it is
+// in. So the evidence decides it alone. The flag stays on GP_CATEGORIES - the
+// Places search stamps consolidation_risk from it, and research, the merge and
+// the score all read it - and it no longer gates this.
+//
+// Darrel is kept by a better guard than the category was: this stands down the
+// SEARCH wave ONLY. Vin, 2026-09-12: "Stand down on the searches, keep the
+// licence stage." A $5M business that is a guy named Darrel is filed in a
+// state licence register and appears on no roster, so the register is still
+// searched on exactly the leads this stands down.
 const FIND_OWNER_RISK_STANDDOWN = !/^(?:0|false|off|no)$/i.test(String(process.env.FIND_OWNER_RISK_STANDDOWN || ''));
 // One lookup, named. GP_CATEGORIES was searched by label inline in three
 // places already; a fourth copy is how the four drift.
@@ -36240,18 +36371,55 @@ const findCategoryByLabel = (label) => {
   return l ? (GP_CATEGORIES.find(c => String(c.label).toLowerCase() === l) || null) : null;
 };
 const categoryOwnerRisk = (label) => !!(findCategoryByLabel(label) || {}).ownerRisk;
-// Their own pages named NOBODY - no roster, no names, no founder sentence.
+// Their own pages named NOBODY - not one roster row this file's own name doors
+// will stand behind as a person, and no founder sentence.
 // Every one of these is set by readFindIcpSignals from pages we already hold,
 // so this costs nothing and is known before a byte of the wave is bought.
 // NOT ownerNamedOnSite: it is written 300 lines below this, AFTER the wave,
 // out of what the wave itself found. Reading it here would be a clause that
 // can never be false - a check that cannot fail, dressed as a second opinion.
+//
+// ══ ROUND 146: A NAV LABEL IS NOT A PERSON ═════════════════════════════════
+// Live, 2026-09-12: "Anesthesia Options" came off a practice's team page as a
+// roster row - executed, parseTeamRoster returns a row named "Anesthesia
+// Options" titled "Coordinator" for a heading followed by a role word - so
+// teamNames and teamTitles were both non-empty, this clause read "their pages
+// DO name somebody", it could not be true, and the wave was bought to go
+// looking for a person nobody had named.
+//
+// A roster row now has to clear the three name doors this file already
+// declares, and each of them has refused a live sheet on its own:
+//   looksLikeRealName - shape. Refuses "Functional Finished Basements", the
+//     strapline that sorted FIRST at 93 on 2026-09-10.
+//   looksLikeAPerson  - the nav and form-label vocabulary. Refuses "Google
+//     Reviews" and "Last Name", which shape alone accepts.
+//   ownerNameDoor     - meaning. Refuses "Client Connection Lead", three
+//     capitalised words made entirely of role words (§106).
+// No fourth vocabulary is written here: two hand-kept copies of one rule is
+// the class this file records most.
+//
+// MEASURED LIMIT, stated because a guard nobody can see the edge of gets
+// trusted too far: all three doors ACCEPT "Anesthesia Options" itself. No list
+// in this file knows that "options" ends a nav label and ends nobody - it is
+// absent from NOT_A_PERSON_LAST, from both role-word lists and from the
+// business-tail list - so that exact pair still reads as a person here. The
+// root cause is one word missing from the roster parser's own vocabulary, and
+// that vocabulary is read by the headcount, the owner pick and the sheet as
+// well as by this clause.
+//
+// teamCount and teamTitles are out of the rule altogether: teamCount is that
+// same row count, so nine junk rows read as nine people, and a TITLE is not a
+// name a search index could be asked for.
+//
+// And an absence needs a look (PART 3). With no readable page nothing could
+// have named anybody, so the answer there is NO - that lead keeps its wave,
+// which is also what keeps the wave reachable at all.
 const ownPagesNameNobody = (sig) => {
   const s = sig || {};
-  return !(Number(s.teamCount) > 0)
-    && !(Array.isArray(s.teamNames) && s.teamNames.length > 0)
-    && !(Array.isArray(s.teamTitles) && s.teamTitles.length > 0)
-    && !s.founderPhrase;
+  if (s.readable !== true) return false;
+  const named = (Array.isArray(s.teamNames) ? s.teamNames : [])
+    .some(n => looksLikeRealName(n) && looksLikeAPerson(n) && ownerNameDoor(n, '') === null);
+  return !named && !s.founderPhrase;
 };
 const DM_SIGNATURE_PROMOTE_AT = 3;   // signatures of the same first name before it outranks a weak site title
 const foldFirstNameClusters = (clusters) => {
@@ -36529,7 +36697,7 @@ const rankOwnerCandidates = (found, companyName = '') => {
 // straight to the site reader, which then buys no map and no scrapes. This is
 // how the Find tab resolves an owner for zero Firecrawl credits while running
 // the identical roster parse, prompt and anti-hallucination gate the audit runs.
-const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '', industry = '', apifyToken = '', callOnly = false, preFetchedPages = null, navLinks = null }) => {
+const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepageContent, hunterName, hunterTitle, location, placeId = '', industry = '', apifyToken = '', callOnly = false, standDownSearchWave = false, preFetchedPages = null, navLinks = null }) => {
   // ═══ STAGED WATERFALL — STOP PAYING ONCE WE HAVE THE ANSWER ═══════════════
   // This used to fire all seven sources in parallel on EVERY lead, so a company
   // that names its owner on its own About page still paid for two web searches,
@@ -36880,7 +37048,14 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     // is bought only if the web search did not settle the lead. Fired
     // together, a web-search win could not stop the ~8 licence credits
     // already in flight - live on 2026-09-02, every lead paid for both.
-    const websearch = await findOwnerViaWebSearch(companyName, website, fcKey, apiKey, location).catch(() => null);
+    // Round 146: the searches stand down where their own readable pages named
+    // nobody, and the LICENCE stage below does not. A search hunts a name in
+    // somebody else's index and needs one to corroborate; the state register is
+    // where a sole proprietor is actually filed, and on a lead whose pages name
+    // nobody it is the only route left to him. Vin, 2026-09-12: "Stand down on
+    // the searches, keep the licence stage."
+    const websearch = standDownSearchWave ? null : await findOwnerViaWebSearch(companyName, website, fcKey, apiKey, location).catch(() => null);
+    if (standDownSearchWave) console.log(`DM [${companyName}]: the paid owner SEARCHES were not bought - their own readable pages named nobody, so a search index has no name here to corroborate (~6 Firecrawl credits). The state licence register is still searched below: that is where a sole proprietor is filed.`);
     if (websearch) found.push(websearch);
     if (settled()) {
       console.log(`DM [${companyName}]: the web search settled it \u2014 the licence and chamber searches are not bought (~8 Firecrawl credits saved)`);
@@ -37055,6 +37230,27 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
 // NAME WE CONFIRMED and applies its own indexed data + learned domain pattern, and
 // returns a confidence score. 95+ means it was found in a public source; ~60 means it
 // inferred from the domain's pattern. We treat those very differently.
+// ── WHY A PAID MAILBOX LOOKUP DID NOT HAPPEN, SAID IN ONE PLACE ────────
+// Round 146. Three ternaries rendered this in English, each holding its own
+// copy of three states, and not one of them held the fourth: a lookup that
+// THREW. The finder answered a bare null from its catch on a timeout, a reset
+// socket or a DNS failure - indistinguishable from an empty index - so the
+// caller's last line told the row that Hunter's index has no address for a
+// named person, off a request that may never have reached Hunter. Three of ten
+// leads in one batch (Winn's, SLC, Oehler): a false statement about a
+// business, built on a failure of ours.
+//
+// One declaration, four states, executed by OWNER MAILBOX FIRST CHECK. The
+// fourth blames neither our balance nor our key, and claims nothing about the
+// prospect.
+const HUNTER_BLOCKED_SAY = {
+  hunter_key_rejected: 'the Hunter key was rejected, so no paid mailbox lookup can run until it is replaced',
+  hunter_out_of_credits: 'Hunter is out of credits, so the paid mailbox lookup could not be bought',
+  hunter_rate_limited: 'Hunter is rate-limited right now, which is a speed limit and not an empty balance - re-running this lead in a minute will ask again',
+  hunter_unreachable: 'the Hunter lookup did not complete - the request never came back, so their index was never asked and we know nothing either way',
+};
+const hunterBlockedSay = (reason) => HUNTER_BLOCKED_SAY[String(reason || '')]
+  || 'a paid mailbox lookup did not happen and the reason was not recorded';
 const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
   if (!domain || !fullName || !hunterKey) return null;
   // Already known spent or dead — do not spend a round trip to be told again, and
@@ -37091,7 +37287,13 @@ const hunterFindPersonEmail = async (domain, fullName, hunterKey) => {
     const sourced = Array.isArray(d.data.sources) && d.data.sources.length > 0;
     console.log(`HUNTER FINDER [${domain}]: ${fullName} \u2192 ${email} (confidence ${score}${sourced ? ', found in a public source' : ', pattern-inferred'})`);
     return { email, score, sourced };
-  } catch(e) { console.log('hunterFindPersonEmail failed:', e.message); return null; }
+  } catch(e) {
+    // A throw is the FOURTH unavailable state, never an empty index: on a
+    // timeout, a reset socket or a DNS failure the request may never have
+    // reached Hunter at all, so nothing on this path is a fact about them.
+    console.log(`HUNTER FINDER [${domain}]: the lookup for ${fullName} did not complete (${(e && e.message) || e}), so their index was never asked and no absence is claimed.`);
+    return { unavailable: true, reason: 'hunter_unreachable' };
+  }
 };
 
 // ══ ONE EXIT, AND NOTHING SHAPED LIKE A FILE LEAVES THROUGH IT ═════════════
@@ -37811,7 +38013,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     // other is a fact about our account.
     if (hf && hf.unavailable) {
       _lookupBlocked = hf.reason;
-      console.log(`EMAIL [${domain}]: could NOT check ${name} — ${_lookupBlocked === 'hunter_rate_limited' ? 'Hunter is rate-limited right now, which is a speed limit and not an empty balance — re-running this lead in a minute will ask again' : 'Hunter out of credits'}. This is not evidence that no address exists.`);
+      console.log(`EMAIL [${domain}]: could NOT check ${name} — ${hunterBlockedSay(_lookupBlocked)}. This is not evidence that no address exists.`);
       return null;
     }
     if (hf && hf.email) {
@@ -37833,7 +38035,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
       console.log(`EMAIL [${domain}]: Hunter Finder returned ${hf.email} at confidence ${hf.score} but it is unsourced/unverified — not sendable`);
       return null;
     }
-    console.log(`EMAIL [${domain}]: the Hunter email-finder WAS asked for ${name} and its index has no address for them. One credit spent; this is a fact about their record, not about our account.`);
+    console.log(`EMAIL [${domain}]: the Hunter email-finder WAS asked for ${name} and its index has no address for them, which is a fact about their record and not about our account. Whether a credit moved is not measured here.`);
     return null;
   };
 
@@ -38194,8 +38396,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     const _smtpActuallyRan = (_mayProbe && verifierAnyAvailable(undefined, verifierKey));
 
     const _why = !verifierAnyAvailable(undefined, verifierKey) ? 'every configured email checker stopped answering'
-      : (_lookupBlocked && !_smtpActuallyRan)
-        ? (_lookupBlocked === 'hunter_key_rejected' ? 'Hunter key rejected' : _lookupBlocked === 'hunter_rate_limited' ? 'Hunter rate-limited — a throttle, not an empty balance; re-run this lead in a minute' : 'Hunter out of credits')
+      : (_lookupBlocked && !_smtpActuallyRan) ? hunterBlockedSay(_lookupBlocked)
       : null;
     if (_lookupBlocked && _smtpActuallyRan) {
       console.log(`EMAIL [${domain}]: Hunter was unavailable, but the FREE SMTP path ran in full \u2014 every personal pattern and every company mailbox was probed and denied. This is evidence about the prospect, not about our credits.`);
@@ -38331,8 +38532,7 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
     : (catchAll !== true && catchAll !== false)
     ? 'we have no catch-all verdict for this domain, so an SMTP answer would prove nothing either way'
 
-    : _lookupBlocked
-    ? (_lookupBlocked === 'hunter_key_rejected' ? 'the Hunter key was rejected' : _lookupBlocked === 'hunter_rate_limited' ? 'Hunter was rate-limited on this lead \u2014 a speed limit, not an empty balance. Re-running in a minute will work' : 'Hunter is out of credits')
+    : _lookupBlocked ? hunterBlockedSay(_lookupBlocked)
     : 'no evidence of this mailbox from any source';
   console.log(`⚠ EMAIL [${domain}] T4 inferred only \u2014 ${inferred.email} is a GUESS and is BLOCKED from sending. Reason: ${_blockWhy}.`);
   return { email: inferred.email, ...EMAIL_TIERS.PATTERN_INFERRED, name, pattern: inferred.pattern, blockReason: _blockWhy };
@@ -39877,12 +40077,19 @@ const scoreReachability = (c) => {
 //              Managing Partner can buy. VP and below is blocked." canBuy is
 //              computed by the resolver, and the ranking is where that verdict
 //              should show rather than only in a log line.
-//   ICP BAND   discovery DEMOTES rather than deletes a business outside the
-//              4.2-4.85 band or above the review ceiling (PART 4 sections 13
-//              and 17), because Google bills per call and deleting a result
-//              cannot save a penny. A demoted lead is "never audited while a
-//              better lead exists" - so it has to sort last HERE too, or a
-//              decision taken at discovery is silently undone at ranking.
+//   SIZE       discovery DEMOTES rather than deletes a business above the
+//              review ceiling (PART 4 section 17), because Google bills per
+//              call and deleting a result cannot save a penny. A demoted lead
+//              is "never audited while a better lead exists" - so it has to
+//              sort last HERE too, or a decision taken at discovery is
+//              silently undone at ranking.
+//
+//              THE STAR RATING IS NOT ONE OF THESE ANY MORE. It was, at the
+//              same -10 as the size ceiling, and on the press of 2026-09-12 it
+//              marked down 259 of 480 businesses - 259 of that run's 274
+//              demotions - on the one measurement the ladder is already proved
+//              not to use. Vin, that day, asked twice: treat a great rating as
+//              normal. So there is no term for it at all, in either direction.
 //
 // Magnitudes are deliberately small against a 0-100 base: this orders CLOSE
 // CALLS, exactly as OWNER_KNOWS does in the email ladder at a spread of 22. It
@@ -39899,7 +40106,14 @@ const CONTACT_RANK_TERMS = [
   { id: 'authority',  points: 6,   why: 'the person named can actually buy' },
   { id: 'premium',    points: 4,   why: 'the job value and the job count clear the premium tier' },
   { id: 'belowFloor', points: -12, why: 'nothing in the catalogue is affordable at this job value and volume' },
-  { id: 'outOfBand',  points: -10, why: 'outside the star band discovery demotes on' },
+  // ROUND 146: the star-band term was declared here at -10, the same size as
+  // the one below it, and it fired on 259 of the 480 businesses in the press of
+  // 2026-09-12. There is now no term for the star rating in either direction -
+  // not a smaller one, none - and three boot checks assert that a lead still
+  // carrying the old discovery flag ranks and scores identically to one that
+  // never had it. Adding a rating term back here changes the Find card, the
+  // contact list and the contact-read score at once, which is why it lives in
+  // one declared table and not in three scorers.
   { id: 'aboveSize',  points: -10, why: 'above the review ceiling discovery demotes on' },
   // ══ SOMEBODY COMPETENT IS ALREADY ON THIS ACCOUNT ═══════════════════════
   // Conversion tracking AND call tracking AND a real booking tool, all three,
@@ -39936,10 +40150,16 @@ const CONTACT_RANK_MAX_MODIFIER = 18;   // the three positives; asserted at boot
 // a perfectly good lead to the bottom while looking measured.
 // == demotionPenalty - one answer to "is this lead demoted, and by how much" =
 //
-// outsideBand and aboveSizeCeiling changed the SORT and never the NUMBER. So a
-// 4.9-star business could show a Find score of 90 on its card and sit below a
-// 4.5-star lead scoring 60, with nothing on screen explaining why - which reads
-// as a broken rating, and is a real contradiction rather than a display quirk.
+// The discovery demotions changed the SORT and never the NUMBER. So a lead
+// could show a Find score of 90 on its card and sit below one scoring 60, with
+// nothing on screen explaining why - which reads as a broken score, and is a
+// real contradiction rather than a display quirk. This is the one place that
+// answers it, for every surface.
+//
+// Round 146 took the STAR RATING out of the answer entirely, in both
+// directions: no mark-down for sitting above 4.85, and the Find card's
+// high-rating bonus removed in the same change, because "irrelevant" and
+// "rewarded" are different rulings and Vin gave the first one.
 //
 // Meanwhile contactRankFor DID subtract for both, so two rankers in one app
 // disagreed about one lead and the Find card showed the one that did not know.
@@ -39973,7 +40193,10 @@ const demotionPenalty = (lead) => {
   const _reached = l.marketingLeadFound === true;
   // Round 111: over the ceiling is corporate whoever was found, so that mark is
   // never lifted; the review-ceiling mark still is, because reviews are not size.
-  const want = [['outOfBand', l.outsideBand === true], ['aboveSize', l.aboveSizeCeiling === true && !_reached], ['thinReviews', l.thinReviews === true], ['listingRisk', !!l.listingRisk], ['aboveScale', l.scaleBand === 'over_ceiling'], ['scaleBelowFloor', l.scaleBand === 'below_floor'], ['sizeHigh', l.sizeBand === 'high'], ['layeredLast', l.laneLast === true]];
+  // Round 146: the star rating is not in this list and must not return to it. A
+  // lead that still carries discovery's old star flag is asked nothing about it
+  // here, so it scores exactly like a lead that never had it.
+  const want = [['aboveSize', l.aboveSizeCeiling === true && !_reached], ['thinReviews', l.thinReviews === true], ['listingRisk', !!l.listingRisk], ['aboveScale', l.scaleBand === 'over_ceiling'], ['scaleBelowFloor', l.scaleBand === 'below_floor'], ['sizeHigh', l.sizeBand === 'high'], ['layeredLast', l.laneLast === true]];
   for (const [id, on] of want) {
     if (!on) continue;
     const t = CONTACT_RANK_TERMS.find(x => x.id === id);
@@ -39998,8 +40221,16 @@ const demotionPenalty = (lead) => {
 // visitor's reaction is the pitch, and 8 keeps a bad-website lead below a
 // business already demoted for being out of band (-10) rather than above it -
 // a broken site is a reason to call, not a reason to un-bench a lead.
-const TRIAGE_SITE_BAD = 8;
-const TRIAGE_SITE_DATED = 4;
+// ══ ROUND 146: THE WEBSITE GRADE MOVES THE SCORE BY 0 ═════════════════════
+// TRIAGE_SITE_BAD (8) and TRIAGE_SITE_DATED (4) lived here for four hours.
+// Vin, reading the first press that used them: "i dont want find targeting
+// explcitly bad ones i never said that did i? i just want it within tour ICP
+// numbers". He asked for the rep's LIST to carry bad-website businesses; Round
+// 146's author turned that into the press RANKING them first and shipped it.
+// Removed, and a boot check now asserts the grade moves both the Find score
+// and the draw order by exactly 0 on every one of the four words, so it cannot
+// come back by accident. The free read itself STAYS - it costs nothing and Vin
+// kept it explicitly ("lets stick with what we are doing free tier wise").
 const TRIAGE_MARKET_POINTS = 3;   // per metro beyond the first
 const TRIAGE_MARKET_CAP = 9;      // and never more than this, whatever the count
 const placesTriageScore = (m) => {
@@ -40034,22 +40265,24 @@ const placesTriageScore = (m) => {
   // 60) rather than the number.
   if (capacityClassFor(String((m && (m.label || m.industry)) || ''), (m && m.trade) || '') === 'solo') revBonus *= 0.5;
   base += revBonus;
-  // == AND IT MUST NOT PAY FOR THE THING THAT DEMOTED IT ====================
-  // A 4.9-star business earned +5 here AND was demoted for sitting above the
-  // 4.85 ceiling: the score paying for the exact property that makes the lead
-  // worse for us. PART 5 is explicit about why the ceiling exists - at 4.9
-  // there are almost no negative reviews left to mine, and the repeating
-  // complaint is one of only two findings with a real human reply behind it.
+  // == A GOOD RATING IS WORTH NOTHING HERE, AND THAT IS THE RULING ==========
+  // There was a ladder on this spot: +5 at 4.8 and over, +3 at 4.6, +1.25 at
+  // 4.3, and a guard that took the +5 away again from a business the star band
+  // had demoted. So the card paid a near-perfect business up to five points for
+  // the property the press was simultaneously marking it down ten for, and the
+  // two cancelled to a number nobody could explain on a screen.
   //
-  // Only the ABOVE-the-ceiling case loses its bonus. A lead demoted for a LOW
-  // rating still takes the struggling deduction below, which is the same
-  // judgement pointed the other way and was never in dispute.
-  const ratingDemoted = (m && m.outsideBand === true) && rating >= 4.8;
-  if (!ratingDemoted) {
-    if (rv >= 20 && rating >= 4.8)      base += 5;
-    else if (rv >= 20 && rating >= 4.6) base += 3;
-    else if (rv >= 20 && rating >= 4.3) base += 1.25;
-  }
+  // Vin ended both halves on 2026-09-12, asked twice and confirmed twice: treat
+  // a great rating as normal. NORMAL MEANS ZERO, in both directions - a
+  // mark-down would be the thing he ruled out, and a bonus would be rewarding
+  // the same measurement he called irrelevant. So a business at 4.4, at 4.7 and
+  // at 5.0 now scores identically on this curve, which FIND SCORE CHECK and
+  // RATING BAND CHECK both execute rather than read.
+  //
+  // WHAT IS NOT TOUCHED is the low side, twenty lines down. Vin, 2026-08-28:
+  // "the ones with lower ratings have way more pain, especially visibility
+  // pain." That lift is a fact about Google's local pack rather than about our
+  // audit, it needs real volume behind it, and it stays exactly as it was.
   // ══ A LOW RATING IS PAIN, NOT A REASON TO SKIP THEM ══════════════════════
   // This used to subtract 5 from any business under 3.8 stars, and the star
   // floor deleted them outright a few hundred lines up. Vin, 2026-08-28: "the
@@ -40148,10 +40381,6 @@ const placesTriageScore = (m) => {
   // Smaller than the contact read's equivalent (up to +14) on purpose: this
   // verdict rests on markup alone with no picture, so it is the cheaper and
   // weaker of the two reads and must not outrank the one that saw the page.
-  if (m && m.siteLooksMeasured === true) {
-    if (m.siteLooks === 'bad') base += TRIAGE_SITE_BAD;
-    else if (m.siteLooks === 'dated') base += TRIAGE_SITE_DATED;
-  }
   // == THE DEMOTION IS IN THE NUMBER ========================================
   // Same table the contact ranker reads, so the Find card and the contact list
   // can no longer hand an operator two different verdicts on one business.
@@ -42596,11 +42825,19 @@ const WEIGHTS = {
       // yield line drops the rows entirely instead of printing "0 bad websites"
       // about a read nobody performed. That is this file's own rule: nobody
       // increments it and it happened to nobody are different facts.
-      _findYield.siteBad = _siteRead.bad;
-      _findYield.siteDated = _siteRead.dated;
+      // The four grades, off the one table, so a word added to the ladder
+      // cannot go uncounted here.
+      for (const _g of SITE_LOOKS_GRADES) _findYield['siteGrade_' + _g] = _siteRead.byGrade[_g] || 0;
       _findYield.siteClean = _siteRead.clean;
       _findYield.siteUnread = _siteRead.refused + _siteRead.notReached;
-      console.log(`\u{1F310} PRESS SITE READ: ${_siteRead.considered} homepage(s) read free - no Firecrawl, no screenshot, no model call. ${_siteRead.graded} carry a verdict a visitor would recognise (${_siteRead.bad} bad, ${_siteRead.dated} dated); ${_siteRead.clean} read clean and stay UNKNOWN, because clean code is not the same as looking good and nobody took a picture; ${_siteRead.refused} refused a plain read; ${_siteRead.notReached} were not reached before the clock. ${_siteRead.noWebsite} lead(s) have no website at all and are their own lane. Refused and not-reached leads say nobody looked - never that the site passed.`);
+      // ══ THE NUMBER THIS ROUND CANNOT PREDICT ══════════════════════════
+      // How often a trade's homepage states its own size has never been
+      // measured, so the round's target for it is a floor and a re-measure
+      // rather than a percentage. These two rows ARE the measurement.
+      _findYield.sized = _siteRead.sized;
+      _findYield.notSized = _siteRead.notSized;
+      console.log(`\u{1F310} PRESS SITE READ: ${_siteRead.considered} homepage(s) read free - no Firecrawl, no screenshot, no model call. ${_siteRead.graded} carry a grade a visitor would recognise (${SITE_LOOKS_GRADES.map(_g => `${_siteRead.byGrade[_g] || 0} ${_g}`).join(', ')}); ${_siteRead.clean} showed nothing a visitor could see and stay NOT GRADED, because clean code is not the same as looking good and nobody took a picture; ${_siteRead.refused} refused a plain read; ${_siteRead.notReached} were not reached before the clock. ${_siteRead.noWebsite} lead(s) have no website at all and are their own lane. Refused and not-reached leads say nobody looked - never that the site passed.`);
+      console.log(`\u{1F4CF} PRESS SIZE READ: ${_siteRead.sized} of ${_siteRead.considered} businesses state their own size on their homepage and now carry a MEASURED tier off it for nothing (${SIZE_TIER_IDS.map(_t => `${_siteRead.byTier[_t] || 0} ${SIZE_TIER_WORD[_t]}`).join(', ')}${_siteRead.byTier[SIZE_TIER_OVER] ? `, ${_siteRead.byTier[SIZE_TIER_OVER]} over the ICP` : ''}). ${_siteRead.notSized} say nothing about how big they are and are marked \"size not measured\" - never a review-count guess wearing a measurement's clothes. A published count is a FLOOR: a business publishes at most the people it wants seen, so every tier here means at least that big. Before this round NO lead in the pool carried a measured size at all, because the size ladder only ran inside the paid contact read - ten leads a day against a queue of 1,791.`);
     }
     const allScored = unique
       .map(c => {
@@ -42799,21 +43036,28 @@ const WEIGHTS = {
           if (c.source && c.source !== 'google_places') return 1;
           return 0;   // 0 — fit only, no timing signal
         };
-        // ══ OUTSIDE THE BAND SORTS LAST, BEFORE ANYTHING ELSE IS WEIGHED ══
-        // searchGooglePlaces already returns them behind every in-band lead, and
-        // this re-sorts the whole pool, so without this term a demoted 4.9-star
-        // business with a high ICP score would climb straight back over a 4.6-star
-        // one. Two mechanisms for one promise, because the promise is the entire
-        // safety of turning that filter into a sort: the leads we have evidence
-        // for still go out first, every run, and the rest wait on the bench.
-        // ALL THREE demotion reasons, not just the band. A business above the
-        // review ceiling, or under its trade's review floor, is returned behind
-        // everything by searchGooglePlaces and would climb straight back over an
-        // in-band lead here on ICP score alone. A reason missing from this term
-        // is a demotion that survives the press and dies in the sort, which is
-        // the one way the bench promise can be broken without any gate changing.
-        const ba = (a.outsideBand || a.aboveSizeCeiling || a.thinReviews || a.listingRisk) ? 1 : 0;
-        const bb = (b.outsideBand || b.aboveSizeCeiling || b.thinReviews || b.listingRisk) ? 1 : 0;
+        // ══ A BENCHED LEAD SORTS LAST, BEFORE ANYTHING ELSE IS WEIGHED ════
+        // searchGooglePlaces already returns them behind every other lead, and
+        // this re-sorts the whole pool, so without this term a benched business
+        // with a high ICP score would climb straight back over the lead we have
+        // evidence for. Two mechanisms for one promise, because the promise is
+        // the entire safety of turning a filter into a sort: the leads we have
+        // evidence for go out first, every run, and the rest wait on the bench.
+        // EVERY demotion reason, not just one. A business above the review
+        // ceiling, under its trade's review floor, or flagged by Google itself
+        // is returned behind everything by searchGooglePlaces and would climb
+        // straight back over a queue lead here on ICP score alone. A reason
+        // missing from this term is a demotion that survives the press and dies
+        // in the sort, which is the one way the bench promise can be broken
+        // without any gate changing.
+        //
+        // The star rating is NOT one of the reasons since Round 146, and both
+        // halves below dropped it together on purpose: Round 143A shipped a run
+        // where ba grew a reason and bb did not, so a flagged listing sorted
+        // FIRST whenever it happened to arrive before a clean lead. A
+        // comparator is two reads of one rule.
+        const ba = (a.aboveSizeCeiling || a.thinReviews || a.listingRisk) ? 1 : 0;
+        const bb = (b.aboveSizeCeiling || b.thinReviews || b.listingRisk) ? 1 : 0;
         if (ba !== bb) return ba - bb;
         const ta = tier(a), tb = tier(b);
         if (ta !== tb) return tb - ta;
@@ -42861,7 +43105,11 @@ const WEIGHTS = {
     const _large = [];
     for (const c of allScored) {
       if (_large.length >= _largeSlots) break;
-      if (!(c.aboveSizeCeiling === true && c.outsideBand !== true)) continue;
+      // Size ALONE. The second half of this test used to exclude a lead the star
+      // band had also demoted; the band no longer demotes anything, so asking
+      // about it here would be asking about a flag nothing sets - and a 4.9-star
+      // large company is exactly the email lead this slice exists to serve.
+      if (c.aboveSizeCeiling !== true) continue;
       if (_isKnown(c)) continue;
       _large.push(c);
     }
@@ -42995,10 +43243,11 @@ const WEIGHTS = {
         // 'read clean and left unknown' is not a verdict that their site is
         // fine. It means their markup showed nothing a visitor would wince at
         // and nobody looked at the page - the press never takes a picture.
-        _row('website read free - looks bad', _y.siteBad, false),
-        _row('website read free - looks dated', _y.siteDated, false),
-        _row('website read free - read clean and left unknown', _y.siteClean, false),
+        ...SITE_LOOKS_GRADES.map(_g => _row('website read free - graded ' + _g, _y['siteGrade_' + _g], false)),
+        _row('website read free - nothing a visitor could see, left not graded', _y.siteClean, false),
         _row('website refused a free read or was not reached', _y.siteUnread, false),
+        _row('size measured free off their own homepage', _y.sized, false),
+        _row('size not stated anywhere on their homepage', _y.notSized, false),
         _row('returned', scored.length, false),
         // Round 111: the TheirStack lane's leads by tier - the one lane whose
         // size is known at Find time. A Places lead is tiered on its contact read.
@@ -64041,7 +64290,12 @@ app.listen(PORT, () => {
     if (!_src.includes(_n('findOwnerViaBrain(website, fcKey, apiKey, homepageContent, companyName,', ' preFetchedPages, navLinks)'))) _fails.push('the navigation harvest does not reach the owner model');
     if (!_src.includes(_n('preFetchedPages: interior,\n', '        navLinks: links,'))) _fails.push('the contact route does not hand its navigation harvest to the owner ladder');
     // 7. Small ones.
-    if (!_src.includes(_n('if (!bbb.ok && !/^retired/.test(String(bbb.why)))', ' console.log(`SIZE ['))) _fails.push('the retired BBB rung still prints a line on every lead');
+    // ROUND 146: the rule moved. The retirement test used to sit in the same
+    // expression as the log call; the merge is a declared function now, so the
+    // silence is pinned where it actually is. Same rule, new home - re-aimed
+    // rather than dropped, because a per-lead line for a rung that is switched
+    // off is the "warning nobody reads" defect of Round 24.
+    if (!_src.includes(_n("if (_bbbMerge.why && !/^retired/.test(_bbbMerge.why))", ' console.log(`SIZE ['))) _fails.push('the retired BBB rung is no longer held silent, so a switched-off reader prints a refusal line on every lead again');
     if (!bizTitleUsable('Owner | Licensed General Contractor')) _fails.push('a title with a pipe after the ownership word is refused, so "Owner | Licensed General Contractor" drops the title (Yin & Yang, 2026-09-08)');
     if (!_src.includes(_n('mined.length > meta.totalReviews ? `${mined.length} reviews (their listing shows', ' ${meta.totalReviews})`'))) _fails.push('the review coverage line can still say "read 86 of 85"');
     if (_fails.length) console.log(`⛔ PLACE IS NOT A PERSON CHECK: ${_fails.join(' | ')}.`);
@@ -64338,13 +64592,20 @@ app.listen(PORT, () => {
       [_nd('if (apiKey && name &&', ' !out.notIcp) {'), 'a chain outlet still buys the paid owner wave'],
       [_nd('out.outlet = readOutletTell({ name, homeUrl:', ' ((pages || []).find(p'), 'the contact read no longer asks where their own Google listing points, so a branch on a brand site is read as an independent'],
       [_nd('const _headOffice = signals.branchNetwork', ' === true;'), 'the head-office rule no longer reads the branch mark'],
-      // Round 144: RE-AIMED. The line gained a second stand-down, so the old
-      // needle pinned a shape rather than the fact. Both stand-downs are
-      // asserted, separately, because losing either is its own live failure:
-      // the branch one cost 30 credits on 2026-09-04 and the ownerRisk one
-      // cost 21 on 2026-09-11.
-      [_nd('const paidOwner = opts.paidOwnerLookup !== false', ' && !_headOffice'), 'a branch of a national brand buys the paid owner wave again - ten credits and three minutes for a signer who sits at head office'],
-      [_nd(' && !_owner', 'Risk;'), 'the owner wave no longer stands down at a consolidated operator whose own pages name nobody - that is 21 of the 32 credits the 2026-09-11 batch spent, for three names that were never there'],
+      // Round 146: RE-AIMED again. Round 144's needle pinned ` && !_ownerRisk`
+      // on the paidOwner line - the shape where the stand-down switched the
+      // whole resolver to call-only and took the state licence register down
+      // with it. Vin's ruling of 2026-09-12 is searches down, licence kept, so
+      // these pin the three things that must now stay true: the branch
+      // stand-down, the page rule decided WITHOUT the category, and the flag
+      // reaching the resolver as the search switch rather than as call-only.
+      [_nd('const paidOwner = opts.paidOwnerLookup !== false', ' && !_headOffice;'), 'a branch of a national brand buys the paid owner wave again - ten credits and three minutes for a signer who sits at head office; or the page stand-down is back on this line, where it switches the whole resolver off and loses the licence register with it'],
+      [_nd('const _ownerRisk = FIND_OWNER_RISK_STANDDOWN &&',
+        ' ownPagesNameNobody(signals);'), 'the stand-down is no longer decided on their own pages alone - a category gate on this line is what let Glow Up, McCall and Bobcat spend 28 of the 68 credits in the 2026-09-12 batch, and about 620 seconds, looking for people nobody had named'],
+      [_nd('standDownSearchWave: ',
+        '_ownerRisk,'), 'the stand-down never reaches the owner resolver, so the searches are bought on a lead whose pages named nobody anyway'],
+      [_nd('const websearch = standDownSearchWave ? null : await findOwnerViaWeb',
+        'Search(companyName, website, fcKey, apiKey, location)'), 'the resolver ignores the search stand-down, or it stands the LICENCE stage down with it - that register is where a sole proprietor is filed and the only route left to Darrel on a lead whose own pages name nobody'],
       [_nd('out.paidOwnerRiskStandDown = ', '_ownerRisk;'), 'the row cannot say the owner wave was stood down, so a batch that saved the credits looks identical to one that never had the leads'],
       [_nd('if (website &&', ' !out.notIcp) {'), 'a chain outlet still buys the address lookup'],
       [_nd('out.nonprofit = readNonprofitEvidence({ pages,', ' links });'), 'the contact read no longer looks for nonprofit evidence at all'],
@@ -64535,7 +64796,26 @@ app.listen(PORT, () => {
       if (_hay.tier !== 'entry' || _hay.call !== true || _hay.email !== false || _hay.measured !== false) _fails.push('an unmeasured "low" lead is not entry / call only - the sheet word and the lane disagree again (Hayward)');
       const _nn = lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'none' });
       if (_nn.call !== false || _nn.noname !== true || _nn.email !== false || laneWord(_nn) !== 'no name yet') _fails.push('a read lead with nobody named is on the call sheet instead of the no-name bucket');
-      if (lanesFor({ tier: 'below_floor', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'none' }).noname !== false) _fails.push('a benched lead is in the no-name bucket');
+      // ══ ROUND 146: THE AFFORDABILITY FLOOR NO LONGER BENCHES ═══════════
+      // This asserted that a lead measured under $800k is off the call sheet.
+      // Vin asked whether the floor had been removed - "i thought we removed
+      // the floor ... did that never happen?" - and ruled the four published
+      // tiers start at zero, so "below the floor" is no longer a word a rep
+      // reads and no longer a bench. The lane now comes from the SIZE tier,
+      // and an unmeasured lead goes to the rep by design.
+      //
+      // Re-aimed to the rule that replaced it, and both halves asserted so it
+      // cannot pass on a lane that stopped reading anything: a lead measured
+      // over the top of the ICP gets no lane, and an unmeasured lead with
+      // nobody named is in the no-name bucket rather than silently dropped.
+      {
+        const _tiny = lanesFor({ tier: 'below_floor', sizeTier: 'very_small', sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', phone: true });
+        if (_tiny.call !== true) _fails.push('a business measured under the old $800k floor is off the call sheet - Vin removed that floor from the sheet on 2026-09-12 and the four published tiers start at zero');
+        const _huge = lanesFor({ sizeTier: SIZE_TIER_OVER, layers: 'owner', source: 'google_places', target: 'owner', phone: true });
+        if (_huge.call !== false || _huge.email !== false) _fails.push(`a business measured over ${ICP_REVENUE_BAND.ceiling / 1e6}M still has a lane (call ${_huge.call}, email ${_huge.email}) - over the top of the ICP is a drop, not a tier`);
+        const _nn = lanesFor({ layers: 'owner', source: 'google_places', target: 'none', phone: true });
+        if (_nn.noname !== true) _fails.push('a lead with an unmeasured size and nobody named is not in the no-name bucket, so it is neither on the call sheet nor visibly held back');
+      }
       if (lanesFor({ tier: 'core', layers: 'layered', source: 'google_places', target: 'none' }).noname !== true) _fails.push('a layered lead with nobody named is not in the no-name bucket (Round 114: layered stays on the sheet)');
       if (cityState('Phoenix AZ') !== 'Phoenix AZ' || cityState('Phoenix, Arizona') !== 'Phoenix AZ' || cityState('Dripping Springs TX') !== 'Dripping Springs TX' || cityState('1234 W Main St, Phoenix, AZ 85001') !== 'Phoenix AZ' || cityState('') !== '') _fails.push('the city parser still loses "Phoenix AZ" or "Phoenix, Arizona", so the licence search is skipped');
     }
@@ -64578,8 +64858,29 @@ app.listen(PORT, () => {
       const _c = scaleCuts(ICP_REVENUE_PER_EMPLOYEE), _t = scaleCuts(ICP_REVENUE_PER_TRUCK);
       if (Math.abs(ICP_REVENUE_BAND.coreFrom - ICP_PREMIUM_RETAINER_MONTHLY * 12 / ICP_MARKETING_SHARE) > 1) _fails.push('the core floor is not the premium retainer at the 10% rule - the ladder and the price list drifted apart');
       if (!OUR_PRICE_FIGURES.includes('$' + Math.round(ICP_PREMIUM_RETAINER_MONTHLY / 1000) + 'k')) _fails.push('the retainer the ladder is derived from is not a licensed price figure');
-      if (_c.entry !== 4 || _c.core !== 6 || _c.upper !== 50 || _c.ceiling !== 75) _fails.push(`the default staff cuts read ${JSON.stringify(_c)} - not 4 / 6 / 50 / 75 from $800k / $1.2M / $10M / $15M at $200k a head`);
-      if (_t.entry !== 3 || _t.core !== 4 || _t.upper !== 33 || _t.ceiling !== 50) _fails.push(`the truck cuts read ${JSON.stringify(_t)} - not 3 / 4 / 33 / 50 from the same four dollar lines at $300k a truck`);
+      // ROUND 146: these four were TYPED (4 / 6 / 50 / 75) against a $15M
+      // ceiling, so moving the cap to $20M turned a correct check red for the
+      // right reason. Derived from the one table now, which is what this file
+      // says every cut must be - a typed copy is the defect Round 139 exists
+      // for, and this check was itself a second copy of it.
+      const _want = { entry: Math.round(ICP_REVENUE_BAND.floor / ICP_REVENUE_PER_EMPLOYEE),
+                      core: Math.round(ICP_REVENUE_BAND.coreFrom / ICP_REVENUE_PER_EMPLOYEE),
+                      upper: Math.round(ICP_REVENUE_BAND.upperFrom / ICP_REVENUE_PER_EMPLOYEE),
+                      ceiling: Math.round(ICP_REVENUE_BAND.ceiling / ICP_REVENUE_PER_EMPLOYEE) };
+      if (_c.entry !== _want.entry || _c.core !== _want.core || _c.upper !== _want.upper || _c.ceiling !== _want.ceiling) {
+        _fails.push(`the default staff cuts read ${JSON.stringify(_c)} - not ${JSON.stringify(_want)}, which is the ICP table divided by ${ICP_REVENUE_PER_EMPLOYEE / 1000}k a head`);
+      }
+      if (_c.ceiling <= _c.upper || _c.upper <= _c.core || _c.core <= _c.entry) _fails.push(`the staff cuts are not in ascending order (${JSON.stringify(_c)}), so a bigger business can read as a smaller tier`);
+      // ROUND 146: typed against a $15M ceiling, same as the staff cuts above.
+      // Derived from the one table, which is what this file requires.
+      const _wantT = { entry: Math.round(ICP_REVENUE_BAND.floor / ICP_REVENUE_PER_TRUCK),
+                       core: Math.round(ICP_REVENUE_BAND.coreFrom / ICP_REVENUE_PER_TRUCK),
+                       upper: Math.round(ICP_REVENUE_BAND.upperFrom / ICP_REVENUE_PER_TRUCK),
+                       ceiling: Math.round(ICP_REVENUE_BAND.ceiling / ICP_REVENUE_PER_TRUCK) };
+      if (_t.entry !== _wantT.entry || _t.core !== _wantT.core || _t.upper !== _wantT.upper || _t.ceiling !== _wantT.ceiling) {
+        _fails.push(`the truck cuts read ${JSON.stringify(_t)} - not ${JSON.stringify(_wantT)}, which is the same four dollar lines at ${ICP_REVENUE_PER_TRUCK / 1000}k a truck`);
+      }
+      if (_t.ceiling <= _t.upper || _t.upper <= _t.core || _t.core <= _t.entry) _fails.push(`the truck cuts are not ascending (${JSON.stringify(_t)})`);
       // ══ ROUND 139 (Vin, 2026-09-11): ONE NUMBER MOVED AND ONE DID NOT ════
       // Round 114 (Vin, 2026-09-03) put the call cap at $35M and the owner-run
       // reach line at $50M. Two numbers, two different questions, and only the
@@ -64599,9 +64900,31 @@ app.listen(PORT, () => {
       // round's first draft did, at ten sevenths) lets a FIT decision silently
       // move a REACHABILITY one, and leaves the ratio as a second copy of a
       // fact nothing else reads, waiting to drift.
-      if (ICP_REVENUE_BAND.ceiling !== 15e6) _fails.push(`the call cap is $${ICP_REVENUE_BAND.ceiling / 1e6}M - Vin ruled $15M on 2026-09-11, reversing his own $35M of 2026-09-03, because the written ICP says $800k-$15M and the code had drifted away from it`);
+      // ══ ROUND 139'S ANTI-DRIFT GUARD, STILL DOING ITS JOB ══════════════
+      // It went red the moment the cap moved, which is exactly right: this is
+      // the one guard standing between a strategic lever and two hand-kept
+      // copies of it. Re-aimed to Vin's 2026-09-12 ruling of $20M, which
+      // unlike either number before it has evidence under it - cold email
+      // reply halving near 100 people, agency buying giving way to in-house
+      // at $20-25M, and a PE platform acquisition in these trades starting at
+      // $20M. The doc moved in the same commit; if you are reading this
+      // because it is red again, change business-and-icp FIRST.
+      if (ICP_REVENUE_BAND.ceiling !== 20e6) _fails.push(`the ICP ceiling is ${ICP_REVENUE_BAND.ceiling / 1e6}M - Vin ruled $20M on 2026-09-12 on researched evidence (100 people at $200k a head; above it marketing goes in-house and PE buys the operator), superseding the $15M of 2026-09-11 and the $35M of 2026-09-03. Change the skill doc business-and-icp in the same commit or the two copies drift, which is the defect Round 139 exists for`);
+      if (ICP_CALL_REACH_CEILING <= ICP_REVENUE_BAND.ceiling) _fails.push('the owner-run reach line is not above the ICP ceiling, so the rule that keeps a founder-run business callable above the cap can never fire');
       if (ICP_CALL_REACH_CEILING !== 50e6) _fails.push(`the owner-run reach line is $${ICP_CALL_REACH_CEILING / 1e6}M - Vin ruled $50M and re-affirmed it on 2026-09-11 by putting a $24M founder-run roofer in BOTH lanes; the cap is a fit line and it moved, this is a reachability line and it did not, so it is never derived from the cap`);
-      if (tierFromRevenue(14e6) !== 'upper' || tierFromRevenue(16e6) !== 'over_ceiling') _fails.push(`a $14M business reads "${tierFromRevenue(14e6)}" and a $16M one reads "${tierFromRevenue(16e6)}" - under a $15M cap the first is high and callable and the second is over the cap`);
+      // ROUND 146: $14M and $16M were typed either side of a $15M cap. Both
+      // sides derived now, so a cap that moves again cannot leave this green
+      // on two revenues that sit on the same side of it.
+      const _justUnder = ICP_REVENUE_BAND.ceiling - 1e6, _justOver = ICP_REVENUE_BAND.ceiling + 1e6;
+      if (tierFromRevenue(_justUnder) !== 'upper' || tierFromRevenue(_justOver) !== 'over_ceiling') {
+        _fails.push(`${_justUnder / 1e6}M reads "${tierFromRevenue(_justUnder)}" and ${_justOver / 1e6}M reads "${tierFromRevenue(_justOver)}" - either side of the ${ICP_REVENUE_BAND.ceiling / 1e6}M cap the first must be the top in-range tier and the second over it`);
+      }
+      // And the SAME two revenues through Vin's four-word ladder, which is the
+      // one a rep reads. Two ladders on one business must agree about which
+      // side of the ceiling it falls on, or the sheet and the lane disagree.
+      if (sizeTierFromRevenue(_justUnder) !== 'large' || sizeTierFromRevenue(_justOver) !== SIZE_TIER_OVER) {
+        _fails.push(`the four-word ladder reads ${_justUnder / 1e6}M as "${sizeTierFromRevenue(_justUnder)}" and ${_justOver / 1e6}M as "${sizeTierFromRevenue(_justOver)}" - it must agree with the affordability ladder about the ceiling, because the row prints one and the lane reads the other`);
+      }
       if (!LANE_TIERS.email.includes('over_ceiling') || LANE_TIERS.call.includes('over_ceiling')) _fails.push('the email lane has a ceiling again, or the call lane lost its cap');
       if (!(ICP_CALL_REACH_CEILING > ICP_REVENUE_BAND.ceiling)) _fails.push('the reach line is not above the call cap, so the owner-run override can never fire');
       if (tierFromCount(_c.core - 1, _c) !== 'entry' || tierFromCount(_c.core, _c) !== 'core' || tierFromCount(_c.upper, _c) !== 'core' || tierFromCount(_c.upper + 1, _c) !== 'upper' || tierFromCount(_c.ceiling, _c) !== 'upper' || tierFromCount(_c.ceiling + 1, _c) !== 'over_ceiling' || tierFromCount(_c.entry - 1, _c) !== 'below_floor') _fails.push('the tier boundaries do not sit on the cuts');
@@ -64623,10 +64946,26 @@ app.listen(PORT, () => {
       if (parseStatedRevenue('$25,300,000') !== 25300000 || parseStatedRevenue('$5M') !== 5e6 || parseStatedRevenue('about 12 employees') !== null) _fails.push('a directory\'s revenue string is misread');
       // The lanes, both ways.
       const _ln = (o) => laneWord(lanesFor(o));
-      if (_ln({ tier: 'core', layers: 'owner', source: 'google_places', target: 'owner' }) !== 'call + email') _fails.push('Darrel at $5M is not in both lanes');
+      // ══ ROUND 146: ONE LANE PER LEAD, NOT BOTH ════════════════════════
+      // This required Darrel to be in BOTH lanes. Vin's 2026-09-12 framing is
+      // two disjoint exports - "we need to edport given ones to call for the
+      // rep and send ones to research that will be emailed" - and the old
+      // overlap meant nearly every row read "call + email", which is not a
+      // decision. Darrel at $5M is MEDIUM, and medium is under the $10M line
+      // where somebody other than the owner starts owning marketing, so he is
+      // a call. Named as a deliberate narrowing: a business we cannot reach by
+      // phone no longer falls through to email on its own, and that is a
+      // trade to revisit when the email side is actually being worked.
+      if (_ln({ tier: 'core', sizeTier: 'medium', layers: 'owner', source: 'google_places', target: 'owner', phone: true }) !== 'call') _fails.push('Darrel at $5M is not a call - medium sits under the $10M line where the owner still decides marketing');
+      if (_ln({ tier: 'upper', sizeTier: 'large', layers: 'layered', source: 'google_places', target: 'marketing_lead', phone: true }) !== 'email') _fails.push('a $15M business with a named marketing head is not an email lead - above $10M a GM and a sales manager exist and the owner has stopped deciding');
       // Round 114 (Vin: "it's better to never find out if we cut it"): layered stays on the sheet, LAST.
       const _lc = lanesFor({ tier: 'core', layers: 'layered', source: 'google_places', target: 'marketing' });
-      if (laneWord(_lc) !== 'call + email' || _lc.last !== true || !/last/.test(_lc.why)) _fails.push(`a layered core business is not on the call sheet last and in the email lane (got ${laneWord(_lc)}, last ${_lc.last})`);
+      // ROUND 146: was "call + email"; one lane now. Round 114's ruling is
+      // the part that must survive and is asserted unchanged: a layered
+      // business under the cap STAYS on the call sheet and is ranked LAST,
+      // with the reason on the row - Vin, "it's better to never find out if
+      // we cut it". Only the second lane is gone.
+      if (laneWord(_lc) !== 'call' || _lc.last !== true || !/last/.test(_lc.why)) _fails.push(`a layered in-range business is not on the call sheet ranked last with the reason on the row (got ${laneWord(_lc)}, last ${_lc.last}) - Round 114 keeps it callable and marked, and only the duplicate email lane was removed`);
       const _lu = lanesFor({ tier: 'upper', layers: 'layered', source: 'google_places', target: 'owner' });
       if (laneWord(_lu) !== 'call + email' || _lu.last !== true) _fails.push('a layered upper business whose only name is the owner is off the call sheet');
       if (lanesFor({ tier: 'core', layers: 'owner', source: 'google_places', target: 'owner' }).last !== false) _fails.push('an owner-run core business is ranked last');
@@ -64875,6 +65214,41 @@ app.listen(PORT, () => {
     }
     if (/Chrome\/\d+\.\d+ Safari/.test(String(fetchBbbProfile))) _fails.push('the BBB fetch is back on a two-part Chrome version, which no browser has ever sent');
     if (!(DM_SOURCE_WEIGHT.bbb_profile > 0)) _fails.push('the BBB manager has no source weight, so the ranker scores it as nothing');
+    // ══ ROUND 146: THE CREDITS THE MERGE THREW AWAY ═════════════════
+    // Live, on every lead whose size search surfaced a bbb.org URL:
+    //   findSizeViaSearch failed: Cannot read properties of undefined
+    //   RETURNED: null
+    // The retired read answers ok:false with NO management key, the merge was
+    // guarded on the shape of its WHY rather than on ok, and the next line
+    // asked the missing key for a length. The Firecrawl credits and the Haiku
+    // call were already spent; the size they bought was dropped and the lead
+    // guessed its tier off a review count. Executed on every shape
+    // fetchBbbProfile can return, with the retirement's own words.
+    {
+      const _url = 'https://www.bbb.org/us/nc/raleigh/profile/roofing/acme-roofing-0593-90314457';
+      const _shapes = [
+        ['the retirement', { ok: false, why: 'retired - 403 on every attempt across two batches' }],
+        ['an HTTP status', { ok: false, why: 'HTTP 403' }],
+        ['a thrown fetch', { ok: false, why: 'fetch failed' }],
+        ['a timed-out fetch', { ok: false, why: 'timeout' }],
+        ['nothing at all', null],
+        ['a profile with no management list', { ok: true, employees: 14, started: 2001 }],
+      ];
+      for (const [_say, _shape] of _shapes) {
+        let _m = null;
+        try { _m = sizeBbbMerge({ revenue: '$4M', source: 'Growjo' }, _url, _shape); }
+        catch (e) { _fails.push(`the BBB merge THROWS when the profile read answers ${_say} (${(e && e.message) || e}) - so a lead whose size search found a bbb.org URL loses the headcount and revenue its Firecrawl credits and its model call already bought, and guesses its tier off a review count`); continue; }
+        if (!_m || !_m.parsed || _m.parsed.revenue !== '$4M') _fails.push(`the BBB merge drops a size already parsed when the profile read answers ${_say}, so the credits that bought it are wasted`);
+        try { if (sizeBbbManagementCount(_m && _m.parsed) !== 0) _fails.push(`the BBB management count is not zero when the profile read answers ${_say}, which is a list nobody read`); }
+        catch (e) { _fails.push(`counting the BBB management list THROWS when the profile read answers ${_say} (${(e && e.message) || e})`); }
+      }
+      if (sizeBbbMerge({ revenue: '$4M' }, _url, { ok: false, why: 'HTTP 403' }).why !== 'HTTP 403') _fails.push('a refused BBB profile does not hand back its status, so the log cannot name the cause it actually got');
+      if (sizeBbbMerge({ revenue: '$4M' }, _url, { ok: false, why: 'retired - 403 on every attempt across two batches' }).why.indexOf('retired') !== 0) _fails.push('the retirement no longer reads as retired to the caller, so every lead prints a refusal line about a read nobody asked for');
+      const _live = sizeBbbMerge(null, _url, { ok: true, employees: 12, started: 2005, management: [{ name: 'John Smith', title: 'Owner' }] });
+      if (!_live.parsed || _live.parsed.employees !== 12 || _live.parsed.source !== 'BBB profile') _fails.push('a parsed BBB profile no longer supplies the headcount when the directories found none');
+      if (sizeBbbManagementCount(_live.parsed) !== 1) _fails.push('a BBB profile naming one manager counts as zero, so the free owner source the size search finds is dropped and the lookup returns nothing');
+      if (sizeBbbManagementCount(undefined) !== 0 || sizeBbbManagementCount({}) !== 0 || sizeBbbManagementCount({ bbb: {} }) !== 0) _fails.push('the management count throws or lies on a lead with no BBB profile at all');
+    }
     // 5. The call sites.
     const _src = selfSourceNoCommentsLF();
     const _n = (a, b) => a + b;
@@ -64886,7 +65260,8 @@ app.listen(PORT, () => {
       [_n('&& !retiredNear(corpus, ', '_fallbackName) && !ownerNameDoor(_fallbackName, companyName)) {'), 'the regex backstop ships a retired name'],
       [_n('retired, deceased or a former owner', ', do NOT report them'), 'the web-search prompt no longer warns about retired people'],
       [_n('const n = countTeamNames(p.html', ' || p.text);'), 'the team page is no longer counted without titles'],
-      [_n('const bbb = await fetchBbbProfile(', 'bbbUrl);'), 'the size lookup no longer fetches the BBB profile'],
+      [_n('sizeBbbMerge(parsed, bbbUrl, await fetchBbbProfile(', 'bbbUrl));'), 'the size lookup no longer fetches the BBB profile, or it merges the answer inline again instead of through the one guarded merge - inline, a refusal fell through to the success arm and threw away a size the credits had already bought'],
+      [_n('!(sizeBbbManagementCount(', 'parsed) > 0))) return null;'), 'the decision to return nothing reads the BBB management list directly again, so a refusal with no management key throws on the line that reads its length'],
       [_n("source: 'bbb_profile'", ', evidence:'), 'the BBB manager never reaches the owner ladder when nobody else named anyone'],
       [_n('if (crews.n !== null) staff = { n: crews.n * 3,', " say: crews.say + ' (about 3 a crew)' };"), 'crews are no longer read as a labelled headcount'],
     ]) if (!_src.includes(needle)) _fails.push(msg);
@@ -65162,39 +65537,66 @@ app.listen(PORT, () => {
     if ('looks' in _keep) _fails.push('the markup grader is now producing the visual verdict itself, so one function decides both and the audit can no longer be changed without changing the toggle');
     if (/visionSiteLooks|fcHomeShot/.test(String(readSiteBuild))) _fails.push('the free markup read now renders or looks at a picture - it must stay pure over markup already in hand');
 
-    // ── 2. THE NEW VERDICT, EXECUTED, IN EVERY DIRECTION ───────────────────
+    // ── 2. THE ONE GRADE, EXECUTED, IN EVERY DIRECTION ─────────────────────
+    // FOUR WORDS and one derivation. Round 142 scored the picture and the
+    // markup TOGETHER and the markup won 15 points to 9, which is how three
+    // real leads with zero vision faults were graded bad. Everything in this
+    // section EXECUTES the grader on fixtures; nothing here reads source to
+    // decide a band.
+    //
+    // The technical fault objects the free read hands over, in the shape
+    // readSiteBuild actually builds them - and for the dated build, the visible
+    // marker sentences that must travel WITH it or it grades nothing.
+    const _F = (id, group, points, say) => ({ id, group, points, say });
+    const _datedFault = (seen) => Object.assign(_F('datedBuild', 'build', 5, 'the build is years out of date'), { seen: seen || [] });
     const _eyes = (o) => Object.assign({ isRealHomepage: true, fullyRendered: true, designEra: 'current',
       templateUntouched: false, desktopOnlyLayout: false, photosLookCheap: false, looksCredible: true,
+      hasVisibleAsk: true,
       whatAVisitorSees: 'a clean page with a photograph of a crew and a quote button' }, o || {});
-    const _modern = readSiteLooks(_eyes());
-    if (_modern.looks !== 'modern' || _modern.measured !== true) _fails.push(`a current design with nothing wrong with it reads as "${_modern.looks}"`);
-    const _dated = readSiteLooks(_eyes({ designEra: 'old' }));
-    if (_dated.looks !== 'dated') _fails.push(`a design a visitor can see is years out of date reads as "${_dated.looks}"`);
-    const _bad = readSiteLooks(_eyes({ designEra: 'old', templateUntouched: true, looksCredible: false }));
-    if (_bad.looks !== 'bad') _fails.push(`an old, untouched template a stranger would not trust reads as "${_bad.looks}"`);
-    if (!/out of date/.test(_bad.why) || !/template/.test(_bad.why)) _fails.push('the visual verdict names no reason a person could check, so the rep is handed a word and nothing behind it');
-    // THE RULING (Vin): an unreadable site is KEPT and marked unknown, and
-    // unknown must never be mistakable for modern.
-    for (const [_v, _what] of [
-      [null, 'no picture at all'],
-      [_eyes({ isRealHomepage: false }), 'a block or error page'],
-      [_eyes({ fullyRendered: false }), 'a page caught still loading'],
-      [_eyes({ designEra: '' }), 'a model that answered nothing about the design'],
-    ]) {
-      const _u = readSiteLooks(_v);
-      if (_u.looks !== 'unknown' || _u.measured !== false) _fails.push(`${_what} produces "${_u.looks}" (measured ${_u.measured}) instead of an unmeasured unknown - "we could not look" would be read as "it looks fine"`);
+    const _good = readSiteLooks(_eyes());
+    if (_good.looks !== 'good' || _good.measured !== true) _fails.push(`a current design with a visible way to ask for the job reads as "${_good.looks}" rather than good`);
+    const _fair = readSiteLooks(_eyes({ designEra: 'aging' }));
+    if (_fair.looks !== 'fair') _fails.push(`a design the eyes call "starting to show its age" reads "${_fair.looks}" rather than fair - Vin asked for the fair websites as well as the bad ones`);
+    const _badEyes = readSiteLooks(_eyes({ designEra: 'old' }));
+    if (_badEyes.looks !== 'bad') _fails.push(`a design a visitor can see is years out of date reads "${_badEyes.looks}" rather than bad`);
+    const _poor = readSiteLooks(_eyes({ designEra: 'old', hasVisibleAsk: false }));
+    if (_poor.looks !== 'poor') _fails.push(`a page that is plainly out of date AND gives a visitor nothing to click reads "${_poor.looks}" - both of Vin's two questions answered badly is what the bottom band is for`);
+    if (!/out of date/.test(_poor.why) || !/ask for the job/.test(_poor.why)) _fails.push('the website grade names no reason a person could check, so the rep is handed a word and nothing behind it');
+    // THE FOUR WORDS, and the fifth that is not a grade.
+    if (SITE_LOOKS_GRADES.join(',') !== 'poor,bad,fair,good') _fails.push(`the published grade's words are now ${SITE_LOOKS_GRADES.join(', ')} - Vin asked for ONE grade in four words, poor worst, and the rep's cell and the toggle both read this list`);
+    if (SITE_LOOKS_GRADES.indexOf('unknown') >= 0) _fails.push('"unknown" has become one of the grades, so a site nobody looked at can be collected by a toggle asking for the bad ones');
+    for (const _w of [_good.looks, _fair.looks, _badEyes.looks, _poor.looks, readSiteLooks(null).looks]) {
+      if (!SITE_LOOKS_WORDS.includes(_w)) _fails.push(`the website grade produced "${_w}", which is not one of the ${SITE_LOOKS_WORDS.length} words the row, the client and the toggle know`);
     }
-    if (readSiteLooks(null).looks === readSiteLooks(_eyes()).looks) _fails.push('a site nobody looked at and a site that looked fine produce the same word');
-    // An absent answer is not a fault: only an explicit one may score.
-    if (readSiteLooks({ isRealHomepage: true, fullyRendered: true, designEra: 'current' }).looks !== 'modern') {
-      _fails.push('a model that answered the design question and skipped the rest is scoring faults it never reported');
-    }
-    for (const _w of [_modern.looks, _dated.looks, _bad.looks, readSiteLooks(null).looks]) {
-      if (!SITE_LOOKS_WORDS.includes(_w)) _fails.push(`the visual verdict produced "${_w}", which is not one of the ${SITE_LOOKS_WORDS.length} declared words the row and the toggle know`);
+    // ── 2b. ONE DERIVATION, BOTH HALVES ────────────────────────────────────
+    // The word and the 1-10 number come off the same score whichever half
+    // produced it, so the eyes and the free code read cannot band one business
+    // two ways - two hand-kept copies of one rule is the class this file
+    // records most. Four points of visible damage is four points either way.
+    {
+      const _byEyes = readSiteLooks(_eyes({ designEra: 'old' }));
+      const _byMarkup = readSiteLooks(null, 'the picture never came back',
+        [_datedFault(['the page is still laid out with tables', 'it is still on plain http'])]);
+      if (_byEyes.score !== _byMarkup.score) _fails.push(`the two halves score the same amount of visible damage differently (${_byEyes.score} by eye, ${_byMarkup.score} off their own code), so one derivation has become two`);
+      if (_byEyes.looks !== _byMarkup.looks || _byEyes.grade !== _byMarkup.grade) _fails.push(`a score of ${_byEyes.score} reads "${_byEyes.looks}"/${_byEyes.grade} of 10 by eye and "${_byMarkup.looks}"/${_byMarkup.grade} off their code - one business, two verdicts`);
+      if (_byEyes.from !== 'eyes' || _byMarkup.from !== 'markup') _fails.push('the row is not told which half graded the site, so a verdict somebody looked at and one read off markup arrive identical');
+      for (let _s = 0; _s <= SITE_LOOKS_MAX; _s++) {
+        if (!SITE_LOOKS_GRADES.includes(SITE_LOOKS_WORD(_s))) _fails.push(`a score of ${_s} bands to "${SITE_LOOKS_WORD(_s)}", which is not one of the four words`);
+        if (!(SITE_LOOKS_GRADE(_s) >= 1 && SITE_LOOKS_GRADE(_s) <= 10)) _fails.push(`a score of ${_s} grades ${SITE_LOOKS_GRADE(_s)} of 10, outside the 1-10 the rep reads`);
+        if (_s === 0) continue;
+        // MONOTONIC: more visible damage may never read better.
+        if (SITE_LOOKS_GRADES.indexOf(SITE_LOOKS_WORD(_s)) > SITE_LOOKS_GRADES.indexOf(SITE_LOOKS_WORD(_s - 1))) {
+          _fails.push(`a score of ${_s} reads BETTER ("${SITE_LOOKS_WORD(_s)}") than ${_s - 1} ("${SITE_LOOKS_WORD(_s - 1)}")`);
+        }
+        if (SITE_LOOKS_GRADE(_s) > SITE_LOOKS_GRADE(_s - 1)) _fails.push(`a score of ${_s} grades higher out of 10 than ${_s - 1}`);
+      }
+      // The bands themselves, in the order the words are declared in.
+      if (!(SITE_LOOKS_FAIR < SITE_LOOKS_BAD && SITE_LOOKS_BAD < SITE_LOOKS_POOR)) _fails.push(`the band edges are out of order (fair ${SITE_LOOKS_FAIR}, bad ${SITE_LOOKS_BAD}, poor ${SITE_LOOKS_POOR}), so a worse site can read better`);
     }
     for (const t of SITE_LOOKS_FAULTS) {
-      if (!(t.points > 0) || !t.say || !t.id) _fails.push(`the visual fault "${t.id}" is declared without its points or its sentence`);
-      if (/schema|alt text|robots|noindex|title tag/i.test(t.say)) _fails.push(`the visual fault "${t.id}" is describing something invisible - those already have a home in the markup grade`);
+      if (!(t.points > 0) || !t.say || !t.id) _fails.push(`the visible fault "${t.id}" is declared without its points or its sentence - a fault that fires with no words behind it is Round 142's empty evidence field`);
+      if (t.from !== 'eyes' && t.from !== 'markup') _fails.push(`the visible fault "${t.id}" does not say which half may raise it, so something read off markup can be reported as something a person saw`);
+      if (/schema|alt text|robots|noindex|title tag|website-builder|Squarespace|Wix/i.test(t.say)) _fails.push(`the visible fault "${t.id}" is describing something invisible - those already have a home in the technical gap`);
     }
 
     // ── 3. WHO PAYS FOR A RENDER, EXECUTED ────────────────────────────────
@@ -65279,63 +65681,183 @@ app.listen(PORT, () => {
       if (!(_iBuy < _iWave)) _fails.push('the render sits after the paid owner wave, so a lead that drops between them has already bought both');
     }
 
-    // ══ ROUND 142: THE VERDICT COULD NOT FLAG ANYTHING, AND THE FREE READ
-    //              ALREADY KNEW ══════════════════════════════════════════
-    // Round 141 shipped this reading the picture alone and it returned
-    // 'modern' on all nine leads of the 2026-09-11 run. Two causes, and both
-    // are asserted below on the leads themselves.
-    //
-    // A fixture supplies its own arguments, so the CALL SITE is pinned too:
-    // the free half must be read off the GROUP, because a hand-kept list of
-    // ids is the shape that stops catching the fault somebody adds next.
+    // ══ ROUND 146: ONLY WHAT A VISITOR CAN SEE MAY DECIDE THE GRADE ══════
+    // Round 142's calibrated fixtures (Brick and Stone -> bad, Tranquility
+    // Place -> bad, Journey Treatment -> dated) were derived from the ADDITIVE
+    // score, which no longer exists, so every one of them is RE-DERIVED below
+    // from the new bands and its new answer is stated with the reason. A guard
+    // nobody can trip still reads as coverage, which is worse than no guard.
     {
-      const _D = (id, group, points, say) => ({ id, group, points, say });
-      const _datedB = _D('datedBuild', 'build', 5, 'the build is years out of date');
-      const _diy = _D('diyBuilder', 'build', 3, 'it is a DIY website-builder template');
-      const _noForm = _D('noForm', 'converts', 4, 'there is no enquiry form anywhere we read');
-      const _schema = _D('noSchema', 'geo', 5, 'no business schema in their code');
-      const _look = (era, code) => readSiteLooks({ designEra: era, isRealHomepage: true, fullyRendered: true,
-        templateUntouched: false, photosLookCheap: false, looksCredible: true, whatAVisitorSees: '' }, '', code);
+      const _diy = _F('diyBuilder', 'build', 3, 'it is a DIY website-builder template');
+      const _noTel = _F('noClickToCall', 'converts', 3, 'the phone number is not tappable on a phone');
+      const _noForm = _F('noForm', 'converts', 4, 'there is no enquiry form anywhere we read');
+      const _schema = _F('noSchema', 'geo', 5, 'no business schema in their code');
+      // The seven faults nobody can see. Every one of them is real, every one
+      // of them feeds the audit, and not one of them is a thing a person meets
+      // on a page: a builder fingerprint, a schema block, a robots rule, a
+      // JavaScript shell, a noindex tag, a title tag and alt text.
+      const _invisible = [_diy, _schema,
+        _F('noindex', 'seo', 5, 'their own code tells search engines not to index the page'),
+        _F('jsOnly', 'geo', 4, 'the page is painted by JavaScript'),
+        _F('blocksAi', 'geo', 2, 'their robots.txt tells the AI crawlers to stay out'),
+        _F('weakTitle', 'seo', 2, 'the page title is a default'),
+        _F('thinAlt', 'seo', 1, 'most images carry no alt text')];
 
-      // The three live leads, by name, with the faults their own logs carried.
-      const _brick = _look('aging', [_datedB, _diy]);
-      if (_brick.looks !== 'bad') _fails.push(`Brick and Stone of NC - a build years out of date AND a DIY template, with eyes that call the design aging - reads "${_brick.looks}", and on 2026-09-11 it read modern while the line above it in the same log said both of those things`);
-      const _tranq = _look('aging', [_diy, _noForm]);
-      if (_tranq.looks !== 'bad') _fails.push(`Tranquility Place - a DIY template with no enquiry form and an aging design - reads "${_tranq.looks}"`);
-      const _journey = _look('current', [_datedB]);
-      if (_journey.looks !== 'dated') _fails.push(`Journey Treatment Center - a build years out of date, which the eyes did not notice - reads "${_journey.looks}", so the free read that DID notice is being thrown away`);
+      // ── 1. THE THREE LEADS OF 2026-09-11, one shape, EXECUTED ──────────
+      // diyBuilder (3) + noClickToCall (3) hit the old bad band exactly, so
+      // SLC Med Spa, Winn's Plumbing and Locust Pump were each told their
+      // website was bad with the eyes reporting nothing wrong at all.
+      const _slc = readSiteLooks(_eyes({ designEra: 'current' }), '', [_diy, _noTel]);
+      if (SITE_LOOKS_GRADES.indexOf(_slc.looks) < SITE_LOOKS_GRADES.indexOf('fair')) {
+        _fails.push(`SLC Med Spa, Winn's Plumbing and Locust Pump share one shape - a DIY builder, a phone that will not dial, and a homepage the eyes call current - and it reads "${_slc.looks}". All three were graded bad on 2026-09-11 on two faults no visitor could ever meet`);
+      }
+      // And with nobody looking, the only visible thing left in that markup is
+      // a phone that will not dial, worth one point.
+      const _slcBlind = readSiteLooks(null, 'the render timed out', [_diy, _noTel]);
+      if (_slcBlind.measured === true && SITE_LOOKS_GRADES.indexOf(_slcBlind.looks) < SITE_LOOKS_GRADES.indexOf('fair')) {
+        _fails.push(`the same three leads with no picture read "${_slcBlind.looks}" off their code, and the only visible thing in that code is a phone that will not dial`);
+      }
 
-      // Vin, 2026-09-11: "'Starting to show its age' counts as dated".
-      const _aging = _look('aging', []);
-      if (_aging.looks !== 'dated') _fails.push(`a design the eyes call "starting to show its age" reads "${_aging.looks}" - Vin ruled on 2026-09-11 that it counts as dated, because he asked for the fair websites as well as the bad ones`);
-      if (_look('current', []).looks !== 'modern') _fails.push('a current page with nothing wrong either side still reads as a site worth collecting, so the toggle would hand the rep every lead');
+      // ── 2. EVERY PAIR OF THE INVISIBLE FAULTS, EXECUTED ────────────────
+      // 21 pairs. With a picture in hand none of them may move the grade AT
+      // ALL; with no picture none of them may produce a grade at all, and
+      // certainly not the bottom band.
+      for (let _i = 0; _i < _invisible.length; _i++) for (let _j = _i + 1; _j < _invisible.length; _j++) {
+        const _pair = [_invisible[_i], _invisible[_j]];
+        const _names = _pair.map(f => f.id).join(' + ');
+        const _seenBy = readSiteLooks(_eyes(), '', _pair);
+        if (_seenBy.looks !== _good.looks || _seenBy.score !== _good.score) {
+          _fails.push(`${_names} moved the grade of a page somebody actually looked at from "${_good.looks}" to "${_seenBy.looks}" - the markup out-voting the eyes is the defect this round exists to remove`);
+        }
+        const _blindBy = readSiteLooks(null, 'the render timed out', _pair);
+        if (_blindBy.looks === 'poor') _fails.push(`${_names} alone grades a website "poor", and neither of them is a thing a visitor can see`);
+        if (_blindBy.measured !== false) _fails.push(`${_names} with nobody looking produces a GRADE ("${_blindBy.looks}") instead of "not graded" - Round 142's markup rescue, rebuilt out of faults no visitor meets`);
+      }
 
-      // The invisible half must stay out of it. A schema tag is real, it
-      // feeds the audit, and no visitor has ever seen one.
-      if (_look('current', [_schema]).looks !== 'modern') _fails.push('a missing schema tag alone now makes a website look bad to a visitor, which is the exact defect this round was asked to remove - it crosses a band on a fault nobody can see');
+      // ── 3. TWO VISIBLE AGE MARKERS AND NOTHING ELSE ────────────────────
+      // Read end to end through the REAL free markup read, not from a
+      // hand-made fault: a 2016 table-layout page on plain http, so that the
+      // sentences readSiteAge writes are the ones the grade names.
+      const _oldHtml = '<html><head><title>Roof Repair in Dallas | Pinned Roofing</title></head><body>'
+        + '<table width="900" border="1"><tr><td>' + _body + '</td></tr></table>'
+        + '<table width="900" cellpadding="4"><tr><td><a href="tel:2145550100">Call</a> <a href="/about">About</a> <a href="/contact">Contact</a></td></tr></table>'
+        + '<form action="/enquire"><input name="e"></form><p>&copy; 2016 Pinned Roofing</p></body></html>';
+      const _oldRead = readSiteBuild({ pages: [{ url: 'http://pinned.com/', finalUrl: 'http://pinned.com/',
+        intent: 'home', text: _body + ' (c) 2016 Pinned Roofing', html: _oldHtml }],
+        website: 'http://pinned.com/', companyName: 'Pinned Roofing', city: 'Dallas, TX', trade: 'Roofing',
+        robots: 'User-agent: *\nAllow: /' });
+      const _agedF = (_oldRead.faults || []).find(f => f.id === 'datedBuild');
+      if (!_agedF) {
+        _fails.push('a 2016 table-layout build served over plain http no longer reports a dated build at all, so the design-age half of the published grade has nothing to read');
+      } else if (!Array.isArray(_agedF.seen) || _agedF.seen.filter(Boolean).length < 2) {
+        _fails.push(`the dated-build fault reaches the grade carrying ${(_agedF.seen || []).length} marker sentence(s) instead of the two visible ones readSiteAge found - the published grade cannot then name anything a person could go and check, which is Round 142 shipping the claim with its evidence field empty`);
+      } else {
+        const _fromReal = readSiteLooks(null, 'the render came back empty', _oldRead.faults);
+        if (SITE_LOOKS_GRADES.indexOf(_fromReal.looks) > SITE_LOOKS_GRADES.indexOf('bad')) {
+          _fails.push(`a homepage laid out in tables, pinned to 900px, on plain http and stamped 2016 reads "${_fromReal.looks}" rather than bad or worse, so readSiteAge's own visible flag still decides nothing`);
+        }
+        for (const _m of _agedF.seen) if (String(_fromReal.why).indexOf(_m) < 0) {
+          _fails.push(`the grade does not name the marker "${_m}" behind it, so the rep is told a website is bad and cannot say what a visitor would see`);
+        }
+        if (!/read free from their own markup/.test(_fromReal.why)) _fails.push('a verdict resting on their own code does not say so, so a rep cannot tell it from one where somebody looked at the page');
+      }
+      // ONE marker is a quirk, and readSiteAge says so where it declares the
+      // rule. One visible sentence may not grade a business.
+      const _one = readSiteLooks(null, 'the render came back empty', [_datedFault(['it is still on plain http'])]);
+      if (_one.measured !== false) _fails.push(`one age marker on its own grades a website "${_one.looks}" - readSiteAge declares two as the point where an impression becomes evidence`);
+      // A dated build whose markers are ALL invisible grades nothing: that is
+      // the exact fault that fired with agedSay empty in Round 142.
+      const _noEvidence = readSiteLooks(null, 'the render came back empty', [_datedFault([])]);
+      if (_noEvidence.measured !== false) _fails.push(`a dated build whose age markers are all invisible grades "${_noEvidence.looks}" off a sentence with nothing behind it`);
 
-      // The eyes blind, the markup not. This lead is still judged.
-      const _blind = readSiteLooks(null, 'the picture never came back', [_datedB, _diy]);
-      if (_blind.looks !== 'bad' || _blind.measured !== true) _fails.push(`a lead whose picture failed but whose markup says the build is years out of date and it is a DIY template reads "${_blind.looks}" - the free read already judged it and the verdict is discarding that`);
-      if (!/read free from their own markup/.test(_blind.why)) _fails.push('a verdict resting on the markup alone does not say so, so a rep cannot tell it from one where somebody looked at the page');
-      // And both blind is still unknown - never modern.
-      const _both = readSiteLooks(null, 'nobody looked', []);
-      if (_both.looks !== 'unknown' || _both.measured !== false) _fails.push(`a lead nobody looked at either way reads "${_both.looks}" instead of unknown`);
+      // ── 4. NOBODY LOOKED AND NOTHING VISIBLE: NOT GRADED ──────────────
+      for (const [_v, _code, _what] of [
+        [null, [], 'no picture at all and nothing in their code'],
+        [null, _invisible, 'no picture and all seven faults nobody can see'],
+        [_eyes({ isRealHomepage: false }), [], 'a block or error page'],
+        [_eyes({ fullyRendered: false }), [], 'a page caught still loading'],
+        [_eyes({ designEra: '' }), [], 'a model that answered nothing about the design'],
+      ]) {
+        const _u = readSiteLooks(_v, 'nobody looked at their homepage on this lead', _code);
+        if (_u.looks !== 'unknown' || _u.measured !== false || _u.score !== null || _u.grade !== null) {
+          _fails.push(`${_what} produces "${_u.looks}" (measured ${_u.measured}, score ${_u.score}) instead of an ungraded unknown - "we could not look" would be read as "the website is fine"`);
+        }
+        if (!_u.why) _fails.push(`${_what} reaches the row with no reason why nobody looked`);
+      }
+      if (readSiteLooks(null).looks === readSiteLooks(_eyes()).looks) _fails.push('a site nobody looked at and a site that looked fine produce the same word');
+      // An absent answer is not a fault: only an explicit one may score.
+      if (readSiteLooks({ isRealHomepage: true, fullyRendered: true, designEra: 'current' }).looks !== 'good') {
+        _fails.push('a model that answered the design question and skipped the rest is scoring faults it never reported');
+      }
+
+      // ── 5. WHERE A PICTURE EXISTS, THE EYES DECIDE ALONE ──────────────
+      // The eyes top out at 12 points and the old markup half at 15, so a
+      // crawler that had not looked out-voted a person who had, two to one.
+      const _saw = readSiteLooks(_eyes({ designEra: 'aging' }), '', []);
+      for (const _code of [[_diy], [_noForm], [_noTel], [_schema], _invisible, _oldRead.faults,
+        [_datedFault(['the page is still laid out with tables', 'it is still on plain http'])]]) {
+        const _with = readSiteLooks(_eyes({ designEra: 'aging' }), '', _code);
+        if (_with.looks !== _saw.looks || _with.score !== _saw.score) {
+          _fails.push(`changing their markup (${(_code || []).map(f => f.id).join(', ')}) moved the grade of a page a person actually looked at from "${_saw.looks}" at ${_saw.score} point(s) to "${_with.looks}" at ${_with.score}`);
+        }
+        if (_with.from !== 'eyes') _fails.push('the row cannot say the grade came from somebody looking at the page');
+      }
+
+      // ── 6. THE THREE NAMED LEADS OF ROUND 142, RE-DERIVED ─────────────
+      const _brick = readSiteLooks(_eyes({ designEra: 'aging' }), '',
+        [_datedFault(['the page is still laid out with tables', 'it is still on plain http']), _diy]);
+      if (_brick.looks !== 'fair') _fails.push(`Brick and Stone of NC - eyes on the page calling the design aging, a DIY template and a dated build in the code - reads "${_brick.looks}" rather than fair. A person looked and said "starting to show its age", and the code read may not overrule him`);
+      const _tranq = readSiteLooks(_eyes({ designEra: 'aging' }), '', [_diy, _noForm]);
+      if (_tranq.looks !== 'fair') _fails.push(`Tranquility Place - an aging design by eye, a DIY template and no enquiry form in the code - reads "${_tranq.looks}" rather than fair`);
+      const _tranqAsked = readSiteLooks(_eyes({ designEra: 'aging', hasVisibleAsk: false }), '', [_diy, _noForm]);
+      if (_tranqAsked.looks !== 'bad') _fails.push(`Tranquility Place with the eyes ALSO reporting nothing on the first screen to ask with reads "${_tranqAsked.looks}" rather than bad - the missing form is a question the picture answers now, and aging plus nothing to click is what the rep should call about`);
+      const _journey = readSiteLooks(_eyes({ designEra: 'current' }), '',
+        [_datedFault(['it is still on plain http', 'the copyright line at the bottom still reads 2019'])]);
+      if (_journey.looks !== 'good') _fails.push(`Journey Treatment Center - a build years out of date in the code and a homepage the eyes call current - reads "${_journey.looks}" rather than good. Round 142 called it dated off the code alone; the rule Vin gave is what a VISITOR sees, and a visitor sees a current page`);
+
+      // ── 7. THE GRADE MOVES THE READ ORDER AND THE FIND SCORE BY 0 ─────
+      // Vin, 2026-09-12: "i dont want find targeting explcitly bad ones i never
+      // said that did i?" So this is a COLUMN the rep reads, never a ranking:
+      // the Find score and the unread draw order must not read it at all.
+      {
+        const _base = { reviewCount: 120, rating: 4.5, tier: 'A', reachScore: 30 };
+        const _plainScore = placesTriageScore(_base);
+        for (const _g of SITE_LOOKS_WORDS) {
+          const _withGrade = placesTriageScore(Object.assign({}, _base,
+            { siteLooks: _g, looks: _g, contactSiteLooks: _g, siteLooksMeasured: true, siteLooksScore: 8 }));
+          if (_withGrade !== _plainScore) _fails.push(`a website graded "${_g}" moves the Find score from ${_plainScore} to ${_withGrade} - the grade is a column the rep reads, and Vin ruled that Find does not target bad websites`);
+        }
+        const _rows = SITE_LOOKS_WORDS.map((w, i) => ({ id: String(i), website: `https://x${i}.example`,
+          extra: { contactSiteLooks: w, siteLooks: w, siteLooksScore: 12 - i }, reach_predict: 10, icp_score: 10 }));
+        const _flat = orderUnread(_rows).map(r => r.id).join('');
+        if (_flat !== _rows.map(r => r.id).join('')) _fails.push(`the unread draw order came back "${_flat}" when the only thing separating those leads is their website grade - a tier for bad websites has been put back into the queue`);
+      }
 
       // The question a desktop screenshot cannot answer must stay gone.
       if (SITE_LOOKS_FAULTS.some(f => f.id === 'desktopOnly')) _fails.push('the eyes are asked again whether the page is laid out for desktop only, from a DESKTOP screenshot - the image cannot answer it, it fired on 0 of 10 live leads, and readSiteAge already marks a missing viewport for free');
 
-      // The call site: the free half comes off the GROUP.
-      if (SITE_LOOKS_VISIBLE_GROUPS.join(',') !== 'build,converts') {
-        _fails.push(`the groups a visitor can see are now ${SITE_LOOKS_VISIBLE_GROUPS.join(', ')} - schema, robots, titles and alt text are real faults that feed the audit and no visitor has ever seen one, so letting them in here rebuilds the exact defect this round removed`);
+      // ── 8. THE CALL SITE: the free half comes off the GROUP, and 'build'
+      //      is no longer in it. ────────────────────────────────────────
+      // RE-AIMED from Round 142, which pinned the groups as exactly
+      // "build,converts". That is now impossible to satisfy: the build group
+      // holds diyBuilder, which is 3 of the 6 points that graded three real
+      // leads bad and which nobody can see, and datedBuild, which is read here
+      // from readSiteAge's visible markers instead so its evidence travels
+      // with it. The geo and seo groups stay out for the reason they always
+      // did - nobody has ever seen a schema tag.
+      if (SITE_LOOKS_VISIBLE_GROUPS.join(',') !== 'converts') {
+        _fails.push(`the groups a visitor can see are now ${SITE_LOOKS_VISIBLE_GROUPS.join(', ')} - "build" back in this list puts the DIY-builder fingerprint into how a website LOOKS, which is 3 of the 6 points that graded SLC Med Spa, Winn's Plumbing and Locust Pump bad with the eyes reporting nothing wrong`);
       }
-      if (_src.indexOf(_n('  const _code = (Array.isArray(codeFaults) ? codeFaults : [])\n', '    .filter(f => f && SITE_LOOKS_VISIBLE_GROUPS.indexOf(f.group) >= 0);')) < 0) {
-        _fails.push('the verdict no longer filters the code faults it is handed, so it counts whatever the caller passes - and the caller passes every fault the free read found, which puts schema tags and alt text back into how a website LOOKS');
+      if (_src.indexOf(_n('  const _conv = _all.filter(f => SITE_LOOKS_VISIBLE_GROUPS.indexOf(f.group) >= 0\n', "    && SITE_LOOKS_FAULTS.some(t => t.id === f.id && t.from === 'markup'));")) < 0) {
+        _fails.push('the grade no longer filters the code faults it is handed, so it counts whatever the caller passes - and the caller passes every fault the free read found, which puts schema tags and alt text back into how a website LOOKS');
+      }
+      if (_src.indexOf(_n("  const _aged = _all.filter(f => f.id === 'datedBuild'\n", '    && Array.isArray(f.seen) && f.seen.filter(Boolean).length >= 2);')) < 0) {
+        _fails.push('the design-age half no longer counts the VISIBLE markers behind the dated build, so a build dated on two markers nobody can see grades a website again');
       }
     }
 
     if (_fails.length) console.log(`⛔ SITE LOOKS CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
-    else console.log(`✓ SITE LOOKS CHECK: the website now carries TWO verdicts and this check exists to keep them apart. The technical one is executed and pinned - a clean build still reads gap 0, strong, ${_keep.grade} of 10, and the same page with only its schema removed still reads noSchema at 5 and the word "fair", which is exactly the defect Vin asked about: one fault no visitor and no owner can see, crossing a band. Nothing in the audit's findings or the Find score moves. The NEW verdict is read off one render of the first screen by one cheap model call and says ${SITE_LOOKS_WORDS.join(' / ')}: a current page is modern, a plainly old one is dated, an old untouched template a stranger would not trust is bad, and a picture nobody took, a block page, a shot caught mid-load and a model that answered nothing are all UNKNOWN and measured false - kept, never dropped, and never mistakable for a site that passed. Five refusals (dropped, switched off, no website, no key, site down) each name themselves in their own words, the drop is tested FIRST, and the source order proves the render sits after the branch and franchisee drops and before the paid owner wave. FIND_SITE_LOOKS=${FIND_SITE_LOOKS}; the picture is priced through fcCreditCost at ${fcCreditCost('scrape+screenshot', true)} credit(s) and printed on the FIND CONTACT footer, which is how the 1-versus-5 rate gets settled against the dashboard. HONEST SHAPE: no render has been taken against a live business from this build - the verdict's mapping is proven here, what the model answers about a real homepage is not.`);
+    else console.log(`✓ SITE LOOKS CHECK: the website carries ONE published grade in four words - ${SITE_LOOKS_GRADES.join(' / ')}, poor worst - and only things a VISITOR MEETS may move it. Executed here, not read: the three leads of 2026-09-11 (a DIY builder, a phone that will not dial, a page the eyes call current) now read ${SITE_LOOKS_WORD(1)} where all three were graded bad; all 21 pairs of the seven invisible faults move a graded page by exactly 0 points and produce NO grade at all where nobody looked; a real 2016 table-layout page on plain http, run through the free markup read, grades bad and NAMES the two markers readSiteAge found; one marker alone, and a dated build whose markers are all invisible, grade nothing; and where a picture exists the eyes decide alone, so seven different markup fault sets leave an aging page at ${SITE_LOOKS_WORD(2)}. The word and the 1-10 number come off ONE score for both halves, checked monotonic across 0-${SITE_LOOKS_MAX}. The technical gap is untouched and pinned beside it - a clean build still reads gap 0, strong, ${_keep.grade} of 10, and the same page with only its schema removed still reads noSchema at 5 and the word "fair" - so no audit finding and no Find score moves. The grade moves the Find score and the unread draw order by exactly 0 on all ${SITE_LOOKS_WORDS.length} words (Vin, 2026-09-12: "i dont want find targeting explcitly bad ones"). Five refusals (dropped, switched off, no website, no key, site down) each name themselves in their own words, the drop is tested FIRST, and the source order proves the render sits after the branch and franchisee drops and before the paid owner wave. FIND_SITE_LOOKS=${FIND_SITE_LOOKS}; the picture is priced through fcCreditCost at ${fcCreditCost('scrape+screenshot', true)} credit(s). HONEST SHAPE, two parts: no render has been taken against a live business from this build, so the mapping is proven and what the model answers about a real homepage is not - and the new hasVisibleAsk question has never been put to a live model at all. A build whose age markers are old while the page still LOOKS current now grades good, which is the rule Vin gave and a change from Round 142.`);
   } catch (e) {
     console.log(`⛔ SITE LOOKS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
@@ -65625,7 +66147,19 @@ app.listen(PORT, () => {
       // boundary these two sit either side of moved from 175 people to 75.
       // Both are typed on purpose: deriving them from the cut would make this
       // pair agree with any ceiling, including one nobody ruled.
-      if ((estimateScaleBand({ verifiedEmployees: 76 }) || {}).band !== 'over_ceiling') _fails.push('76 verified employees is not read as over the call cap - at $200k a head that is $15.2M, past the cap Vin ruled on 2026-09-11');
+      // ROUND 146: the headcount was TYPED at 76, one over a $15M cap. The cap
+      // is $20M now (Vin, 2026-09-12, on researched evidence), so 76 people is
+      // $15.2M and comfortably INSIDE - the check was right and the number was
+      // stale. Both sides derived from the table, and both directions asserted,
+      // so a cap that moves again cannot leave this passing on nothing.
+      const _overBy1 = ICP_EMPLOYEE_BLOCK + 1;
+      const _underBy1 = ICP_EMPLOYEE_BLOCK - 1;
+      if ((estimateScaleBand({ verifiedEmployees: _overBy1 }) || {}).band !== 'over_ceiling') {
+        _fails.push(`${_overBy1} verified employees is not read as over the call cap - at ${ICP_REVENUE_PER_EMPLOYEE / 1000}k a head that is ${(_overBy1 * ICP_REVENUE_PER_EMPLOYEE / 1e6).toFixed(1)}M, past the ${ICP_REVENUE_BAND.ceiling / 1e6}M cap`);
+      }
+      if ((estimateScaleBand({ verifiedEmployees: _underBy1 }) || {}).band === 'over_ceiling') {
+        _fails.push(`${_underBy1} verified employees reads as OVER the call cap - at ${(_underBy1 * ICP_REVENUE_PER_EMPLOYEE / 1e6).toFixed(1)}M it is inside the ICP, so the gate is one business too tight and the check would pass on a cap of any size`);
+      }
       if ((estimateScaleBand({ verifiedEmployees: 75 }) || {}).band !== 'upper') _fails.push('75 verified employees is not read as the upper tier - at $200k a head that is exactly the $15M cap, and the lead is still on the call sheet');
       if ((estimateScaleBand({ fleetProse: 12 }) || {}).band !== 'core') _fails.push('a twelve-truck fleet is not read as a core-band business');
       if ((estimateScaleBand({ yearsInBusiness: 20, reviewCount: 80 }) || {}).band !== 'entry') _fails.push('twenty years at eighty reviews is not read as an established small business (entry)');
@@ -65709,20 +66243,44 @@ app.listen(PORT, () => {
       const _a = findIcpScore(_clean);
       const _b = findIcpScore({ ..._clean, outsideBand: true });
       const _c = findIcpScore({ ..._clean, outsideBand: true, aboveSizeCeiling: true });
-      if (!(_b.score < _a.score)) _fails.push(`a band-demoted lead scores ${_b.score} against an identical clean lead's ${_a.score} - the demotion is invisible in the number`);
-      if (!(_c.score < _b.score)) _fails.push('a lead demoted twice costs no more than one demoted once');
+      const _sz = findIcpScore({ ..._clean, aboveSizeCeiling: true });
+      // ── RE-AIMED IN ROUND 146, AND THE REASON RECORDED ─────────────────
+      // These three assertions used to read "a band-demoted lead scores LOWER".
+      // Vin ruled on 2026-09-12 that a great rating is irrelevant - neither a
+      // penalty nor a reward - after the press of that day marked 259 of 480
+      // businesses down ten points for sitting above 4.85. So the assertion is
+      // INVERTED rather than deleted: the flag is still handed in, it still
+      // reaches this function, and it must move the number by nothing. A guard
+      // nobody can trip reads as coverage, and a band that comes back silently
+      // is the bug class this file records most.
+      if (_b.score !== _a.score) {
+        _fails.push(`the star rating moves the contact-read score again: ${_b.score} against an identical lead's ${_a.score}. Vin ruled it irrelevant on 2026-09-12, in both directions`);
+      }
+      if (demotionPenalty({ outsideBand: true }).points !== 0) {
+        _fails.push('the shared demotion table charges for the star rating again, so the Find card, the contact list and this score all mark a high-rated business down at once');
+      }
+      // AND THE SIZE CEILING STILL DOES COST, which is what keeps the three
+      // assertions above from passing on a score that has stopped reading
+      // demotions at all - the fixture-that-measures-nothing trap.
+      if (!(_sz.score < _a.score)) _fails.push(`a lead above the REVIEW ceiling scores ${_sz.score} against an identical clean lead's ${_a.score} - the demotion is invisible in the number`);
+      if (_c.score !== _sz.score) _fails.push('the star flag adds to the review-ceiling demotion, so the rating is still costing a lead something when it arrives beside another mark');
       // The numbers come from the DECLARED table, not retyped here. Retyping
       // them is how the two rankers come to disagree about one lead.
-      const _want = demotionPenalty({ outsideBand: true }).points;
-      if ((_b.score - _a.score) !== _want) {
-        _fails.push(`the contact score marks a demoted lead down by ${_b.score - _a.score} while the shared table says ${_want} - two hand-kept copies of one penalty`);
+      const _want = demotionPenalty({ aboveSizeCeiling: true }).points;
+      if ((_sz.score - _a.score) !== _want) {
+        _fails.push(`the contact score marks a demoted lead down by ${_sz.score - _a.score} while the shared table says ${_want} - two hand-kept copies of one penalty`);
       }
-      if (_a.demotions.length !== 0 || _b.demotions.length !== 1 || !_b.why.includes(_b.demotions[0].why)) {
+      if (_a.demotions.length !== 0 || _b.demotions.length !== 0) {
+        _fails.push('the row still records a star-rating demotion, so a rep reading it is told a business was marked down for something that no longer costs it anything');
+      }
+      if (_sz.demotions.length !== 1 || !_sz.why.includes(_sz.demotions[0].why)) {
         _fails.push('the row cannot say WHY it was marked down, so a number that moved has nothing accounting for it');
       }
       // A string is not a boolean. Number(null) is 0 and 0 is finite; the same
-      // trap one type across.
-      if (findIcpScore({ ..._clean, outsideBand: 'true' }).score !== _a.score) {
+      // trap one type across. Aimed at the size ceiling since Round 146, because
+      // the star flag now costs nothing either way and a fixture that passes
+      // whether the mechanism exists or not is the trap this file records.
+      if (findIcpScore({ ..._clean, aboveSizeCeiling: 'true' }).score !== _a.score) {
         _fails.push('a non-boolean demotion flag marks a lead down, so a stray string costs a good lead ten points');
       }
     }
@@ -66468,34 +67026,62 @@ app.listen(PORT, () => {
         _fails.push('findDecisionMaker no longer returns how many stages ran, so nothing downstream can know whether the wave fired');
       }
 
-      // ══ ROUND 144: THE WAVE STANDS DOWN WHERE IT BOUGHT NOBODY ═════════
-      // Live, 2026-09-11: three leads bought the full paid wave and named
-      // nobody - The Insight Program (7 credits), Northgate Park (8), The
-      // Colonnade (6). All three are ownerRisk categories, and that flag has
-      // sat on GP_CATEGORIES with its reason written beside it the whole time.
-      //
-      // EXECUTED against the real predicates on the real table, because the
-      // rule is two halves and only one of them is safe on its own. The
-      // category alone must NEVER stand a lead down: Darrel owns a funeral
-      // home and finding Darrel is the entire point of this system.
+      // ══ ROUND 146: THE PAGES STAND THE SEARCHES DOWN, NOT THE TRADE ════
+      // Round 144 required an ownerRisk CATEGORY as well as pages naming
+      // nobody, and this check pinned that half: it asserted three categories
+      // still carried the flag and that a plain trade could never stand down.
+      // Vin's read batch of 2026-09-12 made the category half the defect -
+      // Glow Up, McCall and Bobcat named nobody, sit in none of the flagged
+      // categories, and took 28 of 68 credits and about 620 seconds between
+      // them. So these are RE-AIMED at the new rule rather than deleted, and
+      // the two assertions that keep it honest stay: the wave must still be
+      // REACHABLE (a stand-down that fires on every lead saves every credit
+      // and finds nobody, and would pass a naive check), and an absence still
+      // needs a look. EXECUTED against the live predicate and the live table.
       {
-        const _risky = GP_CATEGORIES.filter(c => c.ownerRisk).map(c => c.label);
-        if (_risky.length < 3) _fails.push('fewer than three categories are marked ownerRisk, so the flag the stand-down reads has been emptied out and the wave is back to buying nobody at consolidated operators');
-        for (const _l of ['Senior Care', 'Behavioral Health']) {
-          if (!categoryOwnerRisk(_l)) _fails.push(`${_l} is no longer an ownerRisk category - it is one of the two that bought 21 credits and found nobody on 2026-09-11, and the stand-down reads this flag and nothing else`);
+        // 1. THE TRADE IS NOT READ AT ALL. A flagged category and a plain one,
+        // both taken off the real table, must answer identically.
+        const _riskyLabel = (GP_CATEGORIES.find(c => c.ownerRisk) || {}).label || '';
+        const _plainLabel = (GP_CATEGORIES.find(c => !c.ownerRisk) || {}).label || '';
+        if (!_riskyLabel || !_plainLabel) _fails.push('GP_CATEGORIES no longer carries both a flagged and an unflagged category, so nothing here can prove the stand-down ignores that flag');
+        else if (categoryOwnerRisk(_riskyLabel) !== true || categoryOwnerRisk(_plainLabel) !== false) _fails.push('the ownerRisk lookup no longer answers off the table, so the indifference assertions below prove nothing');
+        if (/categoryOwnerRisk|tradeLabel|industry/.test(String(ownPagesNameNobody))) _fails.push('the page rule reads the trade again, so the stand-down is back to asking what field a business is in rather than whether anybody is named on its own pages');
+        // 2. IT FIRES ON THE EVIDENCE ALONE. The call-site needle pins that
+        // this IS the live expression, so this drives the live rule.
+        const _stand = (sig) => FIND_OWNER_RISK_STANDDOWN && ownPagesNameNobody(sig);
+        if (_stand({ readable: true, teamNames: [], teamTitles: [], founderPhrase: false }) !== true) _fails.push('a business whose own readable pages name nobody still buys the paid owner searches - that is Glow Up, McCall and Bobcat, 28 of the 68 credits in the 2026-09-12 batch and about 620 seconds, for three names that were never there');
+        // 3. A ROW IS A PERSON ONLY IF THE NAME DOORS SAY SO. One case per
+        // door, each refused by that door ALONE - otherwise a revert of any
+        // one of the three stays green on another door's case (§106).
+        if (_stand({ readable: true, teamNames: ['Google Reviews'], teamTitles: ['Coordinator'], teamCount: 1 }) !== true) _fails.push('a nav label parsed into the name slot counts as a named person, so a page naming nobody reads as naming somebody and the searches are bought to look for "Google Reviews"');
+        if (_stand({ readable: true, teamNames: ['Functional Finished Basements'], teamTitles: ['Owner'], teamCount: 1 }) !== true) _fails.push('a strapline parsed into the name slot counts as a named person - that is the row that sorted first at 93 on 2026-09-10');
+        if (_stand({ readable: true, teamNames: ['Darrel'], teamTitles: ['Owner'], teamCount: 1 }) !== true) _fails.push('a bare first name on their own page counts as a person the paid searches can go and find - measured, this is the one junk shape ONLY the shape door refuses, and without it that door can be deleted with every assertion here still green');
+        if (_stand({ readable: true, teamNames: ['Client Connection Lead'], teamTitles: ['Owner'], teamCount: 1 }) !== true) _fails.push('a name made entirely of role words counts as a named person, so the shape rule is being asked and the meaning rule is not');
+        if (_stand({ readable: true, teamCount: 9, teamNames: ['Google Reviews', 'Last Name'], teamTitles: ['Coordinator', 'Manager'] }) !== true) _fails.push('a roster row COUNT or a list of titles counts as naming somebody - nine junk rows read as nine people, and a title is not a name a search index could be asked for');
+        // 4. AND THE WAVE IS STILL REACHABLE. Each of these is a lead whose
+        // searches must still be bought, and the first one is Darrel.
+        if (_stand({ readable: true, teamNames: ['Darrel Jones'], teamTitles: ['Owner'], teamCount: 1 }) !== false) _fails.push('a business naming one real person on its own pages has its owner searches stood down - that is Darrel, and finding Darrel is the entire point of this system');
+        if (_stand({ readable: true, teamNames: ['Dusty Hannah', 'Kacie Carrico'], teamTitles: ['CO-OWNER/CEO', 'COO'], teamCount: 2 }) !== false) _fails.push('a two-name roster is stood down, so the searches are refused on a business that published its people');
+        if (_stand({ readable: true, teamNames: [], founderPhrase: 'family owned since 1974' }) !== false) _fails.push('a founder sentence on their own site no longer counts as naming somebody, and that sentence is the strongest free owner signal there is');
+        // 5. AN ABSENCE NEEDS A LOOK. With no readable page nothing could have
+        // named anybody, and a search is the only route left on that lead.
+        if (_stand({ readable: false, teamNames: [] }) !== false) _fails.push('a lead whose pages could not be read is stood down as naming nobody - an absence asserted off markup we never read, on the one lead whose only route to a name is a search');
+        if (_stand({ teamNames: [] }) !== false) _fails.push('a lead with no readability verdict at all is stood down, so a lead we know nothing about loses its owner searches on a fact we do not have');
+        // 6. THE CLAUSE HAS TO STAY FALSIFIABLE. ownerNamedOnSite is written
+        // 300 lines after this decision out of what the wave itself found;
+        // reading it here would be a clause that can never be false.
+        if (/ownerNamedOnSite/.test(String(ownPagesNameNobody))) _fails.push('the page rule reads ownerNamedOnSite, which is written out of what the wave itself found - a clause that can never be false, dressed as a second opinion');
+        const _iSig = _src.indexOf(_n('const signals = readFindIcp',
+          'Signals(pages);'));
+        const _iDec = _src.indexOf(_n('const _ownerRisk = FIND_OWNER_RISK_STANDDOWN &&',
+          ' ownPagesNameNobody(signals);'));
+        const _iAfter = _src.indexOf(_n('signals.ownerNamedOnSite = _nm.length >= 2 ?',
+          ' _nm.every(t => _txt.includes(t)) : null;'));
+        if (_iSig < 0 || _iDec < 0 || _iAfter < 0) _fails.push('the free page read, the stand-down or the post-wave owner signal is no longer in the source as written - the likeliest cause is a gate added back to the stand-down line, which the call-site needle names precisely; either way nothing here proves this decision is made on facts that exist before the money goes out');
+        else {
+          if (_iSig > _iDec) _fails.push('the stand-down is decided before their pages are read, so it reads an empty signals object and stands every lead down');
+          if (_iAfter < _iDec) _fails.push('ownerNamedOnSite is now written before the stand-down, so the clause can be fed the answer the wave itself produced');
         }
-        if (categoryOwnerRisk('Roofing')) _fails.push('a plain trade reads as ownerRisk, so the stand-down would refuse the paid wave across the core ICP');
-        if (categoryOwnerRisk('')) _fails.push('a lead with NO trade label reads as ownerRisk, so a lead we know nothing about is stood down on a fact we do not have');
-        // The roster half, on the three free signals it actually reads.
-        if (ownPagesNameNobody({ teamCount: 9 }) !== false) _fails.push('a business whose own team page lists nine people reads as naming nobody, so a Darrel with a roster would have his owner search stood down');
-        if (ownPagesNameNobody({ teamNames: ['Darrel Jones'] }) !== false) _fails.push('a named person on their own pages does not count as naming somebody');
-        if (ownPagesNameNobody({ founderPhrase: 'family owned since 1974' }) !== false) _fails.push('a founder sentence on their own site does not count as naming somebody, and that sentence is the strongest free owner signal there is');
-        if (ownPagesNameNobody({}) !== true) _fails.push('a business whose pages named nobody at all does not read as naming nobody, so the stand-down can never fire and the 21 credits go again');
-        // BOTH halves, or nothing. This is the assertion that keeps Darrel.
-        const _stand = (trade, sig) => FIND_OWNER_RISK_STANDDOWN && categoryOwnerRisk(trade) && ownPagesNameNobody(sig);
-        if (_stand('Senior Care', {}) !== true) _fails.push('a senior care business whose own pages name nobody still buys the paid owner wave - that is Northgate Park and The Colonnade, 14 credits for two names nobody found');
-        if (_stand('Senior Care', { teamCount: 6 }) !== false) _fails.push('a senior care business that DOES name six people on its own team page is stood down - the category was never meant to decide this alone, and an owner-run home in a consolidated field is exactly the lead worth finding');
-        if (_stand('Roofing', {}) !== false) _fails.push('a roofing contractor whose pages name nobody is stood down - the stand-down has escaped the flagged categories and is now refusing to look for owners across the whole ICP');
       }
 
       // ══ THE TheirStack LANE'S OWN EVIDENCE ═════════════════════════════
@@ -66588,38 +67174,48 @@ app.listen(PORT, () => {
     // none of its rows carries a verdict - so on its own it would be a check
     // that cannot fail, green forever over code it never reaches. This is the
     // half that executes the tier.
+    // ══ ROUND 146: THE WEBSITE GRADE DECIDES NOTHING ABOUT THE ORDER ══════
+    // This block asserted the OPPOSITE four hours ago: it required a bad
+    // website to be read first, even on the worst owner guess in the set.
+    // That was Round 145's "one ordering trade", and Vin had asked for
+    // something else - lower-tier businesses ON the rep's list, not the press
+    // ranking on websites: "i dont want find targeting explcitly bad ones i
+    // never said that did i?" So the ladder rung is gone and this block is
+    // re-aimed to prove it cannot come back, which is the stronger assertion:
+    // a check that pins a rule we have retired is worse than no check, because
+    // it still reads as coverage.
     {
-      const _w = (id, looks, reach, icp) => ({ id, website: `https://${id}.example`,
-        extra: { siteLooks: looks, siteLooksMeasured: looks === 'bad' || looks === 'dated' },
+      const _w = (id, grade, reach, icp) => ({ id, website: `https://${id}.example`,
+        extra: { siteLooks: grade, siteLooksMeasured: grade !== '' && grade !== 'unknown' },
         reach_predict: reach, icp_score: icp });
+      // The WORST website in the set sits on the worst owner guess and the
+      // worst score; the best website sits on the best of both. If the grade
+      // touched the order at all, this order would invert.
       const rows = [
-        // A bad website on the WORST owner guess and the WORST score in the set.
-        _w('f', 'bad', 5, 40),
-        // Dated, on a much better guess and score.
-        _w('g', 'dated', 50, 95),
-        // No verdict at all, on the second-best guess.
+        _w('f', 'poor', 5, 40),
+        _w('g', 'bad', 50, 95),
         { id: 'h', website: 'https://h.example', extra: {}, reach_predict: 60, icp_score: 99 },
-        // Refused a free read: 'unknown' and NOT measured, on the best guess in
-        // the set. Must not be promoted - a site we could not read is not a bad
-        // site, and it must not be docked either.
-        { id: 'i', website: 'https://i.example', extra: { siteLooks: 'unknown', siteLooksMeasured: false }, reach_predict: 70, icp_score: 99 },
+        _w('i', 'good', 70, 99),
       ];
       const o = orderUnread(rows).map(r => r.id).join('');
-      if (o !== 'fgih') _fails.push(`the draw order with website verdicts came back "${o}" instead of "fgih" - a bad website must be read first even on the worst owner guess in the set, dated second, and a site nobody could read must sit with the unjudged ones and be ordered by the owner guess alone`);
-      // Each rung of the ladder, executed on its own so a wrong total order
-      // cannot be mistaken for a wrong single rule.
-      if (queueSiteBadness({ extra: { siteLooks: 'bad', siteLooksMeasured: true } }) !== 2) _fails.push('a measured bad website is not the top of the draw ladder');
-      if (queueSiteBadness({ extra: { siteLooks: 'dated', siteLooksMeasured: true } }) !== 1) _fails.push('a measured dated website does not rank above an unjudged one');
-      if (queueSiteBadness({ extra: { siteLooks: 'bad', siteLooksMeasured: false } }) !== 0) _fails.push('an UNMEASURED bad verdict moves the draw - a verdict nobody measured is being laundered into one that was');
-      if (queueSiteBadness({ extra: { siteLooks: 'unknown', siteLooksMeasured: false } }) !== 0) _fails.push('a site that refused a free read is ranked, so our own coverage is deciding the order');
-      if (queueSiteBadness({ extra: {} }) !== 0) _fails.push('a lead with no website verdict at all is ranked on one');
-      // THE CONTACT READ WINS. It saw a picture of the page; the press only
-      // ever sees markup. A lead read properly and found modern must not be
-      // promoted by a stale press guess that said bad.
-      if (queueSiteBadness({ extra: { contactSiteLooks: 'modern', contactSiteLooksMeasured: true, siteLooks: 'bad', siteLooksMeasured: true } }) !== 0) {
-        _fails.push('the press\u2019s markup-only guess is outranking the contact read that actually looked at the page, so a lead somebody read and found fine is promoted as a bad website');
+      if (o !== 'ihgf') _fails.push(`the unread draw order came back "${o}" instead of "ihgf" - it must be decided by how likely we are to reach the owner and then by the ICP score, and by the website grade not at all. Vin's own framing of what should order this list is "size is the golden ticket"`);
+      // Every grade, executed one at a time against the same business, so a
+      // right total order cannot hide a single rule that still reads a grade.
+      const _base = { id: 'z', website: 'https://z.example', reach_predict: 50, icp_score: 80, extra: {} };
+      const _plain = orderUnread([_base]).length;
+      for (const _g of SITE_LOOKS_WORDS.concat([''])) {
+        const _one = orderUnread([Object.assign({}, _base, { extra: { siteLooks: _g, siteLooksMeasured: true } }),
+                                  Object.assign({}, _base, { id: 'y', extra: {} })]).map(r => r.id).join('');
+        if (_one !== 'zy') _fails.push(`a website graded "${_g}" reorders the draw against an identical business with no grade at all ("${_one}") - the grade is information on the row, never a rank`);
       }
-      if (queueSiteBadness({ extra: { contactSiteLooks: 'bad', contactSiteLooksMeasured: true } }) !== 2) _fails.push('the contact read\u2019s own bad verdict does not reach the draw order');
+      if (_plain !== 1) _fails.push('the draw dropped a row');
+      // And the function that carried the rung must be GONE, not just unread:
+      // a dead scorer left in the file is the shape that gets wired back in.
+      // Assembled at runtime from two halves. Written as a literal first, and
+      // it could only ever FIRE: the literal sits in the check that greps for
+      // it, so the check matched itself. That is the trap check-writing-traps
+      // opens with, walked into inside the same hour it was read.
+      if (_src.includes(_n('queueSite', 'Badness('))) _fails.push('the website-badness scorer is back in the source - the website is deciding the read order again, which Vin ruled out by name');
     }
     // ══ ROUND B: 1c. THE VERDICT FROM ONE HTML STRING, NO PICTURE ═════════
     // The whole round rests on this: the press can grade a website from markup
@@ -67378,7 +67974,12 @@ app.listen(PORT, () => {
     // would undo the gate PART 4 section 41 exists for.
     if (contactRankFor({ ..._base, decisionMaker: { name: 'A B', canBuy: false } }).rank !== 50) _fails.push('a decision-maker below the buying floor was credited as authority');
     if (contactRankFor({ ..._base, decisionMaker: { name: 'A B' } }).rank !== 50) _fails.push('a decision-maker with no canBuy verdict was credited as authority');
-    if (contactRankFor({ ..._base, outsideBand: true }).rank !== 40) _fails.push('a band-demoted lead was not demoted here');
+    // RE-AIMED IN ROUND 146: this asserted that a star-band lead ranked 40, ten
+    // below its reachability. Vin ruled the rating irrelevant on 2026-09-12, so
+    // the flag is still handed in here and must change the rank by NOTHING. The
+    // assertion is inverted rather than removed, because the rank the rep sorts
+    // his call sheet by is the thing that would quietly start moving again.
+    if (contactRankFor({ ..._base, outsideBand: true }).rank !== 50) _fails.push('a high star rating marks a lead down in the contact list again - it is 50 out of 50 or the rating is back in the rank');
     if (contactRankFor({ ..._base, aboveSizeCeiling: true }).rank !== 40) _fails.push('a size-demoted lead was not demoted here');
 
     // FOUR - the modifiers order CLOSE CALLS. A lead with a phone and a buyer
@@ -67391,7 +67992,12 @@ app.listen(PORT, () => {
     const _strong = contactRankFor({ reachability: 95 });
     if (_weak.rank >= _strong.rank) _fails.push(`an unreachable lead with a phone (${_weak.rank}) overtook an SMTP-confirmed one (${_strong.rank}) - the modifiers are too big to be tiebreakers`);
     if (contactRankFor({ reachability: 98, phone: '5125550134', decisionMaker: { name: 'A B', canBuy: true } }).rank !== 100) _fails.push('the rank is not clamped to 100');
-    if (contactRankFor({ reachability: 2, outsideBand: true, aboveSizeCeiling: true }).rank !== 0) _fails.push('the rank is not clamped to 0');
+    // RE-AIMED IN ROUND 146: the two flags that drove this below zero were the
+    // star band and the size ceiling. The star band costs nothing now, so the
+    // clamp is driven by two marks that still do - otherwise this would be
+    // asserting a clamp that nothing can reach.
+    if (contactRankFor({ reachability: 2, aboveSizeCeiling: true, thinReviews: true }).rank !== 0) _fails.push('the rank is not clamped to 0');
+    if (CONTACT_RANK_TERMS.some(t => t.id === 'outOfBand')) _fails.push('the star band is a declared ranking term again, so one edit has put the rating back into the contact list, the Find card and the contact-read score at once');
 
     // FIVE - the CALL SITES. Each guard is the difference between a contact
     // lead costing about four Firecrawl credits and costing sixteen, and a
@@ -67442,73 +68048,61 @@ app.listen(PORT, () => {
     const _fails = [];
     const _base = { reviewCount: 120, rating: 4.5, reachScore: 30, tier: 'A' };
 
-    // 1. A DEMOTED LEAD SCORES LOWER. It used to score exactly the same: the
-    //    demotion moved the sort and never the number, so the top of the list
-    //    filled with businesses the run had already decided to serve last.
+    // 1. A DEMOTED LEAD SCORES LOWER, AND A HIGH-RATED ONE IS NOT DEMOTED.
+    //    A demotion used to move the sort and never the number, so the top of
+    //    the list filled with businesses the run had already decided to serve
+    //    last. That still has to hold for the marks that remain.
+    //
+    //    RE-AIMED IN ROUND 146. The star band was one of these marks and Vin
+    //    ruled it out on 2026-09-12 - "trteat grate reviews as normal" - after
+    //    the 17:33 press marked 259 of 480 businesses down ten points for
+    //    sitting above 4.85, 259 of that run's 274 demotions. So the band
+    //    assertion is INVERTED rather than deleted: the flag is still handed in
+    //    and must move the number by nothing, while the review ceiling beside it
+    //    must still cost exactly what the declared table says.
     const _plain = placesTriageScore(_base);
     const _band  = placesTriageScore({ ..._base, outsideBand: true });
     const _size  = placesTriageScore({ ..._base, aboveSizeCeiling: true });
     const _both  = placesTriageScore({ ..._base, outsideBand: true, aboveSizeCeiling: true });
-    if (!(_band < _plain)) _fails.push(`a band-demoted lead scores ${_band} against ${_plain} for the same business - the demotion is still not in the number`);
+    if (_band !== _plain) _fails.push(`the star band moves the Find card again: ${_band} against ${_plain} for the same business - Vin ruled a great rating irrelevant, in both directions`);
     if (!(_size < _plain)) _fails.push(`a lead above the review ceiling scores ${_size} against ${_plain} - the demotion is still not in the number`);
-    if (!(_both < _band && _both < _size)) _fails.push('two demotions do not cost more than one, so one of them is being dropped');
-    // ══ ROUND B: A BAD WEBSITE IS IN THE NUMBER, AND ONLY A MEASURED ONE ══
-    // The one signal on this score that says whether they NEED us rather than
-    // whether they can pay - and Vin's rep pitches websites, so it is the
-    // reason a lead gets worked first. Executed on the same base fixture as
-    // the demotions above, so the comparison is one business against itself.
-    {
-      const _sBad = placesTriageScore({ ..._base, siteLooks: 'bad', siteLooksMeasured: true });
-      const _sDated = placesTriageScore({ ..._base, siteLooks: 'dated', siteLooksMeasured: true });
-      const _sUnknown = placesTriageScore({ ..._base, siteLooks: 'unknown', siteLooksMeasured: false });
-      const _sLaundered = placesTriageScore({ ..._base, siteLooks: 'bad', siteLooksMeasured: false });
-      const _sRefused = placesTriageScore({ ..._base, siteLooks: '', siteLooksMeasured: false });
-      if (!(_sBad > _plain)) _fails.push(`a business whose website a visitor would wince at scores ${_sBad} against ${_plain} for the same business - the one signal that says they NEED us is not in the number, so the rep is handed them in whatever order everything else decided`);
-      if (!(_sDated > _plain)) _fails.push(`a dated website scores ${_sDated} against ${_plain} - the lift reaches bad and not dated, so most of the leads this pitch is for are unranked`);
-      if (!(_sBad > _sDated)) _fails.push(`bad and dated are worth ${_sBad} and ${_sDated} - they must not be the same, or the worst websites do not come first`);
-      // AND AN ABSENCE MOVES NOTHING, in all three of its shapes: a clean
-      // markup read with nobody looking, a site that refused, and a verdict
-      // somebody wrote without measuring it. Number(null) is 0 and 0 is
-      // finite; a laundered verdict is the unmeasured-treated-as-measured
-      // class pointed the other way.
-      if (_sUnknown !== _plain) _fails.push(`a website nobody could judge scores ${_sUnknown} against ${_plain} - our own coverage is moving their number`);
-      if (_sRefused !== _plain) _fails.push(`a website that refused a free read scores ${_sRefused} against ${_plain} - a site we could not open is being scored as if we had`);
-      if (_sLaundered !== _plain) _fails.push(`an UNMEASURED bad verdict scores ${_sLaundered} against ${_plain} - a guess nobody measured is being paid for like a measurement`);
-      // A good website is FREE, never a penalty. We sell into a broken site;
-      // we do not sell against a working one.
-      const _sModern = placesTriageScore({ ..._base, siteLooks: 'modern', siteLooksMeasured: true });
-      if (_sModern !== _plain) _fails.push(`a business with a tidy website scores ${_sModern} against ${_plain} - a good website has become a penalty, which is the mistake the website gap at the contact read is a LIFT specifically to avoid`);
-    }
+    if (_both !== _size) _fails.push('the star band adds to the review-ceiling demotion, so a high-rated large business is still being charged twice');
 
     // 2. THE TWO RANKERS READ ONE TABLE. contactRankFor subtracted for both and
     //    the Find card did not, so one app held two verdicts about one lead and
     //    the card showed the one that did not know.
-    const _declared = CONTACT_RANK_TERMS.filter(t => t.id === 'outOfBand' || t.id === 'aboveSize')
+    const _declared = CONTACT_RANK_TERMS.filter(t => t.id === 'aboveSize')
       .reduce((n, t) => n + t.points, 0);
-    if (demotionPenalty({ outsideBand: true, aboveSizeCeiling: true }).points !== _declared) {
+    if (demotionPenalty({ aboveSizeCeiling: true }).points !== _declared) {
       _fails.push('the demotion penalty no longer matches the declared table the contact ranker reads');
     }
-
-    // 3. THE SCORE MUST NOT PAY FOR WHAT DEMOTED IT. A 4.9 earned +5 here AND was
-    //    demoted for sitting above the 4.85 ceiling.
-    //
-    //    ISOLATED, and it took a falsification run to see why it had to be.
-    //    The first version compared a demoted 4.9 against an IN-BAND 4.7 and
-    //    held whether the guard existed or not: the demotion is -10 and the
-    //    rating bonus is +5, so the demotion swamped the very thing under
-    //    test. Two fixes hiding each other, which this file records and which
-    //    only reverting ever finds. Both leads below carry the SAME demotion,
-    //    so the rating bonus is the only thing that can separate them.
-    const _in47 = placesTriageScore({ ..._base, rating: 4.7 });
-    const _dem49 = placesTriageScore({ ..._base, rating: 4.9, outsideBand: true });
-    const _dem47 = placesTriageScore({ ..._base, rating: 4.7, outsideBand: true });
-    if (!(_dem49 < _dem47)) {
-      _fails.push(`a 4.9 above the ceiling scores ${_dem49} against a 4.7 demoted the same way at ${_dem47} - the rating bonus is still paying for the property that demoted the lead`);
+    if (demotionPenalty({ outsideBand: true, aboveSizeCeiling: true }).points !== _declared) {
+      _fails.push('the shared table charges for the star rating again, which puts it back on the Find card, the contact list and the contact-read score in one edit');
     }
-    // and the in-band 4.9 keeps every point it ever had, because the bonus is
-    // right whenever the ceiling is not the reason we are looking at the lead.
-    if (!(placesTriageScore({ ..._base, rating: 4.9 }) > _in47)) {
-      _fails.push('an in-band 4.9 lost its rating bonus - the guard was widened past the case it exists for');
+
+    // 3. THE RATING MOVES THE SCORE BY EXACTLY 0 ABOVE THE 4.85 CEILING.
+    //
+    //    There was a ladder here - +5 at 4.8, +3 at 4.6, +1.25 at 4.3 - with a
+    //    guard that took the +5 back off a business the band had demoted, so the
+    //    card paid a near-perfect lead for the property the press was marking it
+    //    down for. Both halves went on 2026-09-12: Vin said irrelevant, and
+    //    irrelevant is not the same as rewarded.
+    //
+    //    THE THREE RATINGS BELOW MUST COME OUT IDENTICAL. One equality would
+    //    pass on a build that had simply lost the ability to read the rating at
+    //    all, so the low-rating lift is asserted in RATING BAND CHECK on the
+    //    same curve - that is the half of the rule Vin kept.
+    const _in47 = placesTriageScore({ ..._base, rating: 4.7 });
+    const _hi49 = placesTriageScore({ ..._base, rating: 4.9 });
+    const _mid44 = placesTriageScore({ ..._base, rating: 4.4 });
+    if (!(_hi49 === _in47 && _in47 === _mid44)) {
+      _fails.push(`the same business scores ${_mid44} at 4.4, ${_in47} at 4.7 and ${_hi49} at 4.9 - the star rating is worth points on the Find card again and Vin ruled it irrelevant on 2026-09-12`);
+    }
+    // And the dead discovery flag cannot bring it back either: the flag still
+    // rides the request from the press, so a term reading it would be invisible
+    // to the three comparisons above.
+    if (placesTriageScore({ ..._base, rating: 4.9, outsideBand: true }) !== _hi49) {
+      _fails.push('the star-band flag is being read by the Find score again, so a lead the press once marked is scored differently from an identical lead that was not');
     }
 
     // 4. AN UNMEASURED REACHABILITY IS SKIPPED, NOT READ AS ZERO. Number(null) is
@@ -67849,7 +68443,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`\u26d4 FIND SCORE CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
     } else {
-      console.log(`\u2713 FIND SCORE CHECK: the Find card's number was EXECUTED, not read. A demoted lead scores lower than the same business undemoted and two demotions cost more than one; the penalty comes from the same declared table the contact list reads, so one app can no longer hold two verdicts about one business; a 4.9 above the star ceiling no longer earns the bonus for the very rating that demoted it, while an in-band 4.9 keeps every point; and a reachability nobody measured is skipped rather than laundered into a confident zero. Coverage across metros is in the number at last: +${TRIAGE_MARKET_POINTS} a metro beyond the first to a cap of ${TRIAGE_MARKET_CAP}, so a crewed operator seen in four markets outranks the same business seen in one, a twelfth market buys nothing more, an unmeasured count scores exactly as one market does, and twelve metros cannot lift a trade whose job value cannot fund anything we sell. The handler is pinned at its call site.`);
+      console.log(`✓ FIND SCORE CHECK: the Find card's number was EXECUTED, not read. A lead above the review ceiling scores lower than the same business without that mark and the penalty comes from the same declared table the contact list reads, so one app can no longer hold two verdicts about one business; the STAR RATING is worth exactly nothing on this curve above 4.3 — the same business scores the same number at 4.4, at 4.7 and at 4.9, because Vin ruled on 2026-09-12 that a great rating is neither a penalty nor a reward, and the dead discovery flag cannot move it either; and a reachability nobody measured is skipped rather than laundered into a confident zero. Coverage across metros is in the number at last: +${TRIAGE_MARKET_POINTS} a metro beyond the first to a cap of ${TRIAGE_MARKET_CAP}, so a crewed operator seen in four markets outranks the same business seen in one, a twelfth market buys nothing more, an unmeasured count scores exactly as one market does, and twelve metros cannot lift a trade whose job value cannot fund anything we sell. The handler is pinned at its call site.`);
     }
   } catch (e) {
     console.log(`\u26d4 FIND SCORE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
@@ -72908,13 +73502,18 @@ app.listen(PORT, () => {
       // the press's two arrays and then climbs back over an in-band lead in
       // the sort, which is the one way the bench promise breaks with every
       // gate still correct.
-      const _n = _needle('const ba = (a.', 'outsideBand || a.aboveSizeCeiling || a.thinReviews || a.listingRisk) ? 1 : 0');
+      // RE-AIMED AGAIN IN ROUND 146, for the reason the note above predicts:
+      // the star band left this term, so the needle that pinned four reasons
+      // went red on the change that removed one. Aimed at the three that are
+      // left. It is still a needle and not a read of the live comparator,
+      // because the comparator is an inline arrow inside a request handler.
+      const _n = _needle('const ba = (a.', 'aboveSizeCeiling || a.thinReviews || a.listingRisk) ? 1 : 0');
       // BOTH HALVES, because only one of them was pinned and the two drifted
       // apart inside one round: ba grew a fourth reason and bb did not, so a
       // listing Google itself flags sorted FIRST whenever it happened to arrive
       // before an in-band lead. A comparator is two reads of one rule and a
       // check that pins one of them is half a check.
-      const _nb = _needle('const bb = (b.', 'outsideBand || b.aboveSizeCeiling || b.thinReviews || b.listingRisk) ? 1 : 0');
+      const _nb = _needle('const bb = (b.', 'aboveSizeCeiling || b.thinReviews || b.listingRisk) ? 1 : 0');
       const _i = _src.indexOf(_n);
       if (_src.indexOf(_nb) < 0) {
         _fails.push('the two halves of the demotion comparator read different lists of reasons, so a lead demoted for the reason only one half knows sorts FIRST whenever it arrives before an in-band one - the bench promise is broken by the comparator rather than by any gate');
@@ -72993,8 +73592,13 @@ app.listen(PORT, () => {
       // Google's own verdict on the listing (_risk.demote). A reason missing
       // from this flag would take a per-category cap slot and a queue position
       // from an in-band lead.
-      if (_src.indexOf(_needle('const _demoted = _outsideBand', ' || _tooBig')) < 0) {
-        _fails.push('the demotion reasons no longer feed one flag, so a gate reading only the band lets over-ceiling, thin-review or risky-listing leads back into the in-band queue');
+      // Re-aimed in Round 146 for the third time and for the reason above: the
+      // star band LEFT the flag, so the needle that started at it went red on
+      // the change that removed it. It now starts at the first reason that is
+      // still there. Reasons joining or leaving this flag is the design working;
+      // a reason getting its OWN flag is the failure.
+      if (_src.indexOf(_needle('const _demoted = _too', 'Big || _underFloor')) < 0) {
+        _fails.push('the demotion reasons no longer feed one flag, so a gate reading only one of them lets over-ceiling, thin-review or risky-listing leads back into the queue ahead of the leads we have evidence for');
       }
       if (_src.indexOf(_needle('thinReviews: true, thinReview', 'Note: _underFloorWhy')) < 0) {
         _fails.push('the thin-review reason no longer travels on the lead, so the sort at the far end cannot tell it apart and the call sheet cannot say why it is last');
@@ -73004,10 +73608,63 @@ app.listen(PORT, () => {
       }
     }
 
+    // 8. THE STAR RATING MOVES NOTHING. ROUND 146, AND THIS IS ARITHMETIC.
+    //
+    // THE LIVE DEFECT. Press of 2026-09-12 17:33: 259 of 480 businesses were
+    // marked down ten points for sitting above the ceiling - 259 of that run's
+    // 274 demotions, and the same penalty as being over the size cap. Sections 1
+    // and 2 above are the argument that this was never worth doing, re-derived
+    // on every boot; Vin ruled on it the same day, asked twice and confirmed
+    // twice: treat a great rating as normal, take it out completely.
+    //
+    // Sections 3 to 7 are about where a demoted lead SORTS. This one is about
+    // whether the rating is worth any points at all, which is the question now,
+    // and it runs the real curve rather than reading it.
+    {
+      const _r = { reviewCount: 120, reachScore: 30, tier: 'A' };
+      const _hi = placesTriageScore({ ..._r, rating: 4.9 });
+      const _in = placesTriageScore({ ..._r, rating: 4.4 });
+      if (_hi !== _in) {
+        _fails.push(`the same business scores ${_hi} at 4.9 stars and ${_in} at 4.4 - the star rating is worth points on the Find card again, in one direction or the other, and Vin ruled it irrelevant on 2026-09-12`);
+      }
+      if (demotionPenalty({ outsideBand: true }).points !== 0) {
+        _fails.push('the star rating is a demotion again in the one declared table the Find card, the contact list and the contact-read score all read, so it is back on three surfaces at once');
+      }
+      if (CONTACT_RANK_TERMS.some(t => t.id === 'outOfBand')) {
+        _fails.push('the star band is a declared ranking term again');
+      }
+      // AND THE PRESS MUST NOT WRITE THE MARK BACK ONTO THE LEAD. Nothing reads
+      // it now, so no fixture can see it return - only the press's own source
+      // can. The two halves are on separate lines so that no whole copy of the
+      // needle exists in this file for the search to find instead of the press.
+      const _pressSrc = String(searchGooglePlaces);
+      const _flagA = 'outsideBand: ';
+      const _flagB = 'true, bandNote';
+      if (_pressSrc.indexOf(_needle(_flagA, _flagB)) >= 0) {
+        _fails.push('the press writes the star-rating mark onto the lead again, so the screen, the sort, the CSV and the call sheet can all start reading it');
+      }
+      // THE LOW SIDE IS THE HALF VIN KEPT, and it has to still be here, or the
+      // equality above would pass on a build that had simply stopped reading the
+      // rating at all - a fixture arranged so the assertion holds whether or not
+      // the mechanism exists. Vin, 2026-08-28: "the ones with lower ratings have
+      // way more pain, especially visibility pain."
+      const _lowLead = { reviewCount: 200, reachScore: 30, tier: 'A', label: 'Plumbing' };
+      const _low = placesTriageScore({ ..._lowLead, rating: 3.5 });
+      const _mid = placesTriageScore({ ..._lowLead, rating: 4.5 });
+      if (!(_low > _mid)) {
+        _fails.push(`a 3.5-star business with 200 reviews scores ${_low} against an identical 4.5-star one at ${_mid} - the low-rating lift is gone, and that is the half of this rule Vin kept: rating is one of the inputs Google weighs in the local pack, so a low-rated business is harder to find and has more reason to buy`);
+      }
+      const _keptA = 'lowRating';
+      const _keptB = 'Kept++;';
+      if (_pressSrc.indexOf(_needle(_keptA, _keptB)) < 0) {
+        _fails.push('the press no longer counts the low-rated businesses it keeps, so the surviving half of the rating rule goes unreported on the run that decides it');
+      }
+    }
+
     if (_fails.length) {
       console.log(`⛔ RATING BAND CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
     } else {
-      console.log(`✓ RATING BAND CHECK: the star rating reaches exactly one rung and that rung is internal-only, so it can never reach an email; the real ladder returns the same sayable findings at 4.6, 4.9 and 5.0, leading on the same one. Businesses outside the band are therefore demoted rather than deleted — 1,810 of 2,892 already-paid-for businesses were deleted on the 2026-08-19 run. The review ceiling now demotes on the identical argument, having deleted 282 more on 2026-08-20: Google bills per CALL, so deleting a result cannot save a penny, and nothing remembered them, so every run paid to rediscover and re-delete the same businesses. All THREE reasons feed ONE demotion flag since Round 143 added the trade review floor to them, so no gate can be fixed for some and left open for the others, and each reason travels on the lead so the call sheet can say which. Undemoted leads still go out first on every run, enforced twice: two arrays concatenated at the source, and a comparator term weighed ahead of tier and score that reads all three reasons. The per-category cap is spent only on undemoted leads, so a near-perfect, over-ceiling or thin-review business cannot take a queue slot from the lead behind it. GP_BAND_MODE=cut, GP_SIZE_MODE=cut and GP_FLOOR_MODE=cut each restore the old delete exactly.`);
+      console.log(`✓ RATING BAND CHECK: the star rating reaches exactly one rung and that rung is internal-only, so it can never reach an email; the real ladder returns the same sayable findings at 4.6, 4.9 and 5.0, leading on the same one. So since 2026-09-12 the rating moves the Find score by exactly nothing in either direction — no mark-down above the ceiling and no bonus for a near-perfect average either — asserted by running the real curve at 4.4 and at 4.9 and getting one number, and by the press's own source no longer writing the mark onto the lead. The LOW-rating lift Vin kept is asserted on the same curve, so the equality above cannot pass on a build that has simply stopped reading the rating. Deleting the near-perfect businesses cost 1,810 of 2,892 already-paid-for businesses on the 2026-08-19 run; demoting them instead marked 259 of 480 down ten points on 2026-09-12, 259 of that run's 274 demotions, and Vin ruled out both. The review ceiling, the trade review floor and Google's own flag on a listing still demote: THREE reasons feeding ONE demotion flag, so no gate can be fixed for some and left open for the others, and each reason travels on the lead so the call sheet can say which. Undemoted leads still go out first on every run, enforced twice: two arrays concatenated at the source, and a comparator term weighed ahead of tier and score whose BOTH halves read all three reasons. The per-category cap is spent only on undemoted leads, so an over-ceiling, thin-review or flagged business cannot take a queue slot from the lead behind it — a near-perfect business is no longer on that list and takes its slot like anybody else. GP_BAND_MODE=cut still restores the original star delete exactly, and GP_SIZE_MODE=cut and GP_FLOOR_MODE=cut the other two.`);
     }
   } catch (e) {
     console.log(`⛔ RATING BAND CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -73205,13 +73862,16 @@ app.listen(PORT, () => {
     // Needles assembled at runtime: written as literals they would sit in this
     // check's own source and pass on a build where the demote is gone.
     for (const [_needle, _msg] of [
-      [_n('const _demoted = _outsideBand || _tooBig', ' || _underFloor'),
-        'the thin-review demotion no longer feeds the shared demotion flag, so a lead under its trade review floor takes a per-category cap slot and a queue position from an in-band lead'],
+      // Re-aimed in Round 146: the star band left the shared flag, so this
+      // needle now ends at the reason it is actually about rather than starting
+      // at a reason that no longer exists.
+      [_n('const _demoted = _tooBig || _under', 'Floor || _risk.demote;'),
+        'the thin-review demotion no longer feeds the shared demotion flag, so a lead under its trade review floor takes a per-category cap slot and a queue position from a lead the run means to serve first'],
       [_n('if (GP_FLOOR_HARD_CUT) { skippedUnderFloor++;', ' continue; }'),
         'the review floor deletes on every run again rather than only when GP_FLOOR_MODE=cut is set - the businesses a five-figure engagement is for are the ones with the thinnest review counts'],
       [_n('thinReviews: true, thinReview', 'Note: _underFloorWhy'),
         'the thin-review mark and its sentence no longer travel on the lead, so the sort cannot put it last and the call sheet cannot say why it is'],
-      [_n('(a.outsideBand || a.aboveSizeCeiling || a.', 'thinReviews || a.listingRisk) ? 1 : 0'),
+      [_n('(a.aboveSizeCeiling || a.', 'thinReviews || a.listingRisk) ? 1 : 0'),
         'the discovery sort no longer reads the thin-review demotion, so a lead the press put on the bench climbs straight back over an in-band lead on ICP score'],
       // ── THE TWO COUNTERS THAT REACHED NOTHING, PINNED ────────────────
       // Both were incremented in the press loop and printed on their own log
@@ -73573,10 +74233,15 @@ app.listen(PORT, () => {
       _fails.push('the FIND YIELD row block could not be found in runDiscovery, so nothing here is checking what the yield line prints');
     } else {
       const _block = _rd.slice(_ri, _rd.indexOf(';', _wi) + 1);
-      const _run = (_yy, _returned, _largeN) => new Function('_y', '_bench', 'scored', 'SCALE_TIERS', '_large', 'findYieldWorst',
+      // SITE_LOOKS_GRADES joins the sandbox because the website rows are now
+      // built by mapping over it rather than typed one per word. Without it
+      // this check died with "SITE_LOOKS_GRADES is not defined" - a COULD NOT
+      // RUN, which is the worst outcome of the three: not a red telling you
+      // something is wrong, just a check that stopped covering anything.
+      const _run = (_yy, _returned, _largeN) => new Function('_y', '_bench', 'scored', 'SCALE_TIERS', '_large', 'findYieldWorst', 'SITE_LOOKS_GRADES',
         _block + ' return { rows: _rows, worst: _worst };')(
         _yy, [], new Array(_returned).fill({ source: 'google_places' }), SCALE_TIERS,
-        new Array(_largeN || 0).fill({ source: 'theirstack' }), findYieldWorst);
+        new Array(_largeN || 0).fill({ source: 'theirstack' }), findYieldWorst, SITE_LOOKS_GRADES);
       const _seek = (_o, _frag) => _o.rows.find(r => String(r.say).includes(_frag));
       const _out = _run({ seen: 500, underFloor: 12, notIcp: 387, franchise: 9, alreadyOwned: 4, catCap: 3, demoted: 6 }, 0);
       const _icpRow = _seek(_out, 'ICP');
@@ -82461,7 +83126,51 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       _fails.push('a lead where the Hunter finder was skipped no longer says so, so a log cannot tell "we did not ask" from "we asked and there was nothing" - the unmeasured-as-measured class, on the one route this round exists to make reachable');
     }
     if (_src.indexOf(_n('the Hunter email-finder WAS asked for ${name}', ' and its index has no address')) < 0) {
-      _fails.push('a Hunter lookup that came back empty prints nothing, so a credit is spent with no record of what it bought');
+      _fails.push('a Hunter lookup that came back empty prints nothing, so the one route that asks for a named person leaves no record of what it answered');
+    }
+    // ══ ROUND 146: AN UNREACHABLE HUNTER IS NOT A FACT ABOUT THE PROSPECT ═
+    // That absence line is TRUE on the response path, and it was ALSO being
+    // printed on the throw path, because the finder answered a bare null from
+    // its catch. Three leads in a batch of ten (Winn's, SLC, Oehler) were each
+    // told Hunter's index holds no address for a named person, off a call that
+    // may never have arrived. Its "One credit spent" clause went with it: on a
+    // timeout nothing measured whether a credit moved, and an unmeasured spend
+    // reported as a measured one is the class this file records most.
+    //
+    // Executed on the live table and the live function's own text, with a
+    // needle per English render and a count beside them, because three
+    // hand-kept copies of one rule is how the fourth state went missing from
+    // all three at once.
+    {
+      const _hfSrc = String(hunterFindPersonEmail);
+      const _ci = _hfSrc.lastIndexOf(_n('} catc', 'h(e)'));
+      const _catch = _ci < 0 ? '' : _hfSrc.slice(_ci);
+      if (_ci < 0) _fails.push('the Hunter finder no longer catches anything, so a timeout takes the whole address resolver down with it instead of being reported as unavailable');
+      if (_catch.indexOf(_n("unavailable: true, reason: 'hunter_unre", "achable'")) < 0) {
+        _fails.push('a Hunter lookup that THREW - a timeout, a reset socket, a DNS failure - answers a bare null again, which the caller cannot tell from an empty index, so a row is told "its index has no address for them" about a request that may never have reached Hunter');
+      }
+      if (/\breturn null\b/.test(_catch)) {
+        _fails.push('the Hunter finder still returns a bare null from its catch, so a failure of ours is reported to the rep as a fact about the business');
+      }
+      if (_src.indexOf(_n('One credit spent; this is a fact', ' about their record')) >= 0) {
+        _fails.push('the empty-index line claims a credit was spent, which nothing on that path measured - unmeasured spend reported as measured');
+      }
+      const _states = ['hunter_key_rejected', 'hunter_out_of_credits', 'hunter_rate_limited', 'hunter_unreachable'];
+      const _says = _states.map(_r => hunterBlockedSay(_r));
+      if (_says.some(_s => !_s)) _fails.push('one of the four reasons a paid mailbox lookup did not happen has no sentence, so the log prints an empty bracket where the cause belongs');
+      if (new Set(_says).size !== 4) _fails.push('two of the four reasons a paid mailbox lookup did not happen now read the same, so a log cannot tell a dead key from a timeout and the operator is sent to fix the wrong thing');
+      const _unreach = hunterBlockedSay('hunter_unreachable');
+      if (!/did not complete/.test(_unreach)) _fails.push(`an unreachable Hunter is reported as "${_unreach}", which does not say that the lookup never completed`);
+      if (/credit|balance|rejected|out of/i.test(_unreach)) _fails.push(`an unreachable Hunter is reported as "${_unreach}" - a timeout blamed on our balance or our key sends the operator to top up an account that is fine`);
+      if (/no address|has none|nothing there|no record/i.test(_unreach)) _fails.push(`an unreachable Hunter is reported as "${_unreach}", which reads as an absence at the PROSPECT off a request that never arrived`);
+      if (!hunterBlockedSay('')) _fails.push('a block reason nothing recognises renders as an empty sentence, so the line says a lookup was unavailable and names no cause');
+      for (const [_needle, _msg] of [
+        [_n('could NOT check ${name} \u2014 ${hunterBlockedSay(', '_lookupBlocked)}'), 'the route that spends the credit renders its own English again, so a rate limit, a dead key and an unreachable Hunter collapse into "Hunter out of credits"'],
+        [_n(': (_lookupBlocked && !_smtpActuallyRan) ? hunterBlockedSay', '(_lookupBlocked)'), 'the NOT RESOLVED line renders its own English again, so a lookup that never completed is reported there as an empty balance'],
+        [_n(': _lookupBlocked ? hunterBlockedSay', '(_lookupBlocked)'), 'the T4 block reason renders its own English again, so the row shows a blocked guess under a cause that did not happen'],
+      ]) if (_src.indexOf(_needle) < 0) _fails.push(_msg);
+      const _uses = _src.split(_n('hunterBlockedSay(_lookup', 'Blocked)')).length - 1;
+      if (_uses !== 3) _fails.push(`the block reason is rendered from the one table at ${_uses} places, not the three that print it - a fourth copy is a fourth chance to miss a state`);
     }
     // It must not re-open SMTP on a host that stalls: the whole point of this
     // route is that it needs no probe. Without this, every lead it was opened
@@ -82526,7 +83235,7 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     if (_fails.length) {
       console.log(`⛔ OWNER MAILBOX FIRST CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
     } else {
-      console.log(`✓ OWNER MAILBOX FIRST CHECK: the decision-maker's own mailbox is asked for before his company's front desk is accepted. The Find read hands over the Hunter key it was already holding, so the one route that asks for a named person's own address can run at all; the company-mailbox probe HOLDS its answer instead of returning it, so every route below it stays reachable; and the grade tells three states apart that were one - his own desk (smtp_confirmed), his firm's front desk (company_mailbox), and a shared inbox nobody is named against (published_role). A front desk ships sendable only at an owner-run business with a named owner and a measured crew of ${FRONT_DESK_CREW_MAX} or fewer; an unmeasured crew is refused, because we did not look is not the same as the owner reading it himself. An owner named by one word now builds kenny@, which is SMTP-confirmed or dropped, never guessed. Round 140 widened the rule to the half it was missing: his own mailbox is asked for before ANY other person's, not only before a front desk, so a site publishing a colleague (megan@ at JFK Window & Door, ryan@ at Wasatch Recovery) no longer closes the one route that produces an owner address. Executed on the predicate that decides it with those live pairs. A colleague's address is kept when his own cannot be confirmed, because it is real and the rep can use it - and the row says whose desk it is, and scores it below a shared inbox, because an owner-voiced email landing on a named colleague reads as a pitch to forward.`);
+      console.log(`✓ OWNER MAILBOX FIRST CHECK: the decision-maker's own mailbox is asked for before his company's front desk is accepted. The Find read hands over the Hunter key it was already holding, so the one route that asks for a named person's own address can run at all; the company-mailbox probe HOLDS its answer instead of returning it, so every route below it stays reachable; and the grade tells three states apart that were one - his own desk (smtp_confirmed), his firm's front desk (company_mailbox), and a shared inbox nobody is named against (published_role). A front desk ships sendable only at an owner-run business with a named owner and a measured crew of ${FRONT_DESK_CREW_MAX} or fewer; an unmeasured crew is refused, because we did not look is not the same as the owner reading it himself. An owner named by one word now builds kenny@, which is SMTP-confirmed or dropped, never guessed. Round 140 widened the rule to the half it was missing: his own mailbox is asked for before ANY other person's, not only before a front desk, so a site publishing a colleague (megan@ at JFK Window & Door, ryan@ at Wasatch Recovery) no longer closes the one route that produces an owner address. Executed on the predicate that decides it with those live pairs. A colleague's address is kept when his own cannot be confirmed, because it is real and the rep can use it - and the row says whose desk it is, and scores it below a shared inbox, because an owner-voiced email landing on a named colleague reads as a pitch to forward. Round 146 added the fourth unavailable state: a lookup that THREW returns unavailable rather than a bare null, all three English renders read the one declared table, and the line that does claim an absence no longer claims a credit nobody measured.`);
     }
   } catch (e) {
     console.log(`⛔ OWNER MAILBOX FIRST CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -85673,17 +86382,31 @@ const readSiteBuild = ({ pages, links, website, companyName, city, trade, robots
     thinAlt: (seo.checked && seo.imgCount >= 4) ? (seo.imgAltCount / seo.imgCount) < 0.5 : null,
   };
   const need = { markup: markupRead, home: homeRead, contact: homeRead && (contactRead || navRead), robots: rb.checked };
+  // The markers readSiteAge already wrote sentences for, so the row can name
+  // the fault a person can see rather than repeating "the build is dated".
+  // Computed BEFORE the fault loop since Round 146: the published website grade
+  // is decided by readSiteAge's `visible` flag now, and it can only read it if
+  // the evidence travels ON the fault rather than in a sibling field the
+  // verdict is never handed.
+  const agedSay = (age.markers || []).filter(m => m && m.visible).slice(0, 2).map(m => m.say);
   const faults = [], clean = [];
   let gap = 0, measured = 0;
   for (const t of SITE_GAP_TERMS) {
     if (need[t.need] !== true || hits[t.id] === null || hits[t.id] === undefined) continue;
     measured++;
-    if (hits[t.id] === true) { gap += t.points; faults.push({ id: t.id, group: t.group, family: t.family, points: t.points, short: t.short, say: t.say }); }
+    if (hits[t.id] === true) {
+      const _f = { id: t.id, group: t.group, family: t.family, points: t.points, short: t.short, say: t.say };
+      // TWO VISIBLE MARKERS, OR THE PUBLISHED GRADE DOES NOT MOVE. datedBuild
+      // fires on two age markers of which only ONE need be visible, which is
+      // right for the technical gap and not enough for a claim about how a page
+      // LOOKS. So what travels here is the visible SENTENCES themselves and
+      // readSiteLooks counts them, rather than trusting a flag whose evidence
+      // Round 142 shipped empty.
+      if (t.id === 'datedBuild') _f.seen = agedSay.slice();
+      gap += t.points; faults.push(_f);
+    }
     else clean.push(t.id);
   }
-  // The markers readSiteAge already wrote sentences for, so the row can name
-  // the fault a person can see rather than repeating "the build is dated".
-  const agedSay = (age.markers || []).filter(m => m && m.visible).slice(0, 2).map(m => m.say);
   // A fault that FIRED is evidence whatever else we could read. Nothing firing
   // is only evidence when we could read enough text to have seen an absence -
   // otherwise "no faults" means "we could not look", and scoring that as a
@@ -85770,7 +86493,8 @@ const FIND_PRESS_SITE_MAX = Math.max(0, parseInt(process.env.FIND_PRESS_SITE_MAX
 // the queue row's extra blob and are read back by the client and by the score.
 const pressSiteLooks = async (leads) => {
   const all = Array.isArray(leads) ? leads : [];
-  const out = { considered: 0, graded: 0, dated: 0, bad: 0, clean: 0, refused: 0, notReached: 0, noWebsite: 0 };
+  const out = { considered: 0, graded: 0, clean: 0, refused: 0, notReached: 0, noWebsite: 0,
+                byGrade: {}, sized: 0, notSized: 0, byTier: {} };
   if (!FIND_PRESS_SITE_READ) return out;
   const _todo = [];
   for (const c of all) {
@@ -85810,6 +86534,55 @@ const pressSiteLooks = async (leads) => {
           // readSiteLooks discards anyway.
           robots: null, llms: null,
         });
+        // ══ AND THE SIZE, OFF THE SAME BYTES, FOR NOTHING ═════════════════
+        // The whole reason this round exists. signals.scaleBand is assigned
+        // inside the CONTACT READ - ten leads a day - so for the 743 unread
+        // and 1,048 banked leads the tier was a guess off a Google review
+        // count. Vin: "i just want to be able to catgeroize these businesses
+        // properly so we kow the size and can filter through the size", and
+        // separately: "id like to know if we can organzie the size before we
+        // run read ... this owuld speed th rporcess up and make it more cost
+        // effcient". A review count is exactly the wrong instrument for the
+        // business he is after - "quiet succesful", few reviews, real revenue.
+        //
+        // Four of the eight rungs on the size ladder read off a business's own
+        // pages, and the homepage is already in hand and already parsed, so
+        // this costs nothing: no Firecrawl, no model call, no second fetch.
+        const _sig = readFindIcpSignals([{ intent: 'home', url: c.website, finalUrl: r.finalUrl || '', html: r.html, text: r.text }]);
+        const _scale = estimateScaleBand(_sig);
+        // A TENURE guess is not a size. _scaleLadder already flags it, and it
+        // is the same review-count-and-age inference this round exists to stop
+        // publishing as a measurement.
+        const _sized = !!_scale && _scale.guess !== true && Number(_scale.usd) > 0;
+        if (_sized) {
+          c.sizeUsd = Number(_scale.usd);
+          c.sizeTier = sizeTierFromRevenue(c.sizeUsd);
+          c.sizeTierMeasured = true;
+          // ══ IT IS A FLOOR, AND THE ROW MUST SAY SO ═════════════════════
+          // Vin asked for the sizing to be "as accurate as possible", and the
+          // honest answer is that a count a business PUBLISHES is a lower
+          // bound - this file's own words, at the staffProse rung: "a
+          // forty-person firm may publish four". So the error has a known
+          // direction, and the direction is the one that matters: it reads
+          // businesses SMALLER than they are, which is the half of the ladder
+          // Vin works. Marked rather than smoothed over, so a rep reading
+          // "small" knows it means at least small.
+          c.sizeIsFloor = _scale.floor === true || !_scale.verified;
+          c.sizeSay = (SIZE_TIER_SAY[c.sizeTier] || '') + (c.sizeIsFloor ? ' or more' : '');
+          c.sizeWhy = `${_scale.say} - read free off their own homepage at the press${c.sizeIsFloor ? ', and it is a floor: a business publishes at most the people it wants seen, so this is at least this big and never at most' : ''}`;
+          out.sized++;
+          out.byTier[c.sizeTier] = (out.byTier[c.sizeTier] || 0) + 1;
+        } else {
+          // NOT MEASURED, said in those words. Never looked is not measured
+          // zero, and a review-count guess dressed as a size is the defect
+          // the whole round is about.
+          c.sizeTier = SIZE_TIER_UNMEASURED;
+          c.sizeTierMeasured = false;
+          c.sizeWhy = _scale && _scale.guess === true
+            ? 'their homepage says nothing about how big they are; the only thing left was age against review count, which is a guess and is not published as a size'
+            : 'their homepage says nothing about how big they are - no team, no fleet, no locations, no staff count';
+          out.notSized++;
+        }
         const _saw = readSiteLooks(null, 'nobody looked at the page itself - the press reads their markup only', (_build && _build.faults) || []);
         c.siteLooks = _saw.looks;
         c.siteLooksMeasured = _saw.measured === true;
@@ -85822,7 +86595,7 @@ const pressSiteLooks = async (leads) => {
         }
         if (_saw.measured === true) {
           out.graded++;
-          if (_saw.looks === 'bad') out.bad++; else if (_saw.looks === 'dated') out.dated++;
+          out.byGrade[_saw.looks] = (out.byGrade[_saw.looks] || 0) + 1;
         } else out.clean++;
       } catch (e) {
         out.refused++;
@@ -86485,8 +87258,21 @@ const FIND_ICP_TERMS = [
       if (typeof s.rating !== 'number' || !Number.isFinite(r) || r <= 0) return null;
       // The 4.2-4.85 band is the ONE filter in this system with real evidence
       // behind it: both emails that ever earned a reply came from inside it.
-      if (r >= 4.2 && r <= 4.85) return { points: 8, say: `${r} stars - inside the band both replies came from` };
-      if (r > 4.85) return { points: 4, say: `${r} stars - so high there is rarely a complaint to work with` };
+      // ══ ROUND 146: A HIGH RATING IS IRRELEVANT, NOT A PENALTY ══════════
+      // This was the SECOND place the star rating scored a business, and the
+      // agent that removed the first one could not see it: 8/8 inside the
+      // band against 4/8 above it, so a 4.9-star business still lost half
+      // these points after every other star penalty had gone. Vin, asked
+      // twice and answering twice: "trteat grate reviews as normal we dont
+      // not care fi there is anyhting abotu bad reviews that is irrlevant
+      // buisnesses ... take that out completley."
+      //
+      // Above the old ceiling now scores exactly what inside it scores. The
+      // BELOW-the-band branch is deliberately untouched: Vin ruled on the
+      // high end only, and the low end is a separate recorded decision
+      // (2026-08-28, a low rating is pain and is kept and ranked). Naming
+      // that here because it leaves the term asymmetric on purpose.
+      if (r >= 4.2) return { points: 8, say: `${r} stars` };
       return { points: 3, say: `${r} stars - below the band we have evidence for` };
     },
   },
@@ -86694,6 +87480,12 @@ const findIcpScore = (signals) => {
   // demotionPenalty reads CONTACT_RANK_TERMS - the SAME declared table the
   // contact ranker reads - so the two can never disagree about what a demotion
   // costs. Two hand-kept copies of one penalty is how one of them stays wrong.
+  //
+  // ROUND 146: the star band is no longer one of those demotions. The flag
+  // still rides the request from the press, and it now costs this score
+  // nothing, which FIND CONTACT CHECK asserts by handing it in and demanding
+  // the same number. Vin, 2026-09-12: a great rating is irrelevant, which is
+  // not the same as rewarded, so it earns nothing here either.
   //
   // Applied AFTER the ratio and never as a term: a negative max would change
   // the DENOMINATOR, so a demoted lead would be scored out of a different
@@ -87590,18 +88382,19 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // searches are stood down, and the marketing head Hunter looks for is the
   // target on a branch anyway.
   const _headOffice = signals.branchNetwork === true;
-  // Round 144: the second stand-down, in the same shape as the first. The
-  // trade label arrives on the lead from the press (company.industry is what
-  // feeds signals.tradeLabel further down), so this is decided before anything
-  // is bought. BOTH halves are required - see FIND_OWNER_RISK_STANDDOWN.
+  // Round 146: the evidence stands the SEARCHES down, and the trade decides
+  // nothing. signals was read off pages we already hold, above this line, so
+  // the whole rule is settled before a credit moves - and it reads nothing the
+  // wave itself produces. See FIND_OWNER_RISK_STANDDOWN for the 2026-09-12
+  // batch this comes from and for why the licence stage is kept.
   const _riskTrade = (company && company.industry) || '';
-  const _ownerRisk = FIND_OWNER_RISK_STANDDOWN && categoryOwnerRisk(_riskTrade) && ownPagesNameNobody(signals);
-  const paidOwner = opts.paidOwnerLookup !== false && !_headOffice && !_ownerRisk;
+  const _ownerRisk = FIND_OWNER_RISK_STANDDOWN && ownPagesNameNobody(signals);
+  const paidOwner = opts.paidOwnerLookup !== false && !_headOffice;
   out.paidOwnerLookup = paidOwner;
   out.paidOwnerHeadOffice = _headOffice;
   out.paidOwnerRiskStandDown = _ownerRisk;
   if (_headOffice) console.log(`DM [${name}]: a branch of a bigger operation - the signer is at head office, so the paid owner search was not bought (~10 Firecrawl credits saved)`);
-  else if (_ownerRisk) console.log(`DM [${name}]: a ${_riskTrade} business whose own pages name nobody - no team page, no roster, no founder sentence. That field is consolidated into national operators, so the paid owner search was not bought (~6-8 Firecrawl credits saved). The FREE stage still ran, and a ${_riskTrade} business that DOES name its people still buys the wave.`);
+  else if (_ownerRisk) console.log(`DM [${name}]: their own pages named nobody - not one roster row that reads as a person, and no founder sentence - so the paid owner SEARCHES were not bought on this ${_riskTrade || 'local'} business (three searches at 2 Firecrawl credits each, ~6 credits and up to three model calls saved). The state licence register is still searched, because that is where a sole proprietor is filed and he is on nobody's roster, and the FREE stage still read their own pages.`);
   // null means the resolver never ran on this lead, which is a different thing
   // from "it ran and bought nothing". Undefined would read as the second.
   out.ownerStagesRun = null;
@@ -87635,7 +88428,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
         // never open its guard. It is bounded to unsettled leads inside
         // findDecisionMaker, so this does not bill every lead.
         placeId, industry: (company && company.industry) || '',
-        apifyToken, callOnly: !paidOwner,
+        apifyToken, callOnly: !paidOwner, standDownSearchWave: _ownerRisk,
         preFetchedPages: interior,
         navLinks: links,
       });
@@ -87979,7 +88772,22 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   signals.scaleUsd = (_scale && !_scale.guess && Number(_scale.usd) > 0) ? Number(_scale.usd) : null;
   const _size = sizeBand(signals);
   signals.sizeBand = _size.band; signals.sizeConfidence = _size.confidence;
-  out.size = { band: _size.band, confidence: _size.confidence, why: _size.why, tier: signals.scaleBand, say: _scale ? _scale.say : '' };
+  // ══ TWO LADDERS, BOTH ON THE ANSWER, NEITHER PRETENDING TO BE THE OTHER
+  // tier/say are the AFFORDABILITY ladder (can they pay for the premium
+  // line?). sizeTier is Vin's FOUR-WORD ladder (how big are they?), and they
+  // cross-cut - very small, small and medium all sit inside one affordability
+  // band - so the row carries both rather than one standing in for the other.
+  //
+  // The read's own dollars beat the press's. signals.scaleUsd is null unless
+  // something was actually MEASURED (a verified headcount, a directory's
+  // stated revenue, a published count), so a guessed lead gets no size tier
+  // here at all and the row says "not measured" rather than inventing one.
+  const _sizeUsd = Number(signals.scaleUsd) > 0 ? Number(signals.scaleUsd) : 0;
+  const _sizeTier = sizeTierFromRevenue(_sizeUsd);
+  out.size = { band: _size.band, confidence: _size.confidence, why: _size.why, tier: signals.scaleBand, say: _scale ? _scale.say : '',
+               sizeTier: _sizeTier, sizeTierMeasured: !!_sizeTier, usd: _sizeUsd || null,
+               sizeSay: _sizeTier ? (SIZE_TIER_SAY[_sizeTier] || '') : '',
+               sizeWord: _sizeTier ? (SIZE_TIER_WORD[_sizeTier] || '') : '' };
   let _layers = readLayers(signals, { ownerNamed: !!(out.owner && out.owner.name) });
   // Round 115: a branch network, a PE-owned company or a national operator is
   // layered by construction - "locally owned and operated" on ClearChoice's
@@ -88091,7 +88899,13 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // siteless: their pages could not be read AT ALL - no website on the listing,
   // or a site that returned nothing. readable is the same flag readLayers uses
   // to refuse a layers verdict, so the two cannot disagree about what we saw.
-  const _lanes = lanesFor({ tier: signals.scaleBand, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true, siteless: signals.readable !== true, phone: !!out.phone, siteMarketingHead: _siteMarketingHead });
+  // sizeTier is passed EXPLICITLY, and it is the field the channel is decided
+  // from. Without it lanesFor falls back to its unmeasured default - which is
+  // 'call' - so every read lead would have been handed to the rep whatever its
+  // size, and the one thing Vin asked the size to decide would have been
+  // decided by nothing. Computed-but-not-passed is the bug class this repo
+  // records most; the boot check below pins this call site by name.
+  const _lanes = lanesFor({ tier: signals.scaleBand, sizeTier: _sizeTier, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true, siteless: signals.readable !== true, phone: !!out.phone, siteMarketingHead: _siteMarketingHead });
   out.lanes = _lanes;
   // Round 114: a layered or owned-elsewhere lead on the call sheet ranks LAST.
   signals.laneLast = _lanes.last === true;
@@ -88492,7 +89306,27 @@ const contactFieldsFrom = (data) => {
     contactLayers: (d.layers && d.layers.verdict) || '',
     contactTarget: d.target || '',
     contactTargetWhy: d.targetWhy || '',
-    contactSizeTier: (d.size && d.size.tier) || '',
+    // ══ ROUND 146: contactSizeTier NOW CARRIES VIN'S FOUR-WORD LADDER ═════
+    // It used to carry d.size.tier, the AFFORDABILITY band - the same answer
+    // contactTier below already ships from lanesFor. Two fields, one answer,
+    // and the client reads THIS one first, so the new ladder had to either
+    // take this name or be silently outranked by the old one on every read
+    // lead. The affordability answer is not lost: it is contactTier, where it
+    // always was. Old rows carrying 'core' or 'below_floor' here are refused
+    // by value on the client, not trusted by name - which is why this is safe
+    // to repurpose rather than needing a third field nobody reads.
+    //
+    // The one casualty is index.html's laneChip, which tested this field for
+    // 'over_ceiling' / 'below_floor'. It is called from nowhere in that file;
+    // named here so the next person does not re-wire it and get a wrong word.
+    contactSizeTier: (d.size && d.size.sizeTier) || '',
+    contactSizeTierMeasured: !!(d.size && d.size.sizeTierMeasured === true),
+    contactSizeTierSay: (d.size && d.size.sizeSay) || '',
+    contactSizeWord: (d.size && d.size.sizeWord) || '',
+    // The CHANNEL, which is the whole point of measuring the size: Vin,
+    // "size kind of decides reachability wise and also decides which channel
+    // we use". lanesFor computes it and, until this line, nothing carried it.
+    contactChannel: (d.lanes && d.lanes.channel) || '',
     contactSizeSay: (d.size && d.size.say) || '',
     // ══ THE TIER THE LOG PRINTS, AND THE ONE THE ROW CARRIED ═══════════════
     // Round 144. Two tiers existed and only the weaker one reached the row.
@@ -88651,35 +89485,23 @@ const _qnum = (v) => (typeof v === 'number' && Number.isFinite(v)) ? v : -1;
 // markup alone but never 'modern' (readSiteLooks holds that a clean-code site
 // can still look terrible with nobody having seen it), so the absence of a
 // verdict is the normal case here and must be inert.
-const queueSiteBadness = (row) => {
-  const x = queueExtraOf(row) || {};
-  // The contact read's verdict wins where it exists - it saw a picture of the
-  // page. The press's markup-only verdict is the fallback, which is the whole
-  // point: it is the only one that exists on an unread lead, and an unread
-  // lead is what the draw order is choosing between.
-  const _m = (x.contactSiteLooksMeasured === true) || (x.siteLooksMeasured === true);
-  if (!_m) return 0;
-  const v = String(x.contactSiteLooks || x.siteLooks || '').toLowerCase();
-  return v === 'bad' ? 2 : v === 'dated' ? 1 : 0;
-};
 const queueReadable = (row) => {
   const x = queueExtraOf(row) || {};
   return ((row && row.website) || x.website || x.placeId) ? 1 : 0;
 };
-// Round B put the website ABOVE the owner-findable guess, deliberately, and it
-// is the one ordering decision in this file that trades one good thing for
-// another. A bad-website lead whose owner we may not find now outranks a
-// tidy-website lead whose owner we probably will. That is right for a business
-// where the rep DIALS - he does not need the owner pre-found to ask for him,
-// and the website IS the pitch. The findable-owner guess still decides the
-// order inside each website group, so it is narrowed, not retired.
+// ══ ROUND 146: THE WEBSITE NO LONGER DECIDES WHO IS READ FIRST ════════════
+// Round B (Round 145) put the website verdict ABOVE the owner-findable guess
+// here and called it "the one ordering trade in this round". Vin had asked for
+// something else - that his rep's LIST contain lower-tier businesses, which
+// likely have bad websites - and said so plainly when he saw it: "i dont want
+// find targeting explcitly bad ones i never said that did i?" His own
+// framing of what the order should read: "size is the golden ticket".
 //
-// It is also switchable by construction: with FIND_PRESS_SITE_READ off no lead
-// carries a measured verdict, every badness is 0, and the draw is exactly what
-// it was before this round.
+// So the tier is gone and the draw is what it was: a lead we can actually
+// work, then how likely we are to reach the owner, then the ICP score. The
+// grade is INFORMATION on the row, not a rank.
 const orderUnread = (rows) => (Array.isArray(rows) ? rows.slice() : []).sort((a, b) =>
   (queueReadable(b) - queueReadable(a))
-  || (queueSiteBadness(b) - queueSiteBadness(a))
   || (_qnum(b.reach_predict) - _qnum(a.reach_predict))
   || (_qnum(b.icp_score) - _qnum(a.icp_score)));
 // done: every claimed lead answered (read or a verdict); partial: something

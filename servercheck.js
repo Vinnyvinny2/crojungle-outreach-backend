@@ -808,7 +808,17 @@ const fake = http.createServer(async (req, res) => {
     return send(res, 200, apifyItems(b));
   }
 
-  if (host === 'api.hunter.io') return send(res, 200, { data: { emails: [], pattern: null } });
+  // Round 146: the email-finder's THROW path. This stub answered 200 with an
+  // empty body on every request, so hunterFindPersonEmail's catch was
+  // unreachable from here and the fixture proved the ABSENCE of the case
+  // rather than the presence of the rule. state.hunterHang holds the socket
+  // open and never answers, which is what a timing-out Hunter does: the
+  // finder's own 10-second cap settles it and the catch runs. The flag is off
+  // unless a case turns it on, so every existing scenario is unchanged.
+  if (host === 'api.hunter.io') {
+    if (state.hunterHang && /email-finder/.test(path)) return;   // answered by nobody, on purpose
+    return send(res, 200, { data: { emails: [], pattern: null } });
+  }
 
   // ── THE FREE NAME-TO-DOMAIN SLATE (round 105) ─────────────────────────────
   // 'findtwin' hands back two different hosts under one name, which is the
