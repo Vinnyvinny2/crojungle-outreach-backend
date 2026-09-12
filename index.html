@@ -1356,7 +1356,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261019;
+const CLIENT_CONTRACT = 20261020;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5742,8 +5742,19 @@ const siteGradeCell = (c) => (!c.contactReadOk || c.contactSiteMeasured !== true
 // (an older read, a lead nobody has read yet) is in the same state and answers
 // the same way here.
 const SITE_LOOKS = ['modern', 'dated', 'bad', 'unknown'];
+// ══ ROUND B: THE PRESS VERDICT IS THE FALLBACK ════════════════════════════
+// The contact read wins where it exists - it saw a PICTURE of the page, and
+// the press only ever sees markup. But until Round B this read the contact
+// field and nothing else, so the bad-websites toggle could only filter leads
+// somebody had already paid to read. On a queue 743 deep against ten reads a
+// day that is almost none of them, which made the toggle a filter over the
+// wrong population.
+//
+// The press verdict fills the gap and is honestly weaker: it can say dated or
+// bad, and it says unknown for everything else - including a site whose code
+// came back clean, because clean code is not the same as looking good.
 const siteLooksOf = (c) => {
-  const v = String((c && c.contactSiteLooks) || '').toLowerCase();
+  const v = String((c && (c.contactSiteLooks || c.siteLooks)) || '').toLowerCase();
   return SITE_LOOKS.indexOf(v) >= 0 ? v : 'unknown';
 };
 // The words, in one place. "not checked" is the house wording for a signal we
