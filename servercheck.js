@@ -1258,6 +1258,70 @@ const runLead = async (b, over, capMs) => {
       ok(/0 of them on a homepage render/.test(srv.log().slice(frLog0)), 'the drop line does not print the render cost of a dropped lead, which is the line that shows it is zero');
       state.biz = hBiz;
     }
+
+    // ══ ROUND 144: THE OWNER WAVE STANDS DOWN WHERE IT BOUGHT NOBODY ═════
+    // Live, 2026-09-11: 32 credits on 10 leads and 21 of them bought nothing.
+    // The paid wave ran on four leads and named nobody on three - The Insight
+    // Program (7), Northgate Park (8), The Colonnade (6) - and all three sit in
+    // ownerRisk categories whose consolidation was declared on GP_CATEGORIES
+    // years before, with the rationale written beside it.
+    //
+    // DRIVEN THROUGH THE ROUTE AND COUNTED OFF THE LEDGER, not off the log. A
+    // log line saying the wave stood down proves the log line, not the spend.
+    // Three leads, because the rule is two halves and a one-sided test would
+    // pass on a build that had stopped looking for owners entirely.
+    {
+      const _isOwnerSearch = (q) => q.host === 'api.firecrawl.dev' && /\/v1\/search/.test(q.path)
+        && !_isSizeQ(q.query) && /owner|principal|founder|president|license|linkedin\.com\/in/i.test(String(q.query || ''));
+      // The MODE decides whether their pages carry a roster at all: only
+      // 'findrich' serves a team page. 'nosettle' strips the owner sentence
+      // from a plain homepage, so those leads name nobody anywhere - which is
+      // the exact shape of Northgate Park and The Colonnade.
+      const _run = async (tag, industry, mode) => {
+        const _b = bizReg(tag); state.biz = _b;
+        const _prevMode = state.mode; state.mode = mode;
+        const _i0 = state.requests.length;
+        const _r = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+          company: { name: _b.company, website: `https://${_b.host}`, phone: '(214) 555-0188',
+                     location: 'Dallas, TX', industry, reviewCount: 180, rating: 4.6 },
+          keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test', verifierKey: '' },
+        });
+        state.mode = _prevMode;
+        return { r: _r, j: _r.json || {}, searches: state.requests.slice(_i0).filter(_isOwnerSearch).length };
+      };
+
+      // THE CONTROL FIRST, or none of this proves anything: a plain trade whose
+      // pages name nobody must still buy the wave. Without this the two
+      // assertions below would both pass on a build that never searches at all.
+      const _ctl = await _run('Rw1', 'Roofing', 'nosettle');
+      ok(_ctl.r.code === 200, `the control lead for the owner-wave stand-down answered ${_ctl.r.code}`);
+      ok(_ctl.searches > 0, 'the CONTROL lead - a roofing contractor whose own pages name nobody - bought zero owner searches, so this fixture cannot reach the paid wave at all and the two assertions below prove nothing');
+      ok(_ctl.j.paidOwnerRiskStandDown === false, 'a plain roofing contractor is marked as an ownerRisk stand-down, so the rule has escaped the flagged categories');
+
+      // THE CASE. Northgate Park and The Colonnade, in one assertion.
+      const _risk = await _run('Rw2', 'Senior Care', 'nosettle');
+      ok(_risk.r.code === 200, `a senior care lead answered ${_risk.r.code} - the stand-down must change what is BOUGHT, never whether the lead completes`);
+      ok(_risk.j.notIcp !== true, 'a senior care lead was DROPPED rather than stood down - the lead is kept, only the paid search is skipped');
+      ok(_risk.searches === 0, `a senior care business whose own pages name nobody still bought ${_risk.searches} owner search(es) against the control's ${_ctl.searches} - that is 21 of the 32 credits the 2026-09-11 batch spent, for three owners who were never there`);
+      ok(_risk.j.paidOwnerRiskStandDown === true, 'the row does not record that the wave was stood down, so a batch that saved the credits reads identically to one that never had the leads');
+
+      // AND THE HALF THAT KEEPS DARREL. The same consolidated category, but
+      // their own team page names people - so there IS an owner to find here
+      // and the wave must still be bought. This is the assertion that stops
+      // the stand-down quietly becoming a category ban.
+      const _named = await _run('Rw3', 'Senior Care', 'findrich');
+      ok(_named.r.code === 200, `a senior care lead with a roster answered ${_named.r.code}`);
+      ok(Number((_named.j.signals || {}).teamCount) > 0, `the senior care lead with a roster read teamCount ${JSON.stringify((_named.j.signals || {}).teamCount)} - without a roster on the row this assertion is testing the fixture, not the rule`);
+      ok(_named.j.paidOwnerRiskStandDown === false, 'a senior care business that names people on its own team page is still stood down - the category was never meant to decide this alone, and an owner-run home in a consolidated field is exactly the lead worth finding');
+      // NOT asserted here: that this lead then BOUGHT searches. Their own team
+      // page names Pete Barnes as Owner, so stage 1 settles and the wave is
+      // rightly never reached - asserting a buy would be asserting the fixture.
+      // The half that matters is the flag above, and the predicate behind it is
+      // executed directly by the boot's own stand-down check.
+      ok((_named.j.owner || {}).name, 'the roster lead found nobody at all, so the stand-down flag above was read on a lead whose pages we apparently could not read either');
+
+      state.biz = hBiz;
+    }
     ok(/plain fetch/.test(String(HJ.readVia || '')), `readVia says "${HJ.readVia}" rather than naming the free read`);
     // Their own navigation, not a paid sitemap: the team, contact and careers
     // pages must all have been found from the homepage's own links.
