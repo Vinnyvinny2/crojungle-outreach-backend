@@ -64193,6 +64193,43 @@ app.listen(PORT, () => {
     const _fails = [];
     const _srcS = selfSourceNoCommentsLF();
     const _nS = (a, b) => a + b;
+    // ══ ROUND 146: THE SECOND PLACE THE STAR RATING SCORED A LEAD ════════
+    // The agent that took the rating out could not see this one: the term
+    // table gave 8/8 inside the old band and 4/8 above it, so a 4.9-star
+    // business still lost half these points after every other star penalty
+    // had gone. Vin, asked twice: "trteat grate reviews as normal ... take
+    // that out completley." Asserted on the TERM and on the whole score, at
+    // both ends, because an equality alone would pass on a build that
+    // stopped reading the rating at all.
+    {
+      const _rt = FIND_ICP_TERMS.find(t => t.id === 'rating');
+      if (!_rt) _fails.push('the rating term is gone from the ICP table entirely, so the denominator moved and every score in the system shifted with it');
+      else {
+        const _at = (r) => { const x = _rt.score({ rating: r }); return x ? x.points : null; };
+        if (_at(4.4) !== _at(4.9) || _at(4.4) !== _at(5.0)) {
+          _fails.push(`the rating term scores ${_at(4.4)} at 4.4 stars, ${_at(4.9)} at 4.9 and ${_at(5.0)} at 5.0 - a high rating is meant to be IRRELEVANT, not a penalty (Vin, 2026-09-12), and this is the second place it scored a lead`);
+        }
+        if (_at(3.5) === _at(4.4)) _fails.push('the rating term gives a 3.5-star business the same points as a 4.4 one, so this equality is passing on a term that stopped reading the rating rather than on one that stopped penalising a high one');
+        if (_rt.score({ rating: null }) !== null) _fails.push('an unrated business scores rather than leaving the denominator, so a business Google has no rating for is charged for our own missing measurement');
+      }
+    }
+    // ══ AND THE NAV LABELS VIN FOUND, REFUSED BY THE NAME DOOR ═══════════
+    // "Anesthesia Options" reached a call sheet as a person with
+    // "Coordinator" as its title. Measured on that exact string before the
+    // fix: all three name doors said yes, because the only thing wrong with
+    // it is the last word. It cost more than a wrong row - a junk pair makes
+    // ownPagesNameNobody read "their pages DO name somebody", so the paid
+    // owner wave buys a search for a business whose pages name nobody.
+    // Both directions, because a door that refuses everything would pass a
+    // refuse-only list and take Darrel with it.
+    {
+      for (const _junk of ['Anesthesia Options', 'Payment Options', 'Service Areas', 'Treatment Plans', 'Our Locations', 'Insurance Coverage']) {
+        if (looksLikeAPerson(_junk)) _fails.push(`"${_junk}" reads as a person, so a nav label can reach the rep as the owner and can tell the owner wave that their pages name somebody - Vin found this exact shape on a live call sheet`);
+      }
+      for (const _real of ['Darrel Jones', 'Mike Taft', 'Chris Winn', 'Shaun Parson']) {
+        if (!looksLikeAPerson(_real)) _fails.push(`"${_real}" no longer reads as a person, so the nav-label refusals have been widened until they take real owners with them - which is worse than the hole they closed`);
+      }
+    }
     for (const [_needle, _msg] of [
       [_nS('  let _settleSaid =',
         ' false;'), 'the once-latch is gone, so the settle sentence prints once per ASK again and the free-settle rate counts duplicates'],
@@ -64662,6 +64699,17 @@ app.listen(PORT, () => {
       [_nd('const websearch = standDownSearchWave ? null : await findOwnerViaWeb',
         'Search(companyName, website, fcKey, apiKey, location)'), 'the resolver ignores the search stand-down, or it stands the LICENCE stage down with it - that register is where a sole proprietor is filed and the only route left to Darrel on a lead whose own pages name nobody'],
       [_nd('out.paidOwnerRiskStandDown = ', '_ownerRisk;'), 'the row cannot say the owner wave was stood down, so a batch that saved the credits looks identical to one that never had the leads'],
+      // ══ ROUND 146: THE TWO MECHANISMS THE WHOLE ROUND IS FOR ═════════════
+      // Both were unguarded until this block, and one of them carried a
+      // comment claiming a check pinned it. That comment was wrong, which is
+      // worse than no comment: the next reader trusts it and moves on.
+      [_nd('const _lanes = lanesFor({ tier: signals.scaleBand, sizeTier:',
+        ' _sizeTier,'), 'the measured size never reaches lanesFor, so the CHANNEL falls back to its unmeasured default - which is "call" - and every read lead goes to the rep whatever its size. That is the one thing Vin asked the size to decide: "size is the golden ticket because size kind of decides reachability wise and also decides which channel we use"'],
+      [_nd('sizeTier: _sizeTier, sizeTierMeasured: !!_sizeTier,',
+        ' usd: _sizeUsd || null,'), 'the four-word size tier is computed and never put on the answer, so the row, the CSV and the size filter all read empty while the log knows the size - which is exactly how Round 144 shipped a tier that was computed, printed and dropped at the wire'],
+      [_nd('const _sig = readFindIcpSignals([{ intent: ', "'home', url: c.website,"), 'the press stops reading their own pages for a size, so no lead in the pool carries a measured one and the tier is a Google review count again - 0 of 300 on 2026-09-12, which is the defect this round exists for'],
+      [_nd('c.sizeTier = sizeTierFromRevenue(', 'c.sizeUsd);'), 'the press measures a size and never writes the tier, so the free measurement is thrown away between the ladder and the row'],
+      [_nd('c.sizeIsFloor = _scale.floor === true ||', ' !_scale.verified;'), 'the row stops saying a published size is a FLOOR, so "small" reads as a measurement when a forty-person firm publishing four people is exactly this file’s own example of why it is not - Vin asked for the sizing to be as accurate as possible, and the honest answer is that the error has a known direction'],
       [_nd('if (website &&', ' !out.notIcp) {'), 'a chain outlet still buys the address lookup'],
       [_nd('out.nonprofit = readNonprofitEvidence({ pages,', ' links });'), 'the contact read no longer looks for nonprofit evidence at all'],
       // Until Round 139 this needle asserted that the nonprofit verdict
