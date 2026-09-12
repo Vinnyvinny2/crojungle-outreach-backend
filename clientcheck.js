@@ -2417,6 +2417,19 @@ let contactTally = null;
                  // cell when owner_confidence stopped being its own column. All
                  // pure, all at module scope, so the guess marker is EXECUTED here.
                  'TIER_SHEET_WORD', 'tierCell', 'revenueBandCell', 'OWNER_GRADE_HEAD', 'EMAIL_GRADE_UNVERIFIED',
+                 // ══ ROUND 146: THE SIZE TIER, THE CHANNEL AND THE GRADE ═══
+                 // Every name here is read by findContactRows, so leaving one
+                 // out does not FAIL this file - it makes it die with
+                 // "<name> is not defined" and cover nothing at all. That is
+                 // exactly what happened when this round landed, and a check
+                 // that crashes is worse than one that goes red: a red tells
+                 // you something is wrong, a crash tells you nothing.
+                 'SIZE_TIER_FIELDS', 'SIZE_MEASURED_FIELDS', 'SIZE_SAY_FIELDS', 'SIZE_TIER_BY_WORD',
+                 'sizeTierOf', 'sizeStateOf', 'SIZE_NOT_MEASURED', 'sizeSayOf',
+                 'channelCell', 'channelOf', 'CHANNEL_FIELDS', 'CHANNEL_SAY',
+                 'SIZE_FILTER_UNMEASURED', 'SIZE_FILTER_KEYS', 'SIZE_FILTER_LABEL',
+                 'sizeFilterKeyOf', 'sizeFilterSet', 'sizeFilter', 'sizeFilterHidden', 'sizeFilterHiddenSay',
+                 'SITE_GRADE_FIELDS',
                  // Round 141: the SECOND website verdict - what a visitor sees -
                  // and the toggle Vin asked for, which filters the rep's rows on
                  // it. Every one of these is pure and at module scope so the
@@ -2477,7 +2490,11 @@ let contactTally = null;
     // Round 141: the four words the visual verdict may take. contactFieldsFrom
     // guards the field against this list rather than against a retyped copy, so
     // the list has to be in the sandbox the row builder is executed in.
-    _lift(/const SITE_LOOKS_WORDS = \[[^\]]*\];/, 'SITE_LOOKS_WORDS'),
+    // ROUND 146: the four grades are a declared list and the word set is
+    // derived from it, so this stopped being a literal array. Both are
+    // lifted, grades first - the derived one reads it.
+    _lift(/const SITE_LOOKS_GRADES = \[[^\]]*\];/, 'SITE_LOOKS_GRADES'),
+    _lift(/const SITE_LOOKS_WORDS = [^;]*;/, 'SITE_LOOKS_WORDS'),
   ].join('\n');
   const got2 = {};
   walk(ast, (n) => {
