@@ -1,12 +1,19 @@
 ---
 name: business-and-icp
-description: "L1 STRATEGY: Business context for CROJungle outreach: what is sold and at what price (premium $35k sites, $10k/mo retainers, AI builds; the never-advertised lower tier), who buys (founder-led trades and owner-operated practices on the $800k-$15M ladder whose ceiling is a reachability rule and not a price one; bigger companies are email leads, a franchisee is never a lead and a nonprofit is), and why the cold email's only job is to earn a reply, with the one email that did. Use when asked what we sell, whether a lead or finding fits the ICP, whether a finding is sellable, or what a good email looks like."
+description: "L1 STRATEGY: Business context for CROJungle outreach: what is sold and at what price (premium $35k sites, $10k/mo retainers, AI builds; the never-advertised lower tier), who buys (founder-led trades and owner-operated practices on the $800k-$20M ladder cut into four published size tiers, where size also picks the channel (call under $10M, email above); bigger companies are email leads, a franchisee is never a lead and a nonprofit is), and why the cold email's only job is to earn a reply, with the one email that did. Use when asked what we sell, whether a lead or finding fits the ICP, whether a finding is sellable, or what a good email looks like."
 ---
 # Business and ICP — what CROJungle sells, to whom, and what the email must do
 
 **Goal:** After reading this, Claude can decide whether a lead or a finding fits what CROJungle sells, and at which price tier.
 
 Copied verbatim from CLAUDE.md (commit b01d952) lines 10-87 (PART 1). The seven non-negotiable rules stay in CLAUDE.md; what is PROVEN by real replies is the skill `evidence-and-priorities`.
+
+**Read the dated sections at the bottom before acting on the numbers in this block.** It is a
+historical copy and is deliberately left byte-exact (`docs/history/verify-split.sh` proves it), so
+every later ruling is APPENDED rather than edited in. Two of its figures are already superseded: the
+**ceiling is $20M**, not the $15M written below (Vin, 2026-09-12, on researched evidence), and the
+pool is cut into **four published size tiers** where **size also picks the channel** — call at or
+below $10M, email above it.
 
 ## The business
 
@@ -106,3 +113,78 @@ Three rulings the same day about who is a lead at all:
 - **A franchisee is not a lead, in either lane** — not demoted, not emailed, dropped. A franchise agreement can hand the franchisee a call centre the brand contracts and a website the brand supplies, so the call we place can land at a third party and the site we would audit is not his to change. No revenue band filters them, at any size, so this has to be a fact rule and not a number. The brand-level marks are unchanged: a branch network, a PE-owned operator and a national operator are still kept and routed to email ([§114](../../../docs/history/round-114.md)).
 - **A nonprofit is a lead.** It used to be dropped on a /donate page or a 501(c)(3) line. A nonprofit whose CEO is named and reachable is a person who can say yes, which is the only test this note has ever applied.
 - **A professional practice is an email lead**, off the rep's call sheet. The practices stay inside the ICP; the phone is not the way in to them.
+
+## Superseded on 2026-09-12 by Vin — the ceiling is **$20M**, and this time it has evidence
+
+The two sections above are the record of what was reversed, and they stay: a reversal with no record
+of what it reversed is how the same drift happens twice.
+
+**Why it moved again.** The $15M of 2026-09-11 won an argument, not a measurement — the code had
+drifted to $35M, this note said $15M, and Vin ruled that the written ICP wins. That is a correct way
+to stop two copies disagreeing and no reason at all to believe $15M. Asked on 2026-09-12 for the
+number rather than a pick — *"find me the ideal range for whats still reachabile either cold callign
+wise or email wise"* — three independent lines were researched and they cross in the same place:
+
+1. **Cold email reply falls almost linearly with headcount.** Belkins, 7.5M emails sent in 2025:
+   under 10 people 0.72%, 11–50 0.49%, 10,000+ 0.22%. Sales.co over 2M+: businesses of 1–10 people
+   return **18.2% positive** replies against **3.4%** at 5,000+. Woodpecker/Stealery: 1–100 8–15%,
+   100–1,000 4–8%, 1,000+ 1–3%. The break sits near **100 people**.
+2. **Who still buys from an agency at all**, converging across six sources: under $1M freelancers;
+   $1M–$5M one in-house marketer plus agencies; $5M–$25M a 3–6 person team with agencies for
+   overflow; **above $25M a full department and agencies get defined projects only.**
+3. **PE roll-ups in these exact trades:** the *platform* acquisition is a **$20M–$80M** operator and
+   the add-ons are $2M–$15M independents. Once a business is the platform, marketing technology and
+   lead routing centralise at corporate and the local owner stops deciding. Vin: *"big PE comapneis
+   woukd never work for cold outreach"*.
+
+At $200k of revenue a head, **100 people is about $20M**, and all three cross there. **Honest shape:**
+lines 1 and 2 are general B2B, not trades; only line 3 is trade-specific. It is better evidenced than
+$15M or $35M ever were, and it is still an affordability-and-reachability judgement rather than a
+measurement of our own results — we have never sold to a $20M business.
+
+**Two rules this research independently confirmed**, which matter more than the ceiling: **owners and
+founders reply more than any other job title** (0.57% against 0.32% for VPs), and asking a
+receptionist for the owner by name works **60–70% of the time**, falling off above ~200 people. The
+owner-first rule and the rep's approach are both sound, and the approach's limit sits past the point
+where the buyer has already gone.
+
+**What the ceiling now DOES is narrower than §114 said.** §114 gave the email lane no ceiling — a big
+company was an email lead at any size. Vin put a ceiling on the whole ICP instead: *"over 30m is
+dropped for now higher tiers are more so email leads btu we arent wokring on email yet so we jsut
+need a nice qway to organzie and categroize them."* So **over the ceiling is no lane at all today**,
+not an uncapped email lane. **§114's reach exception survives untouched** and is the one way back onto
+the call sheet: an owner-run business with measured dollars under `ICP_CALL_REACH_CEILING` is still
+called, which is DMI Paving at $24M. **Round 139's headroom survives too**: a business over the cap on
+a *guess* stays callable, because a guess is the thing most likely wrong.
+
+## Four published size tiers, and size picks the channel (Vin, 2026-09-12)
+
+> *"break catgeroize that pool into 4 teirs very small , small, meidum large … size is the golden
+> ticket because size kind of decides reachability wise and also decides which channel we use."*
+
+| tier | revenue | channel | why |
+|---|---|---|---|
+| **very small** | under $1.5M | call | the owner answers his own phone |
+| **small** | $1.5M–$4M | call | one CSR; ask for the owner by name |
+| **medium** | $4M–$10M | call | an office team, but the owner still decides marketing |
+| **large** | $10M–$20M | **email** | a GM and a Sales/Marketing Manager exist |
+| — | over $20M | none | not a lead today |
+
+**This is a SECOND ladder, not a rename of the affordability band, and the distinction is load-bearing.**
+`ICP_REVENUE_BAND` answers *what can they pay* and its cuts are prices — `coreFrom` is $1.2M because a
+$10k/mo retainer is 10% of $1.2M, and a boot check proves it against the price list. These four cuts
+answer *how big are they*, and the two cross-cut: very small, small and medium all sit inside one
+affordability band. Kept apart, both stay provable, and a row can say "small · lower tier" against
+"medium · premium fit", which is the who-closes-it question. They live as `ICP_SIZE_TIERS`, and only
+two numbers are typed there — the $10M and $20M lines are read from `ICP_REVENUE_BAND`.
+
+**The $10M channel line is researched, and it is not about the phone being answered.** Four
+trades-specific staffing sources give one ladder: under $1.5M the owner answers his own phone (1–2
+techs, booking calls between estimates); ~$1.5M buys the first full-time CSR or dispatcher, the
+"unlock hire"; $3M splits CSR from dispatcher and adds an office manager; $5–10M runs 2–3 CSRs, a
+dispatcher and an ops manager **with the owner still deciding marketing**; $10–20M adds a GM **and a
+Sales/Marketing Manager**. The ratio holds across all four: one office person per 3–4 technicians, at
+$250–350k of revenue per technician. So the line is where **somebody other than the owner owns
+marketing**. Above it, the rule this note already carries applies: ask for the marketing
+decision-maker one rung down. **Weakest on the professional practices** — a ten-person law firm at
+$1.75M has a receptionist and a different shape.

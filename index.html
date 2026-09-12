@@ -246,6 +246,13 @@ const persistedFieldsFrom = (l) => ({
       // it - the same shape as reachPredict and the other five above.
       contactSiteLooks: l.contactSiteLooks ?? null,
       contactSiteLooksWhy: l.contactSiteLooksWhy ?? null,
+      // Round 146: the size tier, its dollar range and the channel. All
+      // three are measured once on a paid read, and the filter and the
+      // sheet that read them are worthless the moment a reload blanks them.
+      contactSizeTier: l.contactSizeTier ?? null,
+      contactSizeTierMeasured: l.contactSizeTierMeasured ?? null,
+      contactSizeTierSay: l.contactSizeTierSay ?? null,
+      contactChannel: l.contactChannel ?? null,
       // ── THE AUDIT'S OWN CONTEXT ──────────────────────────────────────
       // auditedWebsite and domainMatch were merged onto the lead and never
       // saved, so after a reload the Research tab reported "No website audited
@@ -923,6 +930,12 @@ const rowToLead = (r) => ({
   contactRankWhy: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactRankWhy) || '',
   contactSiteLooks: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactSiteLooks) || '',
   contactSiteLooksWhy: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactSiteLooksWhy) || '',
+  contactSizeTier: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactSizeTier) || '',
+  // Read back as the THREE states it was written as: a null here means the
+  // build that read the lead never measured size, and that is not false.
+  contactSizeTierMeasured: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactSizeTierMeasured) ?? null,
+  contactSizeTierSay: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactSizeTierSay) || '',
+  contactChannel: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.contactChannel) || '',
   auditedWebsite: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.auditedWebsite) ?? null,
   homepageContent: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.homepageContent) || '',
   valueEquation: (r.brain_audit && r.brain_audit._persisted && r.brain_audit._persisted.valueEquation) || null,
@@ -1356,7 +1369,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261020;
+const CLIENT_CONTRACT = 20261021;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5665,55 +5678,202 @@ const laneKey = (c) => { const l = laneOf(c); return l.call ? 'call' : l.email ?
 // The rep's sheet is the CALL lane and nothing else - the CSV, the Google
 // Sheet and the count on the button all read this one rule.
 const exportableContact = (c) => contactTabOf(c) === 'read' && hasContactData(c) && laneOf(c).call === true;
-const sizeCell = (c) => !c.contactReadOk ? '' : (c.contactSize || 'not measured');
-// ══ ROUND 144: THE TIER THE REP ASKED FOR, AND THE GUESS MARKED IN IT ═════
-// Vin, 2026-09-12, of a tier table built by hand off the Render log: "absoilety
-// love this table i wantv when we export it to look like this". The table did
-// not exist in the product. lanesFor computed the tier on every read, the
-// TARGET line printed it, and contactFieldsFrom copied four of its seven keys
-// - so the sheet a rep dials off could not say whether a business was a $900k
-// shop or a $12M one.
+// ══ ROUND 146: THE SIZE THE REP FILTERS ON, IN VIN'S FOUR WORDS ═══════════
+// Vin, 2026-09-12: "i want to be able to filter through size i want all sizes
+// so it needs to be clealryb marked their size", and the four tiers he set the
+// same day - very small under $1.5M, small $1.5M-$4M, medium $4M-$10M, large
+// $10M-$20M, and over $20M is dropped.
 //
-// The words are the rep's, not the ladder's: over_ceiling is TOO BIG, not
-// "high". SIZE_WORD on the server cannot be reused for this - it collapses
-// over_ceiling into high, which is the one distinction this column exists to
-// make. The DOLLARS are never written here: the band arrives from the server's
-// SCALE_BAND_SAY, derived from ICP_REVENUE_BAND, so moving the band moves the
-// sheet and the two cannot drift.
+// WHAT THIS REPLACES. TIER_SHEET_WORD published LOW / LOW / MEDIUM / HIGH /
+// TOO BIG over the five AFFORDABILITY tiers (below_floor .. over_ceiling),
+// which answer "what can they pay?" - a different question from "how big are
+// they?". Two of the five printed the same word, so a $900k one-truck shop and
+// a $1.4M one read identically, and the column a rep filtered on could not
+// tell him which businesses to work first. The keys here are the SIZE ladder's
+// ids and nothing else: an affordability id arriving in the same field is not
+// one of Vin's sizes and prints as a size nowhere.
+//
+// THE WORDS ARE TYPED HERE AND THE DOLLARS ARE NOT - Round 144's rule stands.
+// The range arrives from the server, derived from ICP_REVENUE_BAND, so moving
+// the band moves the sheet and the two cannot drift. A dollar figure typed in
+// this file would be a second copy of the ladder.
 const TIER_SHEET_WORD = {
-  below_floor: 'LOW', entry: 'LOW', core: 'MEDIUM', upper: 'HIGH', over_ceiling: 'TOO BIG',
+  very_small: 'very small', small: 'small', medium: 'medium', large: 'large', over_icp: 'over the ICP',
 };
-// Four of eight rows in the 2026-09-11 batch got their tier from a review
-// count - Northgate at 82 reviews and Monticello at 12 both landed in LOW, and
-// the research found no established relationship between review count and
-// revenue. Vin's ruling the next day was to mark it inside the cell rather
-// than in a column beside it, because a rep scanning five columns never reaches
-// the sixth. So a guess SAYS it is a guess, and its revenue band says nothing
-// at all rather than inventing a range - never looked is not measured zero.
+// WHICH FIELD CARRIES IT. The read is merged onto the row with every other
+// contact field, so the boundary may prefix it the way it prefixes the rest;
+// the raw name lanesFor returns is accepted too. Either way the VALUE decides:
+// a candidate is taken only if it is one of Vin's ids, or his word for it, so
+// an old-ladder 'core' or 'upper' sitting in the same field falls through and
+// the row says nobody measured the size - the honest answer for a lead an
+// older build read.
+const SIZE_TIER_FIELDS = ['contactSizeTier', 'sizeTier'];
+const SIZE_MEASURED_FIELDS = ['contactSizeTierMeasured', 'sizeTierMeasured'];
+const SIZE_SAY_FIELDS = ['contactSizeTierSay', 'sizeSay', 'contactSizeSay'];
+const SIZE_TIER_BY_WORD = Object.keys(TIER_SHEET_WORD)
+  .reduce((m, id) => { m[TIER_SHEET_WORD[id]] = id; return m; }, {});
+const sizeTierOf = (c) => {
+  for (const k of SIZE_TIER_FIELDS) {
+    const raw = String((c && c[k]) || '').trim().toLowerCase();
+    if (TIER_SHEET_WORD[raw]) return raw;
+    if (SIZE_TIER_BY_WORD[raw]) return SIZE_TIER_BY_WORD[raw];
+  }
+  return '';
+};
+// THREE STATES, and the third is the whole reason this is a function and not a
+// lookup. Never looked is not measured zero:
+//   none        nobody read this lead, or a build that did not measure size at
+//               all read it - the tier and the range go out EMPTY, because a
+//               business nobody sized is not a small business.
+//   unmeasured  this build read it and nothing could size it - the cell says
+//               "not measured" in words, and no dollar range is printed.
+//   measured    a tier was measured - his word for it, and the server's range.
+const sizeStateOf = (c) => {
+  if (!c || c.contactReadOk !== true) return 'none';
+  for (const k of SIZE_MEASURED_FIELDS) {
+    if (c[k] === true) return sizeTierOf(c) ? 'measured' : 'unmeasured';
+    if (c[k] === false) return 'unmeasured';
+  }
+  return sizeTierOf(c) ? 'measured' : 'none';
+};
+const SIZE_NOT_MEASURED = 'not measured';
+// The dollar range, never derived here. A value counts only if it carries a
+// dollar sign: the older build's size SENTENCE lives in one of the same fields
+// and a sentence is not a range.
+const sizeSayOf = (c) => {
+  for (const k of SIZE_SAY_FIELDS) {
+    const v = String((c && c[k]) || '').trim();
+    if (v && v.indexOf('$') >= 0) return v;
+  }
+  return '';
+};
+// The 'size' column, which is the one a rep reads first. A lead we READ and
+// could not size says so in words here - that state is the common one today
+// and a blank cell would read as a bug in the file. Empty only when nobody
+// read the business at all.
+const sizeCell = (c) => {
+  if (!c || c.contactReadOk !== true) return '';
+  return sizeStateOf(c) === 'measured' ? (TIER_SHEET_WORD[sizeTierOf(c)] || SIZE_NOT_MEASURED) : SIZE_NOT_MEASURED;
+};
+// The 'tier' and 'revenue_band' columns, which are the pair Round 144 built.
+// They keep the stricter rule: a lead read before the size ladder existed
+// carries no token at all, and both cells are EMPTY for it - 'very small'
+// would be an invention and 'not measured' would claim we looked.
 const tierCell = (c) => {
-  if (!c || !c.contactReadOk) return '';
-  const w = TIER_SHEET_WORD[String(c.contactTier || '')] || '';
-  if (!w) return '';
-  return c.contactTierMeasured === true ? w : (w + ' (guess)');
+  const s = sizeStateOf(c);
+  return s === 'none' ? '' : s === 'unmeasured' ? SIZE_NOT_MEASURED : (TIER_SHEET_WORD[sizeTierOf(c)] || SIZE_NOT_MEASURED);
 };
 const revenueBandCell = (c) => {
-  if (!c || !c.contactReadOk) return '';
-  if (!TIER_SHEET_WORD[String(c.contactTier || '')]) return '';
-  return c.contactTierMeasured === true ? (c.contactTierBand || '') : 'not measured';
+  const s = sizeStateOf(c);
+  return s === 'none' ? '' : s === 'unmeasured' ? SIZE_NOT_MEASURED : sizeSayOf(c);
 };
-// Round 118 (Vin: "a company with a bad or poor website"). The one signal on
-// the sheet that says whether they NEED us rather than whether they can pay.
-// FACTS ONLY: "poor (DIY build, no schema)" - never "converts badly", which is
-// a claim about their business we cannot measure from their markup.
-// Round 120, Vin: "dont need a descritpion on why theyre good or bad, just
-// good fair bad." He is right, and the reason is Round 117's: this cell is one
-// of nineteen a rep scans, the grade beside it already carries the detail as a
-// number, and the whole sentence is one tick box away in the `siteWhy` column
-// of the full file. "poor (DIY build, no schema)" was a sentence pretending to
-// be a token.
-const siteCell = (c) => !c.contactReadOk ? ''
-  : c.contactSiteMeasured !== true ? 'not read'
-  : shortCell(c.contactSiteWord || 'not read');
+// ══ AND THE CHANNEL, WHICH FALLS OUT OF THE SIZE ══════════════════════════
+// $10M is where a trades business hires a GM and a sales manager and the owner
+// stops deciding marketing: at or below it the rep dials, above it the business
+// is written to. The line is the SERVER's and it travels on the row - it is
+// never re-derived here, because one rule kept in two places is the class this
+// file has been bitten by most. A row that never carried a channel says so
+// rather than picking one.
+const CHANNEL_FIELDS = ['contactChannel', 'channel'];
+const CHANNEL_SAY = { call: 'call', email: 'email lane' };
+const channelOf = (c) => {
+  for (const k of CHANNEL_FIELDS) {
+    const v = String((c && c[k]) || '').trim().toLowerCase();
+    if (CHANNEL_SAY[v]) return v;
+  }
+  return '';
+};
+const channelCell = (c) => {
+  if (!c || c.contactReadOk !== true) return '';
+  const ch = channelOf(c);
+  if (ch) return CHANNEL_SAY[ch];
+  // No channel travelled, and WHY decides what the cell may say. Over the
+  // top of the ICP there is no channel because the business is dropped;
+  // below it a missing channel means nobody sized them, which is a
+  // different fact and must not be printed as the same one.
+  if (sizeTierOf(c) === 'over_icp') return 'none - over the ICP';
+  return sizeStateOf(c) === 'measured' ? 'not decided' : 'not decided - size not measured';
+};
+// ══ THE SIZE FILTER (Vin, 2026-09-12) ═════════════════════════════════════
+// He works very small and small first, because that is where the owner answers
+// his own phone. "not measured" is a bucket of its own on purpose: it is a real
+// and today a very common state, and a filter that can neither show it nor
+// exclude it hides how much of a run nobody has sized.
+//
+// Nothing ticked means every size, so a filter nobody set hides nothing. ONE
+// rule, read by the rows and by the count of what they hid - the shape the
+// website toggle already follows.
+const SIZE_FILTER_UNMEASURED = 'unmeasured';
+const SIZE_FILTER_KEYS = Object.keys(TIER_SHEET_WORD).concat([SIZE_FILTER_UNMEASURED]);
+const SIZE_FILTER_LABEL = Object.assign({ unmeasured: SIZE_NOT_MEASURED }, TIER_SHEET_WORD);
+const sizeFilterKeyOf = (c) => (sizeStateOf(c) === 'measured' ? (sizeTierOf(c) || SIZE_FILTER_UNMEASURED) : SIZE_FILTER_UNMEASURED);
+const sizeFilterSet = (want) => {
+  const s = (want && typeof want.has === 'function') ? want : new Set(Array.isArray(want) ? want : []);
+  return new Set(SIZE_FILTER_KEYS.filter(k => s.has(k)));
+};
+const sizeFilter = (leads, want) => {
+  const list = (Array.isArray(leads) ? leads : []).slice();
+  const s = sizeFilterSet(want);
+  return (!s.size || s.size === SIZE_FILTER_KEYS.length) ? list : list.filter(c => s.has(sizeFilterKeyOf(c)));
+};
+const sizeFilterHidden = (leads, want) => (Array.isArray(leads) ? leads : []).length - sizeFilter(leads, want).length;
+const sizeFilterHiddenSay = (n) => !Number(n) ? ''
+  : Number(n) + ' row(s) are hidden by the size filter. Tick the sizes you want, or untick them all, to see them.';
+// ══ ROUND 146: ONE WEBSITE GRADE, IN FOUR WORDS ═══════════════════════════
+// Until this round the sheet carried TWO website verdicts in two vocabularies:
+// a technical word read off their markup (poor / weak / fair / strong) and a
+// visitor verdict read off a picture of the page (modern / dated / bad). A rep
+// scanning the file had to hold both ladders in his head, and "bad" meant one
+// thing in one column and nothing at all in the other.
+//
+// Four words now, worst first: poor / bad / fair / good.
+//
+// WHICH FIELD CARRIES IT, on the same rule as the size above: the candidates
+// are tried in order and a value is taken only if it IS one of the four words,
+// so a retired 'modern' or 'dated' can never be re-read as a grade it never
+// meant. A field whose own measured flag is explicitly false is skipped: a
+// site nobody could read says "not graded" and must never carry a grade.
+//
+// contactSiteWord IS NOT ON THIS LIST, on purpose. That field still carries
+// the technical ladder (poor / weak / fair / strong) counted off their markup,
+// and two of its words also exist in the new vocabulary meaning something
+// else - 'fair' there is a count of invisible faults, 'fair' here is what a
+// visitor meets. Reading it would print the wrong measurement under a
+// right-looking word, and on a lead nobody could grade it would carry a grade.
+// Round 118's rule still holds - FACTS ONLY, and the sentence behind the word
+// is one tick box away in the siteWhy and siteLooksWhy columns.
+const SITE_LOOKS = ['poor', 'bad', 'fair', 'good'];
+const SITE_GRADE_FIELDS = [
+  ['contactSiteGradeWord', 'contactSiteGradeMeasured'],
+  ['contactSiteLooks', 'contactSiteLooksMeasured'],
+  // ══ THE PRESS GRADE IS THE FALLBACK, AND IT IS THE ONLY ONE MOST LEADS HAVE
+  // The two above are set by a PAID contact read. The queue is 743 unread plus
+  // 1,048 banked against ten reads a day, so on all but a handful of rows they
+  // are both empty and this third pair is the whole answer. Round 145 added it
+  // for exactly that reason; it went missing here and was restored on the
+  // record rather than quietly. LAST on purpose: a read that saw a PICTURE of
+  // the page outranks one that only ever saw markup.
+  ['siteLooks', 'siteLooksMeasured'],
+];
+const siteLooksOf = (c) => {
+  for (const pair of SITE_GRADE_FIELDS) {
+    if (c && c[pair[1]] === false) continue;
+    const v = String((c && c[pair[0]]) || '').trim().toLowerCase();
+    if (SITE_LOOKS.indexOf(v) >= 0) return v;
+  }
+  return 'unknown';
+};
+// The words, in one place. "not graded" is the house wording for a signal we
+// do not hold (contactYesNo says it the same way): it is the absence of a
+// verdict about their website, never a verdict that their website is bad.
+const SITE_LOOKS_SAY = { poor: 'poor', bad: 'bad', fair: 'fair', good: 'good', unknown: 'not graded' };
+// Empty on a lead nobody read: a row we never looked at claims nothing at all.
+const siteLooksCell = (c) => (!c || c.contactReadOk !== true) ? '' : SITE_LOOKS_SAY[siteLooksOf(c)];
+// Both website columns the rep's sheet already has read the ONE grade, so the
+// two can never describe one business differently. Which of the two Vin keeps
+// is his call - a column comes off this file at his instruction, never as a
+// tidy-up.
+const siteCell = (c) => siteLooksCell(c);
 // Round 119: the same read as one number, sitting beside the address it is
 // about. 10 is a build with nothing we sell missing from it, 1 is the worst we
 // can measure. A site we could not read gets no grade at all - a 1 there would
@@ -5721,60 +5881,33 @@ const siteCell = (c) => !c.contactReadOk ? ''
 const siteGradeCell = (c) => (!c.contactReadOk || c.contactSiteMeasured !== true
   || typeof c.contactSiteGrade !== 'number') ? '' : String(c.contactSiteGrade);
 
-// ══ ROUND 141: WHAT A VISITOR SEES IS NOT WHAT THE GRADE MEASURES ═════════
+// ══ ROUND 141, RE-AIMED BY ROUND 146: THE BAD-WEBSITES TOGGLE ═════════════
 // Vin, 2026-09-11: "the only adjustment I want to make is a toggle switch
 // that just picks up businesses with fair and bad websites - like if I toggle
 // that on we only target businesses with bad websites."
 //
-// It cannot be built on contactSiteWord above. That verdict is 56% faults
-// nobody can see - schema tags, alt text, robots.txt - so on the run of
-// 2026-09-11 three leads graded "fair" on nothing a human could look at and 7
-// of 10 landed in the one bucket. A toggle reading it would hand the rep a
-// list chosen by invisible markup. So there is a SECOND verdict,
-// contactSiteLooks, measured by rendering their homepage and looking at it:
-// modern / dated / bad / unknown. The two are never mixed: the grade feeds
-// the audit, this feeds the toggle.
+// The rule is unchanged and its vocabulary is not. It used to mean "everything
+// except a site we looked at and found MODERN", and the word modern no longer
+// exists: the grade is poor / bad / fair / good now. Left reading 'modern' it
+// would have matched every row on the screen - a filter that hides nothing,
+// reading as coverage. It means everything except a site we graded GOOD.
 //
-// "unknown" is the one that decides whether this filter is honest. It means we
-// could not look - the page would not load, or it paints itself with
-// JavaScript - and Vin ruled that such a lead is KEPT and marked, never
-// hidden. Never-looked is not looks-fine. A lead carrying no verdict at all
-// (an older read, a lead nobody has read yet) is in the same state and answers
-// the same way here.
-const SITE_LOOKS = ['modern', 'dated', 'bad', 'unknown'];
-// ══ ROUND B: THE PRESS VERDICT IS THE FALLBACK ════════════════════════════
-// The contact read wins where it exists - it saw a PICTURE of the page, and
-// the press only ever sees markup. But until Round B this read the contact
-// field and nothing else, so the bad-websites toggle could only filter leads
-// somebody had already paid to read. On a queue 743 deep against ten reads a
-// day that is almost none of them, which made the toggle a filter over the
-// wrong population.
+// "not graded" is the one that decides whether this filter is honest. It means
+// we could not read the site - the page would not load, or it paints itself
+// with JavaScript - and Vin ruled that such a lead is KEPT and marked, never
+// hidden. Never-looked is not looks-fine, and a lead carrying no verdict at
+// all (an older read, a lead nobody has read yet) is in the same state.
 //
-// The press verdict fills the gap and is honestly weaker: it can say dated or
-// bad, and it says unknown for everything else - including a site whose code
-// came back clean, because clean code is not the same as looking good.
-const siteLooksOf = (c) => {
-  const v = String((c && (c.contactSiteLooks || c.siteLooks)) || '').toLowerCase();
-  return SITE_LOOKS.indexOf(v) >= 0 ? v : 'unknown';
-};
-// The words, in one place. "not checked" is the house wording for a signal we
-// do not hold (contactYesNo says it the same way): it is the absence of a
-// verdict about their website, never a verdict that their website is bad.
-const SITE_LOOKS_SAY = { modern: 'looks modern', dated: 'looks dated', bad: 'looks bad', unknown: 'site not checked' };
-// Empty on a lead nobody read, exactly as siteCell is: a row we never looked
-// at claims nothing at all.
-const siteLooksCell = (c) => (!c || c.contactReadOk !== true) ? '' : SITE_LOOKS_SAY[siteLooksOf(c)];
-// The toggle's rule, read by the rows, by the count of what they hid and by
-// nothing else: everything except a site we looked at and found modern. Two
-// hand-kept copies of one rule is the class this repo records most.
-const siteLooksWanted = (c) => siteLooksOf(c) !== 'modern';
+// ONE rule, read by the rows, by the count of what they hid, and by nothing
+// else. Two hand-kept copies of one rule is the class this repo records most.
+const siteLooksWanted = (c) => siteLooksOf(c) !== 'good';
 const siteLooksFilter = (leads, on) => on === true ? (leads || []).filter(siteLooksWanted) : (leads || []).slice();
 const siteLooksHidden = (leads, on) => (leads || []).length - siteLooksFilter(leads, on).length;
 // A filter that silently shrinks a list is how somebody concludes a press
 // returned nothing. Same shape as exportWithheldSay: how many, why, and how to
 // get them back.
 const siteLooksHiddenSay = (n) => !Number(n) ? ''
-  : Number(n) + ' row(s) are hidden because their website looks modern. Untick "bad websites only" to see them.';
+  : Number(n) + ' row(s) are hidden because their website is graded good. Untick "bad websites only" to see them.';
 // Round 117: a name and one flag of three words, nothing else. The title is
 // already its own lean column (marketingLeadTitle / ownerTitle), the owner is
 // already the owner column, and the provenance moved to the website cell - so
@@ -5937,12 +6070,21 @@ const FIND_CSV_COLUMNS = [
   // Round 110: what the rep asked for - how big, and who to go to.
   ['size', 'size'],
   ['sizeConfidence', 'How sure we are of the size'],
+  // Round 146: the channel the size decides. At or below $10M the owner
+  // still decides marketing and the rep dials; above it the business is
+  // written to. Lean, because a rep working this file has to know which of
+  // the two a row is before he picks up the phone.
+  ['channel', 'channel (call or email)'],
   // Round 118: how much of the website work we sell is missing.
-  ['site', 'Their website (strong / fair / weak / poor)'],
+  // Round 146: one grade in four words, worst first. It replaces BOTH the
+  // technical word (poor / weak / fair / strong) and the visitor verdict
+  // (modern / dated / bad) - two ladders on one sheet is two vocabularies a
+  // rep had to hold in his head.
+  ['site', 'Their website (poor / bad / fair / good)'],
   // Round 141: the second verdict, and the one the toggle filters on. The
   // column is LEAN because the rows in the file were chosen by it - a sheet
   // filtered on a signal it does not print is a list a rep cannot check.
-  ['siteLooks', 'What their website looks like to a visitor (modern / dated / bad)'],
+  ['siteLooks', 'Their website graded in words (poor / bad / fair / good)'],
   ['siteWhy', 'What is missing from their website, in full'],
   // Round 141: the REASON behind the visitor verdict, and the column that
   // makes the verdict auditable. Vin's ask was "make sure the website
@@ -6092,7 +6234,7 @@ const FIND_CSV_PREFIX = ['company', 'target', 'tier', 'revenueBand', 'website',
 const FIND_CSV_ESSENTIAL = FIND_CSV_PREFIX.concat([
   // target moved into the prefix (Round 144); sizeConfidence STAYS - it is the
   // existing sure/likely/guess column and it is not what was dropped.
-  'icp', 'sizeConfidence', 'site', 'siteLooks', 'marketingLead', 'marketingLeadTitle',
+  'icp', 'sizeConfidence', 'channel', 'site', 'siteLooks', 'marketingLead', 'marketingLeadTitle',
   'marketingLeadEmail', 'siteGrade',
   // exported is lean because it answers the one question the file could not:
   // has this row already been handed out.
@@ -6317,7 +6459,15 @@ const findContactRows = (companies) => {
     size: sizeCell(c),
     tier: tierCell(c),
     revenueBand: revenueBandCell(c),
-    sizeConfidence: c.contactReadOk ? (c.contactSizeConfidence || 'unknown') : '',
+    // Round 146: whether this row is his to dial or one queued for email
+    // later. The rep reads the file before he reads the screen.
+    channel: channelCell(c),
+    // Round 146: gated on the size THIS column is about. The old scale
+    // ladder's sure / likely / guess still travels, and printed beside the
+    // new size word it would have said "sure" on a row reading "not
+    // measured" - a sheet contradicting itself about one business.
+    sizeConfidence: !c.contactReadOk ? ''
+      : sizeStateOf(c) === 'measured' ? (c.contactSizeConfidence || 'unknown') : 'not measured',
     site: siteCell(c),
     siteLooks: siteLooksCell(c),
     siteLooksWhy: !c.contactReadOk ? '' : (c.contactSiteLooksWhy || ''),
@@ -6656,6 +6806,15 @@ const leadFromCompany = (company) => {
       contactTargetWhy: company.contactTargetWhy || '',
       contactSizeTier: company.contactSizeTier || '',
       contactSizeSay: company.contactSizeSay || '',
+      // ══ ROUND 146: THE SIZE TIER, ITS RANGE, AND THE CHANNEL ══════════
+      // Three states on the flag, carried as three states: true, false and
+      // "the build that read this lead never measured size". Coerced to
+      // false it would turn an older read into a claim that we looked and
+      // found nothing, which is the one thing the size cell must not say.
+      contactSizeTierMeasured: (company.contactSizeTierMeasured === true || company.contactSizeTierMeasured === false)
+        ? company.contactSizeTierMeasured : null,
+      contactSizeTierSay: company.contactSizeTierSay || '',
+      contactChannel: company.contactChannel || '',
       // Round 144: the tier the sheet prints, carried into Research too. A
       // field the server returns and the promotion drops is the same class
       // this file has recorded four times.
@@ -6966,6 +7125,10 @@ function FindView({
   // the rest of the view: a switch that hides businesses must be pressed on
   // purpose, not remembered from last week.
   const [looksOnly, setLooksOnly] = React.useState(false);
+  // Round 146, Vin's size filter. Nothing ticked means every size, and like
+  // the toggle above it is deliberately NOT remembered: a switch that hides
+  // businesses must be pressed on purpose, not inherited from last week.
+  const [sizePick, setSizePick] = React.useState(() => new Set());
   const [sortBy, setSortBy] = React.useState('fit');
   const [picked, setPicked] = React.useState(() => new Set());
   // The archive.
@@ -7252,14 +7415,16 @@ function FindView({
   const readDisabled = !summary || unread === 0 || !!running || busy === 'read';
 
   // ── SCREEN B ───────────────────────────────────────────────────────────
-  function visibleOf(leads, chipKey, sort, looksOnly) {
+  function visibleOf(leads, chipKey, sort, looksOnly, sizeWant) {
     const pick = siteLooksFilter(batchChipFilter(leads, chipKey), looksOnly);
     const fit = (l) => (typeof l.contactIcp === 'number') ? l.contactIcp : -1;
     // Every state emailStatusOf can return has a rank here: a state missing
     // from this map ranks undefined and the whole comparison collapses to NaN,
     // which silently drops the operator back to a Fit sort.
     const eRank = (l) => ({ verified: 0, company: 1, shared: 2, unverified: 3, none: 4, unreadable: 5 })[emailStatusOf(l)];
-    return pick.slice().sort((a, b) => sort === 'name' ? String(a.name || '').localeCompare(String(b.name || ''))
+    // Round 146: the size filter wraps the same base the chips and the
+    // website toggle produce, so one press cannot mean two sets of rows.
+    return sizeFilter(pick, sizeWant).sort((a, b) => sort === 'name' ? String(a.name || '').localeCompare(String(b.name || ''))
       : sort === 'email' ? (eRank(a) - eRank(b)) || (fit(b) - fit(a))
       : (fit(b) - fit(a)) || String(a.name || '').localeCompare(String(b.name || '')));
   }
@@ -7271,15 +7436,19 @@ function FindView({
     const leads = batch.leads || [];
     const stats = batchCardStats(leads);
     const counts = batchChipCounts(leads);
-    const rows = visibleOf(leads, chip, sortBy, looksOnly);
+    const rows = visibleOf(leads, chip, sortBy, looksOnly, sizePick);
     // The rows and the number the toggle removed come out of the SAME filter
     // on the SAME base, so the count on screen can never be the size of a
     // different set of rows - the rule the chips already follow.
     const looksHidden = siteLooksHidden(batchChipFilter(leads, chip), looksOnly);
+    // Counted on the rows the website toggle left, which is the base the
+    // size filter actually ran on - a count taken off a different base is
+    // how a screen comes to say it hid rows it never had.
+    const sizeHidden = sizeFilterHidden(siteLooksFilter(batchChipFilter(leads, chip), looksOnly), sizePick);
     const selectable = rows.filter(l => queueStateOf(l) === 'read' || queueStateOf(l) === 'failed');
     const sel = new Set(Array.from(picked).filter(id => selectable.some(l => l.id === id)));
     const allOn = selectable.length > 0 && selectable.every(l => sel.has(l.id));
-    const setChipAnd = (k) => { setChip(k); setPicked(new Set(visibleOf(leads, k, sortBy, looksOnly).filter(l => queueStateOf(l) === 'read').map(l => l.id))); };
+    const setChipAnd = (k) => { setChip(k); setPicked(new Set(visibleOf(leads, k, sortBy, looksOnly, sizePick).filter(l => queueStateOf(l) === 'read').map(l => l.id))); };
     const chipEl = (k, label, n) => h('button', {
       onClick: () => setChipAnd(k),
       style: { fontFamily: 'Inter,sans-serif', fontSize: 11, padding: '4px 9px', borderRadius: 5, cursor: 'pointer',
@@ -7308,6 +7477,14 @@ function FindView({
       // is in it, and a lead we could not look at says "site not checked".
       const looks = siteLooksCell(l);
       const looksWhy = String(l.contactSiteLooksWhy || '');
+      // Round 146: his size, and the channel it decides, on the row itself.
+      // A rep scanning the list has to be able to tell a business he dials
+      // from one queued for email later, and a business nobody has sized
+      // from a small one - so an unsized lead says "not measured" here and
+      // carries no dollar range at all.
+      const sizeSay = sizeCell(l);
+      const sizeRange = revenueBandCell(l);
+      const chanSay = channelOf(l) ? channelCell(l) : '';
       // Two honest marks the old card carried and the sheet still does: a name
       // the read could not confirm, and pages that name a different business.
       const held = emailHeldBackOf(l);
@@ -7339,7 +7516,7 @@ function FindView({
           // Round 141: the verdict reads on the row, and the SENTENCE behind
           // it is on hover. A one-word judgement nobody can question is the
           // thing this round exists to replace, so the reason travels with it.
-          h('div', { title: looksWhy || undefined, style: Object.assign({ fontSize: 11, color: T.text3 }, ell) }, who + (where ? ' · ' + where : '') + (looks ? ' · ' + looks : ''),
+          h('div', { title: [looksWhy, sizeRange && sizeRange !== 'not measured' ? 'size ' + sizeRange : ''].filter(Boolean).join(' · ') || undefined, style: Object.assign({ fontSize: 11, color: T.text3 }, ell) }, who + (where ? ' · ' + where : '') + (sizeSay ? ' · ' + sizeSay : '') + (looks ? ' · site ' + looks : '') + (chanSay ? ' · ' + chanSay : ''),
             flags.length ? h('span', { style: { color: T.amberDim } }, ' · ' + flags.join(' · ')) : null)),
         h('div', { style: Object.assign({ fontSize: 10 }, ell) }, emailCell),
         h('div', { style: { textAlign: 'right' } }, action));
@@ -7367,6 +7544,21 @@ function FindView({
           style: Object.assign({}, _toggleStyle, looksOnly ? { color: T.amber, borderColor: T.amber } : null),
           title: 'Only businesses whose website looks dated or bad to a visitor. A site we could not look at is kept and marked "site not checked", never hidden.',
         }, (looksOnly ? '\u2611' : '\u2610') + ' bad websites only'),
+        // ══ ROUND 146: THE SIZE FILTER ═══════════════════════════════
+        // Vin, 2026-09-12: "i want to be able to filter through size i want
+        // all sizes so it needs to be clealryb marked their size." Built
+        // exactly as the toggle above it is built and seated beside it,
+        // because it filters ROWS on the screen and not the file. Nothing
+        // ticked means every size. "not measured" is one of the buckets:
+        // never looked is not small, and today most of a run is unsized.
+        h('span', { style: { color: T.text2 } }, 'Size'),
+        ...SIZE_FILTER_KEYS.map(k => h('button', { key: k,
+          onClick: () => setSizePick(p => { const n = new Set(p); if (n.has(k)) n.delete(k); else n.add(k); return n; }),
+          style: Object.assign({}, _toggleStyle, sizePick.has(k) ? { color: T.amber, borderColor: T.amber } : null),
+          title: k === SIZE_FILTER_UNMEASURED
+            ? 'Leads nobody has sized. Never looked is not the same as small, so they are their own bucket and are never counted as a size.'
+            : 'Businesses measured as ' + SIZE_FILTER_LABEL[k] + '.',
+        }, (sizePick.has(k) ? '\u2611' : '\u2610') + ' ' + SIZE_FILTER_LABEL[k])),
         h('div', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 } },
           h('span', { style: { color: T.text2 } }, 'Sort'),
           h('select', { value: sortBy, onChange: e => setSortBy(e.target.value),
@@ -7376,6 +7568,7 @@ function FindView({
         box(allOn, () => setPicked(allOn ? new Set() : new Set(selectable.map(l => l.id))), !selectable.length),
         'FIT', 'BUSINESS', 'EMAIL', ''),
       looksHidden ? h('div', { style: { padding: '8px 16px', borderBottom: '1px solid ' + T.rowDivider, fontSize: 11, color: T.amberDim } }, siteLooksHiddenSay(looksHidden)) : null,
+      sizeHidden ? h('div', { style: { padding: '8px 16px', borderBottom: '1px solid ' + T.rowDivider, fontSize: 11, color: T.amberDim } }, sizeFilterHiddenSay(sizeHidden)) : null,
       rows.length ? rows.map(row) : h('div', { style: { padding: '18px 16px', fontSize: 12, color: T.text3 } }, 'Nothing under this filter.'),
       h('div', { style: { background: T.surface, borderTop: '1px solid ' + T.border, padding: '12px 16px', display: 'flex', gap: 7, flexWrap: 'wrap', alignItems: 'center' } },
         h('span', { style: { fontSize: 12, color: T.text2 } }, sel.size ? h(React.Fragment, null, h('span', { style: { color: T.text, fontWeight: 500 } }, sel.size), ' selected') : 'Nothing selected'),
