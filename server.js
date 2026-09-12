@@ -164,7 +164,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261017;
+const CONTRACT_VERSION = 20261018;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -7819,6 +7819,11 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   const citiesSearchedByCat = new Map();
   let calls = 0, skippedFranchise = 0, skippedCatCap = 0, skippedTooBig = 0, skippedNoPain = 0, keptNoWebsite = 0, keptBuilder = 0, lowRatingKept = 0;
   // Round 139: branches dropped on the URL Google already handed us, before a credit moves.
+  // ROUND 143A: Google's own word on a listing, and one number wearing many names.
+  let skippedListingRisk = 0;
+  const _riskWhy = [];
+  let skippedListingPhone = 0;
+  const _phoneWhy = new Map();
   let skippedBranchUrl = 0;
   const _branchWhy = [];
   // The review floor is now the gate that decides whether a business is
@@ -7978,12 +7983,25 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
         const _hours = readPublishedHours(p.regularOpeningHours);
         const _noWebsite = !website;
         const _builderSite = !!website && GP_FREE_BUILDER.test(website);
-        if (p.businessStatus && p.businessStatus !== 'OPERATIONAL') continue;
+        // Google's own verdict on this listing, read off the free fields in the
+        // same response. This is the ONE reader of businessStatus at the press:
+        // its answer on an absent status, on 'OPERATIONAL' and on any other
+        // value is identical to the single line it replaces.
+        // COUNTED BEFORE THE FIRST DROP, on purpose. "seen from Google" is the
+        // denominator every loss row is read against, so a listing dropped here
+        // has to be inside it or the row below reports a loss out of a total
+        // that never contained it. Round 143A moved this line up by four gates.
+        seenFromGoogle++;
+        const _risk = readListingRisk(p);
+        if (_risk.drop) {
+          skippedListingRisk++;
+          if (_riskWhy.length < 4) _riskWhy.push(`${name}: ${_risk.why}`);
+          continue;
+        }
         // Trade-aware floor, not one number for every vertical — see reviewFloorFor.
         const _reviewFloor = Number.isFinite(Number(_flt.minReviews))
           ? Math.max(Number(_flt.minReviews), reviewFloorFor(cat.label, MIN_REVIEWS))
           : reviewFloorFor(cat.label, MIN_REVIEWS);
-        seenFromGoogle++;
         // ══ THE FLOOR IS A SORT POSITION, NOT A DELETE ═════════════════════
         // The third demotion reason, built the same way as the two below it so
         // that no gate has to learn a new mechanism: a flag, a sentence the rep
@@ -8144,7 +8162,7 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
         // The floor joined them here rather than anywhere else for that reason:
         // one flag with three inputs cannot be fixed for two of them and left
         // open for the third.
-        const _demoted = _outsideBand || _tooBig || _underFloor;
+        const _demoted = _outsideBand || _tooBig || _underFloor || _risk.demote;
         if (!_demoted) {
           const catCount = perCat.get(cat.label) || 0;
           if (catCount >= PER_CAT_CAP) { skippedCatCap++; _capBlocked = true; _missCap++; continue; }    // one vertical must not flood the queue
@@ -8215,6 +8233,10 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
           // had ever read. Seven open days is not a one-man show, and that is
           // the only capacity signal available before a penny is spent.
           ...(_hours.checked ? { publishedHours: _hours } : {}),
+          ...(_risk.demote ? { listingRisk: _risk.reason, listingRiskNote: _risk.why } : {}),
+          ...(_risk.googleText ? { googleAlertText: _risk.googleText } : {}),
+          ...(_risk.alertLink ? { googleAlertLink: _risk.alertLink } : {}),
+          ...(_risk.serviceArea ? { serviceAreaOnly: true } : {}),
           industry: cat.label, reviewCount: reviews, rating,
           phone: p.internationalPhoneNumber || '',
           jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. ${cat.ownerRisk ? 'Practice \u2014 confirm a reachable owner (field is being PE/DSO-consolidated).' : 'Owner-operated, high reachability.'}${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}${_underFloor ? ` Under the ${_reviewFloor} reviews this run asks of a ${cat.label} business, so it is ranked last: a thin count is work they are losing, not a reason to skip them.` : ''}`,
@@ -8316,6 +8338,35 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
         console.log(`\u{1F517} CHAIN OUTLETS [Places]: ${skippedChain} business(es) dropped as branches of a chain, measured from this run rather than from a list \u2014 ${[..._why.entries()].slice(0, 4).map(([r, names]) => `${r} (${names.join(', ')})`).join(' | ')}. A single owner-operated business does not trade in ${GP_CHAIN_MIN_METROS} metros hundreds of miles apart; the branch manager does not own the marketing, so there is nothing to sell him.`);
       }
     }
+  }
+  // ══ ONE NUMBER, MANY NAMES, MANY METROS ═══════════════════════════════
+  // Run over the WHOLE corpus and the bench, never inside the loop: a network
+  // that surfaces one listing per run is invisible to anything that can only
+  // see the query it arrived on. Name-variance AND metro-variance are both
+  // required, because a number shared under ONE name across metros is a real
+  // multi-branch business and must survive.
+  {
+    const _priorForPhone = Array.isArray(filters.priorLeads) ? filters.priorLeads : [];
+    const _coll = detectPhoneCollisions([...out, ...benched, ..._priorForPhone]);
+    if (_coll.groups.size) {
+      const _keepP = (arr) => arr.filter((l) => {
+        const r = _coll.reasonFor(l);
+        if (!r) return true;
+        skippedListingPhone++;
+        if (!_phoneWhy.has(r)) _phoneWhy.set(r, []);
+        if (_phoneWhy.get(r).length < 3) _phoneWhy.get(r).push(l.name);
+        return false;
+      });
+      const _outP = _keepP(out), _benchP = _keepP(benched);
+      out.length = 0; out.push(..._outP);
+      benched.length = 0; benched.push(..._benchP);
+    }
+  }
+  if (skippedListingRisk) {
+    console.log(`\u{1F6AB} LISTING RISK [Places]: ${skippedListingRisk} listing(s) dropped before anything was spent on them \u2014 ${_riskWhy.join(' | ')}. There is nobody at that listing to sell to, so the drop costs the run nothing and saves a read.`);
+  }
+  if (skippedListingPhone) {
+    console.log(`\u{260E} PHONE COLLISION [Places]: ${skippedListingPhone} listing(s) dropped for publishing a number that already belongs to a differently-named business in another metro \u2014 ${[..._phoneWhy.entries()].slice(0, 3).map(([r, names]) => `${r} (${names.join(', ')})`).join(' | ')}. One number wearing several names across metros is a call centre selling the lead on, not a business the rep can sell to.`);
   }
   // ROUND-ROBIN INTERLEAVE. Results are collected query by query, so they leave this
   // function grouped in category blocks. Every Places lead also scores within a point
@@ -39623,6 +39674,14 @@ const CONTACT_RANK_TERMS = [
   // Round 114 (Vin, 2026-09-03): layered, a branch network, PE-owned or a national
   // operator stays on the call sheet - LAST. The rep asks for the marketing head.
   { id: 'layeredLast', points: -8, why: 'layered or owned elsewhere - on the call sheet last, ask for the marketing head' },
+  // ROUND 143A: the two demotion reasons this round added. They arrived changing
+  // the SORT and not the NUMBER, which is the contradiction Round 110 removed for
+  // the first two - a card reading 90 that sits below a card reading 60, with
+  // nothing on screen explaining it. Thin reviews is the gentler of the two on
+  // purpose: Vin ruled it is a problem to SELL rather than a reason to skip, so
+  // it ranks a lead lower without putting it near the floor.
+  { id: 'thinReviews', points: -4,  why: 'under its trade review floor - a thin count is a problem to sell them, and it ranks below a business already found' },
+  { id: 'listingRisk', points: -10, why: 'Google itself flags this listing, so the reviews and the rating on it cannot be trusted as measurements' },
 ];
 const CONTACT_RANK_MAX_MODIFIER = 18;   // the three positives; asserted at boot
 
@@ -39671,7 +39730,7 @@ const demotionPenalty = (lead) => {
   const _reached = l.marketingLeadFound === true;
   // Round 111: over the ceiling is corporate whoever was found, so that mark is
   // never lifted; the review-ceiling mark still is, because reviews are not size.
-  const want = [['outOfBand', l.outsideBand === true], ['aboveSize', l.aboveSizeCeiling === true && !_reached], ['aboveScale', l.scaleBand === 'over_ceiling'], ['scaleBelowFloor', l.scaleBand === 'below_floor'], ['sizeHigh', l.sizeBand === 'high'], ['layeredLast', l.laneLast === true]];
+  const want = [['outOfBand', l.outsideBand === true], ['aboveSize', l.aboveSizeCeiling === true && !_reached], ['thinReviews', l.thinReviews === true], ['listingRisk', !!l.listingRisk], ['aboveScale', l.scaleBand === 'over_ceiling'], ['scaleBelowFloor', l.scaleBand === 'below_floor'], ['sizeHigh', l.sizeBand === 'high'], ['layeredLast', l.laneLast === true]];
   for (const [id, on] of want) {
     if (!on) continue;
     const t = CONTACT_RANK_TERMS.find(x => x.id === id);
@@ -42449,7 +42508,7 @@ const WEIGHTS = {
         // in-band lead here on ICP score alone. A reason missing from this term
         // is a demotion that survives the press and dies in the sort, which is
         // the one way the bench promise can be broken without any gate changing.
-        const ba = (a.outsideBand || a.aboveSizeCeiling || a.thinReviews) ? 1 : 0;
+        const ba = (a.outsideBand || a.aboveSizeCeiling || a.thinReviews || a.listingRisk) ? 1 : 0;
         const bb = (b.outsideBand || b.aboveSizeCeiling || b.thinReviews) ? 1 : 0;
         if (ba !== bb) return ba - bb;
         const ta = tier(a), tb = tier(b);
@@ -72338,7 +72397,7 @@ app.listen(PORT, () => {
       // the press's two arrays and then climbs back over an in-band lead in
       // the sort, which is the one way the bench promise breaks with every
       // gate still correct.
-      const _n = _needle('const ba = (a.', 'outsideBand || a.aboveSizeCeiling || a.thinReviews) ? 1 : 0');
+      const _n = _needle('const ba = (a.', 'outsideBand || a.aboveSizeCeiling || a.thinReviews || a.listingRisk) ? 1 : 0');
       const _i = _src.indexOf(_n);
       if (_i < 0) {
         _fails.push('the discovery sort no longer puts ALL THREE kinds of demoted lead last, so a demoted 4.9-star business, one above the review ceiling or one under its trade review floor climbs back over the 4.6-star lead we have evidence for');
@@ -72626,19 +72685,19 @@ app.listen(PORT, () => {
     // Needles assembled at runtime: written as literals they would sit in this
     // check's own source and pass on a build where the demote is gone.
     for (const [_needle, _msg] of [
-      [_n('const _demoted = _outsideBand || _tooBig', ' || _underFloor;'),
+      [_n('const _demoted = _outsideBand || _tooBig', ' || _underFloor'),
         'the thin-review demotion no longer feeds the shared demotion flag, so a lead under its trade review floor takes a per-category cap slot and a queue position from an in-band lead'],
       [_n('if (GP_FLOOR_HARD_CUT) { skippedUnderFloor++;', ' continue; }'),
         'the review floor deletes on every run again rather than only when GP_FLOOR_MODE=cut is set - the businesses a five-figure engagement is for are the ones with the thinnest review counts'],
       [_n('thinReviews: true, thinReview', 'Note: _underFloorWhy'),
         'the thin-review mark and its sentence no longer travel on the lead, so the sort cannot put it last and the call sheet cannot say why it is'],
-      [_n('(a.outsideBand || a.aboveSizeCeiling || a.', 'thinReviews) ? 1 : 0'),
+      [_n('(a.outsideBand || a.aboveSizeCeiling || a.', 'thinReviews || a.listingRisk) ? 1 : 0'),
         'the discovery sort no longer reads the thin-review demotion, so a lead the press put on the bench climbs straight back over an in-band lead on ICP score'],
       [_n('tally.demotedUnderFloor = demoted', 'UnderFloor;'),
         'the run no longer reports how many leads it ranked last for a thin review count, so the demotion is as invisible as the delete was'],
       [_n("_row('demoted for a thin review count', _y.", 'demotedUnderFloor, false)'),
         'the yield line has no row for the leads demoted at the review floor, so an operator reading a complete-looking report cannot see the largest thing the floor now does'],
-      [_n("['deleted under the trade review floor', _y.", 'underFloor],'),
+      [_n("_row('deleted under the trade review floor', _y.", 'underFloor, true)'),
         'the yield line still calls the floor row a loss without saying it is a DELETE, so a run that kept every thin lead reads as a run that threw them away'],
       [_n('const med = tradeReviewMedian', '(label);'),
         'the review floor no longer reads the per-trade top-three median at all, so it is back to one guessed number for every vertical'],

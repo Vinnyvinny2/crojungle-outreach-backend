@@ -4026,6 +4026,32 @@ let findStat = null;
       if (_bothSay.split(' and ')[0] === _bothSay.split(' and ')[1]) {
         fails.push('the two demotions are described with the same words, so the row cannot say which one applies');
       }
+      // ── ROUND 143A: TWO MORE REASONS, AND ONE IS THE OTHER'S OPPOSITE ────
+      // The floor demotion means TOO FEW reviews and it now sits beside a
+      // reason that means TOO MANY. That is the same collision the block above
+      // records - one measurement described as another - except this time the
+      // two are contradictory rather than merely alike, so a rep reading
+      // "reviews" in both would dial a lead believing the opposite of what was
+      // measured. Asserted as a property, not a literal: each says something,
+      // no two say the same thing, and the thin-review reason states its
+      // direction rather than naming the measurement alone.
+      const _thin = line({ icpScore: 61, reachPredict: 20, thinReviews: true });
+      const _risk = line({ icpScore: 61, reachPredict: 20, listingRisk: 'review_alert' });
+      if (!/sorted last:/.test(_thin)) {
+        fails.push('a lead demoted for a thin review count says nothing about it, so the rep cannot tell a quiet business from a rejected one');
+      }
+      if (!/sorted last:/.test(_risk)) {
+        fails.push('a lead Google itself flagged says nothing about it, so the row hides the one thing that should decide whether to dial');
+      }
+      const _thinSay = String(_thin.split('sorted last:')[1] || '').trim();
+      const _sizeSay = String(line({ icpScore: 61, reachPredict: 20, aboveSizeCeiling: true }).split('sorted last:')[1] || '').trim();
+      const _riskSay = String(_risk.split('sorted last:')[1] || '').trim();
+      if (_thinSay === _sizeSay || _thinSay === _bandSay || _riskSay === _thinSay || _riskSay === _sizeSay) {
+        fails.push('two demotion reasons are described with the same words, and one pair is a direct contradiction - too few reviews and too many cannot read alike on a row');
+      }
+      if (/\babove\b/.test(_thinSay) || !/\bunder\b|\bthin\b|\bfew\b/.test(_thinSay)) {
+        fails.push('the thin-review demotion does not say it is UNDER the count - beside a reason that means above the ceiling, a row that only says "reviews" tells the rep the opposite of what was measured');
+      }
 
       // ---- 4b. What they can afford, which is the question the list exists
       // to answer. The band is the SERVER's; the browser only labels it. A
