@@ -6324,9 +6324,93 @@ const LOW_VOLUME_HIGH_TICKET = new Set([
   'Accounting', 'Insurance', 'PI Law', 'Estate Law', 'Funeral Homes', 'Managed IT',
 ]);
 const LOW_VOLUME_FLOOR = 5;
-const reviewFloorFor = (label, base) => HIGH_VOLUME_LOW_TICKET.has(label) ? Math.max(base, 40)
-  : LOW_VOLUME_HIGH_TICKET.has(label) ? Math.min(base, LOW_VOLUME_FLOOR)
-  : base;
+
+// ── WHAT A REVIEW COUNT MEASURES, MEASURED ────────────────────────────────
+// Both sets above are judgements about review-per-dollar, and neither was ever
+// checked against a number. Three measurements now say what a count means, and
+// all three say the floor was reading it as size when it reads as ASKING:
+//
+//  1. PACE. US home-service businesses collect a MEDIAN OF 2 Google reviews a
+//     month (ProsperQR, 816,307 reviews across 3,739 US businesses). A 40
+//     floor is therefore not "established" - it is "has been actively asking
+//     for about twenty months". A twenty-year-old $4M plumbing company that
+//     never asks sits in the low double digits.
+//  2. HOW MANY HAVE NONE. 26% of local businesses have ZERO reviews, and 20%
+//     of the businesses RANKING IN GOOGLE'S TOP THREE have none at all
+//     (BrightLocal, 93,845 businesses, 26 industries) - construction and
+//     roofing among the fewest-review trades.
+//  3. IT DOES NO ANTI-SPAM WORK, which is what a floor is assumed to be for.
+//     The FTC action of May 2026 over "Premium Home Service" documents 15,000+
+//     fake Google profiles in these exact trades; the named fakes carried 2,
+//     14 and 37 reviews, and a bought review costs about $5. A floor selects
+//     FOR the businesses that farm reviews.
+//
+// ── AND THE PER-TRADE NUMBER, WHICH IS THE PART THAT WAS GUESSED ──────────
+// The MEDIAN review count of businesses actually ranking in Google's local
+// top three, per category: Local Falcon, 50.4M ranking results across 1,993
+// categories. This is the only per-trade figure available that is measured at
+// the place we are selling a position in, so it is the ceiling on any floor:
+// a floor above its own trade's 3-pack median deletes businesses that are
+// ranking in the top three TODAY.
+//
+// DECLARED with its source and date, like ICP_REVENUE_PER_EMPLOYEE_BY_TRADE.
+// A median of null means we looked and have no figure for that trade - it is
+// a row rather than a blank so nobody borrows the neighbouring trade's
+// number, which is the tempting mistake at every one of them. An unlisted
+// trade uses the base floor and the two sets above, exactly as before.
+//
+// Local Falcon also publishes "general contractor" at 28. No searched category
+// is queried as a general contractor - 'Home Builder' is "custom home builder"
+// and 'Home Additions' is "home addition contractor", which are different
+// Google categories - so the figure is recorded here and mapped to nothing.
+const TRADE_3PACK_REVIEW_MEDIAN = {
+  Construction:            { median: 20,  source: 'Local Falcon 50.4M ranking results / 1,993 categories: "construction" 3-pack median', at: '2026-09-11' },
+  'Tree Service':          { median: 47,  source: 'Local Falcon 3-pack median, "tree service"', at: '2026-09-11' },
+  Electrical:              { median: 56,  source: 'Local Falcon 3-pack median, "electrician" (10th percentile 4)', at: '2026-09-11' },
+  Roofing:                 { median: 79,  source: 'Local Falcon 3-pack median, "roofing"', at: '2026-09-11' },
+  'Garage Doors':          { median: 137, source: 'Local Falcon 3-pack median, "garage doors"', at: '2026-09-11' },
+  Plumbing:                { median: 215, source: 'Local Falcon 3-pack median, "plumber"', at: '2026-09-11' },
+  HVAC:                    { median: 244, source: 'Local Falcon 3-pack median, "HVAC"', at: '2026-09-11' },
+  'Pest Control':          { median: 265, source: 'Local Falcon 3-pack median, "pest control"', at: '2026-09-11' },
+  Dental:                  { median: 346, source: 'Local Falcon 3-pack median, "dentist"', at: '2026-09-11' },
+  // ── LOOKED FOR, NOT FOUND. Each of these sits next to a trade above and
+  // would otherwise inherit its number; every one of those inheritances is
+  // wrong for a reason worth writing down.
+  'Commercial Roofing':    { median: null, source: 'no published 3-pack median; "roofing" 79 is residential and commercial roofing is bid work, not searched work', at: '2026-09-11' },
+  'Commercial Mechanical': { median: null, source: 'no published 3-pack median; "HVAC" 244 is residential service calls, which a commercial mechanical contractor does not take', at: '2026-09-11' },
+  'Home Builder':          { median: null, source: 'no published 3-pack median; "general contractor" 28 is a different Google category from "custom home builder"', at: '2026-09-11' },
+  'Home Additions':        { median: null, source: 'no published 3-pack median; "general contractor" 28 is a different Google category', at: '2026-09-11' },
+  'Cosmetic Dentistry':    { median: null, source: 'no published 3-pack median; "dentist" 346 is general dentistry and cosmetic is a cash-pay sub-search', at: '2026-09-11' },
+  'Dental Implants':       { median: null, source: 'no published 3-pack median; "dentist" 346 is general dentistry', at: '2026-09-11' },
+  Orthodontics:            { median: null, source: 'no published 3-pack median; "dentist" 346 is general dentistry', at: '2026-09-11' },
+  'Oral Surgery':          { median: null, source: 'no published 3-pack median; "dentist" 346 is general dentistry', at: '2026-09-11' },
+  Flooring:                { median: null, source: 'no published 3-pack median; held at 40 by HIGH_VOLUME_LOW_TICKET, which is a judgement and not a measurement', at: '2026-09-11' },
+  Insulation:              { median: null, source: 'no published 3-pack median; held at 40 by HIGH_VOLUME_LOW_TICKET, which is a judgement and not a measurement', at: '2026-09-11' },
+  'Med Spa':               { median: null, source: 'no published 3-pack median; held at 40 by HIGH_VOLUME_LOW_TICKET, which is a judgement and not a measurement', at: '2026-09-11' },
+};
+// The floor is DERIVED from the median, never typed beside it: a typed pair is
+// two hand-kept copies of one judgement, and this file records what that costs.
+// One tenth, because the one published PERCENTILE we have says so - electrician
+// sits at a median of 56 and a 10th percentile of 4, and 56/10 is 6. Read as a
+// floor it means "the thinnest tenth of the businesses at the front of this
+// trade", which is as low as a number can honestly go while still separating a
+// trading business from a listing nobody has used.
+const REVIEW_FLOOR_OF_MEDIAN = 0.10;
+const tradeReviewMedian = (label) => {
+  const row = TRADE_3PACK_REVIEW_MEDIAN[String(label || '').trim()];
+  const n = row ? Number(row.median) : NaN;
+  return (Number.isFinite(n) && n > 0) ? n : null;
+};
+const reviewFloorFor = (label, base) => {
+  const med = tradeReviewMedian(label);
+  // Math.min(med, ...) is the invariant, held structurally rather than by a
+  // reviewer noticing: no trade's floor can exceed its own 3-pack median, so
+  // the floor can never reach a business that is ranking in the top three.
+  if (med !== null) return Math.min(med, base, Math.max(LOW_VOLUME_FLOOR, Math.round(med * REVIEW_FLOOR_OF_MEDIAN)));
+  return HIGH_VOLUME_LOW_TICKET.has(label) ? Math.max(base, 40)
+    : LOW_VOLUME_HIGH_TICKET.has(label) ? Math.min(base, LOW_VOLUME_FLOOR)
+    : base;
+};
 // The base floor lived inside searchGooglePlaces, so nothing at module scope
 // could read the number every other consumer of reviewFloorFor has to agree
 // with. One declaration; the discovery loop reads this.
@@ -7169,6 +7253,23 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   // audited while a better lead exists, which is all the ceiling was ever for,
   // and we stop paying to rediscover it. GP_SIZE_MODE=cut restores the delete.
   const GP_SIZE_HARD_CUT = String(process.env.GP_SIZE_MODE || 'rank').toLowerCase() === 'cut';
+  // ══ AND THE REVIEW FLOOR, WHICH DELETED MORE LEADS THAN ANY OTHER LINE ════
+  // The two above stopped deleting and the FLOOR did not, and the floor is the
+  // single largest deleter in this loop. Every argument that demoted them
+  // applies to it unchanged - Google bills per CALL, a call returns twenty
+  // businesses, so deleting one cannot save a penny, and nothing remembered
+  // the deleted ones, so the next run paid to find them and delete them again.
+  //
+  // It has one argument the other two do not: a thin review count is a thing
+  // we SELL. 47% of consumers will not use a business with under 20 reviews,
+  // so the business with nine of them has a measurable problem and the budget
+  // question is answered elsewhere (job value, published hours, markets seen,
+  // a verified headcount). Deleting it threw away the clearest sellable
+  // finding in the trade lanes, on the one measurement that says nothing about
+  // what a business can afford: US home services collect a median of 2 reviews
+  // a MONTH, and 20% of the businesses ranking in Google's top three have none
+  // at all. GP_FLOOR_MODE=cut restores the delete.
+  const GP_FLOOR_HARD_CUT = String(process.env.GP_FLOOR_MODE || 'rank').toLowerCase() === 'cut';
   const PAIN_BAND_LOW = Number.isFinite(Number(_flt.minRating)) ? Number(_flt.minRating) : 3.8;
   const PAIN_BAND_HIGH = Number.isFinite(Number(_flt.maxRating)) ? Number(_flt.maxRating) : 4.85;
 
@@ -7285,6 +7386,11 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   let skippedUnderFloor = 0, seenFromGoogle = 0;
   let skippedNearPerfect = 0;   // dropped by the ceiling: 4.86 and above
   let demotedTooBig = 0;        // over the review ceiling: benched, not deleted
+  // Two counters, because after this round they answer different questions and
+  // one number reported as the other is what makes a yield line lie: a DELETE
+  // is a lead the run lost, a DEMOTION is a lead the run kept and ranked last.
+  // skippedUnderFloor can only move when GP_FLOOR_MODE=cut is set.
+  let demotedUnderFloor = 0;    // under the trade review floor: benched, not deleted
   // ══ BUSINESSES WE ALREADY OWN, SKIPPED BEFORE THEY COST A SLOT ═══════════
   // Passed in by /api/discover. Absent means no constraint, so every other
   // caller behaves exactly as before.
@@ -7418,7 +7524,27 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
           ? Math.max(Number(_flt.minReviews), reviewFloorFor(cat.label, MIN_REVIEWS))
           : reviewFloorFor(cat.label, MIN_REVIEWS);
         seenFromGoogle++;
-        if (reviews < _reviewFloor) { skippedUnderFloor++; continue; }
+        // ══ THE FLOOR IS A SORT POSITION, NOT A DELETE ═════════════════════
+        // The third demotion reason, built the same way as the two below it so
+        // that no gate has to learn a new mechanism: a flag, a sentence the rep
+        // can read, and one shared _demoted that every gate asks.
+        //
+        // A thin review count is the one demotion reason that is also a SALE.
+        // 47% of consumers will not use a business with under 20 reviews, so
+        // the nine-review business is losing customers it never hears about,
+        // and that is a finding rather than a disqualification. What it is NOT
+        // is a measure of size: US home services collect a median of 2 reviews
+        // a month, 26% of local businesses have none, and 20% of the businesses
+        // ranking in Google's top three have none either. The floor per trade
+        // is capped by that trade's own 3-pack median (reviewFloorFor), so it
+        // can no longer reach a business that is ranking today.
+        let _underFloor = false, _underFloorWhy = '';
+        if (reviews < _reviewFloor) {
+          if (GP_FLOOR_HARD_CUT) { skippedUnderFloor++; continue; }
+          _underFloor = true;
+          demotedUnderFloor++;
+          _underFloorWhy = `${reviews} Google reviews, under the ${_reviewFloor} this run asks of a ${cat.label} business. Kept deliberately: a thin count is a problem to sell rather than a reason to skip them, because 47% of consumers will not use a business with under 20 reviews, so this one is losing work it never hears about. It decides sort position here and nothing else.`;
+        }
         // Website-shape filters. Applied here rather than in the UI so a run
         // looking only for call leads does not spend a query on anything else.
         if (_flt.onlyNoWebsite && !_noWebsite) continue;
@@ -7547,14 +7673,18 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
         // by it. They cannot displace an in-band lead because they are not in
         // the same queue at all.
         //
-        // TWO reasons demote now — outside the rating band, or above the review
-        // ceiling — and every gate below asks the one question that matters to it:
-        // "is this lead demoted?". A gate that named one reason would silently
-        // let the other reason's leads take cap slots and queue positions, which
-        // is the whole thing the demotion exists to prevent. The specific reason
-        // still travels on the lead, because the screen and the call sheet need
-        // to say WHICH.
-        const _demoted = _outsideBand || _tooBig;
+        // THREE reasons demote now — outside the rating band, above the review
+        // ceiling, or under the trade review floor — and every gate below asks
+        // the one question that matters to it: "is this lead demoted?". A gate
+        // that named one reason would silently let another reason's leads take
+        // cap slots and queue positions, which is the whole thing the demotion
+        // exists to prevent. The specific reason still travels on the lead,
+        // because the screen and the call sheet need to say WHICH.
+        //
+        // The floor joined them here rather than anywhere else for that reason:
+        // one flag with three inputs cannot be fixed for two of them and left
+        // open for the third.
+        const _demoted = _outsideBand || _tooBig || _underFloor;
         if (!_demoted) {
           const catCount = perCat.get(cat.label) || 0;
           if (catCount >= PER_CAT_CAP) { skippedCatCap++; _capBlocked = true; _missCap++; continue; }    // one vertical must not flood the queue
@@ -7615,6 +7745,11 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
           // is three copies of one rule. It travels on the lead.
           ...(_outsideBand ? { outsideBand: true, bandNote: _bandWhy } : {}),
           ...(_tooBig ? { aboveSizeCeiling: true, sizeNote: _tooBigWhy } : {}),
+          // Carried for the same reason as the two above: the sort, the screen
+          // and the call sheet each need to know this lead is behind the queue
+          // and WHY, and three copies of one rule recomputed from the review
+          // count is three chances to disagree about one business.
+          ...(_underFloor ? { thinReviews: true, thinReviewNote: _underFloorWhy } : {}),
           ...(_lowRating ? { lowRating: true, lowRatingNote: `${rating} stars. Kept deliberately: rating is one of the inputs Google weighs in the local pack, so a low-rated business is genuinely harder to find and has more reason to buy. Whether it is bad marketing or bad work is what the audit answers.` } : {}),
           // The hours Google already sent us on this same call, which nothing
           // had ever read. Seven open days is not a one-man show, and that is
@@ -7622,7 +7757,7 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
           ...(_hours.checked ? { publishedHours: _hours } : {}),
           industry: cat.label, reviewCount: reviews, rating,
           phone: p.internationalPhoneNumber || '',
-          jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. ${cat.ownerRisk ? 'Practice \u2014 confirm a reachable owner (field is being PE/DSO-consolidated).' : 'Owner-operated, high reachability.'}${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}`,
+          jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. ${cat.ownerRisk ? 'Practice \u2014 confirm a reachable owner (field is being PE/DSO-consolidated).' : 'Owner-operated, high reachability.'}${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}${_underFloor ? ` Under the ${_reviewFloor} reviews this run asks of a ${cat.label} business, so it is ranked last: a thin count is work they are losing, not a reason to skip them.` : ''}`,
           signals: { local_owner_operated: true, ...(cat.ownerRisk ? { consolidation_risk: true } : {}), ...(marketingGap ? { under_marketed: true } : {}) },
         };
         seen.set(domainKey, _lead);
@@ -7813,6 +7948,10 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   }
   const _bandDemoted = benched.filter(l => l.outsideBand).length;
   const _sizeDemoted = benched.filter(l => l.aboveSizeCeiling).length;
+  const _floorDemoted = benched.filter(l => l.thinReviews).length;
+  if (_floorDemoted) {
+    console.log(`\u{1F4C7} FLOOR DEMOTED [Places]: ${_floorDemoted} business(es) carry fewer Google reviews than the floor their trade asks for. They are returned behind every other lead and fill the bench instead of being deleted. A review count measures whether a business ASKS, not what it earns: US home services collect a median of 2 reviews a month, 26% of local businesses have none at all, and 20% of the businesses ranking in Google's top three have none either. Each trade's floor is now capped by the median review count of the businesses actually ranking in its own local top three, so the floor cannot reach a business that is ranking today. Set GP_FLOOR_MODE=cut to restore the delete.`);
+  }
   if (_sizeDemoted) {
     console.log(`\u{1F4CF} SIZE DEMOTED [Places]: ${_sizeDemoted} business(es) carry more than ${GP_MAX_REVIEWS} Google reviews. They are no longer deleted \u2014 they are returned behind every other lead and fill the bench, so we stop paying Google to rediscover the same businesses every run and delete them again. They are still never audited while a better lead exists, which is the only thing the ceiling was doing. Review count measures whether a business ASKS for reviews, not how big it is, and this file says so twenty lines above the ceiling itself. Set GP_SIZE_MODE=cut to restore the old delete.`);
   }
@@ -7827,7 +7966,13 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   // object in, so the tally belongs to the run that asked for it.
   if (tally && typeof tally === 'object') {
     tally.seen = seenFromGoogle;
+    // TWO rows, because after this round these are different facts and the
+    // yield line names its largest LOSS. underFloor is a delete and can only
+    // move when GP_FLOOR_MODE=cut is set; underFloorDemoted is a lead the run
+    // KEPT and ranked last, so reporting it as a loss would be a lie about the
+    // biggest number on the line.
     tally.underFloor = skippedUnderFloor;
+    tally.underFloorDemoted = demotedUnderFloor;
     tally.franchise = skippedFranchise + skippedChain + skippedBranchUrl;
     tally.alreadyOwned = skippedAlreadyOwned;
     tally.catCap = skippedCatCap;
@@ -41716,11 +41861,14 @@ const WEIGHTS = {
         // one. Two mechanisms for one promise, because the promise is the entire
         // safety of turning that filter into a sort: the leads we have evidence
         // for still go out first, every run, and the rest wait on the bench.
-        // Both demotion reasons, not just the band. A business above the review
-        // ceiling is returned behind everything by searchGooglePlaces and would
-        // climb straight back over an in-band lead here on ICP score alone.
-        const ba = (a.outsideBand || a.aboveSizeCeiling) ? 1 : 0;
-        const bb = (b.outsideBand || b.aboveSizeCeiling) ? 1 : 0;
+        // ALL THREE demotion reasons, not just the band. A business above the
+        // review ceiling, or under its trade's review floor, is returned behind
+        // everything by searchGooglePlaces and would climb straight back over an
+        // in-band lead here on ICP score alone. A reason missing from this term
+        // is a demotion that survives the press and dies in the sort, which is
+        // the one way the bench promise can be broken without any gate changing.
+        const ba = (a.outsideBand || a.aboveSizeCeiling || a.thinReviews) ? 1 : 0;
+        const bb = (b.outsideBand || b.aboveSizeCeiling || b.thinReviews) ? 1 : 0;
         if (ba !== bb) return ba - bb;
         const ta = tier(a), tb = tier(b);
         if (ta !== tb) return tb - ta;
@@ -41842,7 +41990,12 @@ const WEIGHTS = {
       const _y = _findYield;
       const _rows = [
         ['seen from Google', _y.seen], ['bench served', _bench.length],
-        ['under the trade review floor', _y.underFloor],
+        // The floor's row split in two, because after Round 143 these are two
+        // different facts and the old single row would have reported a lead the
+        // run KEPT as a lead the run lost. The delete only happens when
+        // GP_FLOOR_MODE=cut is set, so the first number is normally 0.
+        ['deleted under the trade review floor', _y.underFloor],
+        ['demoted for a thin review count', _y.underFloorDemoted],
         ['not our ICP by name', _y.notIcp],
         ['franchise or chain outlet', _y.franchise],
         ['already in the pipeline', _y.alreadyOwned],
@@ -41855,7 +42008,12 @@ const WEIGHTS = {
         // Round 114: how many of the size-demoted large companies the slice served.
         ...(_large.length ? [['large companies served for the email lane', _large.length]] : []),
       ].filter(r => Number.isFinite(Number(r[1])));
-      const _worst = _rows.slice(2, -1).sort((a, b) => Number(b[1]) - Number(a[1]))[0];
+      // A DEMOTION IS NOT A LOSS. Rows 0 and 1 are skipped because they are not
+      // losses, and a demoted lead is not one either: it was kept and ranked
+      // last. Announcing it as the run's largest single loss sends the reader
+      // to tune the one number that cost nothing. Judged by what the row SAYS
+      // rather than by where it sits, so a row added later is judged too.
+      const _worst = _rows.slice(2, -1).filter(r => !/^demoted\b/.test(String(r[0]))).sort((a, b) => Number(b[1]) - Number(a[1]))[0];
       console.log(`\u{1F4C9} FIND YIELD: ${_rows.map(r => `${r[0]} ${r[1]}`).join(' \u2192 ')}.` +
         (_worst && Number(_worst[1]) > 0 ? ` The largest single loss is "${_worst[0]}" at ${_worst[1]}.` : '') +
         ` The Google budget for this run was ${_placesBudget} quer${_placesBudget === 1 ? 'y' : 'ies'}, and the bench contributed ${_bench.length} lead(s) toward the ${MAX_TOTAL} this run can return - if those two numbers disagree badly, the budget assumption is what to change, not the market.`);
@@ -71324,10 +71482,20 @@ app.listen(PORT, () => {
     // demoted one whatever else is true of them \u2014 including a demoted lead with
     // a better score, which is the case that would happen most often.
     {
-      const _n = _needle('const ba = (a.', 'outsideBand || a.aboveSizeCeiling) ? 1 : 0');
+      // ── RE-AIMED IN ROUND 143, AND THE REVERSAL RECORDED ───────────────
+      // This needle read the TWO-reason comparator term. The review floor
+      // became the third demotion reason in Round 143, and this assertion
+      // went red on the change that fixed the bug rather than on the bug:
+      // it was pinning the exact text, so the correct three-flag term failed
+      // it. Re-aimed at three, which is what it has to assert now - a lead
+      // demoted for a thin review count and left out of this term survives
+      // the press's two arrays and then climbs back over an in-band lead in
+      // the sort, which is the one way the bench promise breaks with every
+      // gate still correct.
+      const _n = _needle('const ba = (a.', 'outsideBand || a.aboveSizeCeiling || a.thinReviews) ? 1 : 0');
       const _i = _src.indexOf(_n);
       if (_i < 0) {
-        _fails.push('the discovery sort no longer puts out-of-band leads last, so a demoted 4.9-star business with a high ICP score climbs back over the 4.6-star lead we have evidence for');
+        _fails.push('the discovery sort no longer puts ALL THREE kinds of demoted lead last, so a demoted 4.9-star business, one above the review ceiling or one under its trade review floor climbs back over the 4.6-star lead we have evidence for');
       } else {
         const _after = _src.slice(_i, _i + 400);
         const _tierAt = _after.indexOf(_needle('const ta = ', 'tier(a)'));
@@ -71386,8 +71554,20 @@ app.listen(PORT, () => {
     // business take a category slot and a queue position from the lead behind it,
     // which is the whole failure the demotion exists to prevent.
     {
-      if (_src.indexOf(_needle('const _demoted = _outsideBand', ' || _tooBig;')) < 0) {
-        _fails.push('the two demotion reasons no longer feed one flag, so a gate reading only the band lets over-ceiling leads back into the in-band queue');
+      // ── RE-AIMED IN ROUND 143, AND THE REVERSAL RECORDED ─────────────────
+      // This asserted TWO reasons fed the flag and went red on the round that
+      // added the third, because it pinned the text of the two-reason line.
+      // The claim it is making has not changed - every reason feeds ONE flag,
+      // so no gate can be fixed for some reasons and left open for others -
+      // and the reason count it pins moved from two to three. The trade review
+      // floor is the third: it demotes now instead of deleting, and a floor
+      // demotion missing from this flag would take a per-category cap slot and
+      // a queue position from an in-band lead.
+      if (_src.indexOf(_needle('const _demoted = _outsideBand || _tooBig', ' || _underFloor;')) < 0) {
+        _fails.push('the three demotion reasons no longer feed one flag, so a gate reading only the band lets over-ceiling or thin-review leads back into the in-band queue');
+      }
+      if (_src.indexOf(_needle('thinReviews: true, thinReview', 'Note: _underFloorWhy')) < 0) {
+        _fails.push('the thin-review reason no longer travels on the lead, so the sort at the far end cannot tell it apart and the call sheet cannot say why it is last');
       }
       if (_src.indexOf(_needle('aboveSizeCeiling: ', 'true, sizeNote: _tooBigWhy')) < 0) {
         _fails.push('the over-ceiling reason no longer travels on the lead, so the sort at the far end cannot tell it apart and the screen cannot say why it is last');
@@ -71397,10 +71577,236 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ RATING BAND CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
     } else {
-      console.log(`✓ RATING BAND CHECK: the star rating reaches exactly one rung and that rung is internal-only, so it can never reach an email; the real ladder returns the same sayable findings at 4.6, 4.9 and 5.0, leading on the same one. Businesses outside the band are therefore demoted rather than deleted — 1,810 of 2,892 already-paid-for businesses were deleted on the 2026-08-19 run. The review ceiling now demotes on the identical argument, having deleted 282 more on 2026-08-20: Google bills per CALL, so deleting a result cannot save a penny, and nothing remembered them, so every run paid to rediscover and re-delete the same businesses. Both reasons feed ONE demotion flag, so no gate can be fixed for one and left open for the other. Undemoted leads still go out first on every run, enforced twice: two arrays concatenated at the source, and a comparator term weighed ahead of tier and score. The per-category cap is spent only on undemoted leads, so a near-perfect or over-ceiling business cannot take a queue slot from the lead behind it. GP_BAND_MODE=cut and GP_SIZE_MODE=cut each restore the old delete exactly.`);
+      console.log(`✓ RATING BAND CHECK: the star rating reaches exactly one rung and that rung is internal-only, so it can never reach an email; the real ladder returns the same sayable findings at 4.6, 4.9 and 5.0, leading on the same one. Businesses outside the band are therefore demoted rather than deleted — 1,810 of 2,892 already-paid-for businesses were deleted on the 2026-08-19 run. The review ceiling now demotes on the identical argument, having deleted 282 more on 2026-08-20: Google bills per CALL, so deleting a result cannot save a penny, and nothing remembered them, so every run paid to rediscover and re-delete the same businesses. All THREE reasons feed ONE demotion flag since Round 143 added the trade review floor to them, so no gate can be fixed for some and left open for the others, and each reason travels on the lead so the call sheet can say which. Undemoted leads still go out first on every run, enforced twice: two arrays concatenated at the source, and a comparator term weighed ahead of tier and score that reads all three reasons. The per-category cap is spent only on undemoted leads, so a near-perfect, over-ceiling or thin-review business cannot take a queue slot from the lead behind it. GP_BAND_MODE=cut, GP_SIZE_MODE=cut and GP_FLOOR_MODE=cut each restore the old delete exactly.`);
     }
   } catch (e) {
     console.log(`⛔ RATING BAND CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE REVIEW FLOOR DELETED THE BUSINESSES THE OWNER WANTS ═══════════════
+  // THE LIVE DEFECT THIS CHECK EXISTS FOR. Until Round 143 the press DELETED
+  // any business whose Google review count sat under its trade's floor, and the
+  // floor was 40 in eight trades. Three measurements say what that deleted:
+  //
+  //  · PACE. US home-service businesses collect a MEDIAN OF 2 Google reviews a
+  //    month (ProsperQR, 816,307 reviews across 3,739 US businesses), so a 40
+  //    floor reads "has been actively asking for about twenty months". A
+  //    twenty-year-old $4M plumbing company that never asks was deleted before
+  //    anybody looked at it.
+  //  · HOW MANY HAVE NONE. 26% of local businesses have zero reviews, and 20%
+  //    of those ranking in Google's TOP THREE have none at all (BrightLocal,
+  //    93,845 businesses, 26 industries).
+  //  · THE FLOOR PER TRADE WAS GUESSED. The median review count of businesses
+  //    actually ranking in the local top three (Local Falcon, 50.4M results
+  //    across 1,993 categories) is 47 in tree service and 56 in electrical,
+  //    against 244 in HVAC and 215 in plumbing. One 40 was simultaneously
+  //    deleting top-three businesses in two trades and meaningless in two
+  //    others.
+  //
+  // And it did no anti-spam work, which is what a floor is assumed to be for:
+  // the FTC's May 2026 action over "Premium Home Service" documents 15,000+
+  // fake profiles in these exact trades, and the named fakes carried 2, 14 and
+  // 37 reviews at about $5 each. A floor selects FOR review farms.
+  //
+  // EXECUTED, not read, in three places: the real reviewFloorFor over every
+  // searched category, the real call-site block lifted out of
+  // searchGooglePlaces and run on a 12-review lead, and the same block run with
+  // the knob set. Then the call site is pinned, because a fixture supplies its
+  // own arguments and cannot see a caller turning the demote back into a delete.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _src = selfSourceNoCommentsLF();
+    const _base = MIN_REVIEWS_BASE;
+
+    // ── 1. THE INVARIANT, OVER EVERY SEARCHED CATEGORY ────────────────────
+    // No trade's floor may exceed the median review count of the businesses
+    // ranking in its own local top three. Read off GP_CATEGORIES rather than a
+    // typed list, so a category added later is covered without anybody
+    // remembering to add it here.
+    let _withMedian = 0, _without = 0, _nullRows = 0;
+    for (const _cat of GP_CATEGORIES) {
+      const _label = String((_cat && _cat.label) || '');
+      if (!_label) continue;
+      const _f = reviewFloorFor(_label, _base);
+      const _med = tradeReviewMedian(_label);
+      if (!Number.isFinite(_f) || _f < 0) {
+        _fails.push(`"${_label}" has no usable review floor (${JSON.stringify(_f)}), so every business in that trade is compared against a number nobody can read`);
+        continue;
+      }
+      if (_med === null) {
+        _without++;
+        // Told apart on purpose: a NULL ROW is a trade somebody looked up and
+        // could not find a figure for, and an absent one is a trade nobody has
+        // looked up yet. Reporting them as one number would dress 46 unchecked
+        // trades as 46 checked ones.
+        if (Object.prototype.hasOwnProperty.call(TRADE_3PACK_REVIEW_MEDIAN, _label)) _nullRows++;
+        continue;
+      }
+      _withMedian++;
+      if (_f > _med) {
+        _fails.push(`"${_label}" is held to a review floor of ${_f} against a top-three median of ${_med} for its own trade, so the floor reaches businesses that are ranking in Google's local top three today`);
+      }
+    }
+    if (_withMedian < 9) {
+      _fails.push(`only ${_withMedian} searched categor(y/ies) carry a declared 3-pack median, so this invariant is being asserted over almost nothing - the table has lost rows or the labels no longer match GP_CATEGORIES`);
+    }
+    if (_without < 1) {
+      _fails.push('every searched category now claims a published 3-pack median, which is not true of the data - a median has been invented for a trade rather than left as a null row');
+    }
+    // The trades most likely to be given a neighbour's number are the ones
+    // that sit next to a measured trade, and every one of them must be a
+    // stated null rather than a silent absence.
+    if (_nullRows < 10) {
+      _fails.push(`only ${_nullRows} searched categor(y/ies) state "no published median for this trade" as a row, so the trades that sit beside a measured one have gone back to being silently absent - which is how a neighbour's number gets borrowed`);
+    }
+    // Every row DECLARES its source and its date, or a number nobody can trace
+    // decides which businesses a run buries. Same rule as the revenue table.
+    for (const [_k, _row] of Object.entries(TRADE_3PACK_REVIEW_MEDIAN)) {
+      if (!_row || typeof _row.source !== 'string' || _row.source.length < 12 || !/^\d{4}-\d{2}-\d{2}$/.test(String(_row.at || ''))) {
+        _fails.push(`the review median for "${_k}" is declared without a readable source and date, so nobody can check the number that decides where that trade sorts`);
+        break;
+      }
+      if (!(_row.median === null || (Number.isFinite(Number(_row.median)) && Number(_row.median) > 0))) {
+        _fails.push(`the review median for "${_k}" is neither a positive number nor an explicit null, so "we have no figure" and "we have a figure of zero" read the same`);
+        break;
+      }
+    }
+    // A NULL row must not borrow the neighbouring trade's number. That is the
+    // one tempting mistake at every row: "roofing 79" is residential and
+    // "dentist 346" is general dentistry, and both sit next to a searched
+    // category with no figure of its own.
+    for (const _label of ['Commercial Roofing', 'Cosmetic Dentistry', 'Home Builder']) {
+      if (tradeReviewMedian(_label) !== null) {
+        _fails.push(`"${_label}" now claims a 3-pack median of its own, but the published figure belongs to a different Google category - a neighbour's number has been borrowed rather than measured`);
+      }
+    }
+    // And the floor is DERIVED, not typed: a trade whose median moves must move
+    // its floor with it, or the table and the floor are two copies of one
+    // judgement waiting to disagree.
+    if (reviewFloorFor('Tree Service', _base) >= reviewFloorFor('Garage Doors', _base)) {
+      _fails.push('tree service (top-three median 47) is no longer held to a LOWER floor than garage doors (median 137), so the floor has stopped being derived from the measurement and is typed again');
+    }
+
+    // ── 2. THE 12-REVIEW BUSINESS IS NOT DELETED. THE REAL BLOCK, RUN. ────
+    // The block is lifted out of searchGooglePlaces's own source and executed,
+    // so this cannot pass on a build where the loop deletes. It is wrapped in a
+    // one-pass for loop because the delete is a `continue`: reaching the end of
+    // the loop body means the lead survived, and the continue means it is gone.
+    {
+      const _sp = String(searchGooglePlaces);
+      const _a = _sp.indexOf(_n('let _underFloor = false, ', "_underFloorWhy = '';"));
+      const _b = _a < 0 ? -1 : _sp.indexOf('\n', _sp.indexOf(_n('It decides sort position here and', ' nothing else.'), _a));
+      if (_a < 0 || _b < 0) {
+        _fails.push('the review-floor block could not be found in the press loop at all, so nothing here is checking what happens to a business with a thin review count');
+      } else {
+        const _block = _sp.slice(_a, _sp.indexOf('}', _b) + 1);
+        const _run = new Function('reviews', '_reviewFloor', 'GP_FLOOR_HARD_CUT', 'cat', 'skippedUnderFloor', 'demotedUnderFloor',
+          'for (let _i = 0; _i < 1; _i++) {' + _block
+          + ' return { kept: true, underFloor: _underFloor, why: _underFloorWhy, deleted: skippedUnderFloor, demoted: demotedUnderFloor }; }'
+          + ' return { kept: false, deleted: skippedUnderFloor, demoted: demotedUnderFloor };');
+        // The case from the brief: a 12-review business in the three trades
+        // whose floor was 40 or whose median is in the hundreds.
+        for (const _label of ['HVAC', 'Plumbing', 'Tree Service']) {
+          const _floor = reviewFloorFor(_label, _base);
+          const _r = _run(12, _floor, false, { label: _label }, 0, 0);
+          if (_r.kept !== true) {
+            _fails.push(`a ${_label} business with 12 Google reviews is DELETED by the press against a floor of ${_floor} - a twenty-year-old company that never asks for reviews sits here, and nothing remembers it, so the next run pays Google to find it and delete it again`);
+            continue;
+          }
+          if (_r.deleted !== 0) {
+            _fails.push(`a ${_label} business with 12 reviews is counted as a lead the run LOST while it is still in the run, so the yield line reports a loss that did not happen`);
+          }
+          if (12 < _floor) {
+            if (_r.underFloor !== true) _fails.push(`a ${_label} business under the ${_floor}-review floor is kept but carries no demotion mark, so it competes with the in-band leads it is supposed to sit behind`);
+            if (_r.demoted !== 1) _fails.push(`a ${_label} business demoted for a thin review count is not counted, so the run cannot report how many it ranked last instead of deleting`);
+            // The sentence the rep reads: what was measured about THIS
+            // business, and what it means for them.
+            const _why = String(_r.why || '');
+            if (!/\b12\b/.test(_why) || _why.indexOf(String(_floor)) < 0 || _why.indexOf(_label) < 0) {
+              _fails.push(`the note on a thin-review ${_label} lead does not say what was measured about it (12 reviews, the ${_floor} floor, the trade), so the rep is told it is last without being told why`);
+            }
+            if (!/47%/.test(_why)) {
+              _fails.push('the note no longer tells the rep that a thin review count is a problem worth selling (47% of consumers will not use a business with under 20 reviews), so a sellable finding reads as a disqualification');
+            }
+            if (/\bused to\b|\bthe old\b|\b2026-0/i.test(_why)) {
+              _fails.push(`the per-lead note carries the codebase's history instead of this business's facts: ${_why.slice(0, 70)}`);
+            }
+          }
+        }
+        // ── 3. THE KNOB. One variable restores the delete, exactly. ───────
+        const _cut = _run(12, 40, true, { label: 'Tree Service' }, 0, 0);
+        if (_cut.kept !== false || _cut.deleted !== 1) {
+          _fails.push('GP_FLOOR_MODE=cut no longer restores the review-floor delete, so this change cannot be reversed without a deploy');
+        }
+        // ── 4. AND A BUSINESS AT OR ABOVE THE FLOOR IS UNTOUCHED. ────────
+        // A fixture where every lead comes back demoted proves nothing.
+        const _over = _run(200, 15, false, { label: 'HVAC' }, 0, 0);
+        if (_over.kept !== true || _over.underFloor !== false || _over.demoted !== 0) {
+          _fails.push('a business at 200 reviews is marked as thin, so the floor is demoting every lead and the mark means nothing');
+        }
+      }
+    }
+
+    // ── 5. THE OPERATOR OVERRIDE CAN STILL ONLY RAISE THE FLOOR. ──────────
+    // A run asking for 60+ reviews must get 60, and a run asking for 1 must not
+    // lower a trade below what its own evidence says.
+    {
+      const _sp = String(searchGooglePlaces);
+      const _i = _sp.indexOf(_n('const _reviewFloor = Number.isFinite(', 'Number(_flt.minReviews))'));
+      if (_i < 0) {
+        _fails.push('the operator review-count override could not be found in the press loop, so nothing here is checking that a run asking for more reviews gets them');
+      } else {
+        const _stmt = _sp.slice(_i, _sp.indexOf(';', _sp.indexOf('reviewFloorFor(cat.label, MIN_REVIEWS);', _i)) + 1);
+        const _floorOf = new Function('_flt', 'cat', 'MIN_REVIEWS', 'reviewFloorFor', _stmt + ' return _reviewFloor;');
+        const _tree = reviewFloorFor('Tree Service', _base);
+        if (_floorOf({ minReviews: 60 }, { label: 'Tree Service' }, _base, reviewFloorFor) !== 60) {
+          _fails.push('an operator asking for 60+ reviews no longer gets 60, so the one control over this filter has stopped working');
+        }
+        if (_floorOf({ minReviews: 1 }, { label: 'Tree Service' }, _base, reviewFloorFor) !== _tree) {
+          _fails.push(`an operator asking for 1+ reviews now LOWERS the tree service floor below the ${_tree} its own evidence sets, so the override cuts both ways when it was only ever meant to raise`);
+        }
+        if (_floorOf({}, { label: 'Tree Service' }, _base, reviewFloorFor) !== _tree) {
+          _fails.push('a run with no override no longer gets the trade floor, so the evidence table decides nothing on an ordinary press');
+        }
+      }
+    }
+
+    // ── 6. THE CALL SITE, so the demote cannot silently become a delete. ──
+    // Needles assembled at runtime: written as literals they would sit in this
+    // check's own source and pass on a build where the demote is gone.
+    for (const [_needle, _msg] of [
+      [_n('const _demoted = _outsideBand || _tooBig', ' || _underFloor;'),
+        'the thin-review demotion no longer feeds the shared demotion flag, so a lead under its trade review floor takes a per-category cap slot and a queue position from an in-band lead'],
+      [_n('if (GP_FLOOR_HARD_CUT) { skippedUnderFloor++;', ' continue; }'),
+        'the review floor deletes on every run again rather than only when GP_FLOOR_MODE=cut is set - the businesses a five-figure engagement is for are the ones with the thinnest review counts'],
+      [_n('thinReviews: true, thinReview', 'Note: _underFloorWhy'),
+        'the thin-review mark and its sentence no longer travel on the lead, so the sort cannot put it last and the call sheet cannot say why it is'],
+      [_n('(a.outsideBand || a.aboveSizeCeiling || a.', 'thinReviews) ? 1 : 0'),
+        'the discovery sort no longer reads the thin-review demotion, so a lead the press put on the bench climbs straight back over an in-band lead on ICP score'],
+      [_n('tally.underFloorDemoted = demoted', 'UnderFloor;'),
+        'the run no longer reports how many leads it ranked last for a thin review count, so the demotion is as invisible as the delete was'],
+      [_n("['demoted for a thin review count', _y.", 'underFloorDemoted],'),
+        'the yield line has no row for the leads demoted at the review floor, so an operator reading a complete-looking report cannot see the largest thing the floor now does'],
+      [_n("['deleted under the trade review floor', _y.", 'underFloor],'),
+        'the yield line still calls the floor row a loss without saying it is a DELETE, so a run that kept every thin lead reads as a run that threw them away'],
+      [_n('const med = tradeReviewMedian', '(label);'),
+        'the review floor no longer reads the per-trade top-three median at all, so it is back to one guessed number for every vertical'],
+      [_n('if (med !== null) return Math.min(med, base,', ' Math.max(LOW_VOLUME_FLOOR,'),
+        "the floor is no longer capped by its own trade's top-three median, so a trade can be held to a number that deletes businesses ranking in the local top three today"],
+    ]) if (_src.indexOf(_needle) < 0) _fails.push(_msg);
+    // The demoted lead reaches the bench through the SAME two-array routing the
+    // other two reasons use; a third mechanism is a third thing to get wrong.
+    if (_src.indexOf(_n('if (_demoted) benched.push(_lead);', ' else out.push(_lead);')) < 0) {
+      _fails.push('demoted leads are no longer routed to their own array, so the thin-review lead competes with in-band leads directly');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ REVIEW FLOOR CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ REVIEW FLOOR CHECK: the trade review floor demotes instead of deleting, and its number per trade comes from a measurement rather than a judgement. A 12-review HVAC, plumbing and tree service business is KEPT on every one of the three - run on the real press block, lifted out of the loop - marked, counted and ranked last, with a note that says what was measured about that business and that a thin count is a problem worth selling (47% of consumers will not use a business with under 20 reviews). ${_withMedian} searched categories carry a declared top-three median with its source and date, and no floor exceeds its own trade's: tree service is 47 and electrical 56, so the 40 that used to apply to both was deleting businesses ranking in the local top three. ${_without} categories have no published median at all and keep the base floor and the two declared sets; ${_nullRows} of those are the ones sitting next to a measured trade, and each states "no figure for this trade" as its own row so nobody borrows the neighbour's number. The operator override still raises the floor and cannot lower it, a 200-review business is untouched, and GP_FLOOR_MODE=cut restores the delete exactly. Nine call sites are pinned with runtime-assembled needles, including the shared demotion flag, the sort term and both yield rows.`);
+    }
+  } catch (e) {
+    console.log(`⛔ REVIEW FLOOR CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE SIZE GATE WAS BLOCKING THE BUSINESSES WE SELL TO ══════════════════
   // Live run, 2026-08-20. The size gate blocked 15 leads: 9 on a VERIFIED
@@ -71576,32 +71982,59 @@ app.listen(PORT, () => {
       }
     }
 
-    // ── AND THE SINGLE LARGEST DELETER OF LEADS PER RUN ───────────────────
-    // reviewFloorFor decides how many jobs on record a trade needs before we
-    // will look at it, and nothing asserted a trade sat in the right set. The
-    // two directions cost opposite things: a high-ticket trade wrongly held to
-    // the base floor deletes the richest leads in the ICP (a $6m custom home
-    // builder may have nine reviews), and a high-volume trade wrongly given the
-    // low floor fills the queue with businesses that farm reviews.
+    // ── AND THE LINE THAT USED TO BE THE LARGEST DELETER OF LEADS ─────────
+    // reviewFloorFor decides where a trade's leads sort, and nothing asserted a
+    // trade sat in the right set. The two directions cost opposite things: a
+    // high-ticket trade wrongly held to the base floor buries the richest leads
+    // in the ICP (a $6m custom home builder may have nine reviews), and a
+    // high-volume trade wrongly given the low floor fills the queue with
+    // businesses that farm reviews.
     {
       const _base = MIN_REVIEWS_BASE;
       for (const label of LOW_VOLUME_HIGH_TICKET) {
         if (reviewFloorFor(label, _base) >= _base) {
-          _fails.push(`"${label}" is a high-ticket, low-review trade and is still held to the base floor of ${_base}, which deletes exactly the businesses a five-figure engagement is for`);
+          _fails.push(`"${label}" is a high-ticket, low-review trade and is still held to the base floor of ${_base}, which buries exactly the businesses a five-figure engagement is for`);
           break;
         }
       }
+      // ══ RE-AIMED IN ROUND 143, AND THE REVERSAL RECORDED ════════════════
+      // THIS ASSERTION USED TO SAY THE OPPOSITE. It required every trade in
+      // HIGH_VOLUME_LOW_TICKET to sit ABOVE the base floor, which is how the
+      // 40 got there, and it went red on the round that fixed the trade whose
+      // number was wrong: Garage Doors came out at 14 and this line called it
+      // a floor that "means nothing in the trade it was raised for".
+      //
+      // The measurement that reversed it: the MEDIAN review count of the
+      // businesses actually ranking in Google's local top three is 47 in tree
+      // service and 56 in electrical (10th percentile 4), so a 40 floor in
+      // those two trades was reaching businesses that rank in the top three
+      // today. A set membership is a judgement about review-per-dollar; a
+      // 3-pack median is a measurement of the position we sell. Where both
+      // exist the measurement wins, and the assertion now reads that way.
+      //
+      // Both directions are still asserted, because an assertion that only
+      // ever lowers a floor is one somebody satisfies by deleting the floor:
+      //   · with a median   -> capped by it, and never raised past the base
+      //   · without a median -> the declared set still raises it, and that is
+      //     safe now only because the floor demotes instead of deleting
       for (const label of HIGH_VOLUME_LOW_TICKET) {
-        if (reviewFloorFor(label, _base) <= _base) {
-          _fails.push(`"${label}" earns reviews by the hundred and is held to the base floor of ${_base}, so the floor means nothing in the trade it was raised for`);
+        const _med = tradeReviewMedian(label);
+        const _f = reviewFloorFor(label, _base);
+        if (_med === null) {
+          if (_f <= _base) {
+            _fails.push(`"${label}" earns reviews by the hundred, has no published 3-pack median, and is no longer held above the base floor of ${_base} - the declared judgement about it has been dropped rather than replaced by a measurement`);
+            break;
+          }
+        } else if (_f > _med || _f > _base) {
+          _fails.push(`"${label}" is held to a review floor of ${_f} against a top-three median of ${_med} for its own trade, so the floor reaches businesses that are ranking in Google's local top three today - the measurement has been overruled by the set again`);
           break;
         }
       }
-      // A trade in NEITHER set gets the base floor unchanged. That is the
-      // default and it must not drift, or every unclassified trade quietly
-      // changes how many leads a run deletes.
+      // A trade in NEITHER set and with no median gets the base floor
+      // unchanged. That is the default and it must not drift, or every
+      // unclassified trade quietly changes where a run's leads sort.
       if (reviewFloorFor('A Trade Nobody Declared', _base) !== _base) {
-        _fails.push('an unclassified trade no longer gets the base review floor, so adding a trade silently changes how many leads every run deletes');
+        _fails.push('an unclassified trade no longer gets the base review floor, so adding a trade silently changes where every run sorts its leads');
       }
       // And the two sets must not overlap, or one trade has two floors and
       // which one applies is decided by the order of a ternary.
@@ -71655,7 +72088,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ ICP FILTER CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
     } else {
-      console.log(`✓ ICP FILTER CHECK: all 17 owner-operated names survive the size gate, including the five it wrongly blocked on the 2026-08-20 run — three builders whose legal suffix is "Construction Company" and two dermatology practices whose names contain "skin cancer center". All 17 real institutions are still refused, so the pattern was narrowed rather than gutted. Health is owned by one rule with a small-practice escape instead of two rules where the copy defeated the escape, and a verified headcount under ${ICP_EMPLOYEE_BLOCK} beats the name guess — that gate was right nine times out of nine while the name pattern was wrong five times out of six. The two biggest deleters now carry fixtures too: the franchise list, which is the only unconditional name-delete in the Places loop, and the trade review floor, which deletes more leads per run than anything else in the file.`);
+      console.log(`✓ ICP FILTER CHECK: all 17 owner-operated names survive the size gate, including the five it wrongly blocked on the 2026-08-20 run — three builders whose legal suffix is "Construction Company" and two dermatology practices whose names contain "skin cancer center". All 17 real institutions are still refused, so the pattern was narrowed rather than gutted. Health is owned by one rule with a small-practice escape instead of two rules where the copy defeated the escape, and a verified headcount under ${ICP_EMPLOYEE_BLOCK} beats the name guess — that gate was right nine times out of nine while the name pattern was wrong five times out of six. The two biggest deleters now carry fixtures too: the franchise list, which is the only unconditional name-delete left in the Places loop, and the trade review floor, which deleted more leads per run than anything else in the file until Round 143 turned it into a sort position - so each trade's floor is now capped by the median review count of the businesses ranking in its own local top three, and a trade held above the base without a measurement behind it fails here.`);
     }
   } catch (e) {
     console.log(`⛔ ICP FILTER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
