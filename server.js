@@ -164,7 +164,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261019;
+const CONTRACT_VERSION = 20261020;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -39858,6 +39858,12 @@ const demotionPenalty = (lead) => {
 // The coverage term's two knobs, declared where the curve that reads them is,
 // so the boot check asserts the OUTCOME against the same numbers rather than
 // against a second copy of them typed into the check.
+// Round B: the press-side website lift. Bad is worth more than dated because a
+// visitor's reaction is the pitch, and 8 keeps a bad-website lead below a
+// business already demoted for being out of band (-10) rather than above it -
+// a broken site is a reason to call, not a reason to un-bench a lead.
+const TRIAGE_SITE_BAD = 8;
+const TRIAGE_SITE_DATED = 4;
 const TRIAGE_MARKET_POINTS = 3;   // per metro beyond the first
 const TRIAGE_MARKET_CAP = 9;      // and never more than this, whatever the count
 const placesTriageScore = (m) => {
@@ -39984,6 +39990,31 @@ const placesTriageScore = (m) => {
   const _mkt = Number(m && m.marketCount);
   if (typeof (m && m.marketCount) === 'number' && Number.isFinite(_mkt) && _mkt > 1) {
     base += Math.min((_mkt - 1) * TRIAGE_MARKET_POINTS, TRIAGE_MARKET_CAP);
+  }
+  // == ROUND B: WHAT THEIR WEBSITE LOOKS LIKE, READ FREE AT THE PRESS =======
+  // The one signal on this number that says whether they NEED us, rather than
+  // whether they can pay. Vin's rep pitches websites, so a business whose site
+  // a visitor would wince at is the lead he wants first - and until Round B the
+  // press could not see a website at all.
+  //
+  // A LIFT ONLY, and that is deliberate in the same way the website gap is a
+  // lift at the contact read rather than a term inside the ratio: a GOOD
+  // website must be free, never a penalty. We are not selling against their
+  // site being fine; we are selling into it being broken.
+  //
+  // 'unknown' MOVES NOTHING. It is the verdict on a site that refused a plain
+  // read, a site the clock did not reach, and a site whose markup came back
+  // clean with nobody having looked at the page. Those are three different
+  // facts about what WE did and one about them, and none of the four is
+  // evidence about their website - so paying or docking for any of them would
+  // be scoring our own coverage. Never looked is not measured zero.
+  //
+  // Smaller than the contact read's equivalent (up to +14) on purpose: this
+  // verdict rests on markup alone with no picture, so it is the cheaper and
+  // weaker of the two reads and must not outrank the one that saw the page.
+  if (m && m.siteLooksMeasured === true) {
+    if (m.siteLooks === 'bad') base += TRIAGE_SITE_BAD;
+    else if (m.siteLooks === 'dated') base += TRIAGE_SITE_DATED;
   }
   // == THE DEMOTION IS IN THE NUMBER ========================================
   // Same table the contact ranker reads, so the Find card and the contact list
@@ -42411,6 +42442,30 @@ const WEIGHTS = {
     // A high-fit company with no intent is a bad lead. High intent with a closed
     // window is a bad lead. Only the intersection is worth a send — that is the
     // 5% of the market actually in a buying window (Gartner).
+    // ══ ROUND B: READ THE WEBSITE BEFORE THE SCORE IS BUILT ═════════════
+    // Placed HERE and not after the slice, because the scoring map below is
+    // synchronous and builds _affIn - so a verdict that arrives later cannot
+    // reach the number without scoring the run twice. Reading the leading slice
+    // of the press's own preference order means one pass, and the verdict is on
+    // the lead when its score is computed.
+    //
+    // Every free drop has already run by this point - the branch URL, the
+    // franchise name, the review floor, the dedupe - so a dropped lead is never
+    // fetched. That is the same ordering rule the render obeys at the contact
+    // read, and it is why this costs nothing on a lead nobody will work.
+    const _siteRead = await pressSiteLooks(unique.slice(0, FIND_PRESS_SITE_MAX));
+    if (_siteRead.considered) {
+      // ASSIGNED ONLY WHEN THE READ ACTUALLY RAN. With FIND_PRESS_SITE_READ
+      // off, pressSiteLooks returns zeros and these keys stay unwritten, so the
+      // yield line drops the rows entirely instead of printing "0 bad websites"
+      // about a read nobody performed. That is this file's own rule: nobody
+      // increments it and it happened to nobody are different facts.
+      _findYield.siteBad = _siteRead.bad;
+      _findYield.siteDated = _siteRead.dated;
+      _findYield.siteClean = _siteRead.clean;
+      _findYield.siteUnread = _siteRead.refused + _siteRead.notReached;
+      console.log(`\u{1F310} PRESS SITE READ: ${_siteRead.considered} homepage(s) read free - no Firecrawl, no screenshot, no model call. ${_siteRead.graded} carry a verdict a visitor would recognise (${_siteRead.bad} bad, ${_siteRead.dated} dated); ${_siteRead.clean} read clean and stay UNKNOWN, because clean code is not the same as looking good and nobody took a picture; ${_siteRead.refused} refused a plain read; ${_siteRead.notReached} were not reached before the clock. ${_siteRead.noWebsite} lead(s) have no website at all and are their own lane. Refused and not-reached leads say nobody looked - never that the site passed.`);
+    }
     const allScored = unique
       .map(c => {
         const intent = scoreSignals(c);          // intent + timing + stacking
@@ -42502,6 +42557,12 @@ const WEIGHTS = {
             marketCount: typeof c.marketCount === 'number' ? c.marketCount : null,
             outsideBand: c.outsideBand === true,
             aboveSizeCeiling: c.aboveSizeCeiling === true,
+            // Round B: what their website looks like, read free at the press.
+            // Both keys, because the word alone cannot tell 'nobody looked'
+            // from 'we looked and it is fine' - and only one of those may move
+            // a score. An absence is not evidence.
+            siteLooks: c.siteLooks || '',
+            siteLooksMeasured: c.siteLooksMeasured === true,
           };
           const _aff = affordabilityBand(_affIn);
           c.affordBand = _aff.band;
@@ -42787,6 +42848,21 @@ const WEIGHTS = {
         // and neither reached the one line that adds a run up.
         _row('no website at all - the call lane', _y.noWebsite, false),
         _row('on a free page builder - the rebuild lane', _y.builderSite, false),
+        // ══ ROUND B: THE REFUSAL RATE, ON EVERY RUN ═══════════════════════
+        // None of these four is a LOSS - every one of these leads is returned.
+        // They are here because the refusal rate is the one number this round
+        // could not measure before building it: the press made no site call at
+        // all, so the only figure anyone held was 3 of 9 from already-selected
+        // contact-read leads, which is a biased sample and the wrong
+        // denominator. Now it is on the line every press prints.
+        //
+        // 'read clean and left unknown' is not a verdict that their site is
+        // fine. It means their markup showed nothing a visitor would wince at
+        // and nobody looked at the page - the press never takes a picture.
+        _row('website read free - looks bad', _y.siteBad, false),
+        _row('website read free - looks dated', _y.siteDated, false),
+        _row('website read free - read clean and left unknown', _y.siteClean, false),
+        _row('website refused a free read or was not reached', _y.siteUnread, false),
         _row('returned', scored.length, false),
         // Round 111: the TheirStack lane's leads by tier - the one lane whose
         // size is known at Find time. A Places lead is tiered on its contact read.
@@ -66364,7 +66440,72 @@ app.listen(PORT, () => {
         { id: 'e', website: '', extra: JSON.stringify({ placeId: 'ChIJx' }), reach_predict: 0, icp_score: 1 },
       ];
       const o = orderUnread(rows).map(r => r.id).join('');
-      if (o !== 'cbeda') _fails.push(`the draw order came back "${o}" instead of "cbeda" - readable-first, then the owner-findable guess, then the Find score, with a missing guess below zero`);
+      // Round B RE-AIMED this line rather than replacing it. No row above
+      // carries a website verdict, so it now proves a second thing as well as
+      // the first: with no verdict anywhere the website tier is INERT and the
+      // draw is exactly what it was before Round B. That is the switched-off
+      // case, asserted rather than assumed.
+      if (o !== 'cbeda') _fails.push(`the draw order came back "${o}" instead of "cbeda" - readable-first, then the owner-findable guess, then the Find score, with a missing guess below zero. With no website verdict on any row the website tier must not move anything.`);
+    }
+    // ══ ROUND B: 1b. AND THE SAME DRAW WITH WEBSITE VERDICTS ON IT ════════
+    // The fixture above passes whether or not the website tier exists, because
+    // none of its rows carries a verdict - so on its own it would be a check
+    // that cannot fail, green forever over code it never reaches. This is the
+    // half that executes the tier.
+    {
+      const _w = (id, looks, reach, icp) => ({ id, website: `https://${id}.example`,
+        extra: { siteLooks: looks, siteLooksMeasured: looks === 'bad' || looks === 'dated' },
+        reach_predict: reach, icp_score: icp });
+      const rows = [
+        // A bad website on the WORST owner guess and the WORST score in the set.
+        _w('f', 'bad', 5, 40),
+        // Dated, on a much better guess and score.
+        _w('g', 'dated', 50, 95),
+        // No verdict at all, on the second-best guess.
+        { id: 'h', website: 'https://h.example', extra: {}, reach_predict: 60, icp_score: 99 },
+        // Refused a free read: 'unknown' and NOT measured, on the best guess in
+        // the set. Must not be promoted - a site we could not read is not a bad
+        // site, and it must not be docked either.
+        { id: 'i', website: 'https://i.example', extra: { siteLooks: 'unknown', siteLooksMeasured: false }, reach_predict: 70, icp_score: 99 },
+      ];
+      const o = orderUnread(rows).map(r => r.id).join('');
+      if (o !== 'fgih') _fails.push(`the draw order with website verdicts came back "${o}" instead of "fgih" - a bad website must be read first even on the worst owner guess in the set, dated second, and a site nobody could read must sit with the unjudged ones and be ordered by the owner guess alone`);
+      // Each rung of the ladder, executed on its own so a wrong total order
+      // cannot be mistaken for a wrong single rule.
+      if (queueSiteBadness({ extra: { siteLooks: 'bad', siteLooksMeasured: true } }) !== 2) _fails.push('a measured bad website is not the top of the draw ladder');
+      if (queueSiteBadness({ extra: { siteLooks: 'dated', siteLooksMeasured: true } }) !== 1) _fails.push('a measured dated website does not rank above an unjudged one');
+      if (queueSiteBadness({ extra: { siteLooks: 'bad', siteLooksMeasured: false } }) !== 0) _fails.push('an UNMEASURED bad verdict moves the draw - a verdict nobody measured is being laundered into one that was');
+      if (queueSiteBadness({ extra: { siteLooks: 'unknown', siteLooksMeasured: false } }) !== 0) _fails.push('a site that refused a free read is ranked, so our own coverage is deciding the order');
+      if (queueSiteBadness({ extra: {} }) !== 0) _fails.push('a lead with no website verdict at all is ranked on one');
+      // THE CONTACT READ WINS. It saw a picture of the page; the press only
+      // ever sees markup. A lead read properly and found modern must not be
+      // promoted by a stale press guess that said bad.
+      if (queueSiteBadness({ extra: { contactSiteLooks: 'modern', contactSiteLooksMeasured: true, siteLooks: 'bad', siteLooksMeasured: true } }) !== 0) {
+        _fails.push('the press\u2019s markup-only guess is outranking the contact read that actually looked at the page, so a lead somebody read and found fine is promoted as a bad website');
+      }
+      if (queueSiteBadness({ extra: { contactSiteLooks: 'bad', contactSiteLooksMeasured: true } }) !== 2) _fails.push('the contact read\u2019s own bad verdict does not reach the draw order');
+    }
+    // ══ ROUND B: 1c. THE VERDICT FROM ONE HTML STRING, NO PICTURE ═════════
+    // The whole round rests on this: the press can grade a website from markup
+    // alone, with no Firecrawl and no screenshot. EXECUTED over real markup
+    // through the same two functions the press calls.
+    {
+      const _shell = (body) => `<!doctype html><html><head><title>T</title></head><body>${body}${'Some readable sentence about the work we do for homeowners in this town. '.repeat(30)}</body></html>`;
+      // A site a visitor meets badly: no enquiry form, no tappable phone, and
+      // three links so the nav read opens at all.
+      const _grim = readSiteBuild({ pages: [{ intent: 'home', url: 'https://g.example', html: _shell('<a href="/a">A</a><a href="/b">B</a><a href="/c">C</a><p>Copyright 2011</p>') }],
+        links: [], website: 'https://g.example', companyName: 'G', city: 'Dallas, TX', trade: 'Roofing', robots: null, llms: null });
+      const _grimSaw = readSiteLooks(null, 'nobody looked at the page itself', (_grim && _grim.faults) || []);
+      if (_grim.measured !== true) _fails.push('the markup grader read nothing from a real homepage string, so the press cannot grade a website for free at all');
+      if (_grimSaw.measured !== true || _grimSaw.looks === 'unknown') _fails.push(`a homepage with no enquiry form and no tappable phone graded "${_grimSaw.looks}" (measured=${_grimSaw.measured}) from its markup - the press-side verdict is the whole round and it is not reachable without a picture`);
+      if (_grimSaw.looks === 'modern') _fails.push('a markup-only read returned modern - the press never takes a picture, so modern is a claim nothing here can support');
+      // And the other direction: a clean page with nobody looking at it is
+      // UNKNOWN, never modern. This is the existing rule and the reason the
+      // press can only ever find bad websites, not certify good ones.
+      const _clean = readSiteBuild({ pages: [{ intent: 'home', url: 'https://c2.example', html: _shell('<a href="/a">A</a><a href="/b">B</a><a href="/c">C</a><form action="/x"><input name="email"></form><a href="tel:+12145550188">call</a><meta name="viewport" content="width=device-width">') }],
+        links: [], website: 'https://c2.example', companyName: 'C', city: 'Dallas, TX', trade: 'Roofing', robots: null, llms: null });
+      const _cleanSaw = readSiteLooks(null, 'nobody looked at the page itself', (_clean && _clean.faults) || []);
+      if (_cleanSaw.looks === 'modern') _fails.push('a clean-markup page with no picture graded modern - clean code is not the same as looking good, and readSiteLooks holds that on purpose');
     }
     // 2. WHAT A RUN IS CALLED WHEN IT ENDS.
     if (readRunStatusOf({ failedCount: 0 }) !== 'done') _fails.push('a run where every lead answered is not called done');
@@ -67175,6 +67316,33 @@ app.listen(PORT, () => {
     if (!(_band < _plain)) _fails.push(`a band-demoted lead scores ${_band} against ${_plain} for the same business - the demotion is still not in the number`);
     if (!(_size < _plain)) _fails.push(`a lead above the review ceiling scores ${_size} against ${_plain} - the demotion is still not in the number`);
     if (!(_both < _band && _both < _size)) _fails.push('two demotions do not cost more than one, so one of them is being dropped');
+    // ══ ROUND B: A BAD WEBSITE IS IN THE NUMBER, AND ONLY A MEASURED ONE ══
+    // The one signal on this score that says whether they NEED us rather than
+    // whether they can pay - and Vin's rep pitches websites, so it is the
+    // reason a lead gets worked first. Executed on the same base fixture as
+    // the demotions above, so the comparison is one business against itself.
+    {
+      const _sBad = placesTriageScore({ ..._base, siteLooks: 'bad', siteLooksMeasured: true });
+      const _sDated = placesTriageScore({ ..._base, siteLooks: 'dated', siteLooksMeasured: true });
+      const _sUnknown = placesTriageScore({ ..._base, siteLooks: 'unknown', siteLooksMeasured: false });
+      const _sLaundered = placesTriageScore({ ..._base, siteLooks: 'bad', siteLooksMeasured: false });
+      const _sRefused = placesTriageScore({ ..._base, siteLooks: '', siteLooksMeasured: false });
+      if (!(_sBad > _plain)) _fails.push(`a business whose website a visitor would wince at scores ${_sBad} against ${_plain} for the same business - the one signal that says they NEED us is not in the number, so the rep is handed them in whatever order everything else decided`);
+      if (!(_sDated > _plain)) _fails.push(`a dated website scores ${_sDated} against ${_plain} - the lift reaches bad and not dated, so most of the leads this pitch is for are unranked`);
+      if (!(_sBad > _sDated)) _fails.push(`bad and dated are worth ${_sBad} and ${_sDated} - they must not be the same, or the worst websites do not come first`);
+      // AND AN ABSENCE MOVES NOTHING, in all three of its shapes: a clean
+      // markup read with nobody looking, a site that refused, and a verdict
+      // somebody wrote without measuring it. Number(null) is 0 and 0 is
+      // finite; a laundered verdict is the unmeasured-treated-as-measured
+      // class pointed the other way.
+      if (_sUnknown !== _plain) _fails.push(`a website nobody could judge scores ${_sUnknown} against ${_plain} - our own coverage is moving their number`);
+      if (_sRefused !== _plain) _fails.push(`a website that refused a free read scores ${_sRefused} against ${_plain} - a site we could not open is being scored as if we had`);
+      if (_sLaundered !== _plain) _fails.push(`an UNMEASURED bad verdict scores ${_sLaundered} against ${_plain} - a guess nobody measured is being paid for like a measurement`);
+      // A good website is FREE, never a penalty. We sell into a broken site;
+      // we do not sell against a working one.
+      const _sModern = placesTriageScore({ ..._base, siteLooks: 'modern', siteLooksMeasured: true });
+      if (_sModern !== _plain) _fails.push(`a business with a tidy website scores ${_sModern} against ${_plain} - a good website has become a penalty, which is the mistake the website gap at the contact read is a LIFT specifically to avoid`);
+    }
 
     // 2. THE TWO RANKERS READ ONE TABLE. contactRankFor subtracted for both and
     //    the Find card did not, so one app held two verdicts about one lead and
@@ -67343,6 +67511,23 @@ app.listen(PORT, () => {
                           _n('_hours = readPublished', 'Hours(p.regularOpeningHours)'),
                           _n('triage = placesTriage', 'Score(_affIn)')]) {
       if (!_src.includes(_needle)) _fails.push('the Find handler no longer passes ' + _needle.slice(0, 30) + ' into the score');
+    }
+    // ══ ROUND B: THE THREE CALL SITES THE FREE WEBSITE READ HANGS ON ══════
+    // Each of these is a whole round's worth of work that disappears silently
+    // if the line goes. The verdict cannot be asserted from a fixture at boot
+    // - it needs a real HTTP fetch - so the SITE is pinned here and the
+    // behaviour is driven in servercheck over a cast business whose homepage is
+    // deliberately grim. Assembled from halves, and none of these strings is
+    // grepped by any other check.
+    for (const [_needle, _why] of [
+      [_n('const _siteRead = await pressSiteLooks(unique.slice(0,', ' FIND_PRESS_SITE_MAX));'),
+       'the press no longer looks at a single website, so every lead reaches the queue with no verdict and the one signal that says a business NEEDS us is back to being invisible until somebody pays to read them'],
+      [_n('c.siteLooksMeasured = _saw.measured', ' === true;'),
+       'the press grades the website and drops whether it MEASURED anything, so a site that refused a read arrives indistinguishable from one that was read and passed - computed-but-not-passed, the class this file records most'],
+      [_n('siteLooks: c.siteLooks', " || '',"),
+       'the website verdict never reaches the one argument object the score and the affordability band both read, so a bad website cannot move the number'],
+    ]) {
+      if (!_src.includes(_needle)) _fails.push(_why);
     }
     // ONE argument object, or the score and the label are computed from two
     // different views of one lead - which is the exact defect the demotion
@@ -85405,6 +85590,112 @@ const fetchSiteFile = async (website, path) => {
     return t;
   } catch (e) { void e; return null; }
 };
+// ══ ROUND B: THE PRESS LOOKS AT THE WEBSITE, FOR NOTHING ═══════════════════
+// Vin's pitch is websites, and until now the press could not see one. The
+// website was read only at the per-lead contact read - after a lead had already
+// been chosen, queued, and waited its turn. Measured on the live press of
+// 2026-09-12: 300 leads returned, 276 of them carrying a website, and 0 of the
+// 300 carrying any verdict about it. Meanwhile the queue is 743 deep against ten
+// reads a day, so what the rep is handed is decided almost entirely by what
+// sorts first, and nothing in that sort knew what a website looked like.
+//
+// COSTS NOTHING. No Firecrawl, no screenshot, no model call - a plain HTTP GET
+// of one homepage, then the same markup grader the contact read already runs
+// free. Round 142 proved that half works alone: it graded True Recovery and
+// Newcomer 'dated' off their own code after both renders timed out.
+//
+// WHY A VERDICT HERE CAN NEVER BE 'modern'. readSiteLooks returns 'unknown' when
+// the markup is clean and nobody took a picture, and its own comment says why -
+// "a site can have perfect code and still look terrible." There is never a
+// picture at the press, so the only verdicts reachable here are 'dated', 'bad'
+// and 'unknown'. That is the existing rule kept, not a limitation: the press's
+// job is to FIND the bad ones, not to certify the good ones, and a clean-markup
+// lead is honestly unknown until somebody looks at the page.
+const FIND_PRESS_SITE_READ = !/^(?:0|false|off|no)$/i.test(String(process.env.FIND_PRESS_SITE_READ || ''));
+// Five at a time and a wall clock, which is the shape the contact read's own
+// free page wave already uses (FIND_FREE_POOL / FIND_FREE_READ_MS). The press
+// ran in 16.0s on 2026-09-12; ~276 fetches five at a time is about two minutes
+// on top, and the press has been a background job the browser polls ever since
+// Render started cutting the old 60-second request.
+const FIND_PRESS_SITE_POOL = Math.max(1, parseInt(process.env.FIND_PRESS_SITE_POOL || '5', 10) || 5);
+const FIND_PRESS_SITE_MS = Math.max(5000, parseInt(process.env.FIND_PRESS_SITE_MS || '150000', 10) || 150000);
+// Per-site timeout, well under findPlainFetch's own 12s default: at the press we
+// are reading hundreds, and a site that needs more than six seconds to answer a
+// plain GET is a site we can mark unread and move past.
+const FIND_PRESS_SITE_TIMEOUT_MS = Math.max(2000, parseInt(process.env.FIND_PRESS_SITE_TIMEOUT_MS || '6000', 10) || 6000);
+// How far down the press's own preference order to read. FIND_RUN_MAX (300) is
+// what a run returns; the headroom covers the leads the pipeline dedupe and the
+// large-company slice remove after this point, so the 300 that ARE returned are
+// all read. Reading the whole 1,362-lead pool would take four times as long and
+// would change WHICH leads are chosen, which is a bigger blast radius than Vin
+// asked for.
+const FIND_PRESS_SITE_MAX = Math.max(0, parseInt(process.env.FIND_PRESS_SITE_MAX || '360', 10) || 0);
+// The four verdict fields a pressed lead carries. Named once, because they ride
+// the queue row's extra blob and are read back by the client and by the score.
+const pressSiteLooks = async (leads) => {
+  const all = Array.isArray(leads) ? leads : [];
+  const out = { considered: 0, graded: 0, dated: 0, bad: 0, clean: 0, refused: 0, notReached: 0, noWebsite: 0 };
+  if (!FIND_PRESS_SITE_READ) return out;
+  const _todo = [];
+  for (const c of all) {
+    if (!c) continue;
+    // A lead with no website at all is not unread - there is nothing to read.
+    // Those 24 leads on 2026-09-12 are the purest website lead this pitch has
+    // and they are marked as their own thing rather than as a failed look.
+    if (!c.website) { out.noWebsite++; continue; }
+    _todo.push(c);
+  }
+  out.considered = _todo.length;
+  const _startedAt = Date.now();
+  for (let i = 0; i < _todo.length; i += FIND_PRESS_SITE_POOL) {
+    // THE CLOCK IS CHECKED BEFORE EACH WAVE, NOT INSIDE ONE. Everything left
+    // when it expires keeps the unknown verdict it already carries, counted as
+    // not reached - never graded, and never silently passed.
+    if (Date.now() - _startedAt > FIND_PRESS_SITE_MS) {
+      out.notReached = _todo.length - i;
+      console.log(`\u{1F310} PRESS SITE READ: stopped after ${Math.round((Date.now() - _startedAt) / 1000)}s with ${out.notReached} site(s) unread. Those leads carry "nobody looked" rather than a verdict - an unread site is never reported as a site that passed. Raise FIND_PRESS_SITE_MS to read further.`);
+      break;
+    }
+    const _wave = _todo.slice(i, i + FIND_PRESS_SITE_POOL);
+    await Promise.all(_wave.map(async (c) => {
+      try {
+        const r = await findPlainFetch(c.website, FIND_PRESS_SITE_TIMEOUT_MS);
+        if (!r || !r.ok) {
+          out.refused++;
+          c.siteLooksWhy = `their site did not answer a plain read at the press (${(r && r.why) || 'no answer'})`;
+          return;
+        }
+        const _build = readSiteBuild({
+          pages: [{ intent: 'home', url: c.website, finalUrl: r.finalUrl || '', html: r.html, text: r.text }],
+          links: [], website: c.website, companyName: c.name || '',
+          city: c.location || '', trade: c.industry || '',
+          // Neither file is fetched at the press: both cost another round trip
+          // per lead and both only feed faults a visitor cannot see, which
+          // readSiteLooks discards anyway.
+          robots: null, llms: null,
+        });
+        const _saw = readSiteLooks(null, 'nobody looked at the page itself - the press reads their markup only', (_build && _build.faults) || []);
+        c.siteLooks = _saw.looks;
+        c.siteLooksMeasured = _saw.measured === true;
+        c.siteLooksWhy = _saw.why;
+        c.siteLooksFaults = Array.isArray(_saw.faults) ? _saw.faults : [];
+        // The technical read travels too. It is the same object the contact
+        // read produces, so a lead that reaches the read does not buy it twice.
+        if (_build && _build.measured === true) {
+          c.siteWord = _build.word; c.siteGap = _build.gap; c.siteGrade = _build.grade;
+        }
+        if (_saw.measured === true) {
+          out.graded++;
+          if (_saw.looks === 'bad') out.bad++; else if (_saw.looks === 'dated') out.dated++;
+        } else out.clean++;
+      } catch (e) {
+        out.refused++;
+        c.siteLooksWhy = `their site could not be read at the press (${(e && e.message) || 'unknown'})`;
+      }
+    }));
+  }
+  return out;
+};
 const readChainEvidence = ({ pages, rosterTitles, links, name } = {}) => {
   const read = (Array.isArray(pages) ? pages : []).filter(p => p && (p.html || p.text));
   const titles = (Array.isArray(rosterTitles) ? rosterTitles : []).map(t => String(t || ''));
@@ -88214,12 +88505,45 @@ const queueRowFromCompany = (c) => {
 // owner-findable guess, then the Find score. A missing number sorts BELOW zero,
 // so an unmeasured lead is never dressed as a poor one.
 const _qnum = (v) => (typeof v === 'number' && Number.isFinite(v)) ? v : -1;
+// ══ ROUND B: A BAD WEBSITE IS READ FIRST ═══════════════════════════════════
+// 2 for bad, 1 for dated, 0 for everything else - including 'unknown', a site
+// that refused a plain read, and a lead nobody reached before the clock. Those
+// are facts about our coverage, not about their website, and none of them may
+// move a lead up or down.
+//
+// ONLY A MEASURED VERDICT COUNTS. The press can reach 'dated' and 'bad' from
+// markup alone but never 'modern' (readSiteLooks holds that a clean-code site
+// can still look terrible with nobody having seen it), so the absence of a
+// verdict is the normal case here and must be inert.
+const queueSiteBadness = (row) => {
+  const x = queueExtraOf(row) || {};
+  // The contact read's verdict wins where it exists - it saw a picture of the
+  // page. The press's markup-only verdict is the fallback, which is the whole
+  // point: it is the only one that exists on an unread lead, and an unread
+  // lead is what the draw order is choosing between.
+  const _m = (x.contactSiteLooksMeasured === true) || (x.siteLooksMeasured === true);
+  if (!_m) return 0;
+  const v = String(x.contactSiteLooks || x.siteLooks || '').toLowerCase();
+  return v === 'bad' ? 2 : v === 'dated' ? 1 : 0;
+};
 const queueReadable = (row) => {
   const x = queueExtraOf(row) || {};
   return ((row && row.website) || x.website || x.placeId) ? 1 : 0;
 };
+// Round B put the website ABOVE the owner-findable guess, deliberately, and it
+// is the one ordering decision in this file that trades one good thing for
+// another. A bad-website lead whose owner we may not find now outranks a
+// tidy-website lead whose owner we probably will. That is right for a business
+// where the rep DIALS - he does not need the owner pre-found to ask for him,
+// and the website IS the pitch. The findable-owner guess still decides the
+// order inside each website group, so it is narrowed, not retired.
+//
+// It is also switchable by construction: with FIND_PRESS_SITE_READ off no lead
+// carries a measured verdict, every badness is 0, and the draw is exactly what
+// it was before this round.
 const orderUnread = (rows) => (Array.isArray(rows) ? rows.slice() : []).sort((a, b) =>
   (queueReadable(b) - queueReadable(a))
+  || (queueSiteBadness(b) - queueSiteBadness(a))
   || (_qnum(b.reach_predict) - _qnum(a.reach_predict))
   || (_qnum(b.icp_score) - _qnum(a.icp_score)));
 // done: every claimed lead answered (read or a verdict); partial: something

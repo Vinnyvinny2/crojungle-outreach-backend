@@ -220,6 +220,14 @@ const GP_FIND_CAST = [
   // 3-pack median, and never above the 15-review base - Plumbing's median is
   // 215, so its floor is min(215, 15, 22) = 15. The 40 this cast was built
   // against is gone for every trade: 15 is now the ceiling on any floor.
+  // ── ROUND B: the two website shapes the press must be able to tell apart ──
+  // grim: markup a visitor meets badly, so the press grades it without a picture.
+  // refused: a site that will not answer a plain read, so the press says nobody
+  // looked rather than reporting it as a site that passed.
+  { tag: 'grimsite', name: 'Grim Site Plumbing', cities: ['Dallas TX'], reviews: 90, rating: 4.5,
+    site: 'https://grimsiteplumbing.example', phone: '+1 214-555-0191' },
+  { tag: 'refusedsite', name: 'Refused Site Plumbing', cities: ['Dallas TX'], reviews: 95, rating: 4.5,
+    site: 'https://refusedsiteplumbing.example', phone: '+1 214-555-0192' },
   { tag: 'quiet', name: 'Kessler Park Plumbing', cities: ['Dallas TX'], reviews: 12, rating: 4.6,
     site: 'https://kesslerparkplumbing.example', phone: '+1 214-555-0101',
     expect: 'demoted', demote: 'thinReviews',
@@ -815,6 +823,30 @@ const fake = http.createServer(async (req, res) => {
     return send(res, 404, {});
   }
 
+  // ══ ROUND B: ONE BUSINESS WHOSE WEBSITE A VISITOR WOULD WINCE AT ═══════
+  // Every other .example host below serves HOMEPAGE_HTML, which has an enquiry
+  // form, a tappable phone and a current copyright - a CLEAN site. That is
+  // right for the contact-read scenarios, and it is why the press-side verdict
+  // graded nothing at all on its first run here: the cast had no bad website in
+  // it to find, so the check passed over code that had never produced a
+  // verdict. A fixture with no failing case proves the absence of the case, not
+  // the presence of the rule.
+  //
+  // Deliberately bad, in the two groups a VISITOR meets (readSiteLooks keeps
+  // only 'build' and 'converts'): a copyright years out of date, and no way to
+  // get in touch - no form and no tel: link. Three links so the nav read opens
+  // at all, and enough prose to clear the readable-text floor.
+  if (/^grimsite\./.test(host) || host === 'grimsiteplumbing.example') {
+    if (state.slowMs) await sleep(state.slowMs);
+    return send(res, 200, '<!doctype html><html><head><title>Grim Site Plumbing</title></head><body>'
+      + '<nav><a href="/about">About</a> <a href="/services">Services</a> <a href="/contact">Contact</a></nav>'
+      + '<h1>Grim Site Plumbing</h1>'
+      + '<p>' + 'We have served homeowners in this town for many years and we take every job seriously. '.repeat(20) + '</p>'
+      + '<footer>&copy; 2011 Grim Site Plumbing</footer></body></html>');
+  }
+  // A site that refuses a plain read outright, so the press's refused counter
+  // and its "nobody looked" verdict are exercised rather than inferred.
+  if (host === 'refusedsiteplumbing.example') return send(res, 403, '<html><body>Access Denied.</body></html>');
   if (host === b.host || /\.example$/.test(host)) {
     if (state.slowMs) await sleep(state.slowMs);
     // findblocked: the site refuses a plain fetch outright, which is the ONLY
@@ -1648,6 +1680,53 @@ const runLead = async (b, over, capMs) => {
         ok(_q.every(r => r.extra && typeof r.extra === 'object'), 'a queue row the server wrote carries extra as something other than an object - the old page\'s JSON-string shape is back');
         ok(_q.every(r => typeof r.from_trigger_source === 'boolean' && typeof r.reach_predict === 'number'), 'a queue row the server wrote is missing from_trigger_source or reach_predict, so the summary and the draw order have nothing to read');
         ok(_q.some(r => r.source === 'google_places' && r.from_trigger_source === false), 'a Google listing row reads as a trigger-lane lead');
+
+        // ══ ROUND B: THE PRESS LOOKED AT THE WEBSITE, FOR FREE ═════════
+        // Driven through the real press route. The whole round rests on the
+        // verdict existing on a lead BEFORE anybody pays to read it, and on
+        // riding the queue row's extra blob so no SQL is needed - if either
+        // half is missing the round has shipped nothing a rep can use.
+        {
+          const _cos = _findResult.companies || [];
+          const _withSite = _cos.filter(c => c && c.website);
+          const _noSite = _cos.filter(c => c && !c.website);
+          ok(/PRESS SITE READ/.test(srv.log()), 'the press never read a single homepage - the free site read did not run at all, so every assertion below it would be measuring nothing');
+          ok(_withSite.length > 0, 'no pressed lead carries a website, so the free read had nothing to look at and this scenario cannot measure it');
+          // The verdict is on the lead. Only 'dated', 'bad' and 'unknown' are
+          // reachable here: the press never takes a picture, and readSiteLooks
+          // holds that clean code alone is not evidence a site looks good.
+          const _graded = _withSite.filter(c => c.siteLooksMeasured === true);
+          ok(_withSite.every(c => ['dated', 'bad', 'unknown', '', undefined].includes(c.siteLooks)),
+            `a pressed lead carries a website verdict the press cannot support (${JSON.stringify(_withSite.map(c => c.siteLooks).filter(v => !['dated', 'bad', 'unknown', '', undefined].includes(v)).slice(0, 3))}) - 'modern' needs a picture and the press never takes one`);
+          ok(_graded.length > 0, 'the press read homepages and graded NONE of them - the markup-only verdict is the whole round and it is not reaching a single lead');
+          // A lead with no website is its own lane, never a failed look.
+          ok(_noSite.every(c => c.siteLooksMeasured !== true), 'a lead with no website at all carries a measured website verdict - there was nothing to read');
+          // AND IT RIDES THE QUEUE ROW WITH NO SQL. This is the assertion that
+          // proves the no-migration claim: a new top-level column would have
+          // made PostgREST refuse the whole 300-lead write on one unknown key
+          // (launch night, round 42), and the server has no strip-and-retry.
+          const _qGraded = _q.filter(r => r.extra && r.extra.siteLooksMeasured === true);
+          ok(_qGraded.length > 0, 'the website verdict never reached the queue row - it is computed at the press and dropped before the draw order and the bad-websites toggle can read it, which is the computed-but-not-passed class this file records most');
+          ok(_qGraded.every(r => r.extra.siteLooks === 'dated' || r.extra.siteLooks === 'bad'), 'a queue row carries a measured verdict that is neither dated nor bad, so something is being written as measured that the press cannot measure');
+          // NAMED, both directions. Grim Site Plumbing's markup is out of date
+          // and offers no way to make contact; Refused Site Plumbing will not
+          // answer a plain read at all. One must be graded and the other must
+          // say nobody looked - and the second must NEVER read as a site that
+          // passed, which is the bug Round 141 shipped once.
+          const _grim = _cos.find(c => /Grim Site/.test(c.name || ''));
+          const _ref = _cos.find(c => /Refused Site/.test(c.name || ''));
+          if (_grim) {
+            ok(_grim.siteLooksMeasured === true && (_grim.siteLooks === 'bad' || _grim.siteLooks === 'dated'),
+              `Grim Site Plumbing - a homepage with a 2011 copyright and no way to contact them - graded "${_grim.siteLooks}" (measured=${_grim.siteLooksMeasured}). The press must be able to grade that from markup alone, with no picture and no credit spent`);
+          } else ok(false, 'the press did not return Grim Site Plumbing, so the one cast business with a bad website never reached the verdict and the graded path is untested');
+          if (_ref) {
+            ok(_ref.siteLooksMeasured !== true, `Refused Site Plumbing refused a plain read and still came back measured as "${_ref.siteLooks}" - a site nobody could read must never be reported as a site that passed`);
+            ok(/did not answer a plain read/.test(String(_ref.siteLooksWhy || '')), `Refused Site Plumbing does not say WHY nobody looked (got "${_ref.siteLooksWhy}") - the row cannot tell a refusal from a clean site`);
+          } else ok(false, 'the press did not return Refused Site Plumbing, so the refusal path is untested');
+          // The DRAW is asserted at boot, where orderUnread and queueSiteBadness
+          // are module-scope and can be executed directly on built rows. Here we
+          // prove the verdict exists and reaches the row it will be drawn from.
+        }
       }
     }
 
