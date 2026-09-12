@@ -8484,6 +8484,13 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
     // biggest number on the line.
     tally.underFloor = skippedUnderFloor;
     tally.demotedUnderFloor = demotedUnderFloor;
+    // Round 143A: the two new deletions. Both were counted in the loop and
+    // printed on their own lines, and neither reached the report - so a run
+    // that dropped seven listings said it lost one. The rows were already
+    // declared; only the assignment was missing, which is the shape this file
+    // records more than any other.
+    tally.skippedListingRisk = skippedListingRisk;
+    tally.skippedListingPhone = skippedListingPhone;
     tally.franchise = skippedFranchise + skippedChain + skippedBranchUrl;
     tally.alreadyOwned = skippedAlreadyOwned;
     tally.catCap = skippedCatCap;
@@ -42509,7 +42516,7 @@ const WEIGHTS = {
         // is a demotion that survives the press and dies in the sort, which is
         // the one way the bench promise can be broken without any gate changing.
         const ba = (a.outsideBand || a.aboveSizeCeiling || a.thinReviews || a.listingRisk) ? 1 : 0;
-        const bb = (b.outsideBand || b.aboveSizeCeiling || b.thinReviews) ? 1 : 0;
+        const bb = (b.outsideBand || b.aboveSizeCeiling || b.thinReviews || b.listingRisk) ? 1 : 0;
         if (ba !== bb) return ba - bb;
         const ta = tier(a), tb = tier(b);
         if (ta !== tb) return tb - ta;
@@ -72398,9 +72405,18 @@ app.listen(PORT, () => {
       // the sort, which is the one way the bench promise breaks with every
       // gate still correct.
       const _n = _needle('const ba = (a.', 'outsideBand || a.aboveSizeCeiling || a.thinReviews || a.listingRisk) ? 1 : 0');
+      // BOTH HALVES, because only one of them was pinned and the two drifted
+      // apart inside one round: ba grew a fourth reason and bb did not, so a
+      // listing Google itself flags sorted FIRST whenever it happened to arrive
+      // before an in-band lead. A comparator is two reads of one rule and a
+      // check that pins one of them is half a check.
+      const _nb = _needle('const bb = (b.', 'outsideBand || b.aboveSizeCeiling || b.thinReviews || b.listingRisk) ? 1 : 0');
       const _i = _src.indexOf(_n);
+      if (_src.indexOf(_nb) < 0) {
+        _fails.push('the two halves of the demotion comparator read different lists of reasons, so a lead demoted for the reason only one half knows sorts FIRST whenever it arrives before an in-band one - the bench promise is broken by the comparator rather than by any gate');
+      }
       if (_i < 0) {
-        _fails.push('the discovery sort no longer puts ALL THREE kinds of demoted lead last, so a demoted 4.9-star business, one above the review ceiling or one under its trade review floor climbs back over the 4.6-star lead we have evidence for');
+        _fails.push('the discovery sort no longer puts EVERY kind of demoted lead last, so a demoted 4.9-star business, one above the review ceiling, one under its trade review floor or one Google itself flags climbs back over the 4.6-star lead we have evidence for');
       } else {
         const _after = _src.slice(_i, _i + 400);
         const _tierAt = _after.indexOf(_needle('const ta = ', 'tier(a)'));

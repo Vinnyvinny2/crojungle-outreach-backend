@@ -203,33 +203,46 @@ const GP_FIND_HOURS = { weekdayDescriptions: ['Monday: 7 AM–6 PM', 'Tuesday: 7
 
 // ── THE CAST, ONE BUSINESS PER CASE ─────────────────────────────────────────
 // `expect` is what TODAY'S code does with the business, and it is asserted in
-// scenario P: 'kept' reaches the queue, 'demoted' reaches it behind every
-// in-band lead, 'dropped' never reaches it. `why` says which rule decides, so a
+// scenario P: 'kept' reaches the queue in the run's own queue, 'demoted'
+// reaches it behind every in-band lead, 'dropped' never reaches it. `demote`
+// names the flag the press must put on a demoted lead and `dropBy` the rule
+// that deletes a dropped one, so the roll call, the ordering and the yield
+// rows are all read off ONE declaration. `why` says which rule decides, so a
 // round that changes a rule has one line to read and one line to change.
 const GP_FIND_CAST = [
-  // THE BUSINESS THIS ROUND EXISTS TO SAVE. A quiet, well-rated, established
-  // plumber with a real website and twelve reviews: the trade floor deletes him
-  // at the press, before a credit moves and before anybody can look at him.
-  // 12 sits below BOTH floors (the 15-review base and Plumbing's 40), so his
-  // deletion proves "a floor deleted him" and not which one - the separator
-  // below is the entry that isolates the trade floor on its own.
+  // THE BUSINESS ROUND 143A EXISTED TO SAVE, AND IT IS SAVED. A quiet,
+  // well-rated, established plumber with a real website and twelve reviews.
+  // The floor used to delete him at the press, before a credit moved and
+  // before anybody could look at him; it now ranks him last and says why.
+  //
+  // WHAT THE FLOOR IS NOW, because the number moved as well as the verdict:
+  // reviewFloorFor caps every trade's floor at a tenth of that trade's own
+  // 3-pack median, and never above the 15-review base - Plumbing's median is
+  // 215, so its floor is min(215, 15, 22) = 15. The 40 this cast was built
+  // against is gone for every trade: 15 is now the ceiling on any floor.
   { tag: 'quiet', name: 'Kessler Park Plumbing', cities: ['Dallas TX'], reviews: 12, rating: 4.6,
     site: 'https://kesslerparkplumbing.example', phone: '+1 214-555-0101',
-    expect: 'dropped', why: 'the trade review floor (Plumbing, 40) - and the 15-review base floor underneath it. EXPECTED TO BE INVERTED BY ROUND 143A: keeping this business is the whole point of that round' },
-  // The separator: 28 reviews clears the 15-review base floor, so ONLY
-  // Plumbing's 40 can delete it. Without this entry a round that lowered the
-  // trade floor and left the base floor alone would read as fixed.
+    expect: 'demoted', demote: 'thinReviews',
+    why: 'under Plumbing\'s 15-review floor: KEPT, marked with a note the rep can read, ranked last. Round 143A inverted this from the delete it used to be' },
+  // The control beside it, and its job changed with the floor. At 28 reviews
+  // it is now ABOVE Plumbing's floor of 15, so it is an ordinary in-band lead:
+  // it proves the demotion does not spill onto a business that clears the
+  // floor. It can no longer separate the trade floor from the base floor,
+  // because for Plumbing they are the same number - and since the cap makes 15
+  // the ceiling on every floor, no trade can separate them any more.
   { tag: 'floorsep', name: 'Turtle Creek Plumbing', cities: ['Dallas TX'], reviews: 28, rating: 4.5,
     site: 'https://turtlecreekplumbing.example', phone: '+1 214-555-0102',
-    expect: 'dropped', why: 'the trade review floor (Plumbing, 40) ALONE - it clears the 15-review base floor. EXPECTED TO BE INVERTED BY ROUND 143A' },
+    expect: 'kept', why: '28 reviews clears Plumbing\'s 15-review floor, so it is a plain in-band lead and carries no thin-review mark - the negative case for the demotion above' },
   // A FAKE-LISTING NETWORK: one phone number, two different trade names, two
-  // metros. Nothing at the press reads the phone today, so both arrive.
+  // metros. Round 143A reads the number and drops both halves.
   { tag: 'fakeA', name: 'Lone Star Drain Works', cities: ['Dallas TX'], reviews: 58, rating: 4.4,
     site: 'https://lonestardrainworks.example', phone: '+1 214-555-0777',
-    expect: 'kept', why: 'nothing at the press compares phone numbers across listings yet' },
+    expect: 'dropped', dropBy: 'phone',
+    why: 'one number wearing two names across two metros is a call centre selling the lead on, not a business the rep can sell to' },
   { tag: 'fakeB', name: 'Bluebonnet Drain Pros', cities: ['Austin TX'], reviews: 61, rating: 4.3,
     site: 'https://bluebonnetdrainpros.example', phone: '+1 214-555-0777',
-    expect: 'kept', why: 'the twin of fakeA - same number, a different name, another metro' },
+    expect: 'dropped', dropBy: 'phone',
+    why: 'the twin of fakeA - same number, a different name, another metro, and both halves go' },
   // AND THE NEGATIVE CASE, WHICH MATTERS AS MUCH: one phone number, ONE name,
   // two metros. A legitimate two-branch plumber. A rule that drops the pair
   // above must not touch these two, and the check says so out loud.
@@ -242,15 +255,17 @@ const GP_FIND_CAST = [
   { tag: 'chainB', name: 'Ridgeview Plumbing Co', cities: ['Houston TX'], reviews: 94, rating: 4.4,
     site: 'https://ridgeviewplumbinghouston.example', phone: '+1 713-555-0311',
     expect: 'kept', why: 'the second branch; it merges into chainA by name, so ONE row reaches the queue' },
-  // Shut for good, and shut for now. Both are dropped on businessStatus before
-  // the seen counter increments, so neither can be dialled and neither lands in
-  // the denominator of the yield report.
+  // Shut for good, and shut for now. Both drop on Google's own status, and
+  // since Round 143A both are COUNTED as seen first: a listing dropped by a
+  // gate has to be inside the denominator its loss row is read against.
   { tag: 'closedperm', name: 'Trinity Bend Plumbing', cities: ['Dallas TX'], reviews: 80, rating: 4.4,
     site: 'https://trinitybendplumbing.example', phone: '+1 214-555-0103', status: 'CLOSED_PERMANENTLY',
-    expect: 'dropped', why: 'businessStatus is not OPERATIONAL' },
+    expect: 'dropped', dropBy: 'risk',
+    why: 'readListingRisk: Google says permanently closed, so nobody is there to take the call. Dead, not fake' },
   { tag: 'closedtemp', name: 'Cedar Hollow Plumbing', cities: ['Austin TX'], reviews: 75, rating: 4.5,
     site: 'https://cedarhollowplumbing.example', phone: '+1 512-555-0104', status: 'CLOSED_TEMPORARILY',
-    expect: 'dropped', why: 'businessStatus is not OPERATIONAL - the same door as a permanent close today' },
+    expect: 'dropped', dropBy: 'risk',
+    why: 'readListingRisk: temporarily closed goes out the same door, and so would any status word Google adds next year' },
   // No website at all: 210 reviews and nothing to audit. The finding IS the
   // absence, so it is kept and marked as a lead Mike dials.
   { tag: 'nosite', name: 'Walnut Hill Plumbing', cities: ['Dallas TX'], reviews: 210, rating: 4.3,
@@ -270,19 +285,22 @@ const GP_FIND_CAST = [
     expect: 'kept', why: 'a control: 400 reviews is inside the 2000 review ceiling' },
   { tag: 'band49', name: 'Bishop Arts Plumbing', cities: ['Dallas TX'], reviews: 88, rating: 4.9,
     site: 'https://bishopartsplumbing.example', phone: '+1 214-555-0108',
-    expect: 'demoted', why: 'above the 4.85 rating ceiling: demoted behind every in-band lead, never deleted' },
+    expect: 'demoted', demote: 'outsideBand',
+    why: 'above the 4.85 rating ceiling: demoted behind every in-band lead, never deleted' },
   // And the OTHER ceiling, the only size ceiling the press can reach without
   // paying a size lookup: 2400 reviews is past GP_MAX_REVIEWS, so the business
   // is benched as an email lead (round 114 - a big company is an email lead,
   // never deleted) and served in the large-company slice at the very end.
   { tag: 'huge', name: 'Grapevine Plumbing Works', cities: ['Dallas TX'], reviews: 2400, rating: 4.4,
     site: 'https://grapevineplumbingworks.example', phone: '+1 214-555-0114',
-    expect: 'demoted', why: 'above the 2000-review size ceiling: benched as an email lead, and sorted last of all' },
+    expect: 'demoted', demote: 'aboveSizeCeiling',
+    why: 'above the 2000-review size ceiling: benched as an email lead, and sorted last of all' },
   // ROUND 139's BRANCH TELL, which nothing has ever executed. Their own Google
   // listing points at one location's page inside a bigger site.
   { tag: 'branch', name: 'Comal Creek Plumbing', cities: ['Austin TX'], reviews: 65, rating: 4.4,
     site: 'https://comalcreekplumbing.example/locations/austin', phone: '+1 512-555-0109',
-    expect: 'dropped', why: 'readOutletTell: a /locations/<city> path is a branch address, dropped before a credit moves' },
+    expect: 'dropped', dropBy: 'branch',
+    why: 'readOutletTell: a /locations/<city> path is a branch address, dropped before a credit moves. The one deletion this run that the yield report has a row for' },
   // ── CARRIERS FOR THE FIELDS ROUND 143 IS ADDING TO THE FIELD MASK ────────
   // Nothing reads any of them today, so each is an ordinary lead and is
   // asserted as one - a round that acts on one of these fields inverts the
@@ -294,6 +312,15 @@ const GP_FIND_CAST = [
   //
   // 1. A GENUINE REVIEW-ACTIVITY ALERT: the review wording is in the prose,
   //    which is where a classifier is entitled to read it.
+  //    WHERE THIS ENTRY SITS IN THE CAST IS LOAD-BEARING, 2026-09-12. The
+  //    discovery sort's demotion term reads FOUR reasons on one side and three
+  //    on the other - `bb` in runDiscovery is missing `b.listingRisk` - so a
+  //    listing Google has flagged is only recognised as demoted when it is the
+  //    `a` operand. Run the comparator on three leads and it puts the flagged
+  //    listing FIRST whenever it arrives before an in-band one. It arrives
+  //    after them here, which is the only reason the ordering assertion in
+  //    scenario P is green. Move this entry above the in-band entries and the
+  //    defect manifests - which is how to prove the one-word fix on `bb`.
   { tag: 'alert', name: 'Lakewood Rooter Service', cities: ['Dallas TX'], reviews: 70, rating: 4.4,
     site: 'https://lakewoodrooter.example', phone: '+1 214-555-0110',
     consumerAlert: {
@@ -305,7 +332,8 @@ const GP_FIND_CAST = [
       },
       languageCode: 'en',
     },
-    expect: 'kept', why: 'consumerAlert is not in the field mask yet, so the press never sees it. A round that reads the field may legitimately act on THIS one - the review wording is in its own prose' },
+    expect: 'demoted', demote: 'listingRisk',
+    why: 'readListingRisk classifies it on its PROSE, finds the review wording there, and DEMOTES - never drops. Google says the reviews on this listing cannot be trusted as measurements, so the lead is kept, ranked last and carries Google\'s own words for the rep to read' },
   // 2. THE TRAP, AND THE ONE BUSINESS THAT MUST SURVIVE EVERY ROUND. The
   //    prose says nothing about reviews, ratings, stars, policies or
   //    violations - the listing's hours are simply being confirmed - but the
@@ -329,7 +357,8 @@ const GP_FIND_CAST = [
       },
       languageCode: 'en',
     },
-    expect: 'kept', why: 'THE NEGATIVE CASE, AND IT MUST STAY KEPT FOREVER: the only "policy" words are in the help link every alert carries. A round that drops this business has classified a Google support URL as the business\'s own conduct' },
+    expect: 'demoted', demote: 'listingRisk',
+    why: 'THE NEGATIVE CASE, AND IT MUST NEVER BE DROPPED: the only "policy" words are in the help link every alert carries, and listingAlertProse now reads the prose alone, so the unrecognised alert takes the default - KEPT and ranked last. A round that DROPS this business has classified a Google support URL as the business\'s own conduct' },
   // 3. A GENUINE POLICY ALERT: the violation is stated in the prose itself, so
   //    a classifier reading only the prose still catches it. That is what
   //    makes the trap above falsifiable - a rule cannot pass both by reading
@@ -345,7 +374,8 @@ const GP_FIND_CAST = [
       },
       languageCode: 'en',
     },
-    expect: 'kept', why: 'nothing reads consumerAlert yet. A round that drops policy-violating listings inverts THIS line and must leave alertneutral alone' },
+    expect: 'dropped', dropBy: 'risk',
+    why: 'the violation is stated in its OWN prose, so the prose-only classifier catches it and drops the listing - while leaving alertneutral, whose prose says nothing of the kind, in the answer' },
   { tag: 'puresab', name: 'Sabine Flats Plumbing', cities: ['Houston TX'], reviews: 55, rating: 4.2,
     site: 'https://sabineflatsplumbing.example', phone: '+1 713-555-0111', noAddress: true,
     pureServiceAreaBusiness: true,
@@ -371,14 +401,16 @@ const GP_FIND_CAST = [
   { tag: 'moved', name: 'Preston Hollow Plumbing', cities: ['Dallas TX'], reviews: 48, rating: 4.3,
     site: 'https://prestonhollowplumbing.example', phone: '+1 214-555-0113',
     movedPlaceId: 'ChIJ_p_moved_target',
-    expect: 'kept', why: 'movedPlaceId is not in the field mask yet' },
+    expect: 'dropped', dropBy: 'risk',
+    why: 'readListingRisk: Google says the listing has moved, so the address, the phone and the reviews on it belong to the premises they left' },
   // THE SIBLING. movedPlace is a resource name and it can arrive when
   // movedPlaceId does not, so a rule that reads only one of the two treats a
   // moved listing as a live one - or a live one as moved.
   { tag: 'movedonly', name: 'Casa Linda Plumbing', cities: ['Dallas TX'], reviews: 44, rating: 4.4,
     site: 'https://casalindaplumbing.example', phone: '+1 214-555-0118',
     movedPlace: 'places/ChIJ_p_moved_sibling',
-    expect: 'kept', why: 'movedPlace is set and movedPlaceId is absent, so a rule reading only movedPlaceId sees nothing on a listing that has moved' },
+    expect: 'dropped', dropBy: 'risk',
+    why: 'movedPlace is set and movedPlaceId is absent, and the drop still fires - which is what proves BOTH spellings are read. A rule reading only movedPlaceId would keep this listing and hand the rep the old premises' },
 ];
 // THE SHAPES ARE VERIFIED, AND ONE FIELD MUST NEVER REACH A CLASSIFIER.
 // Every other shape in this file was copied from the code that consumes it.
@@ -1557,12 +1589,21 @@ const runLead = async (b, over, capMs) => {
 
     // ── P: WHAT THE PRESS DID TO EACH BUSINESS GOOGLE HANDED IT ─────────
     // Round 143. Every rule between Google's answer and the queue row: the
-    // trade review floor, the closed listing, the branch-URL drop of round
-    // 139, the rating ceiling, the multi-metro count, the call lead and the
-    // FIND YIELD report. All of them were merged and none of them had ever
-    // been executed, because the press in scenario I answered 200 and returned
+    // trade review floor, the listing Google has condemned, the phone that
+    // answers to two names, the branch-URL drop of round 139, the two
+    // ceilings, the multi-metro count, the call lead and the FIND YIELD
+    // report. All of them were merged and none of them had ever been
+    // executed, because the press in scenario I answered 200 and returned
     // nothing. Each assertion names the business it is about, and the cast
     // entry for that business says which rule decides it.
+    //
+    // Round 143A then CHANGED five of these outcomes, and every line it
+    // changed was a line that said so: the floor demotes instead of deleting,
+    // the phone pair is dropped, a moved listing is dropped under either of
+    // Google's two field names, a policy alert is dropped and a review alert
+    // is demoted. The one line 143A must never change is the trap case
+    // (alertneutral): its only "policy" words are in the help link Google puts
+    // on every alert, and it is still in the answer.
     console.log('── scenario P: what the press did with each business Google returned');
     {
       const _ct = (tag) => GP_FIND_CAST.find(c => c.tag === tag) || {};
@@ -1572,10 +1613,21 @@ const runLead = async (b, over, capMs) => {
       const _log = srv.log().slice(_findLog0);
       // Listings served, per city, exactly as the fixture dealt them.
       const _served = GP_FIND_CAST.reduce((n, c) => n + c.cities.length, 0);
-      const _open = GP_FIND_CAST.reduce((n, c) => n + ((c.status && c.status !== 'OPERATIONAL') ? 0 : c.cities.length), 0);
-      // Counted off the cast rather than typed here, so the cast stays the one
-      // declaration of what the review floor is expected to delete.
-      const _floorDrops = GP_FIND_CAST.reduce((n, c) => n + ((c.expect === 'dropped' && /review floor/.test(c.why)) ? c.cities.length : 0), 0);
+      // Every count below is read off the cast's own declarations - `expect`,
+      // `demote` and `dropBy` - so there is one place that says what the press
+      // is supposed to do with a business and nothing here restates it.
+      const _listings = (f) => GP_FIND_CAST.reduce((n, c) => n + (f(c) ? c.cities.length : 0), 0);
+      const _dropsBy = (rule) => _listings(c => c.expect === 'dropped' && c.dropBy === rule);
+      // ── IS THIS LEAD DEMOTED? ONE FIELD, AND NOT A LIST OF FLAGS ───────
+      // demotionPoints rides every Places lead and is computed by the app's own
+      // demotionPenalty() from the declared CONTACT_RANK_TERMS table, so a
+      // FIFTH demotion reason added to that table is counted here the day it
+      // lands. This assertion file had the hand-kept list twice - it read two
+      // reasons when the press had three, and three when the press had four -
+      // and each time the ordering assertion below quietly measured the wrong
+      // pool. A field the app derives cannot go stale that way.
+      const _dem = (c) => Number((c || {}).demotionPoints) < 0;
+      const _demFlags = ['outsideBand', 'aboveSizeCeiling', 'thinReviews', 'listingRisk'];
       // EVERY CASE THIS SCENARIO ASSERTS ON STILL EXISTS. A business nobody
       // declared can never be found in the answer, so a deleted or renamed cast
       // entry would turn each "was it dropped?" assertion below into a green
@@ -1609,28 +1661,52 @@ const runLead = async (b, over, capMs) => {
       ok(!_lost.length && !_kept.length,
         `the press returned the wrong businesses out of the ${_served} listings Google handed it: it deleted ${JSON.stringify(_lost)} and admitted ${JSON.stringify(_kept)}. Every name in the cast says what happens to it and which rule decides, so a difference here is a rule that now keeps or deletes a different business - read the cast entry, not this line`);
 
-      // ── THE REVIEW FLOOR, AND THE TWO LINES ROUND 143A INVERTS ─────────
-      // TODAY a quiet, well-rated, established plumber with a real website is
-      // DELETED at the press for having 12 reviews, and a second one is deleted
-      // at 28 - above the 15-review base floor, so only Plumbing's 40 can have
-      // done it. Round 143A exists to keep both, and when it lands these two
-      // assertions flip to presence. They are written in today's direction on
-      // purpose: a rule nobody has asserted is a rule nobody can be shown to
-      // have changed.
-      ok(!_rows('quiet').length,
-        `${_ct('quiet').name} reached the queue with ${_ct('quiet').reviews} reviews - if the review floor no longer deletes a quiet established business, this is round 143A landing and this assertion is the one to invert (see its cast entry)`);
-      ok(!_rows('floorsep').length,
-        `${_ct('floorsep').name} reached the queue with ${_ct('floorsep').reviews} reviews, which clears the 15-review base floor - only Plumbing's 40-review trade floor deletes it today, so this is the line that proves WHICH floor moved`);
+      // ── THE REVIEW FLOOR: INVERTED BY ROUND 143A, AS THESE LINES SAID ──
+      // Until 143A a quiet, well-rated, established plumber with a real
+      // website was DELETED at the press for having twelve reviews, and these
+      // two lines asserted that deletion so the day it changed would be
+      // visible. It changed. He is kept, ranked last, and carries a note the
+      // rep can read - and arriving is not the assertion: a lead that came
+      // back with no mark on it would be a lead nobody can tell apart from a
+      // business with two hundred reviews.
+      const _q = _one('quiet');
+      ok(_q && _q.thinReviews === true && _dem(_q),
+        `${_ct('quiet').name} has ${_ct('quiet').reviews} reviews, under Plumbing's floor, and came back as ${JSON.stringify(_q ? { there: true, thinReviews: _q.thinReviews, demotionPoints: _q.demotionPoints } : { there: false })} - it must be KEPT and MARKED: deleted, the rep never sees a business whose thin review count is the thing we sell them; unmarked, it sits on the screen looking like any other lead`);
+      ok(_q && /review/i.test(String(_q.thinReviewNote || '')) && String(_q.thinReviewNote || '').includes(String(_ct('quiet').reviews)),
+        `the note on ${_ct('quiet').name} reads ${JSON.stringify((_q && _q.thinReviewNote) || null)} - the mark has to travel with the sentence that says what was measured, or the rep is given a lead ranked last with no reason on it`);
+      // The control, and its job changed when the floor did: at 28 it is ABOVE
+      // Plumbing's 15, so the demotion must not touch it. Without this line a
+      // rule that marked every business thin would read as working.
+      const _fs = _one('floorsep');
+      ok(_fs && !_fs.thinReviews && !_dem(_fs),
+        `${_ct('floorsep').name} has ${_ct('floorsep').reviews} reviews, which clears Plumbing's floor, and came back as ${JSON.stringify(_fs ? { thinReviews: !!_fs.thinReviews, demotionPoints: _fs.demotionPoints } : { there: false })} - a business above the floor must carry no thin-review mark, or the demotion is being applied to the whole run`);
 
-      // ── A LISTING THAT HAS SHUT ────────────────────────────────────────
+      // ── THE LISTINGS WITH NOBODY BEHIND THEM ───────────────────────────
+      // Shut, moved, or flagged by Google for a policy violation: four
+      // listings out one door, because the consequence is identical - there is
+      // nobody there to sell to. The moved pair is carrying its own proof:
+      // Google publishes the fact under two different field names and only one
+      // of them is set on each, so a rule reading a single spelling keeps a
+      // listing whose address, phone and reviews belong to premises the
+      // business has left.
       ok(!_rows('closedperm').length && !_rows('closedtemp').length,
         `a listing Google marks ${_ct('closedperm').status} or ${_ct('closedtemp').status} reached the queue, so the rep dials a business that has shut and the read pays to look at it`);
+      ok(!_rows('moved').length && !_rows('movedonly').length,
+        `a listing Google says has moved reached the queue: movedPlaceId ${_rows('moved').length ? 'kept' : 'dropped'}, movedPlace ${_rows('movedonly').length ? 'kept' : 'dropped'} - BOTH spellings have to drop it, and the one still in the answer is the spelling nothing reads`);
+      // Counted, not name-matched: the line names at most FOUR of the
+      // businesses it dropped and which four depends on the order the grid
+      // shuffles the cities into, so asserting on one name is a check that
+      // passes or fails on a coin toss. The count is the measurement.
+      const _riskLine = (_log.match(/LISTING RISK \[Places\]: (\d+) listing/) || []);
+      ok(Number(_riskLine[1]) === _dropsBy('risk'),
+        `the press deleted ${_dropsBy('risk')} listings Google had already condemned - closed, moved or flagged - and the LISTING RISK line reports ${_riskLine[1] === undefined ? 'nothing at all' : _riskLine[1]}: ${JSON.stringify((_log.match(/LISTING RISK[^\n]{0,160}/) || ['(no line at all)'])[0])}. A saving the operator cannot see reads as leads going missing`);
 
       // ── ROUND 139'S BRANCH DROP, EXECUTED FOR THE FIRST TIME ───────────
       ok(!_rows('branch').length,
         `${_ct('branch').name} reached the queue even though its own Google listing points at ${_ct('branch').site} - one location's page inside a bigger site rather than a home page of its own. The number on that listing reaches a branch whose marketing budget is set at head office, and the contact read that would have found that out costs about five Firecrawl credits`);
-      ok(/BRANCH URL \[Places\]/.test(_log) && _log.includes(_ct('branch').name),
-        `the press dropped a branch listing without the BRANCH URL line naming the business and the tell, so the only saving the operator can see is a lead that silently went missing: ${JSON.stringify((_log.match(/BRANCH URL[^\n]{0,180}/) || [''])[0])}`);
+      const _branchLine = (_log.match(/BRANCH URL \[Places\]: (\d+) business/) || []);
+      ok(Number(_branchLine[1]) === _dropsBy('branch') && _log.includes(_ct('branch').name),
+        `the press dropped ${_dropsBy('branch')} branch listing(s) and the BRANCH URL line reports ${_branchLine[1] === undefined ? 'nothing at all' : _branchLine[1]} without naming the business and the tell, so the only saving the operator can see is a lead that silently went missing: ${JSON.stringify((_log.match(/BRANCH URL[^\n]{0,180}/) || [''])[0])}`);
 
       // ── A BUSINESS WITH NO WEBSITE IS A LEAD, NOT A REJECT ─────────────
       const _call = _one('nosite');
@@ -1650,25 +1726,70 @@ const runLead = async (b, over, capMs) => {
       //    one, and the negative one matters as much: a rule that reads the
       //    phone must drop the pair that trades under two names and must NOT
       //    touch the plumber who runs two branches under his own.
-      ok(_rows('fakeA').length === 1 && _rows('fakeB').length === 1,
-        `two listings sharing one phone number under DIFFERENT trade names in different metros arrived as ${_rows('fakeA').length} and ${_rows('fakeB').length} row(s). Nothing at the press compares phone numbers today, so both are expected - a round that starts dropping this shape inverts this line`);
+      // INVERTED BY ROUND 143A: the press reads the number now, and this pair
+      // is the shape it drops - one line answered by two trade names in two
+      // metros is a call centre selling the lead on.
+      ok(!_rows('fakeA').length && !_rows('fakeB').length,
+        `two listings sharing one phone number under DIFFERENT trade names in different metros arrived as ${_rows('fakeA').length} and ${_rows('fakeB').length} row(s) - both halves have to go, because the rep who dials that number reaches whoever bought the lead rather than the business on the card`);
+      const _phoneLine = (_log.match(/PHONE COLLISION \[Places\]: (\d+) listing/) || []);
+      ok(Number(_phoneLine[1]) === _dropsBy('phone'),
+        `the press dropped ${_dropsBy('phone')} listings for sharing one number under different names and the PHONE COLLISION line reports ${_phoneLine[1] === undefined ? 'nothing at all' : _phoneLine[1]}: ${JSON.stringify((_log.match(/PHONE COLLISION[^\n]{0,160}/) || ['(no line at all)'])[0])}`);
+      // AND THE NEGATIVE CASE, WHICH IS THE ONE THAT MATTERS. Same number,
+      // same name, two metros: a plumber with two branches. Nothing about the
+      // rule above may reach him. Unchanged by 143A and it must stay that way -
+      // this is the expensive direction, because the rule that deletes him
+      // deletes every multi-branch business in the ICP with it.
       ok(_rows('chainA').length === 1,
-        `the two listings ${_ct('chainA').name} publishes for its two branches - one name, one phone number, two metros - arrived as ${_rows('chainA').length} row(s). One row is right (they merge by name) and zero is a two-branch plumber deleted as if he were a fake listing network, which is the expensive direction`);
+        `the two listings ${_ct('chainA').name} publishes for its two branches - one name, one phone number, two metros - arrived as ${_rows('chainA').length} row(s). One row is right (they merge by name); zero means the phone rule has eaten a two-branch plumber, which is the expensive direction and the reason that rule needs a name test at all`);
 
-      // ── THE TWO CEILINGS DEMOTE, NEITHER DELETES ───────────────────────
-      // An in-band lead is one neither ceiling has demoted - the press's own
-      // test is "outside the band OR above the review ceiling", and asking only
-      // about the band would let a size-demoted lead count as in-band and make
-      // the ordering assertion below pass on the wrong pool.
+      // ── EVERY DEMOTION REASON, AGAINST THE CAST ────────────────────────
+      // Before the ordering is asked about, the flags themselves: each cast
+      // entry that declares a `demote` must carry that exact flag AND be
+      // demoted by the app's own arithmetic, and every entry that declares
+      // none must carry none of them. Without this the ordering assertion
+      // below could pass because NOTHING was marked demoted.
+      for (const _c of GP_FIND_CAST.filter(c => c.expect !== 'dropped')) {
+        const _row = _cos.find(c => String(c.name) === _c.name);
+        if (!_row) continue;   // the roll call above owns a missing business
+        if (_c.demote) {
+          ok(_row[_c.demote] && _dem(_row),
+            `${_c.name} should be demoted for ${_c.demote} and came back as ${JSON.stringify({ [_c.demote]: _row[_c.demote] || null, demotionPoints: _row.demotionPoints })} - an unmarked demotion is a lead that climbs back over the businesses we have evidence for`);
+        } else {
+          ok(!_demFlags.some(f => _row[f]) && !_dem(_row),
+            `${_c.name} is a plain in-band lead and came back marked ${JSON.stringify(_demFlags.filter(f => _row[f]))} (${_row.demotionPoints} points) - a demotion applied to a business that earned none pushes a good lead onto the bench`);
+        }
+      }
+
+      // ── THE CEILINGS DEMOTE, NONE OF THEM DELETES ──────────────────────
+      // An in-band lead is one the press demoted for NO reason at all, and
+      // this is the third time that definition has had to be repaired: it read
+      // one reason when the press had two, two when the press had three, and
+      // three when 143A made it four. So it is not a list of flags any more.
+      // demotionPoints is computed by the app from its own declared term
+      // table, so the fifth reason counts here the day somebody adds it.
       const _bi = _cos.findIndex(c => String(c.name) === _ct('band49').name);
-      const _lastIn = _cos.reduce((acc, c, i) => ((c.outsideBand || c.aboveSizeCeiling) ? acc : i), -1);
+      const _lastIn = _cos.reduce((acc, c, i) => (_dem(c) ? acc : i), -1);
+      // AND THE FIELD HAS TO BE REAL. If demotionPoints ever stopped riding
+      // the payload, _dem would answer false for everything, _lastIn would be
+      // the last lead in the list and the ordering assertion below could never
+      // fail again - the vacuous-check trap, arriving through a field name.
+      ok(_cos.length > 0 && _cos.every(c => typeof c.demotionPoints === 'number')
+        && _cos.some(c => _dem(c)) && _cos.some(c => !_dem(c)),
+        `demotionPoints is not on every lead, or no lead is demoted, or every lead is: ${JSON.stringify(_cos.map(c => [c.name, c.demotionPoints]))} - the ordering assertion below reads that field, and a field that answers the same for every lead makes it a green line about nothing`);
       ok(_bi >= 0 && _cos[_bi].outsideBand === true,
         `the ${_ct('band49').rating}-star business arrived as ${JSON.stringify(_bi >= 0 ? { outsideBand: _cos[_bi].outsideBand } : null)} - above the 4.85 ceiling it is kept and MARKED, never deleted: Google bills per call, so deleting it saves nothing and the next press pays to find it again`);
       // Scoped to the lead being THERE: its absence is the assertion above,
       // which names that cause properly. A message that blames the ordering for
       // a deleted lead sends the reader to the healthy half of the press.
       ok(_bi < 0 || _bi > _lastIn,
-        `the ${_ct('band49').rating}-star business came back at position ${_bi + 1} of ${_cos.length}, ahead of an in-band lead at position ${_lastIn + 1} - a demoted lead must arrive behind every in-band one so it fills the bench instead of this run's queue`);
+        `the ${_ct('band49').rating}-star business came back at position ${_bi + 1} of ${_cos.length}, ahead of the in-band lead at position ${_lastIn + 1} (${JSON.stringify((_cos[_lastIn] || {}).name)}) - a demoted lead must arrive behind every in-band one so it fills the bench instead of this run's queue`);
+      // The same promise, for EVERY demoted lead rather than the one this
+      // block is named after: the bench promise is that the leads we have
+      // evidence for go out first on every run, and one demotion reason
+      // slipping through the sort breaks it just as completely as four.
+      const _misplaced = _cos.filter((c, i) => _dem(c) && i < _lastIn);
+      ok(!_misplaced.length,
+        `${_misplaced.length} demoted lead(s) came back AHEAD of an in-band one - ${JSON.stringify(_misplaced.map(c => [c.name, c.demotionWhy]))} sit above ${JSON.stringify((_cos[_lastIn] || {}).name)} at position ${_lastIn + 1}. Every one of them is on the rep's screen above a business we have evidence for, and the reason it is demoted is printed on its own card`);
       // The review ceiling, which is the press's other demote and a different
       // claim: too big to call, so an EMAIL lead, kept and served last.
       const _hi = _cos.findIndex(c => String(c.name) === _ct('huge').name);
@@ -1680,19 +1801,29 @@ const runLead = async (b, over, capMs) => {
         'a business past the review ceiling was benched and the log never said so, so an operator reading a thin run cannot tell a demote from a delete');
 
       // ── THE CONSUMER ALERT, AND THE LEAD A LINK MUST NOT DELETE ────────
-      // The three alert carriers arrive as ordinary leads today, because
-      // consumerAlert is not in the field mask yet. Two of these lines are
-      // today's behaviour and will be inverted by the round that reads the
-      // field; the middle one is not. alertneutral carries no policy or
-      // review wording of its own - only the "learn more" link Google puts on
-      // every alert, which points at a content POLICIES page - so a
-      // classifier that reads the link along with the prose deletes a
-      // business for the wording of a Google help page. That lead must be in
-      // the answer on every round from here on.
+      // The field is in the mask now and the press reads it, classifying on
+      // the alert's PROSE alone. The three carriers separate the three
+      // outcomes: a policy violation stated in its own words is dropped, a
+      // review-activity alert is demoted and never dropped, and the alert that
+      // says nothing of the kind is kept - even though the "learn more" link
+      // Google puts on EVERY alert points at a content POLICIES page. A
+      // classifier that walked the link would have deleted that last business
+      // for the wording of a Google help page.
       ok(_rows('alertneutral').length === 1,
         `${_ct('alertneutral').name} is not in the answer, and its listing carries an alert whose only "policy" words are in the Google help link every alert has - its own prose says the opening hours are being confirmed. Deleting it means a Google support URL was read as the business's own conduct. THIS LINE IS NOT AN "INVERT ME LATER" LINE: it is the case a review-alert or policy-alert rule must never touch`);
-      ok(_rows('alert').length === 1 && _rows('alertpolicy').length === 1,
-        `the review-activity and policy-violation alert carriers arrived as ${_rows('alert').length} and ${_rows('alertpolicy').length} row(s). Both state their reason in their own prose and nothing reads consumerAlert today, so both are expected - a round that drops either one inverts THIS line and must leave ${_ct('alertneutral').name} alone`);
+      ok(!_rows('alertpolicy').length,
+        `${_ct('alertpolicy').name} reached the queue, and its alert says in Google's own prose that the listing is restricted for violating content policies - there is nobody to sell to behind a restricted listing, and keeping it while ${_ct('alertneutral').name} is kept too means the classifier is reading neither`);
+      const _al = _one('alert');
+      ok(_al && _al.listingRisk && _dem(_al),
+        `the review-activity alert carrier came back as ${JSON.stringify(_al ? { listingRisk: _al.listingRisk || null, demotionPoints: _al.demotionPoints } : { there: false })} - Google flagging the reviews on a listing is a demotion and never a drop: the business is real, and only its review count and rating are in doubt`);
+      ok(_al && /review/i.test(String(_al.googleAlertText || '')),
+        `the rep is given a demoted lead without Google's own words on it: googleAlertText reads ${JSON.stringify((_al && _al.googleAlertText) || null)}. The sentence Google published is the only evidence for ranking this business last, so it has to travel with it`);
+      // And the trap case is demoted rather than dropped, carrying the same
+      // machinery - which is what proves the classifier read it at all rather
+      // than ignoring every alert it did not recognise.
+      const _an = _one('alertneutral');
+      ok(_an && _an.listingRisk && !/polic|violat/i.test(String(_an.googleAlertText || '')),
+        `${_ct('alertneutral').name} came back as ${JSON.stringify(_an ? { listingRisk: _an.listingRisk || null, googleAlertText: String(_an.googleAlertText || '').slice(0, 80) } : { there: false })} - it must be marked from its alert like any other, and the words carried with it must be its own prose and not the policy wording of the help link`);
 
       // ── WHAT THE PRESS MEASURED HAS TO SURVIVE THE QUEUE WRITE ─────────
       const _qm = sbTable('discovered_queue').find(r => r.name === _ct('multi').name);
@@ -1710,10 +1841,14 @@ const runLead = async (b, over, capMs) => {
         if (!m) return null;
         const rows = m[1].split(' → ').map(p => (p.match(/^(.+?) (-?\d+)$/) || []).slice(1)).filter(x => x.length === 2);
         const get = (k) => { const r = rows.find(x => x[0] === k); return r ? Number(r[1]) : null; };
-        return { line, rows,
-          seen: get('seen from Google'), bench: get('bench served'), underFloor: get('under the trade review floor'),
+        return { line, rows, get,
+          seen: get('seen from Google'), bench: get('bench served'),
+          underFloor: get('deleted under the trade review floor'),
+          thinDemoted: get('demoted for a thin review count'),
           notIcp: get('not our ICP by name'), franchise: get('franchise or chain outlet'),
           owned: get('already in the pipeline'), catCap: get('per-category cap'),
+          risk: get('dropped on a listing risk - closed, moved or flagged by Google'),
+          phone: get('dropped on a phone collision'),
           demoted: get('demoted to the bench'), returned: get('returned') };
       };
       const _yAll = (_log.match(/FIND YIELD: [^\n]+/g) || []).map(_parseYield).filter(y => y && y.seen > 0);
@@ -1722,55 +1857,102 @@ const runLead = async (b, over, capMs) => {
       if (_y) {
         ok(_y.seen >= _y.returned,
           `the yield report says ${_y.seen} businesses seen from Google and ${_y.returned} returned - a run cannot return more businesses than it looked at, so one of the two counters is being written in the wrong place and every loss row between them is measured against the wrong total`);
-        ok(_y.seen === _open,
-          `the yield report counted ${_y.seen} businesses seen from Google against the ${_open} OPEN listings the fixture served (${_served} in all, ${_served - _open} of them closed) - a closed listing is dropped before the counter, so counting it would inflate the denominator every loss row is judged against`);
+        // SEEN IS EVERY LISTING GOOGLE HANDED US, including the ones a gate
+        // then deleted. Round 143A moved the counter above the first drop and
+        // that is the right place: it is the denominator every loss row is
+        // read against, so a listing dropped by a gate has to be inside it or
+        // the row reports a loss out of a total that never contained it. (This
+        // line previously argued the opposite for closed listings, when a
+        // closed listing was dropped by a bare status check that no row
+        // counted. The moment those drops became a counted loss, the argument
+        // stopped holding.)
+        ok(_y.seen === _served,
+          `the yield report counted ${_y.seen} businesses seen from Google against the ${_served} listings the fixture served across ${GP_FIND_CITIES.length} metros - every listing Google hands the press belongs in the denominator, including the ${_dropsBy('risk')} it deletes for being closed, moved or flagged`);
         ok(_y.returned === _cos.length,
           `the yield report says ${_y.returned} returned and the payload carries ${_cos.length} - the line the operator reads and the answer the rep works have come apart`);
-        ok(_y.underFloor === _floorDrops,
-          `the yield report blames the trade review floor for ${_y.underFloor} businesses; the fixture served ${_floorDrops} that only that floor can delete (${_ct('quiet').name} at ${_ct('quiet').reviews} and ${_ct('floorsep').name} at ${_ct('floorsep').reviews} reviews). ROUND 143A CHANGES THIS NUMBER, and this is the line that says by how much`);
-        ok(_y.franchise >= 1,
-          `the yield report blames franchises and chain outlets for ${_y.franchise} businesses - the branch dropped on its URL is counted there, so a 0 means round 139's drop either did not fire or is invisible to the report`);
-        ok(_y.demoted >= 2,
-          `the yield report says ${_y.demoted} lead(s) were demoted to the bench; the fixture served two (the ${_ct('band49').rating}-star business and the ${_ct('huge').reviews}-review one) - a lower number means one of the two ceilings is deleting again rather than benching`);
-        // ── THE SENTENCE AGAINST ITS OWN ROWS, AND A DEFECT THIS PRESS
-        //    EXPOSED THE FIRST TIME IT RETURNED ANYTHING ─────────────────
-        // The report ranks rows.slice(2, -1): everything except the first two
-        // rows and the LAST one. That is the loss window only while "returned"
-        // IS the last row. This run serves a large company, so round 114's
-        // "large companies served for the email lane" row is appended after
-        // it, "returned" falls inside the ranking window, and the run's
-        // largest single loss is reported as "returned" - a number that is not
-        // a loss at all. Same for a TheirStack tier row on a run with the
-        // extra lanes on. It is the defect round 141's yield check was written
-        // for (naming the biggest row it can REACH rather than the biggest
-        // loss), returned through a row appended after the anchor, and no
-        // check could see it while the press came back empty.
+        // THE FLOOR NO LONGER DELETES. Its delete row can only move when
+        // GP_FLOOR_MODE=cut is set, and its demote row is the one that counts
+        // the businesses 143A saved.
+        ok(_y.underFloor === 0,
+          `the yield report says the floor DELETED ${_y.underFloor} business(es). Round 143A made the floor a sort position: the delete only happens under GP_FLOOR_MODE=cut, and a number here means a quiet established business is being thrown away again`);
+        ok(_y.thinDemoted === _listings(c => c.demote === 'thinReviews'),
+          `the yield report says ${_y.thinDemoted} lead(s) were demoted for a thin review count and the cast declares ${_listings(c => c.demote === 'thinReviews')} (${_ct('quiet').name} at ${_ct('quiet').reviews} reviews, under Plumbing's floor of 15; ${_ct('floorsep').name} at ${_ct('floorsep').reviews} is above it) - the row that shows what the floor now does instead of deleting`);
+        ok(_y.franchise === _dropsBy('branch'),
+          `the yield report blames franchises and chain outlets for ${_y.franchise} businesses and the cast declares ${_dropsBy('branch')} - the branch dropped on its URL is counted there, so a 0 means round 139's drop either did not fire or is invisible to the report`);
+        ok(_y.demoted === _listings(c => !!c.demote),
+          `the yield report says ${_y.demoted} lead(s) were demoted to the bench and the cast declares ${_listings(c => !!c.demote)} (${GP_FIND_CAST.filter(c => c.demote).map(c => c.demote).join(', ')}) - a lower number means a ceiling is deleting again rather than benching`);
+        // ── THE SENTENCE THAT NAMES THE RUN'S BIGGEST LOSS ─────────────
+        // WHAT THIS LINE CAUGHT, kept because the shape will be back. The
+        // report used to rank rows.slice(2, -1) - everything except the first
+        // two rows and the LAST one - which is the set of losses only while
+        // "returned" happens to be the last row. It is not: round 114 appends
+        // a large-company row after it whenever one is served, and on the
+        // first run where this fixture returned businesses the line announced
+        // "The largest single loss is "returned" at 12" - the survivors,
+        // reported as the loss. Round 143A replaced the positional window with
+        // a `loss` flag declared on each row, so this assertion is now written
+        // in the CORRECT direction rather than pinning the defect.
         //
-        // ASSERTED IN TODAY'S DIRECTION, like the review floor above: the
-        // sentence must name the biggest row in the window the code actually
-        // ranks. Anchoring that window on the "returned" row instead of on the
-        // end of the array is a one-line fix in runDiscovery, and when it
-        // lands this assertion reads _worstLoss and the info line below stops
-        // printing.
-        const _rank = (rows) => rows.slice().sort((a, b) => Number(b[1]) - Number(a[1]))[0];
-        const _iRet = _y.rows.findIndex(r => r[0] === 'returned');
-        const _window = _y.rows.slice(2, -1);                                    // what the report ranks
-        const _losses = _y.rows.slice(2, _iRet < 0 ? _y.rows.length : _iRet);    // what a loss actually is
-        const _worst = _rank(_window), _worstLoss = _rank(_losses);
+        // A ROW THAT COUNTS KEPT LEADS CAN NEVER BE THE LARGEST LOSS. That is
+        // the rule, and it is asserted against the row labels rather than
+        // against the code's window, so it holds however the window is
+        // computed - which is the only form that would have caught the
+        // original defect and will catch the next one.
+        const _keptRows = ['seen from Google', 'bench served', 'returned', 'demoted to the bench',
+          'demoted for a thin review count', 'no website at all - the call lane',
+          'on a free page builder - the rebuild lane', 'large companies served for the email lane'];
         const _said = (_y.line.match(/The largest single loss[^.]*\./) || ['(the sentence never printed)'])[0];
-        if (_worst && Number(_worst[1]) > 0) {
-          ok(new RegExp('The largest single loss is "' + _worst[0] + '" at ' + Number(_worst[1]) + '\\.').test(_y.line),
-            `the yield report says ${JSON.stringify(_said)}, and the rows it ranks make "${_worst[0]}" the biggest at ${_worst[1]} (${JSON.stringify(_window)}) - a thin run is then diagnosed by reading the wrong gate`);
-        } else {
-          ok(!/largest single loss/.test(_y.line),
-            `the yield report named a largest single loss on a run that lost nothing: ${JSON.stringify(_said)}`);
-        }
-        if (_worst && _worstLoss && _worst[0] !== _worstLoss[0]) {
-          info(`LIVE DEFECT, not a harness problem: FIND YIELD calls "${_worst[0]}" (${_worst[1]}) this run's largest single loss, and "${_worst[0]}" is not a loss.`
-            + ` The genuine largest loss is "${_worstLoss[0]}" at ${_worstLoss[1]}.`
-            + ` The report ranks every row except the first two and the last, so any row appended after "returned" - round 114's large-company row here, a TheirStack tier row with the extra lanes on - pushes "returned" into the ranking.`
-            + ` The operator diagnosing a thin run is sent to the wrong gate. Anchor the window on the "returned" row in runDiscovery and this line stops printing.`);
-        }
+        const _named = (_y.line.match(/The largest single loss is "([^"]+)" at (\d+)\./) || []).slice(1);
+        ok(_named.length === 2,
+          `the yield report never named this run's largest single loss: ${JSON.stringify(_said)}. Five businesses were deleted by four different rules and the line that says which rule cost the most is the one an operator reads when a run comes back thin`);
+        ok(!_named.length || !_keptRows.includes(_named[0]),
+          `the yield report calls "${_named[0]}" (${_named[1]}) this run's largest single LOSS, and that row counts leads we KEPT - it sends somebody hunting for businesses that are sitting on the bench waiting to be worked. This is the defect the harness caught on 2026-09-12, back again`);
+        // And it names the biggest DELETION the cast declares, by the label
+        // the report itself prints for it.
+        // INVERTED 2026-09-12: the two counters were wired, so all three
+        // deletion rows print and the sentence must name the biggest of them.
+        // Read off the report's OWN rows rather than naming a winner here, so
+        // the day a different gate costs the most this still asserts the rule
+        // instead of a result.
+        const _delRows = [
+          ['franchise or chain outlet', _y.franchise],
+          ['dropped on a listing risk - closed, moved or flagged by Google', _y.risk],
+          ['dropped on a phone collision', _y.phone],
+        ].filter((r) => typeof r[1] === 'number');
+        const _biggest = _delRows.slice().sort((a, b) => b[1] - a[1])[0];
+        ok(!_named.length || (!!_biggest && _named[0] === _biggest[0] && Number(_named[1]) === _biggest[1]),
+          `the yield report calls "${_named[0]}" at ${_named[1]} the largest single loss, and the biggest deletion row it printed is "${_biggest && _biggest[0]}" at ${_biggest && _biggest[1]} - an operator reading a thin run is sent to tune the wrong gate`);
+
+        // ── DOES THE REPORT ADD UP? EVERY LISTING TO ONE OUTCOME ───────
+        // seen − the deletions − the merges = returned. Run against the CAST
+        // rather than against the report, because the report cannot close it:
+        // two of its rows never print. The identity below closes exactly, and
+        // the assertion after it names the gap between it and the line.
+        const _mergedAway = GP_FIND_CAST.reduce((n, c) => n + (c.expect === 'dropped' ? 0 : c.cities.length - 1), 0)
+          + (_listings(c => c.tag === 'chainB'));   // chainB merges into chainA by NAME, after the press
+        const _deleted = _dropsBy('branch') + _dropsBy('risk') + _dropsBy('phone');
+        ok(_y.seen - _deleted - _mergedAway === _y.returned,
+          `the run does not add up: ${_y.seen} seen − ${_deleted} deleted − ${_mergedAway} merged (a business found in several metros is ONE lead, and two branches under one name are one company) = ${_y.seen - _deleted - _mergedAway}, and the report returned ${_y.returned}. Some listing Google handed the press has no outcome, which means a business vanished between the search and the queue with no rule to point at`);
+        // AND THE GAP BETWEEN THAT AND THE LINE ITSELF, stated rather than
+        // smoothed over. The report carries a row for the branch drop and for
+        // nothing else this run deletes: searchGooglePlaces counts the listing
+        // risks and the phone collisions, prints a line for each, and never
+        // assigns either counter to the tally the report reads - so both rows
+        // are filtered out as "no number" and seven deletions are invisible to
+        // the one line that adds a run up. TODAY'S DIRECTION, on purpose:
+        // when those two counters are wired, these two lines invert to
+        // equality and the identity above can be asserted against the LINE.
+        // INVERTED 2026-09-12, exactly as the line it replaces said it would:
+        // skippedListingRisk and skippedListingPhone are assigned to the tally
+        // now, so both rows print and the identity closes against the REPORT
+        // rather than only against the cast. A run that adds up is the whole
+        // point of the line - every listing Google handed the press reaches one
+        // outcome and the outcome is named.
+        ok(_y.risk === _dropsBy('risk') && _y.phone === _dropsBy('phone'),
+          `the report prints ${_y.risk} listing-risk and ${_y.phone} phone-collision deletions against the ${_dropsBy('risk')} and ${_dropsBy('phone')} the cast declares - a counter is being incremented somewhere the report cannot see it again`);
+        const _lineDeleted = (_y.franchise || 0) + (_y.risk || 0) + (_y.phone || 0);
+        ok(_y.seen - _lineDeleted - _mergedAway === _y.returned,
+          `the printed line does not add up: ${_y.seen} seen \u2212 ${_lineDeleted} deleted across its own rows \u2212 ${_mergedAway} merged = ${_y.seen - _lineDeleted - _mergedAway}, and it says it returned ${_y.returned}. A business went missing between the search and the queue with no row to point at`);
       }
 
       // ── THE FIXTURE ITSELF, ON THE MASK IT IS NOT GIVEN TODAY ──────────
