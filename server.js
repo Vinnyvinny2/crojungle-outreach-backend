@@ -6018,8 +6018,26 @@ const predictReachability = (name, website, opts = {}) => {
   // findOwnerViaBrain carries the highest source weight (45) and it can only run on
   // a real site. No website at all means that source, the site-scraped email, and
   // the eponymous-mailbox path are ALL dead before Research starts.
+  //
+  // ══ AND THAT COST US THE PUREST WEBSITE PROSPECT THERE IS ══════════════
+  // This subtracted 14 until 2026-09-11, which ranked a business with NO SITE
+  // AT ALL below one with a site we can read - and the pitch is websites. A
+  // business with no site has nothing to critique, everything to sell, and no
+  // competitor has built them one. Vin's ruling: "Keep them, but separate from
+  // the rest" - a different pitch and a different risk, not a worse lead.
+  //
+  // The deduction is GONE rather than reversed into a bonus, because this
+  // function estimates ONE thing - can we name and reach the owner for free -
+  // and an absent website is no evidence either way about that. What it is
+  // evidence about (what there is to sell) is not this number's job, and
+  // paying a reachability bonus for it would be the same mistake as the rating
+  // bonus that paid for the property which demoted the lead.
+  //
+  // The sentence stays: the row still says the site is missing, and that is
+  // what routes the lead to the call lane (leadChannel 'call', noWebsite on
+  // the lead, the CALL LEADS line and the no-website row on FIND YIELD).
   if (!website) {
-    score -= 14; why.push('no website — their own site is the strongest owner source and it does not exist');
+    why.push('no website at all - nothing of theirs to read, so the owner is asked for by phone rather than found on a page; the missing site is what we sell, not a mark against the lead');
   } else if (SITE_BUILDER_HOST.test(String(website))) {
     score -= 8; why.push('site-builder or social page rather than an owned domain — thin site, rarely a leadership page or a real mailbox');
   }
@@ -6324,9 +6342,93 @@ const LOW_VOLUME_HIGH_TICKET = new Set([
   'Accounting', 'Insurance', 'PI Law', 'Estate Law', 'Funeral Homes', 'Managed IT',
 ]);
 const LOW_VOLUME_FLOOR = 5;
-const reviewFloorFor = (label, base) => HIGH_VOLUME_LOW_TICKET.has(label) ? Math.max(base, 40)
-  : LOW_VOLUME_HIGH_TICKET.has(label) ? Math.min(base, LOW_VOLUME_FLOOR)
-  : base;
+
+// ── WHAT A REVIEW COUNT MEASURES, MEASURED ────────────────────────────────
+// Both sets above are judgements about review-per-dollar, and neither was ever
+// checked against a number. Three measurements now say what a count means, and
+// all three say the floor was reading it as size when it reads as ASKING:
+//
+//  1. PACE. US home-service businesses collect a MEDIAN OF 2 Google reviews a
+//     month (ProsperQR, 816,307 reviews across 3,739 US businesses). A 40
+//     floor is therefore not "established" - it is "has been actively asking
+//     for about twenty months". A twenty-year-old $4M plumbing company that
+//     never asks sits in the low double digits.
+//  2. HOW MANY HAVE NONE. 26% of local businesses have ZERO reviews, and 20%
+//     of the businesses RANKING IN GOOGLE'S TOP THREE have none at all
+//     (BrightLocal, 93,845 businesses, 26 industries) - construction and
+//     roofing among the fewest-review trades.
+//  3. IT DOES NO ANTI-SPAM WORK, which is what a floor is assumed to be for.
+//     The FTC action of May 2026 over "Premium Home Service" documents 15,000+
+//     fake Google profiles in these exact trades; the named fakes carried 2,
+//     14 and 37 reviews, and a bought review costs about $5. A floor selects
+//     FOR the businesses that farm reviews.
+//
+// ── AND THE PER-TRADE NUMBER, WHICH IS THE PART THAT WAS GUESSED ──────────
+// The MEDIAN review count of businesses actually ranking in Google's local
+// top three, per category: Local Falcon, 50.4M ranking results across 1,993
+// categories. This is the only per-trade figure available that is measured at
+// the place we are selling a position in, so it is the ceiling on any floor:
+// a floor above its own trade's 3-pack median deletes businesses that are
+// ranking in the top three TODAY.
+//
+// DECLARED with its source and date, like ICP_REVENUE_PER_EMPLOYEE_BY_TRADE.
+// A median of null means we looked and have no figure for that trade - it is
+// a row rather than a blank so nobody borrows the neighbouring trade's
+// number, which is the tempting mistake at every one of them. An unlisted
+// trade uses the base floor and the two sets above, exactly as before.
+//
+// Local Falcon also publishes "general contractor" at 28. No searched category
+// is queried as a general contractor - 'Home Builder' is "custom home builder"
+// and 'Home Additions' is "home addition contractor", which are different
+// Google categories - so the figure is recorded here and mapped to nothing.
+const TRADE_3PACK_REVIEW_MEDIAN = {
+  Construction:            { median: 20,  source: 'Local Falcon 50.4M ranking results / 1,993 categories: "construction" 3-pack median', at: '2026-09-11' },
+  'Tree Service':          { median: 47,  source: 'Local Falcon 3-pack median, "tree service"', at: '2026-09-11' },
+  Electrical:              { median: 56,  source: 'Local Falcon 3-pack median, "electrician" (10th percentile 4)', at: '2026-09-11' },
+  Roofing:                 { median: 79,  source: 'Local Falcon 3-pack median, "roofing"', at: '2026-09-11' },
+  'Garage Doors':          { median: 137, source: 'Local Falcon 3-pack median, "garage doors"', at: '2026-09-11' },
+  Plumbing:                { median: 215, source: 'Local Falcon 3-pack median, "plumber"', at: '2026-09-11' },
+  HVAC:                    { median: 244, source: 'Local Falcon 3-pack median, "HVAC"', at: '2026-09-11' },
+  'Pest Control':          { median: 265, source: 'Local Falcon 3-pack median, "pest control"', at: '2026-09-11' },
+  Dental:                  { median: 346, source: 'Local Falcon 3-pack median, "dentist"', at: '2026-09-11' },
+  // ── LOOKED FOR, NOT FOUND. Each of these sits next to a trade above and
+  // would otherwise inherit its number; every one of those inheritances is
+  // wrong for a reason worth writing down.
+  'Commercial Roofing':    { median: null, source: 'no published 3-pack median; "roofing" 79 is residential and commercial roofing is bid work, not searched work', at: '2026-09-11' },
+  'Commercial Mechanical': { median: null, source: 'no published 3-pack median; "HVAC" 244 is residential service calls, which a commercial mechanical contractor does not take', at: '2026-09-11' },
+  'Home Builder':          { median: null, source: 'no published 3-pack median; "general contractor" 28 is a different Google category from "custom home builder"', at: '2026-09-11' },
+  'Home Additions':        { median: null, source: 'no published 3-pack median; "general contractor" 28 is a different Google category', at: '2026-09-11' },
+  'Cosmetic Dentistry':    { median: null, source: 'no published 3-pack median; "dentist" 346 is general dentistry and cosmetic is a cash-pay sub-search', at: '2026-09-11' },
+  'Dental Implants':       { median: null, source: 'no published 3-pack median; "dentist" 346 is general dentistry', at: '2026-09-11' },
+  Orthodontics:            { median: null, source: 'no published 3-pack median; "dentist" 346 is general dentistry', at: '2026-09-11' },
+  'Oral Surgery':          { median: null, source: 'no published 3-pack median; "dentist" 346 is general dentistry', at: '2026-09-11' },
+  Flooring:                { median: null, source: 'no published 3-pack median; held at 40 by HIGH_VOLUME_LOW_TICKET, which is a judgement and not a measurement', at: '2026-09-11' },
+  Insulation:              { median: null, source: 'no published 3-pack median; held at 40 by HIGH_VOLUME_LOW_TICKET, which is a judgement and not a measurement', at: '2026-09-11' },
+  'Med Spa':               { median: null, source: 'no published 3-pack median; held at 40 by HIGH_VOLUME_LOW_TICKET, which is a judgement and not a measurement', at: '2026-09-11' },
+};
+// The floor is DERIVED from the median, never typed beside it: a typed pair is
+// two hand-kept copies of one judgement, and this file records what that costs.
+// One tenth, because the one published PERCENTILE we have says so - electrician
+// sits at a median of 56 and a 10th percentile of 4, and 56/10 is 6. Read as a
+// floor it means "the thinnest tenth of the businesses at the front of this
+// trade", which is as low as a number can honestly go while still separating a
+// trading business from a listing nobody has used.
+const REVIEW_FLOOR_OF_MEDIAN = 0.10;
+const tradeReviewMedian = (label) => {
+  const row = TRADE_3PACK_REVIEW_MEDIAN[String(label || '').trim()];
+  const n = row ? Number(row.median) : NaN;
+  return (Number.isFinite(n) && n > 0) ? n : null;
+};
+const reviewFloorFor = (label, base) => {
+  const med = tradeReviewMedian(label);
+  // Math.min(med, ...) is the invariant, held structurally rather than by a
+  // reviewer noticing: no trade's floor can exceed its own 3-pack median, so
+  // the floor can never reach a business that is ranking in the top three.
+  if (med !== null) return Math.min(med, base, Math.max(LOW_VOLUME_FLOOR, Math.round(med * REVIEW_FLOOR_OF_MEDIAN)));
+  return HIGH_VOLUME_LOW_TICKET.has(label) ? Math.max(base, 40)
+    : LOW_VOLUME_HIGH_TICKET.has(label) ? Math.min(base, LOW_VOLUME_FLOOR)
+    : base;
+};
 // The base floor lived inside searchGooglePlaces, so nothing at module scope
 // could read the number every other consumer of reviewFloorFor has to agree
 // with. One declaration; the discovery loop reads this.
@@ -6780,6 +6882,366 @@ const detectChainOutlets = (leads, minMetros) => {
   return { hosts, brands, reasonFor };
 };
 
+// ══ ONE BUSINESS NAME, ONE KEY, ONE COPY OF THE RULE ══════════════════════
+// This was declared with const INSIDE runDiscovery, which is the shape this
+// file already records twice: the four brand lists were local to the discovery
+// handler and /api/find-contact - the route that builds the list somebody
+// actually dials - could reach none of them. A guard in the wrong function.
+//
+// Two hand-kept copies of one name rule is the same disease one step on, and
+// the phone-collision test below needs exactly this rule: the discovery dedupe
+// asks "is this the business we already own?" and the collision test asks "is
+// this the same business under a second listing?". One question, one answer.
+//
+// Normalising strips the legal suffix and punctuation, so "James River
+// Remodeling LLC" and "James River Remodeling, L.L.C." are one business. Kept
+// deliberately conservative: two genuinely different companies sharing a
+// normalised name is rare, and the cost of a false match is one lead skipped.
+//   "&" and "and" are the same word to everyone except a string comparison, so
+//   "Tuck & Howell" and "Tuck and Howell" are one business. "and" goes
+//   entirely: "Tuck & Howell Plumbing, Heating & Air" and "Tuck and Howell
+//   Plumbing Heating Air" are the same shop written by two different sources,
+//   and dropping it makes them identical without bringing unrelated businesses
+//   together - the distinguishing words are the proper nouns.
+const bizNameKey = (n) => String(n || '').toLowerCase()
+  .replace(/&/g, ' and ')
+  .replace(/[.,'’]/g, ' ')
+  .replace(/\b(llc|l l c|inc|incorporated|corp|corporation|co|ltd|limited|pllc|pc|pa|lp|llp|the|and)\b/g, ' ')
+  .replace(/[^a-z0-9 ]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+// ══ WHETHER THE LISTING IS A REAL BUSINESS, ASKED OF GOOGLE ═══════════════
+// This system had NO test for a fake or lead-generation listing. Not a weak
+// one: none. The FTC's May 2026 action over "Premium Home Service" documents
+// 15,000+ fake Google profiles run for eight years in the exact trades this
+// searches, 7,600+ phone numbers across 250+ area codes, all routed to one
+// call centre, with fabricated reviews.
+//
+// The tests a person would reach for first are the ones that must not be
+// built, and the list with the numbers behind it is at the press field mask.
+// The short version: every "obvious" spam tell deletes owner-operated small
+// businesses faster than it deletes fakes, and those businesses are the whole
+// market. The FTC's fakes were called "Levine Heating and Cooling".
+//
+// So this asks GOOGLE instead of guessing. Four fields, free on a call the
+// press already makes, and Google's own judgement rather than our inference.
+//
+// PURE, and no I/O, so a boot check can EXECUTE it on every shape instead of
+// reading the source and hoping.
+//
+// THE DECLARED SHAPE. readListingRisk always returns exactly these seven keys:
+//   drop         true  -> this business must not reach the sheet at all
+//   demote       true  -> it goes behind every other lead, and the row says why
+//   reason       one word from LISTING_RISK_REASONS, '' when there is nothing
+//   label        a short phrase for the row, '' when there is nothing to show
+//   why          one sentence a rep can read, naming what Google said
+//   googleText   Google's own alert wording, verbatim, '' when there was none
+//   serviceArea  true when the listing hides its address. A LABEL, never a
+//                penalty, and it travels whichever rule fired.
+// drop and demote are never both true: a dropped lead has nowhere to sit.
+const LISTING_RISK_REASONS = ['closed', 'moved', 'policy_alert', 'review_alert', 'alert_unread', 'mailbox_address', 'service_area'];
+// ══ A CONSUMER ALERT IS HANDLED BY KIND, NOT BY DEGREE ════════════════════
+// There is no severity scale here. Google returns a flag and some text, and
+// the two kinds of text want opposite answers:
+//
+//   "violates our policies"        the listing itself is the problem. DROP.
+//   "suspicious review activity"   DEMOTE, and show the rep Google's words.
+//
+// The reason for the split is the whole point: a LEGITIMATE business hit by a
+// review-extortion campaign carries the same flag. That business has a real
+// problem, it knows it has a real problem, and it may be one of the better
+// prospects on the sheet. Dropping it would delete a good lead on the strength
+// of somebody else's attack on it.
+//
+// THE EXACT STRINGS GOOGLE RETURNS ARE NOT VERIFIED. Nothing here has been
+// matched against a live response, so the classifier is a declared table of
+// patterns read IN ORDER with a documented default, and both the order and the
+// default lean the same way:
+//
+//   · the review kind is tested FIRST, so text carrying both ideas takes the
+//     safe branch rather than deleting the lead;
+//   · anything unrecognised - a new wording, a code we have never seen, a bare
+//     flag with no text at all - takes the DEFAULT, and the default is DEMOTE.
+//
+// Unmeasured is not zero and it is not guilt either. The cost of demoting a
+// clean business is one sort position; the cost of dropping a real one is a
+// lead nobody ever calls.
+const LISTING_ALERT_KINDS = [
+  { reason: 'review_alert', drop: false, re: /review|rating|\bstars?\b/i,
+    say: 'Google has flagged suspicious review activity on this listing' },
+  { reason: 'policy_alert', drop: true, re: /violat|polic|\bfake\b|deceptiv|misrepresent|prohibit|suspend|impersonat|fraud/i,
+    say: 'Google says this listing breaks its rules' },
+];
+const LISTING_ALERT_DEFAULT = { reason: 'alert_unread', drop: false,
+  say: 'Google has put an alert on this listing, in wording we do not recognise' };
+// Mailbox stores and rented desks, as a DECLARED list. Every entry is
+// multi-word or distinctive for the reason GP_FRANCHISE records: a bare generic
+// word matched anywhere deleted Kelly Roofing, Fox Plumbing and Target Pest
+// Control at discovery. This one only ever DEMOTES, so the worst a wrong match
+// costs is a sort position.
+const MAILBOX_BRAND_RE = /\b(the ups store|ups store|postnet|mail boxes etc|mailboxes etc|postal annex|pak mail|ipostal1|anytime mailbox|regus|wework|intelligent office|davinci virtual|alliance virtual|opus virtual|office evolution|carr workplaces|servcorp|venture x|industrious)\b/i;
+// Present means present. An absent key is no alert - never a quiet false.
+const listingAlertPresent = (v) => !(v === null || v === undefined || v === false || v === '');
+// ══ ONLY PROSE ABOUT THE BUSINESS MAY CLASSIFY THE ALERT ══════════════════
+// The shape is MEASURED now (Google's ConsumerAlert):
+//   overview?      string                          prose
+//   details?       { title?, description?,
+//                    aboutLink? { title?, uri? } } prose, and one LINK
+//   languageCode?  string                          a tag, not prose
+//
+// The first cut of this collected every string leaf, and that INVERTED the
+// safe default. aboutLink is Google's "learn more about this alert" pointer
+// and it points at a support page about review or content POLICIES - so the
+// word "polic" arrives in the collected text of essentially every alert,
+// whatever kind it is. Traced through the table: an alert whose own prose says
+// nothing about reviews, which is exactly the unrecognised case alert_unread
+// exists to protect, matched the policy pattern on the LINK and dropped the
+// lead. Legitimate businesses deleted on the wording of a Google help page,
+// and the safe default unreachable for every case it was written for.
+//
+// So the prose fields are NAMED, and the link is excluded by construction
+// rather than by a pattern somebody could loosen: it never enters this
+// function's answer at all. It is read separately by listingAlertLink, into a
+// field the classifier cannot see. languageCode is excluded for the same
+// reason in miniature - "en" is not something Google said about the business.
+//
+// A new prose field Google adds later must be added HERE, by name. Re-admitting
+// a generic walk would re-earn the bug in one line.
+const LISTING_ALERT_PROSE_FIELDS = ['overview', 'details.title', 'details.description'];
+const listingAlertProse = (v) => {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v)) return v.map((x) => listingAlertProse(x)).filter(Boolean).join(' ');
+  if (typeof v !== 'object') return '';
+  const d = (v.details && typeof v.details === 'object') ? v.details : {};
+  return [v.overview, d.title, d.description]
+    .map((s) => (typeof s === 'string' ? s : ''))
+    .filter(Boolean).join(' ');
+};
+// The link, read for the REP and never for the verdict. Google's own page
+// explaining the alert is genuinely useful on a row; it is fetched here, in
+// its own function, so that the one thing that must never reach the kind table
+// travels on a separate key.
+const listingAlertLink = (v) => {
+  if (!v || typeof v !== 'object') return '';
+  const d = (v.details && typeof v.details === 'object') ? v.details : {};
+  const l = (d.aboutLink && typeof d.aboutLink === 'object') ? d.aboutLink : {};
+  return typeof l.uri === 'string' ? l.uri.slice(0, 300) : '';
+};
+// containingPlaces entries carry a RESOURCE name ("places/ChIJ...") and may or
+// may not carry a readable one. A resource id is not a name and is never
+// treated as one: a container we can only see as an id yields NOTHING, so the
+// mailbox test says nothing rather than guessing. Coverage of this field is
+// undocumented and may be sparse, which costs a signal and never a lead.
+// ONE guard, applied to every path in, for the same reason the alert prose is
+// read by name: a string that is an id, a resource name or a URL is not
+// something a person called this place, and matching the mailbox brands
+// against one would let a help link or a place id decide a verdict. The
+// documented ContainingPlace carries only { name, id } - both ids - so the
+// readable paths below are TOLERANCE for a shape Google may send, and the
+// guard is what stops that tolerance becoming a hole.
+const listingReadableName = (s) => {
+  const t = String(s || '').trim();
+  if (!t) return '';
+  if (/^places\//i.test(t)) return '';                 // a resource name
+  if (t.indexOf('/') >= 0 || /:\/\//.test(t)) return '';  // a URL or a path
+  if (/^[A-Za-z0-9_-]{16,}$/.test(t)) return '';       // a bare id, no spaces
+  return t;
+};
+const listingContainerNames = (v) => {
+  const out = [];
+  for (const c of (Array.isArray(v) ? v : (v ? [v] : []))) {
+    if (!c) continue;
+    if (typeof c === 'string') { const s = listingReadableName(c); if (s) out.push(s); continue; }
+    if (typeof c !== 'object') continue;
+    // Named fields only, never a walk: `id` is deliberately not among them.
+    const dn = (c.displayName && typeof c.displayName === 'object') ? c.displayName.text : c.displayName;
+    for (const cand of [dn, c.title, c.name]) {
+      const s = listingReadableName(typeof cand === 'string' ? cand : '');
+      if (s) { out.push(s); break; }
+    }
+  }
+  return out;
+};
+// ══ THE FIELDS THE VERDICT READS, AS ONE DECLARED LIST ════════════════════
+// The press mask names them and the mask fallback removes them, so the two
+// cannot drift: the fallback removes exactly what the mask added. The boot
+// check EXECUTES this table against the mask line rather than reading a
+// hand-kept list of its own.
+//
+// movedPlace sits beside movedPlaceId because Google documents both on the
+// Place resource and either can be the one that is present.
+const PLACES_RISK_FIELDS = ['places.consumerAlert', 'places.pureServiceAreaBusiness', 'places.containingPlaces', 'places.movedPlaceId', 'places.movedPlace'];
+// What Google says when a field in a mask is not a field. Declared so the
+// fallback can only fire on THAT - a key refusal, a billing stop or a quota
+// needs a human, not a quieter mask.
+const PLACES_MASK_REFUSED_RE = /INVALID_ARGUMENT|field ?mask|fieldMask|unknown field|invalid field/i;
+let PLACES_MASK_FALLBACK = false;
+const LISTING_RISK_CLEAN = { drop: false, demote: false, reason: '', label: '', why: '', googleText: '', alertLink: '', serviceArea: false };
+const readListingRisk = (place) => {
+  const p = (place && typeof place === 'object') ? place : {};
+  // Read once and carried on every verdict: a business can hide its address
+  // AND carry a review alert, and the row needs both facts.
+  const sab = p.pureServiceAreaBusiness === true;
+  const _v = (o) => Object.assign({}, LISTING_RISK_CLEAN, { serviceArea: sab }, o || {});
+  // 1. DEAD, NOT FAKE. Nobody is there to answer the phone either way.
+  //
+  // The press already had this rule, as a bare line reading businessStatus,
+  // and it dropped ANYTHING that was not OPERATIONAL. That breadth is kept
+  // deliberately: a status word Google adds next year would otherwise walk
+  // through a rule that only names two, and this becoming the second copy of
+  // one test is exactly how that happens. So this is the ONE reader of
+  // businessStatus at the press, and its answer on '', 'OPERATIONAL' and any
+  // other value is identical to the line it replaces.
+  const status = String(p.businessStatus || '').trim().toUpperCase();
+  if (status === 'CLOSED_PERMANENTLY' || status === 'CLOSED_TEMPORARILY') {
+    return _v({ drop: true, reason: 'closed', label: 'closed',
+      why: `Google says this business is ${status === 'CLOSED_PERMANENTLY' ? 'permanently' : 'temporarily'} closed, so nobody is there to take the call. Dead, not fake.` });
+  }
+  if (status && status !== 'OPERATIONAL') {
+    return _v({ drop: true, reason: 'closed', label: 'closed',
+      why: `Google reports this listing as "${status.toLowerCase().replace(/_/g, ' ')}" rather than open for business, so nobody is there to take the call.` });
+  }
+  // 2. MOVED. Everything we hold describes the premises they left. Either of
+  //    Google's two fields answers this, and either can be the one present.
+  if (String(p.movedPlaceId || p.movedPlace || '').trim()) {
+    return _v({ drop: true, reason: 'moved', label: 'moved',
+      why: 'Google says this listing has moved and points at a different place, so the address, the phone and the reviews on it belong to the old one.' });
+  }
+  // 3. GOOGLE'S OWN ALERT, BY KIND. Classified on PROSE ONLY - see
+  //    listingAlertProse for the help link that inverted this, and
+  //    LISTING_ALERT_KINDS for why the order and the default both lean
+  //    towards keeping the lead.
+  if (listingAlertPresent(p.consumerAlert)) {
+    const text = String(listingAlertProse(p.consumerAlert) || '').replace(/\s+/g, ' ').trim();
+    const kind = (text && LISTING_ALERT_KINDS.find((k) => k.re.test(text))) || LISTING_ALERT_DEFAULT;
+    const dropIt = kind.drop === true;
+    return _v({ drop: dropIt, demote: !dropIt, reason: kind.reason,
+      label: dropIt ? 'google alert' : 'review alert',
+      why: `${kind.say}. ${text ? `Google's own words: "${text.slice(0, 300)}"` : 'Google sent the flag with no wording on it.'}`,
+      googleText: text, alertLink: listingAlertLink(p.consumerAlert) });
+  }
+  // 4. A MAILBOX OR A RENTED DESK. DEMOTE, never drop: a real small business
+  //    does register at a mailbox store, and an address is not a verdict.
+  const hit = listingContainerNames(p.containingPlaces).find((n) => MAILBOX_BRAND_RE.test(n));
+  if (hit) {
+    return _v({ demote: true, reason: 'mailbox_address', label: 'mailbox address',
+      why: `Google says this listing sits inside ${hit}, which rents mailboxes and desks rather than housing a business. Worth a look before the rep dials.` });
+  }
+  // 5. A HIDDEN ADDRESS IS A LABEL AND NOTHING ELSE. Google INSTRUCTS a
+  //    home-based trade to hide it, so this marks a real one-van operator -
+  //    which is the ICP - and §103 already needs it: the duplicate-listing
+  //    proof standard is an address match, and it is unavailable for them.
+  if (sab) {
+    return _v({ reason: 'service_area', label: 'service area',
+      why: 'Their listing hides its street address, which is what Google tells a home-based trade to do. One van, working out of the house.' });
+  }
+  return _v({});
+};
+
+// ══ THE SAME NUMBER UNDER DIFFERENT NAMES IN DIFFERENT METROS ═════════════
+// The one cross-lead test that survived measurement. Naive number-sharing does
+// NOT work and would delete real businesses: a number appearing on 99 listings
+// is only 26.9% abusive, because legitimate chains, answering services and
+// franchise call lines dominate the shared-number population. NAME-VARIANCE
+// AND METRO-VARIANCE ARE THE DISCRIMINATORS, not the sharing.
+//
+// A SIBLING of detectChainOutlets rather than an extension of it, and the
+// reason is that they answer opposite questions:
+//
+//   detectChainOutlets    the SAME brand in three metros. A franchise. The
+//                         branch manager does not own the marketing, so there
+//                         is nothing to sell him.
+//   detectPhoneCollisions DIFFERENT names in different metros on ONE number.
+//                         A call centre wearing local clothes.
+//
+// Folding the second into the first would hand a fake listing the franchise
+// drop reason and print the franchise sentence about it, which is a message
+// naming the wrong cause - and the thresholds disagree too (three metros and
+// three names there, two of each here). One home for one rule means one rule
+// per home. It follows that function's shape exactly: pure, recomputed from
+// the run's own results, a Map of the evidence and a reasonFor(lead) that
+// returns a checkable sentence or ''.
+//
+// SHAPE: { groups, reasonFor }
+//   groups     Map normalised-phone -> { phone, names:Set, identities:Set,
+//              metros:Set, places:Set } for FLAGGED numbers only
+//   reasonFor  (lead) -> '' to keep it, or one sentence naming the number's
+//              spread. A non-empty answer means DROP.
+//
+// Digits only, and a leading US country code dropped, so "+1 704-555-0199",
+// "(704) 555-0199" and "17045550199" are one number. Under ten digits is not a
+// number we can compare, and an uncomparable one groups nothing rather than
+// grouping with every other short string.
+const listingPhoneKey = (raw) => {
+  const d = String(raw || '').replace(/\D+/g, '');
+  const k = (d.length === 11 && d.charAt(0) === '1') ? d.slice(1) : d;
+  return k.length >= 10 ? k : '';
+};
+// ONE IDENTITY PER BUSINESS, and the brand key comes first on purpose: "Ram
+// Jack Durham" and "Ram Jack Raleigh" are ONE business with the city bolted
+// on, and a full-name comparison would read them as two and delete both. When
+// the brand key identifies nothing - every word in it generic, which is what
+// CHAIN_GENERIC_WORDS is for - the full normalised name decides instead. Both
+// halves are existing rules; neither is a second copy.
+const listingIdentityKey = (name) => chainBrandKey(name) || bizNameKey(name);
+// The metros this lead was actually seen in. marketsSeen is what the press
+// writes; metro/city/market are accepted so a lead restored from another store
+// is not silently metro-less. A lead carrying NO metro contributes none, so it
+// can never create the variance that drops a business - unmeasured is not a
+// value, which is the class this file produces most.
+const listingMetros = (lead) => {
+  const out = [];
+  for (const m of (Array.isArray(lead.marketsSeen) ? lead.marketsSeen : [])) if (m) out.push(String(m).trim().toLowerCase());
+  for (const k of ['metro', 'city', 'market']) {
+    const v = lead[k];
+    if (typeof v === 'string' && v.trim()) out.push(v.trim().toLowerCase());
+  }
+  return out;
+};
+// PURE. Takes the run's leads, returns which phone numbers are answering for
+// several differently-named businesses in several metros. Pure so the boot
+// check can EXECUTE it on the legitimate multi-branch case as well as the fake
+// one - a filter loosened until it catches nothing is the more expensive
+// failure, and a filter that eats real chains is the more expensive one still.
+const detectPhoneCollisions = (leads, minDistinct) => {
+  const need = Math.max(2, Number(minDistinct) || 2);
+  const byPhone = new Map();
+  for (const l of (Array.isArray(leads) ? leads : [])) {
+    if (!l || typeof l !== 'object') continue;
+    // lead.phone is what the press writes; internationalPhoneNumber is the raw
+    // Places field, so a raw result can be passed straight in.
+    const key = listingPhoneKey(l.phone || l.internationalPhoneNumber);
+    if (!key) continue;
+    let e = byPhone.get(key);
+    if (!e) { e = { phone: key, names: new Set(), identities: new Set(), metros: new Set(), places: new Set() }; byPhone.set(key, e); }
+    // ONE LISTING COUNTED ONCE. The bench and this run can both be holding the
+    // same business, and one listing must never be evidence of a network of
+    // itself - the same guard detectChainOutlets gets from counting distinct
+    // names.
+    const pid = String(l.placeId || '');
+    if (pid && e.places.has(pid)) continue;
+    if (pid) e.places.add(pid);
+    const id = listingIdentityKey(l.name);
+    if (id) e.identities.add(id);
+    if (l.name) e.names.add(String(l.name).trim());
+    for (const m of listingMetros(l)) e.metros.add(m);
+  }
+  const groups = new Map();
+  // BOTH conditions, and this is the whole rule. Same name in several cities is
+  // a legitimate multi-branch business and is left alone. Several names in ONE
+  // city is an answering service or a shared office, which is not this.
+  for (const [k, e] of byPhone) if (e.identities.size >= need && e.metros.size >= need) groups.set(k, e);
+  const reasonFor = (lead) => {
+    const k = lead ? listingPhoneKey(lead.phone || lead.internationalPhoneNumber) : '';
+    if (!k || !groups.has(k)) return '';
+    const e = groups.get(k);
+    return `the phone number on this listing answers for ${e.identities.size} businesses under different names in ${e.metros.size} metros (${[...e.names].slice(0, 3).join(', ')})`;
+  };
+  return { groups, reasonFor };
+};
+
 // ══ FILTERS APPLIED AT THE PULL ══════════════════════════════════════════════
 // Filtering after the fact still spends the Places call. Narrowing the run means
 // only buying leads that match — which is the whole point of a narrow pull: one
@@ -7077,11 +7539,74 @@ const orderGridByFreshness = (byCat, state, opts = {}) => {
 const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   const _flt = filters && typeof filters === 'object' ? filters : {};
   if (!placesKey) { console.log('Google Places: no key (set GOOGLE_PLACES_KEY)'); return []; }
+  // ══ FOUR MORE FIELDS ON THE SAME CALL, AT NO EXTRA COST ═══════════════════
+  // Google bills a search at the HIGHEST tier any field in the mask belongs to,
+  // and this mask already asks for the star rating, the review count, the
+  // website and the phone - all Enterprise. So an Essentials field and a Pro
+  // field are free here, and four of them answer the one question this system
+  // could not ask at all: is this listing a real business?
+  //
+  // The FTC's May 2026 action over "Premium Home Service" is the scale of the
+  // problem in the exact trades this searches: 15,000+ fake Google profiles
+  // over eight years, 7,600+ phone numbers across 250+ area codes, every one
+  // routed to one call centre. Their fake names were "Levine Heating and
+  // Cooling" and "Horton Electrical Service" - a surname and a trade, which is
+  // what a real one-truck operator is called too.
+  //
+  // What each of the four is for, and readListingRisk is the one reader:
+  //   consumerAlert            Google's OWN flag, set when it detects
+  //                            suspicious review activity or a policy breach.
+  //                            Their judgement, not our inference.
+  //   pureServiceAreaBusiness  marks a listing that legitimately HIDES its
+  //                            address. PROTECTIVE: it is what Google tells a
+  //                            home-based plumber to do, so it is a label and
+  //                            never a penalty. §77 already buys it on the
+  //                            per-lead profile read; buying it here means the
+  //                            press knows it before a credit moves.
+  //   containingPlaces         what the listing sits inside, which can name a
+  //                            mailbox store or a coworking desk.
+  //   movedPlaceId             set when a closed place has moved, so the
+  //                            address, phone and reviews we hold are the old
+  //                            premises.
+  //
+  // NOT BUILT, deliberately, and each was measured and refuted: keyword-stuffed
+  // names (0.15% of removed listings, and ANTI-correlated with spam), no
+  // website or a free-builder site (~35% of suspended listings had none either,
+  // and no website is this system's best buying signal), a residential address
+  // (Google instructs home-based trades to hide the address; the FTC's fakes
+  // used commercial ones - a donut shop, an Arby's), a toll-free or tracking
+  // number (the fake operation used 250+ local area codes), open 24/7 (in the
+  // FTC's own exhibits the LEGITIMATE competitors showed "Open 24 hours"), a
+  // VoIP carrier lookup (2015 data), and thin content or stock photos (that is
+  // a real small contractor's cheap website). Every one of them deletes
+  // owner-operated businesses faster than it deletes fakes, and owner-operated
+  // businesses are the entire market.
+  //
   // places.location added so a coverage claim can be distance-aware. Without it
   // we would tell a roofer in north Charlotte he is "absent from Rock Hill" —
   // forty-five miles away, where he was never trying to appear. It is in the
   // same billing tier as the fields already requested.
-  const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.rating,places.userRatingCount,places.businessStatus,places.internationalPhoneNumber,places.location,places.regularOpeningHours';
+  const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.rating,places.userRatingCount,places.businessStatus,places.internationalPhoneNumber,places.location,places.regularOpeningHours,places.consumerAlert,places.pureServiceAreaBusiness,places.containingPlaces,places.movedPlaceId,places.movedPlace';
+  // ══ A FIELD NAME WE GOT WRONG MUST NOT ZERO THE PRESS ═════════════════════
+  // Google answers an unknown field in a mask with INVALID_ARGUMENT, and the
+  // error branch below treats ANY error as "this query taught us nothing" and
+  // breaks out of it. So one wrong field name in this string returns zero leads
+  // for a whole run, on the one stage that is in daily use - the worst outcome
+  // this function has.
+  //
+  // The five fake-listing fields are the newest and least proven part of the
+  // mask and the press ran for months without any of them, so they are the
+  // droppable half. On a refusal that names the MASK, they come off, the query
+  // is asked again, and the run returns leads. Latched for the process, so a
+  // bad deploy probes once rather than once per query, and said out loud once
+  // so nobody reads a flagless run as a run with no flags in it.
+  //
+  // The safe mask is DERIVED by removing the declared fields from the one mask
+  // above - never written out a second time, because two hand-kept copies of
+  // one list is the class this file records most. businessStatus is NOT one of
+  // them, so the closed-listing drop survives the fallback.
+  const FIELD_MASK_SAFE = FIELD_MASK.split(',').filter((f) => PLACES_RISK_FIELDS.indexOf(f) < 0).join(',');
+  const _maskFor = () => (PLACES_MASK_FALLBACK ? FIELD_MASK_SAFE : FIELD_MASK);
 
   // ══ WHAT THE RATING TELLS US BEFORE WE SPEND A PENNY ══════════════════════
   // Across fourteen audited leads in one evening, EVERY business at 4.9 stars
@@ -7169,6 +7694,23 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   // audited while a better lead exists, which is all the ceiling was ever for,
   // and we stop paying to rediscover it. GP_SIZE_MODE=cut restores the delete.
   const GP_SIZE_HARD_CUT = String(process.env.GP_SIZE_MODE || 'rank').toLowerCase() === 'cut';
+  // ══ AND THE REVIEW FLOOR, WHICH DELETED MORE LEADS THAN ANY OTHER LINE ════
+  // The two above stopped deleting and the FLOOR did not, and the floor is the
+  // single largest deleter in this loop. Every argument that demoted them
+  // applies to it unchanged - Google bills per CALL, a call returns twenty
+  // businesses, so deleting one cannot save a penny, and nothing remembered
+  // the deleted ones, so the next run paid to find them and delete them again.
+  //
+  // It has one argument the other two do not: a thin review count is a thing
+  // we SELL. 47% of consumers will not use a business with under 20 reviews,
+  // so the business with nine of them has a measurable problem and the budget
+  // question is answered elsewhere (job value, published hours, markets seen,
+  // a verified headcount). Deleting it threw away the clearest sellable
+  // finding in the trade lanes, on the one measurement that says nothing about
+  // what a business can afford: US home services collect a median of 2 reviews
+  // a MONTH, and 20% of the businesses ranking in Google's top three have none
+  // at all. GP_FLOOR_MODE=cut restores the delete.
+  const GP_FLOOR_HARD_CUT = String(process.env.GP_FLOOR_MODE || 'rank').toLowerCase() === 'cut';
   const PAIN_BAND_LOW = Number.isFinite(Number(_flt.minRating)) ? Number(_flt.minRating) : 3.8;
   const PAIN_BAND_HIGH = Number.isFinite(Number(_flt.maxRating)) ? Number(_flt.maxRating) : 4.85;
 
@@ -7285,6 +7827,11 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   let skippedUnderFloor = 0, seenFromGoogle = 0;
   let skippedNearPerfect = 0;   // dropped by the ceiling: 4.86 and above
   let demotedTooBig = 0;        // over the review ceiling: benched, not deleted
+  // Two counters, because after this round they answer different questions and
+  // one number reported as the other is what makes a yield line lie: a DELETE
+  // is a lead the run lost, a DEMOTION is a lead the run kept and ranked last.
+  // skippedUnderFloor can only move when GP_FLOOR_MODE=cut is set.
+  let demotedUnderFloor = 0;    // under the trade review floor: benched, not deleted
   // ══ BUSINESSES WE ALREADY OWN, SKIPPED BEFORE THEY COST A SLOT ═══════════
   // Passed in by /api/discover. Absent means no constraint, so every other
   // caller behaves exactly as before.
@@ -7367,16 +7914,35 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
       do {
       const _body = { textQuery: `${cat.q} in ${city}`, includePureServiceAreaBusinesses: true, pageSize: 20 };
       if (_pageToken) _body.pageToken = _pageToken;
-      notePlacesCall('search', 'find-discovery');   // counted at DISPATCH: Google bills a request it received, even on a request we give up waiting for
-      const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
+      // ONE copy of the request, asked twice at most. The label stays beside
+      // each notePlacesCall as a plain string because PLACES LABEL CHECK reads
+      // it there, and the retry names itself so the meter shows what it cost.
+      const _askPlaces = () => fetchT('https://places.googleapis.com/v1/places:searchText', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': `${FIELD_MASK},nextPageToken` },
+        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': `${_maskFor()},nextPageToken` },
         body: JSON.stringify(_body),
       }, 12000);
+      notePlacesCall('search', 'find-discovery');   // counted at DISPATCH: Google bills a request it received, even on a request we give up waiting for
+      let r = await _askPlaces();
       calls++;
       if (_pageToken) pagesBought++;
       _pagesHere++;
-      const d = await r.json();
+      let d = await r.json();
+      // THE MASK REFUSAL, AND ONLY THE MASK REFUSAL. A key, permission or
+      // billing failure needs a human and is left to the line below; asking
+      // again with fewer fields would only hide it.
+      {
+        const _err = (d && d.error) ? JSON.stringify(d.error) : '';
+        if (_err && !PLACES_MASK_FALLBACK && PLACES_MASK_REFUSED_RE.test(_err)
+            && !/API key|denied|disabled|billing|PERMISSION/i.test(_err)) {
+          PLACES_MASK_FALLBACK = true;
+          console.log(`⚠ PLACES MASK FALLBACK: Google refused the search field mask - "${String((d.error && (d.error.message || d.error.status)) || 'invalid argument').slice(0, 160)}". The ${PLACES_RISK_FIELDS.length} fake-listing field(s) are dropped from every search this process makes and the press is running on the mask it used before them, so this run returns leads instead of nothing. What that costs, stated plainly: every listing now reads as carrying NO Google flag, which is not the same as carrying none. The consumer alert, the moved-listing drop, the mailbox demote and the hidden-address label are all dark until the field name is fixed. Only the closed drop survives, because businessStatus was in the mask before any of this and is not one of the fields dropped here.`);
+          notePlacesCall('search', 'find-discovery-maskretry');
+          r = await _askPlaces();
+          calls++;
+          d = await r.json();
+        }
+      }
       if (d.error) { console.log(`Google Places: "${d.error.message || d.error.status || 'error'}"`); if (/API key|denied|disabled|billing|PERMISSION/i.test(JSON.stringify(d.error))) { _stop = true; break; } break; }
       // A response arrived and parsed. Only now is anything this query says
       // about its own ground worth remembering.
@@ -7418,7 +7984,27 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
           ? Math.max(Number(_flt.minReviews), reviewFloorFor(cat.label, MIN_REVIEWS))
           : reviewFloorFor(cat.label, MIN_REVIEWS);
         seenFromGoogle++;
-        if (reviews < _reviewFloor) { skippedUnderFloor++; continue; }
+        // ══ THE FLOOR IS A SORT POSITION, NOT A DELETE ═════════════════════
+        // The third demotion reason, built the same way as the two below it so
+        // that no gate has to learn a new mechanism: a flag, a sentence the rep
+        // can read, and one shared _demoted that every gate asks.
+        //
+        // A thin review count is the one demotion reason that is also a SALE.
+        // 47% of consumers will not use a business with under 20 reviews, so
+        // the nine-review business is losing customers it never hears about,
+        // and that is a finding rather than a disqualification. What it is NOT
+        // is a measure of size: US home services collect a median of 2 reviews
+        // a month, 26% of local businesses have none, and 20% of the businesses
+        // ranking in Google's top three have none either. The floor per trade
+        // is capped by that trade's own 3-pack median (reviewFloorFor), so it
+        // can no longer reach a business that is ranking today.
+        let _underFloor = false, _underFloorWhy = '';
+        if (reviews < _reviewFloor) {
+          if (GP_FLOOR_HARD_CUT) { skippedUnderFloor++; continue; }
+          _underFloor = true;
+          demotedUnderFloor++;
+          _underFloorWhy = `${reviews} Google reviews, under the ${_reviewFloor} this run asks of a ${cat.label} business. Kept deliberately: a thin count is a problem to sell rather than a reason to skip them, because 47% of consumers will not use a business with under 20 reviews, so this one is losing work it never hears about. It decides sort position here and nothing else.`;
+        }
         // Website-shape filters. Applied here rather than in the UI so a run
         // looking only for call leads does not spend a query on anything else.
         if (_flt.onlyNoWebsite && !_noWebsite) continue;
@@ -7547,14 +8133,18 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
         // by it. They cannot displace an in-band lead because they are not in
         // the same queue at all.
         //
-        // TWO reasons demote now — outside the rating band, or above the review
-        // ceiling — and every gate below asks the one question that matters to it:
-        // "is this lead demoted?". A gate that named one reason would silently
-        // let the other reason's leads take cap slots and queue positions, which
-        // is the whole thing the demotion exists to prevent. The specific reason
-        // still travels on the lead, because the screen and the call sheet need
-        // to say WHICH.
-        const _demoted = _outsideBand || _tooBig;
+        // THREE reasons demote now — outside the rating band, above the review
+        // ceiling, or under the trade review floor — and every gate below asks
+        // the one question that matters to it: "is this lead demoted?". A gate
+        // that named one reason would silently let another reason's leads take
+        // cap slots and queue positions, which is the whole thing the demotion
+        // exists to prevent. The specific reason still travels on the lead,
+        // because the screen and the call sheet need to say WHICH.
+        //
+        // The floor joined them here rather than anywhere else for that reason:
+        // one flag with three inputs cannot be fixed for two of them and left
+        // open for the third.
+        const _demoted = _outsideBand || _tooBig || _underFloor;
         if (!_demoted) {
           const catCount = perCat.get(cat.label) || 0;
           if (catCount >= PER_CAT_CAP) { skippedCatCap++; _capBlocked = true; _missCap++; continue; }    // one vertical must not flood the queue
@@ -7615,6 +8205,11 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
           // is three copies of one rule. It travels on the lead.
           ...(_outsideBand ? { outsideBand: true, bandNote: _bandWhy } : {}),
           ...(_tooBig ? { aboveSizeCeiling: true, sizeNote: _tooBigWhy } : {}),
+          // Carried for the same reason as the two above: the sort, the screen
+          // and the call sheet each need to know this lead is behind the queue
+          // and WHY, and three copies of one rule recomputed from the review
+          // count is three chances to disagree about one business.
+          ...(_underFloor ? { thinReviews: true, thinReviewNote: _underFloorWhy } : {}),
           ...(_lowRating ? { lowRating: true, lowRatingNote: `${rating} stars. Kept deliberately: rating is one of the inputs Google weighs in the local pack, so a low-rated business is genuinely harder to find and has more reason to buy. Whether it is bad marketing or bad work is what the audit answers.` } : {}),
           // The hours Google already sent us on this same call, which nothing
           // had ever read. Seven open days is not a one-man show, and that is
@@ -7622,7 +8217,7 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
           ...(_hours.checked ? { publishedHours: _hours } : {}),
           industry: cat.label, reviewCount: reviews, rating,
           phone: p.internationalPhoneNumber || '',
-          jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. ${cat.ownerRisk ? 'Practice \u2014 confirm a reachable owner (field is being PE/DSO-consolidated).' : 'Owner-operated, high reachability.'}${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}`,
+          jobTitle: `Local ${cat.label} business \u2014 ${reviews} Google reviews${rating ? `, ${rating}\u2605` : ''}. ${cat.ownerRisk ? 'Practice \u2014 confirm a reachable owner (field is being PE/DSO-consolidated).' : 'Owner-operated, high reachability.'}${marketingGap ? ' Thin review presence \u2014 likely under-marketed.' : ''}${_underFloor ? ` Under the ${_reviewFloor} reviews this run asks of a ${cat.label} business, so it is ranked last: a thin count is work they are losing, not a reason to skip them.` : ''}`,
           signals: { local_owner_operated: true, ...(cat.ownerRisk ? { consolidation_risk: true } : {}), ...(marketingGap ? { under_marketed: true } : {}) },
         };
         seen.set(domainKey, _lead);
@@ -7813,6 +8408,10 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   }
   const _bandDemoted = benched.filter(l => l.outsideBand).length;
   const _sizeDemoted = benched.filter(l => l.aboveSizeCeiling).length;
+  const _floorDemoted = benched.filter(l => l.thinReviews).length;
+  if (_floorDemoted) {
+    console.log(`\u{1F4C7} FLOOR DEMOTED [Places]: ${_floorDemoted} business(es) carry fewer Google reviews than the floor their trade asks for. They are returned behind every other lead and fill the bench instead of being deleted. A review count measures whether a business ASKS, not what it earns: US home services collect a median of 2 reviews a month, 26% of local businesses have none at all, and 20% of the businesses ranking in Google's top three have none either. Each trade's floor is now capped by the median review count of the businesses actually ranking in its own local top three, so the floor cannot reach a business that is ranking today. Set GP_FLOOR_MODE=cut to restore the delete.`);
+  }
   if (_sizeDemoted) {
     console.log(`\u{1F4CF} SIZE DEMOTED [Places]: ${_sizeDemoted} business(es) carry more than ${GP_MAX_REVIEWS} Google reviews. They are no longer deleted \u2014 they are returned behind every other lead and fill the bench, so we stop paying Google to rediscover the same businesses every run and delete them again. They are still never audited while a better lead exists, which is the only thing the ceiling was doing. Review count measures whether a business ASKS for reviews, not how big it is, and this file says so twenty lines above the ceiling itself. Set GP_SIZE_MODE=cut to restore the old delete.`);
   }
@@ -7827,13 +8426,45 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   // object in, so the tally belongs to the run that asked for it.
   if (tally && typeof tally === 'object') {
     tally.seen = seenFromGoogle;
+    // TWO rows, because after this round these are different facts and the
+    // yield line names its largest LOSS. underFloor is a delete and can only
+    // move when GP_FLOOR_MODE=cut is set; demotedUnderFloor is a lead the run
+    // KEPT and ranked last, so reporting it as a loss would be a lie about the
+    // biggest number on the line.
     tally.underFloor = skippedUnderFloor;
+    tally.demotedUnderFloor = demotedUnderFloor;
     tally.franchise = skippedFranchise + skippedChain + skippedBranchUrl;
     tally.alreadyOwned = skippedAlreadyOwned;
     tally.catCap = skippedCatCap;
     tally.demoted = benched.length;
     tally.lowRatingKept = lowRatingKept;
+    // ══ THE TWO WEBSITE-SALE LANES, COUNTED FROM THIS RUN'S OWN COUNTERS ════
+    // Both of these already printed their own line (CALL LEADS, REBUILD LEADS)
+    // and neither reached the end-of-run report, so the one thing the rep's
+    // pitch is built on - the state of their website - was missing from the
+    // only line that adds a run up. Neither is a LOSS: a business with no site
+    // at all is the purest thing this pitch has, and the yield line marks them
+    // as shapes of the run so they can never be named as its largest loss.
+    tally.noWebsite = keptNoWebsite;
+    tally.builderSite = keptBuilder;
     tally.queries = calls;
+    // ══ THE OUTCOMES THIS BLOCK DOES NOT YET WRITE ═══════════════════
+    // The FIND YIELD line already carries a row for each of the three below,
+    // and each row is DROPPED from the line while nothing assigns its counter
+    // - absent, not a confident zero, because "nobody increments it" and "it
+    // happened to nobody" are different facts and this file records what it
+    // costs to confuse them. Whoever adds one of those branches assigns it
+    // here, in this same block, and its row starts printing on its own:
+    //   tally.skippedListingRisk   dropped because the listing is permanently
+    //                              closed, has moved, or carries Google's own
+    //                              consumer alert - one counter, because the
+    //                              consequence is the same: nobody is there
+    //   tally.skippedListingPhone  dropped because the number is already on
+    //                              another business in this run
+    //   tally.demotedUnderFloor    DEMOTED for a thin review count rather than
+    //                              deleted - kept, so the yield line declares
+    //                              it not a loss and it can never be named as
+    //                              the largest one
   }
   return interleaved.concat(_benchInterleaved);
 };
@@ -39058,6 +39689,11 @@ const demotionPenalty = (lead) => {
 //
 // The curve itself is unchanged. What changed is the two places it argued with
 // the rest of the system; both are commented at the line that fixes them.
+// The coverage term's two knobs, declared where the curve that reads them is,
+// so the boot check asserts the OUTCOME against the same numbers rather than
+// against a second copy of them typed into the check.
+const TRIAGE_MARKET_POINTS = 3;   // per metro beyond the first
+const TRIAGE_MARKET_CAP = 9;      // and never more than this, whatever the count
 const placesTriageScore = (m) => {
   const rv = Number(m && m.reviewCount) || 0;
   const rating = Number(m && m.rating) || 0;
@@ -39148,6 +39784,41 @@ const placesTriageScore = (m) => {
   // up telling an operator two different things about one lead, which is the
   // defect this file just finished fixing for the demotion penalty.
   base += affordabilityBand(m || {}).points;
+  // ══ COVERAGE ACROSS METROS: THE ONE SIZE SIGNAL GOOGLE GIVES US FREE ══════
+  // A one-truck operator comes back in one metro. An operator with crews, trucks
+  // and a payroll comes back in several, and the press has counted that ever
+  // since the repeat sighting stopped being discarded - the run even prints
+  // "Work these first" about the multi-market operators. The score did not read
+  // it, so the queue it ordered disagreed with the line printed underneath it.
+  //
+  // WEIGHT, DECLARED AND EXPLAINED: TRIAGE_MARKET_POINTS for each metro beyond
+  // the first, capped at TRIAGE_MARKET_CAP. One extra metro is worth about what
+  // a published crew signal is worth in the affordability band ('crewed' +3,
+  // 'staffed' +3), and the cap sits just above the strongest published-team
+  // term there ('teamReal' +6) because this is the SAME claim - crews and a
+  // payroll - measured off Google's own index instead of off a page they wrote
+  // about themselves. It stays far under the review curve's 26, so coverage can
+  // move a lead within its band and can never manufacture one out of a trade
+  // that cannot pay: a tier-C trade in twelve metros still scores below a
+  // tier-A trade in one, which is asserted at boot.
+  //
+  // AND THE CAP IS NOT ONLY ABOUT PROPORTION. Past a handful of metros the
+  // shape stops being a crewed local operator and starts being a regional brand
+  // whose owner does not take the call - predictReachability already docks that
+  // by review volume and detectChainOutlets drops it outright at
+  // GP_CHAIN_MIN_METROS metros under distinct names. A term that kept rising
+  // would end up paying for the property that makes the lead worse for us,
+  // which is the exact mistake the rating bonus above had to be guarded from.
+  //
+  // SKIPPED, never read as zero. Number(null) is 0 and 0 is finite, so a
+  // laundered count would read as "absent from its own market" on a lead nobody
+  // measured. One metro and an unmeasured metro count score identically, which
+  // is the honest answer for both: a single-market business is the default
+  // shape of this ICP and is not being marked down for it.
+  const _mkt = Number(m && m.marketCount);
+  if (typeof (m && m.marketCount) === 'number' && Number.isFinite(_mkt) && _mkt > 1) {
+    base += Math.min((_mkt - 1) * TRIAGE_MARKET_POINTS, TRIAGE_MARKET_CAP);
+  }
   // == THE DEMOTION IS IN THE NUMBER ========================================
   // Same table the contact ranker reads, so the Find card and the contact list
   // can no longer hand an operator two different verdicts on one business.
@@ -40473,6 +41144,62 @@ app.get('/api/cron/discover', async (req, res) => {
   res.json({ ok: true, added: rows.length, theirstackRan: runTheirStack, breakdown: data.breakdown });
 });
 
+// == findYieldWorst - which row of the yield report is the run's biggest loss =
+//
+// LIVE DEFECT, 2026-09-12. This was `_rows.slice(2, -1)`: everything except the
+// first two rows and the last. That window is the set of losses only while
+// 'returned' happens to be the LAST row, and it is not - Round 114 appends a
+// 'large companies served for the email lane' row after it whenever a
+// size-demoted large company is served (GP_LARGE_SHARE is 0.1 by default, so
+// that is most runs), and the per-tier rows append too. On any such run
+// 'returned' fell inside the ranking window, was usually the biggest number in
+// it, and the line announced:
+//
+//     The largest single loss is "returned" at 12.
+//
+// The survivors, reported as the loss. The one job of that sentence is to name
+// the gate that kills the most, and it named the leads we kept. It surfaced
+// only when another agent made the test harness's fake Google actually return
+// businesses; before that the press returned nothing and the row was 0.
+//
+// TWO THINGS ARE WRONG WITH A POSITIONAL WINDOW and only one of them is the
+// off-by-one: the real fault is that every row anybody appends is a fresh
+// chance to break it, and two different agents added rows to this list in one
+// round. So eligibility is DECLARED on the row (loss: true) rather than
+// inferred from where it sits or from a string match on its label, and:
+//
+//   · a row that is not a loss can never be named, however big. 'returned' is
+//     not a loss. Neither is a DEMOTED lead: it was kept and sorted lower, and
+//     announcing it as the run's largest loss sends somebody looking for
+//     leads that are still on the bench waiting to be worked.
+//   · the window still ends at 'returned', found by NAME, so a row appended
+//     after it cannot corrupt the ranking whoever appends it and whatever they
+//     flag it. That is belt and braces on purpose - the flag is the rule, the
+//     anchor is what survives a copy-pasted neighbouring row.
+//   · and a flagged loss sitting AFTER 'returned' is not silently dropped: the
+//     boot check refuses it by name, because quietly ignoring a real loss is
+//     the same lie in the other direction.
+//
+// PURE and at module scope so the boot check can run it on rows the real run
+// cannot produce yet, which is the only way to test a row somebody has not
+// appended yet.
+const findYieldWorst = (rows) => {
+  const list = Array.isArray(rows) ? rows : [];
+  const end = list.findIndex(r => r && r.say === 'returned');
+  const before = end < 0 ? list : list.slice(0, end);
+  return before
+    .filter(r => r && r.loss === true && typeof r.n === 'number' && Number.isFinite(r.n))
+    .sort((a, b) => b.n - a.n)[0];
+};
+// Any row carrying the loss flag that sits AFTER the 'returned' anchor - the
+// shape that would be silently dropped from the ranking. Read by the boot
+// check, which is where it has to be loud.
+const findYieldStranded = (rows) => {
+  const list = Array.isArray(rows) ? rows : [];
+  const end = list.findIndex(r => r && r.say === 'returned');
+  return end < 0 ? [] : list.slice(end + 1).filter(r => r && r.loss === true);
+};
+
 // == runDiscovery - the Find run, with no HTTP request holding it open =======
 //
 // This was the body of app.post('/api/discover') and it ran for 102-120
@@ -40540,19 +41267,14 @@ const runDiscovery = async (body) => {
   // deliberately conservative: two genuinely different companies sharing a
   // normalised name is rare, and the cost of a false match is one lead skipped
   // against ~10 Firecrawl credits and a queue slot for one already owned.
-  const _normName = (n) => String(n || '').toLowerCase()
-    // "&" and "and" are the same word to everyone except a string comparison —
-    // "Tuck & Howell" and "Tuck and Howell" are one business.
-    .replace(/&/g, ' and ')
-    .replace(/[.,'’]/g, ' ')
-    // "and" too: "Tuck & Howell Plumbing, Heating & Air" and "Tuck and Howell
-    // Plumbing Heating Air" are the same shop written by two different sources.
-    // Dropping it entirely makes them identical without bringing unrelated
-    // businesses together — the distinguishing words are the proper nouns.
-    .replace(/\b(llc|l l c|inc|incorporated|corp|corporation|co|ltd|limited|pllc|pc|pa|lp|llp|the|and)\b/g, ' ')
-    .replace(/[^a-z0-9 ]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  //
+  // THE RULE ITSELF IS AT MODULE SCOPE, as bizNameKey, beside the chain
+  // detection that is the other reader of it. It was declared here, inside this
+  // one handler, and the cross-lead phone-collision test needs the identical
+  // question answered - so a second copy would have been written and the two
+  // would have drifted. That is the disease this file records most. This is an
+  // alias, so every call site below is unchanged and there is ONE rule.
+  const _normName = bizNameKey;
   const _knownNames = new Set();
   for (const n of (Array.isArray(knownNames) ? knownNames : [])) {
     const k = _normName(n);
@@ -41607,6 +42329,11 @@ const WEIGHTS = {
             tier: CATEGORY_TIER[c.industry] || null,
             hours: c.publishedHours || null,
             teamCount: typeof c.teamCount === 'number' ? c.teamCount : null,
+            // How many of the searched metros this business came back in,
+            // counted at the press and free (see placesTriageScore). typeof,
+            // not ||: an unmeasured count must stay unmeasured, because zero
+            // metros is not a shape a lead that exists can have.
+            marketCount: typeof c.marketCount === 'number' ? c.marketCount : null,
             outsideBand: c.outsideBand === true,
             aboveSizeCeiling: c.aboveSizeCeiling === true,
           };
@@ -41716,11 +42443,14 @@ const WEIGHTS = {
         // one. Two mechanisms for one promise, because the promise is the entire
         // safety of turning that filter into a sort: the leads we have evidence
         // for still go out first, every run, and the rest wait on the bench.
-        // Both demotion reasons, not just the band. A business above the review
-        // ceiling is returned behind everything by searchGooglePlaces and would
-        // climb straight back over an in-band lead here on ICP score alone.
-        const ba = (a.outsideBand || a.aboveSizeCeiling) ? 1 : 0;
-        const bb = (b.outsideBand || b.aboveSizeCeiling) ? 1 : 0;
+        // ALL THREE demotion reasons, not just the band. A business above the
+        // review ceiling, or under its trade's review floor, is returned behind
+        // everything by searchGooglePlaces and would climb straight back over an
+        // in-band lead here on ICP score alone. A reason missing from this term
+        // is a demotion that survives the press and dies in the sort, which is
+        // the one way the bench promise can be broken without any gate changing.
+        const ba = (a.outsideBand || a.aboveSizeCeiling || a.thinReviews) ? 1 : 0;
+        const bb = (b.outsideBand || b.aboveSizeCeiling || b.thinReviews) ? 1 : 0;
         if (ba !== bb) return ba - bb;
         const ta = tier(a), tb = tier(b);
         if (ta !== tb) return tb - ta;
@@ -41840,24 +42570,67 @@ const WEIGHTS = {
     // loss is visible without reading the code that caused it.
     {
       const _y = _findYield;
+      // ══ EVERY ROW DECLARES WHETHER IT IS A LOSS ═══════════════════
+      // `loss` is the ONLY thing the largest-single-loss sentence may look at,
+      // and findYieldWorst above records what a positional window cost. The
+      // rule in one line: a row is a loss when the lead is GONE. A lead that
+      // was kept and sorted lower is not, and neither is a lead we returned.
+      //
+      // AND AN OUTCOME NOBODY COUNTS READS AS ABSENT, NOT AS ZERO. The filter
+      // below asks for a real number, so a row whose counter no branch assigns
+      // - a new drop that lands a round before its counter does - is dropped
+      // from the line rather than printed as 0. "Nobody increments it" and "it
+      // happened to nobody" are different facts, and reporting the first as
+      // the second is the unmeasured-treated-as-zero class this file records
+      // more than any other. Number(null) is 0 and 0 is finite, so the filter
+      // asks the TYPE and not what Number() makes of it.
+      //
+      // The keys are assigned at the end of searchGooglePlaces, where they are
+      // listed; a key that is not written yet simply has no row yet.
+      const _row = (say, n, loss) => ({ say, n, loss: loss === true });
       const _rows = [
-        ['seen from Google', _y.seen], ['bench served', _bench.length],
-        ['under the trade review floor', _y.underFloor],
-        ['not our ICP by name', _y.notIcp],
-        ['franchise or chain outlet', _y.franchise],
-        ['already in the pipeline', _y.alreadyOwned],
-        ['per-category cap', _y.catCap],
-        ['demoted to the bench', _y.demoted],
-        ['returned', scored.length],
+        _row('seen from Google', _y.seen, false), _row('bench served', _bench.length, false),
+        _row('deleted under the trade review floor', _y.underFloor, true),
+        _row('not our ICP by name', _y.notIcp, true),
+        _row('franchise or chain outlet', _y.franchise, true),
+        _row('already in the pipeline', _y.alreadyOwned, true),
+        _row('per-category cap', _y.catCap, true),
+        // ══ THE DROPS THAT ARE NOT ABOUT THE BUSINESS AT ALL ════════════
+        // A listing that is permanently closed, has moved away, or carries
+        // Google's own consumer alert is one drop with one counter, because
+        // the consequence is identical: there is nobody at that listing to
+        // sell to. A number that already belongs to another business in this
+        // run is the second. Both are DELETIONS - the lead does not come back
+        // on the bench - so each can be named as the worst one.
+        _row('dropped on a listing risk - closed, moved or flagged by Google', _y.skippedListingRisk, true),
+        _row('dropped on a phone collision', _y.skippedListingPhone, true),
+        // ══ KEPT, AND SORTED LOWER ═══════════════════════════
+        // A demotion is not a loss. These leads are on the bench, they are
+        // returned behind every in-band lead, and the run can serve them
+        // tomorrow - so the sentence must never send somebody hunting for
+        // leads that are sitting there waiting to be worked. The thin-review
+        // count is a SHAPE of the demotion total above it as well, so ranking
+        // it would let a subset outrank the total it belongs to.
+        _row('demoted to the bench', _y.demoted, false),
+        _row('demoted for a thin review count', _y.demotedUnderFloor, false),
+        // ══ AND THE TWO WEBSITE LANES, WHICH ARE THE PITCH ══════════════
+        // Leads we RETURNED, counted here because the rep opens on their
+        // website: a business with no site at all is the purest prospect this
+        // pitch has (nothing to critique, everything to sell), and one on a
+        // free page builder is the rebuild lane. Both printed their own line
+        // and neither reached the one line that adds a run up.
+        _row('no website at all - the call lane', _y.noWebsite, false),
+        _row('on a free page builder - the rebuild lane', _y.builderSite, false),
+        _row('returned', scored.length, false),
         // Round 111: the TheirStack lane's leads by tier - the one lane whose
         // size is known at Find time. A Places lead is tiered on its contact read.
-        ...SCALE_TIERS.map(t => [`TheirStack ${t.replace('_', ' ')}`, scored.filter(c => c.source === 'theirstack' && c.scaleTier === t).length]).filter(r => r[1] > 0),
+        ...SCALE_TIERS.map(t => _row(`TheirStack ${t.replace('_', ' ')}`, scored.filter(c => c.source === 'theirstack' && c.scaleTier === t).length, false)).filter(r => r.n > 0),
         // Round 114: how many of the size-demoted large companies the slice served.
-        ...(_large.length ? [['large companies served for the email lane', _large.length]] : []),
-      ].filter(r => Number.isFinite(Number(r[1])));
-      const _worst = _rows.slice(2, -1).sort((a, b) => Number(b[1]) - Number(a[1]))[0];
-      console.log(`\u{1F4C9} FIND YIELD: ${_rows.map(r => `${r[0]} ${r[1]}`).join(' \u2192 ')}.` +
-        (_worst && Number(_worst[1]) > 0 ? ` The largest single loss is "${_worst[0]}" at ${_worst[1]}.` : '') +
+        ...(_large.length ? [_row('large companies served for the email lane', _large.length, false)] : []),
+      ].filter(r => typeof r.n === 'number' && Number.isFinite(r.n));
+      const _worst = findYieldWorst(_rows);
+      console.log(`\u{1F4C9} FIND YIELD: ${_rows.map(r => `${r.say} ${r.n}`).join(' \u2192 ')}.` +
+        (_worst && _worst.n > 0 ? ` The largest single loss is "${_worst.say}" at ${_worst.n}.` : '') +
         ` The Google budget for this run was ${_placesBudget} quer${_placesBudget === 1 ? 'y' : 'ies'}, and the bench contributed ${_bench.length} lead(s) toward the ${MAX_TOTAL} this run can return - if those two numbers disagree badly, the budget assumption is what to change, not the market.`);
     }
     console.log('Breakdown:', breakdown);
@@ -66259,6 +67032,55 @@ app.listen(PORT, () => {
       }
     }
 
+    // 6b. COVERAGE ACROSS METROS, WHICH THE NUMBER IGNORED FOR ITS WHOLE LIFE.
+    //     The press has counted the metros a business comes back in ever since
+    //     the repeat sighting stopped being discarded, and the run prints
+    //     "Coverage across metros means crews and a payroll ... Work these
+    //     first" about them - while the score they are sorted by could not see
+    //     the count at all. The line and the queue disagreed.
+    {
+      // ITS OWN FIXTURE, because _base scores 87 and the score clamps at 97:
+      // four metros would sit one point under the ceiling and twelve would be
+      // held there by the CLAMP rather than by the cap, so the cap assertion
+      // below would pass for the wrong reason. A fixture arranged so the
+      // assertion holds whether or not the mechanism exists is the trap this
+      // file records, and the headroom is asserted rather than assumed.
+      const _cov = { reviewCount: 60, rating: 4.4, reachScore: 22, tier: 'B', label: 'Plumbing' };
+      const _m1 = placesTriageScore({ ..._cov, marketCount: 1 });
+      const _m2 = placesTriageScore({ ..._cov, marketCount: 2 });
+      const _m4 = placesTriageScore({ ..._cov, marketCount: 4 });
+      const _m12 = placesTriageScore({ ..._cov, marketCount: 12 });
+      const _mNone = placesTriageScore(_cov);
+      if (_m4 >= 97 || _m12 >= 97) _fails.push(`the coverage fixture scores ${_m4} against the 97 ceiling, so the clamp is standing in for the cap and everything below it proves nothing - the fixture needs headroom`);
+      if (!(_m2 > _m1)) {
+        _fails.push(`an operator that came back in two metros scores ${_m2} against ${_m1} for the same business in one - the only size signal the press measures for free is not in the number, and the run tells the operator to work those leads first`);
+      }
+      if (!(_m4 > _m2)) _fails.push(`four metros scores ${_m4} against two at ${_m2} - the term is flat, so coverage is being read as a yes-or-no when it is a count`);
+      // Against the DECLARED knobs, not a second copy of them typed here.
+      if (_m2 - _m1 !== TRIAGE_MARKET_POINTS) _fails.push(`one extra metro moved the score by ${_m2 - _m1} rather than the declared ${TRIAGE_MARKET_POINTS}`);
+      if (_m4 - _m1 !== TRIAGE_MARKET_CAP) _fails.push(`three extra metros moved the score by ${_m4 - _m1} rather than the declared cap of ${TRIAGE_MARKET_CAP}`);
+      if (_m12 !== _m4) {
+        _fails.push(`a business in twelve metros scores ${_m12} against ${_m4} in four - the cap is not holding, and past a handful of metros the shape is a regional brand whose owner does not take the call, which is the property this term must not pay for`);
+      }
+      // UNMEASURED IS NOT ZERO METROS. A lead that exists came back in at least
+      // one market, so a laundered count would read as absent from its own.
+      if (_mNone !== _m1) _fails.push(`a lead with no metro count measured scores ${_mNone} against ${_m1} for one measured market - "we did not count" is being read as a number`);
+      for (const _bad of [null, undefined, 0, '', '3', [], {}, NaN, false, true]) {
+        if (placesTriageScore({ ..._cov, marketCount: _bad }) !== _mNone) {
+          _fails.push('a metro count of ' + JSON.stringify(_bad) + ' changed the score, so something is being coerced - Number(null) is 0 and 0 is finite');
+          break;
+        }
+      }
+      // AND COVERAGE CANNOT BUY A TRADE THAT CANNOT PAY. The term orders leads
+      // inside their band; it does not promote one out of a job value where
+      // nothing we sell is affordable.
+      const _cWide = placesTriageScore({ ..._cov, tier: 'C', marketCount: 12 });
+      const _aOne = placesTriageScore({ ..._cov, tier: 'A', marketCount: 1 });
+      if (!(_aOne > _cWide)) {
+        _fails.push(`a tier-C trade in twelve metros scores ${_cWide} against a tier-A trade in one at ${_aOne} - the coverage term has grown big enough to outrank the job value, which is the one thing that decides whether they can write the cheque`);
+      }
+    }
+
     // 7. THE CALL SITE. A fixture supplies its own arguments and therefore cannot
     //    see a caller: the handler could stop passing the demotion flags entirely
     //    and every assertion above would stay green.
@@ -66268,6 +67090,7 @@ app.listen(PORT, () => {
                           _n('aboveSizeCeiling: c.aboveSize', 'Ceiling === true,'),
                           _n('label: c.industry', " || '',"),
                           _n('hours: c.publishedHours', ' || null,'),
+                          _n('marketCount: typeof c.marketCount', " === 'number' ? c.marketCount : null,"),
                           _n('_hours = readPublished', 'Hours(p.regularOpeningHours)'),
                           _n('triage = placesTriage', 'Score(_affIn)')]) {
       if (!_src.includes(_needle)) _fails.push('the Find handler no longer passes ' + _needle.slice(0, 30) + ' into the score');
@@ -66456,10 +67279,191 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`\u26d4 FIND SCORE CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
     } else {
-      console.log(`\u2713 FIND SCORE CHECK: the Find card's number was EXECUTED, not read. A demoted lead scores lower than the same business undemoted and two demotions cost more than one; the penalty comes from the same declared table the contact list reads, so one app can no longer hold two verdicts about one business; a 4.9 above the star ceiling no longer earns the bonus for the very rating that demoted it, while an in-band 4.9 keeps every point; and a reachability nobody measured is skipped rather than laundered into a confident zero. The handler is pinned at its call site.`);
+      console.log(`\u2713 FIND SCORE CHECK: the Find card's number was EXECUTED, not read. A demoted lead scores lower than the same business undemoted and two demotions cost more than one; the penalty comes from the same declared table the contact list reads, so one app can no longer hold two verdicts about one business; a 4.9 above the star ceiling no longer earns the bonus for the very rating that demoted it, while an in-band 4.9 keeps every point; and a reachability nobody measured is skipped rather than laundered into a confident zero. Coverage across metros is in the number at last: +${TRIAGE_MARKET_POINTS} a metro beyond the first to a cap of ${TRIAGE_MARKET_CAP}, so a crewed operator seen in four markets outranks the same business seen in one, a twelfth market buys nothing more, an unmeasured count scores exactly as one market does, and twelve metros cannot lift a trade whose job value cannot fund anything we sell. The handler is pinned at its call site.`);
     }
   } catch (e) {
     console.log(`\u26d4 FIND SCORE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // == SPAM TEST BAN CHECK ===================================================
+  //
+  // WHAT THIS PINS: the ABSENCE, by name, of every fake-listing test that was
+  // measured and REFUTED. None of these may be built, because each one deletes
+  // real businesses - and the ones it deletes are disproportionately ours.
+  //
+  //   1. A KEYWORD-STUFFED BUSINESS NAME. Sterling Sky followed 5,306 reported
+  //      listings across 16 industries for 4 years: garage door repair had
+  //      87.6% of reported listings REMOVED by Google, and only 0.15% of the
+  //      reported listings were keyword-stuffed. The stuffing is not what the
+  //      fakes are made of; it is what an honest local business does to its
+  //      own name because an agency told it to.
+  //   2. A RESIDENTIAL ADDRESS. The FTC's 15,000-profile fake network used
+  //      COMMERCIAL addresses - a donut shop, an Arby's, a wine bar. A trade
+  //      run out of the owner's house is the shape of our ideal customer, and
+  //      it is the shape this test deletes.
+  //   3. NO WEBSITE, OR A FREE-BUILDER WEBSITE. About 35% of suspended
+  //      listings had no website either, which is why this looks like a
+  //      signal - and having no website is this system's single best buying
+  //      signal, because the pitch IS websites. This test would delete the
+  //      purest prospect the machine finds.
+  //   4. A TOLL-FREE OR TRACKING PHONE NUMBER. The same FTC network ran 250+
+  //      LOCAL area codes. A tracking number is what a business that already
+  //      pays somebody for marketing has; that is a reason to call them.
+  //   5. OPEN 24/7 HOURS. In the FTC's own exhibits it is the LEGITIMATE
+  //      competitors that show "Open 24 hours" while the fake profile shows
+  //      "Closes 8 PM". In the emergency trades always-open is the normal
+  //      shape, and this file already reads it as a capacity signal.
+  //   6. A VOIP CARRIER LOOKUP. A paid lookup per lead to learn a fact that
+  //      does not separate the two populations: small businesses of every kind
+  //      moved to VoIP years ago.
+  //   7. THIN CONTENT, STOCK IMAGERY OR NO NAMED HUMAN. These are our own
+  //      SALES FINDINGS - the website critique is the product - and turning
+  //      the same measurement into a fake-listing verdict would delete the
+  //      business we were about to sell a website to.
+  //
+  // WHAT IT CAN CATCH: a mechanism written into this file under any of the
+  // marker names below, which is what such a test needs in order to exist -
+  // plus two behaviours EXECUTED rather than read, because those two are the
+  // ones a rewrite could reintroduce without naming anything: a deduction for
+  // having no website, and a deduction for publishing always-open hours.
+  //
+  // WHAT IT CANNOT CATCH: a mechanism named something nobody here thought of;
+  // one written in index.html, which is not this file and deploys separately;
+  // one expressed as an instruction in a prompt rather than as code (PART 3:
+  // instructional guards do not hold, which cuts both ways); a third-party API
+  // that returns its own fakeness score which this code then reads under an
+  // innocent name; or a person filtering the sheet by hand. It is a scan, and
+  // it says so.
+  //
+  // AN ABSENCE SCAN FAILS THE OPPOSITE WAY ROUND, which is the good way: a
+  // needle written as one literal would find ITSELF and the check would go
+  // RED, loudly, instead of passing while the defect is live. The halves are
+  // still assembled at runtime - every marker below is two non-empty pieces
+  // and neither piece is the whole - because a red on a clean build is still a
+  // wasted hour. The quiet failure left is a marker nobody would ever type,
+  // and the positive control below is what stops the scan going blind.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _src = selfSourceNoCommentsLF();
+    // ONE declared table. The id says which refuted test it is, the sentence
+    // says what building it would have deleted, and the markers are what the
+    // mechanism cannot exist without. Adding one of these measurements means
+    // changing THIS TABLE on purpose, which is the whole point of pinning an
+    // absence by name: it cannot arrive by accident, only by a decision.
+    const _BANNED = [
+      { id: 'stuffed name', say: 'a keyword-stuffed business name read as a fake listing - 0.15% of 5,306 reported listings were stuffed, and 87.6% of garage door listings were removed anyway',
+        markers: [_n('keyword', 'Stuffed'), _n('stuffed', 'Name'), _n('name', 'Stuffing'), _n('KEYWORD_', 'STUFF'), _n('keyword', 'Spam')] },
+      { id: 'residential address', say: 'a home address read as a fake listing - the FTC network used a donut shop, an Arby\'s and a wine bar, while a trade run from the owner\'s house is our ideal customer',
+        markers: [_n('residential', 'Address'), _n('isResident', 'ial'), _n('RESIDENTIAL_', 'ADDRESS'), _n('residential', 'Listing'), _n('residential', 'Spam')] },
+      { id: 'no website', say: 'no website, or a free-builder website, read as a fake listing - 35% of suspended listings had no site, and no site at all is the best buying signal this machine has',
+        markers: [_n('fake', 'NoWebsite'), _n('noWebsite', 'Spam'), _n('spam', 'NoWebsite'), _n('noWebsite', 'Fake'), _n('builderSite', 'Spam'), _n('freeBuilder', 'Spam'), _n('siteless', 'Spam')] },
+      { id: 'phone shape', say: 'a toll-free or tracking number read as a fake listing - the FTC network ran 250+ local area codes, and a tracking number means somebody is already being paid for their marketing',
+        markers: [_n('toll', 'Free'), _n('TOLL_', 'FREE'), _n('tracking', 'Number'), _n('spam', 'Phone'), _n('phone', 'Spam'), _n('tracking', 'Phone')] },
+      { id: 'always open', say: 'always-open hours read as a fake listing - in the FTC exhibits the LEGITIMATE competitors are the ones open 24 hours, and this file already reads those hours as capacity',
+        markers: [_n('open24', 'Spam'), _n('open24', 'Fake'), _n('always', 'OpenSpam'), _n('suspicious', 'Hours'), _n('fake', 'Hours'), _n('hours', 'Spam')] },
+      { id: 'voip lookup', say: 'a paid carrier lookup to learn whether their number is VoIP - a fact that does not separate the two populations, because every kind of small business moved years ago',
+        markers: [_n('voip', 'Check'), _n('voip', 'Carrier'), _n('carrier', 'Lookup'), _n('voip', 'Lookup'), _n('voipNum', 'ber'), _n('lookups.', 'twilio.com'), _n('numveri', 'fy.com'), _n('carrier', 'Name')] },
+      { id: 'thin site or no human', say: 'thin content, stock imagery or no named human read as a fake listing - these are our own sales findings, and the verdict would delete the business we were about to sell a website to',
+        markers: [_n('stockImagery', 'Spam'), _n('stock', 'PhotoFake'), _n('thinContent', 'Spam'), _n('thinContent', 'Fake'), _n('noNamed', 'Human'), _n('namedHuman', 'Missing')] },
+      // The verdict itself. No test above can act without somewhere to put its
+      // answer, so this row is the net under the seven: a mechanism named
+      // something nobody predicted still needs one of these to do anything.
+      { id: 'a fakeness verdict', say: 'somewhere to keep a fakeness verdict, which every test above needs before it can delete anything',
+        markers: [_n('spam', 'Score'), _n('looks', 'Fake'), _n('fake', 'Listing'), _n('is', 'FakeBusiness'), _n('SPAM_', 'SIGNALS'), _n('spam', 'Signal'), _n('fake', 'Score'), _n('spam', 'Risk'), _n('fake', 'Risk'), _n('listing', 'Spam'), _n('spam', 'Flag'), _n('suspicious', 'Listing'), _n('skipped', 'Spam'), _n('skipped', 'Fake'), _n('dropped', 'AsFake')] },
+    ];
+    // 1. THE SCAN.
+    for (const _b of _BANNED) {
+      for (const _m of _b.markers) {
+        if (_src.includes(_m)) {
+          _fails.push(`"${_m}" is in the source: that is ${_b.say}. This was measured and refuted - if the NAME is wanted for something else it has to be called something else, and if the TEST is wanted, this table is where that decision gets made`);
+        }
+      }
+    }
+    // 2. THE SCAN IS STILL LOOKING. Eight rows, every one with markers, none
+    //    of them short enough to match ordinary code - and a haystack that
+    //    plainly contains one must come back flagged. An absence check that
+    //    has quietly stopped matching reports a clean pass forever, which is
+    //    this file's most-recorded way for a check to lie.
+    if (_BANNED.length < 8) _fails.push(`only ${_BANNED.length} refuted test(s) are pinned, so one of the seven that were measured has been dropped from the table along with the evidence that refuted it`);
+    for (const _b of _BANNED) {
+      if (!_b.markers.length) _fails.push(`"${_b.id}" is pinned with no markers at all, so it is a comment rather than a check`);
+      for (const _m of _b.markers) {
+        if (!_m || _m.length < 7) _fails.push(`the marker "${_m}" under "${_b.id}" is too short to identify a mechanism, so it would match ordinary code or nothing`);
+      }
+    }
+    {
+      const _probe = _BANNED[0].markers[0];
+      const _control = ['const drop = (name) => ', _probe, '(name) && kill(name);'].join('');
+      if (!_BANNED.some(_b => _b.markers.some(_m => _control.includes(_m)))) {
+        _fails.push('the scanner cannot find a banned marker in a haystack that plainly contains one, so its needles are broken and its silence about this file means nothing');
+      }
+    }
+    // 3. NO WEBSITE IS NOT A MARK AGAINST THE LEAD, EXECUTED. A rewrite could
+    //    reintroduce the deduction without naming anything, and this is the
+    //    lead the whole pitch is aimed at: nothing to critique, everything to
+    //    sell, and no competitor has built them a site.
+    {
+      const _plain = predictReachability('Jose Barrera Roofing', 'https://example.com');
+      const _none = predictReachability('Jose Barrera Roofing', '');
+      if (!(_none.score >= _plain.score)) {
+        _fails.push(`a business with NO WEBSITE scores ${_none.score}/40 against ${_plain.score}/40 for the same name with a site that tells us nothing - the absent site is what we sell, and it is being charged to the lead again`);
+      }
+      if (!(_none.score > 0)) _fails.push('a named owner with no website scores zero on owner-findability, so the call lane sorts below every business we cannot even name');
+      if (!/no website/i.test(String(_none.why))) _fails.push('the row no longer says the site is missing, so nothing tells the rep why this lead is a phone call rather than an audit');
+      // A free-builder page is marked down as a thin OWNER SOURCE and kept -
+      // never dropped, and never below the lead that has no site at all.
+      const _builder = predictReachability('Jose Barrera Roofing', 'https://site123.wixsite.com');
+      if (!(_builder.score > 0)) _fails.push('a business on a free page builder scores zero, which is a deletion wearing a deduction');
+      if (!(_none.score >= _builder.score)) _fails.push(`a business with no website at all (${_none.score}/40) ranks below one on a free page builder (${_builder.score}/40) - there is less to sell the second one, not more`);
+    }
+    // 4. ALWAYS-OPEN HOURS ARE NOT A MARK AGAINST THE LEAD, EXECUTED. The FTC
+    //    exhibit is the other way round: the fake closes at 8 PM.
+    {
+      const _all = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+      const _h247 = readPublishedHours({ weekdayDescriptions: _all.map(d => `${d}: Open 24 hours`) });
+      const _h95 = readPublishedHours({ weekdayDescriptions: _all.map((d, i) => i < 5 ? `${d}: 9:00 AM – 5:00 PM` : `${d}: Closed`) });
+      if (_h247.open24 !== true) _fails.push('the always-open fixture is not being read as always open, so nothing here is testing what the FTC exhibits actually showed');
+      const _lead = (hours) => ({ reviewCount: 120, rating: 4.5, reachScore: 30, tier: 'A', label: 'Plumbing', hours });
+      const _s247 = placesTriageScore(_lead(_h247));
+      const _s95 = placesTriageScore(_lead(_h95));
+      if (!(_s247 >= _s95)) {
+        _fails.push(`a business open 24 hours scores ${_s247} against ${_s95} for the same business open nine to five - always-open is the normal shape of an emergency trade, and in the FTC's own exhibits it is the honest competitors who show it`);
+      }
+      if (!(affordabilityBand(_lead(_h247)).points >= affordabilityBand(_lead(_h95)).points)) {
+        _fails.push('always-open hours cost a lead points in the affordability band, where seven open days is supposed to MEAN staff');
+      }
+    }
+    // 5. THE NAMES THE FAKES ACTUALLY USED MUST STILL PASS. The FTC network's
+    //    own naming shape is surname-plus-trade - "Levine Heating and Cooling"
+    //    - which is the exact shape this system's owner-findability predictor
+    //    rewards, and a stuffed name is what a real local business does to its
+    //    own listing. Both survive every name gate we own, executed.
+    {
+      // The baseline is an impersonal name that is NOT stuffed. A stuffed name
+      // has no person in it to find, and scoring 0 for that is the predictor
+      // doing its job - what must never happen is the stuffing itself costing
+      // the lead points on top, which is the only thing this compares.
+      const _brand = predictReachability('Premier Roofing', '').score;
+      for (const _nm of ['Levine Heating and Cooling', 'Garage Door Repair Denver Same Day Garage Door Service', 'Emergency Plumber Plumbing Repair Phoenix']) {
+        if (looksLikeEnterpriseByName(_nm)) _fails.push(`"${_nm}" is refused by the cheap pre-spend name screen - a surname-plus-trade name and a stuffed trade name are what REAL local businesses are called, and refusing them costs us the lead and teaches us nothing`);
+        if (GP_FRANCHISE.test(_nm)) _fails.push(`"${_nm}" is caught by the franchise list, which is the only unconditional name-delete at the press`);
+        const _sc = predictReachability(_nm, '').score;
+        if (_sc < _brand) _fails.push(`"${_nm}" scores ${_sc}/40 against ${_brand}/40 for an impersonal name nobody stuffed - the stuffing itself is costing the lead points, and 0.15% is how much of it the removed listings actually had`);
+      }
+      // And the surname-plus-trade shape still reads as a PERSON, which is why
+      // the FTC's fake network copied it: it is what an ordinary family trade
+      // is called, so it can never be evidence of the opposite.
+      const _surname = predictReachability('Levine Heating and Cooling', '').score;
+      if (!(_surname > _brand)) _fails.push(`a surname-plus-trade name scores ${_surname}/40 against ${_brand}/40 for a plain brand name - that shape is a family business with a findable owner, and reading it as anything else is reading the FTC's exhibit backwards`);
+    }
+    if (_fails.length) {
+      console.log(`⛔ SPAM TEST BAN CHECK: ${_fails.slice(0, 5).join(' | ')}${_fails.length > 5 ? ` | +${_fails.length - 5} more` : ''}.`);
+    } else {
+      console.log(`✓ SPAM TEST BAN CHECK: ${_BANNED.length} refuted fake-listing tests are pinned ABSENT by name (${_BANNED.map(b => b.id).join(', ')}), the scanner is proven to still find a marker in a haystack that carries one, and the two a rewrite could reintroduce without naming anything are EXECUTED: a business with no website at all scores no worse on owner-findability than the same name with a site that tells us nothing, a free-builder page is marked down as a thin owner source and never deleted, a business open 24 hours scores no worse than the same business open nine to five in both the Find number and the affordability band, and the two name shapes the research says are ordinary - surname-plus-trade, which is what the FTC's own fake network used, and a stuffed trade name - pass every name gate we own. HONEST LIMIT: this is a scan over this file, so it cannot see a mechanism named something nobody predicted, one built in index.html, one written as an instruction in a prompt, or a vendor that sells us its own fakeness score under an innocent name.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SPAM TEST BAN CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ---- NOT READY IS NOT A STATE THAT TAKES WORK ---------------------------
   // A lead worked during the boot window prints its own refusal glyphs, and
@@ -71324,10 +72328,20 @@ app.listen(PORT, () => {
     // demoted one whatever else is true of them \u2014 including a demoted lead with
     // a better score, which is the case that would happen most often.
     {
-      const _n = _needle('const ba = (a.', 'outsideBand || a.aboveSizeCeiling) ? 1 : 0');
+      // ── RE-AIMED IN ROUND 143, AND THE REVERSAL RECORDED ───────────────
+      // This needle read the TWO-reason comparator term. The review floor
+      // became the third demotion reason in Round 143, and this assertion
+      // went red on the change that fixed the bug rather than on the bug:
+      // it was pinning the exact text, so the correct three-flag term failed
+      // it. Re-aimed at three, which is what it has to assert now - a lead
+      // demoted for a thin review count and left out of this term survives
+      // the press's two arrays and then climbs back over an in-band lead in
+      // the sort, which is the one way the bench promise breaks with every
+      // gate still correct.
+      const _n = _needle('const ba = (a.', 'outsideBand || a.aboveSizeCeiling || a.thinReviews) ? 1 : 0');
       const _i = _src.indexOf(_n);
       if (_i < 0) {
-        _fails.push('the discovery sort no longer puts out-of-band leads last, so a demoted 4.9-star business with a high ICP score climbs back over the 4.6-star lead we have evidence for');
+        _fails.push('the discovery sort no longer puts ALL THREE kinds of demoted lead last, so a demoted 4.9-star business, one above the review ceiling or one under its trade review floor climbs back over the 4.6-star lead we have evidence for');
       } else {
         const _after = _src.slice(_i, _i + 400);
         const _tierAt = _after.indexOf(_needle('const ta = ', 'tier(a)'));
@@ -71386,8 +72400,25 @@ app.listen(PORT, () => {
     // business take a category slot and a queue position from the lead behind it,
     // which is the whole failure the demotion exists to prevent.
     {
-      if (_src.indexOf(_needle('const _demoted = _outsideBand', ' || _tooBig;')) < 0) {
-        _fails.push('the two demotion reasons no longer feed one flag, so a gate reading only the band lets over-ceiling leads back into the in-band queue');
+      // ── RE-AIMED TWICE IN ROUND 143A, AND BOTH REVERSALS RECORDED ───────
+      // The needle stops at _tooBig rather than at the semicolon ON PURPOSE.
+      // It used to pin the whole line, which meant that ADDING a demotion
+      // reason to the one flag - the thing this section asks for - turned this
+      // check red, and the cheap way out of a red check is to give the new
+      // reason its own flag instead. That is the exact failure the section is
+      // about. What must hold is that both named reasons feed ONE flag;
+      // further reasons joining it are the design working.
+      //
+      // Two joined in this round and neither needed this line touched again,
+      // which is the point: the thin-review floor demotion (_underFloor) and
+      // Google's own verdict on the listing (_risk.demote). A reason missing
+      // from this flag would take a per-category cap slot and a queue position
+      // from an in-band lead.
+      if (_src.indexOf(_needle('const _demoted = _outsideBand', ' || _tooBig')) < 0) {
+        _fails.push('the demotion reasons no longer feed one flag, so a gate reading only the band lets over-ceiling, thin-review or risky-listing leads back into the in-band queue');
+      }
+      if (_src.indexOf(_needle('thinReviews: true, thinReview', 'Note: _underFloorWhy')) < 0) {
+        _fails.push('the thin-review reason no longer travels on the lead, so the sort at the far end cannot tell it apart and the call sheet cannot say why it is last');
       }
       if (_src.indexOf(_needle('aboveSizeCeiling: ', 'true, sizeNote: _tooBigWhy')) < 0) {
         _fails.push('the over-ceiling reason no longer travels on the lead, so the sort at the far end cannot tell it apart and the screen cannot say why it is last');
@@ -71397,10 +72428,236 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ RATING BAND CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
     } else {
-      console.log(`✓ RATING BAND CHECK: the star rating reaches exactly one rung and that rung is internal-only, so it can never reach an email; the real ladder returns the same sayable findings at 4.6, 4.9 and 5.0, leading on the same one. Businesses outside the band are therefore demoted rather than deleted — 1,810 of 2,892 already-paid-for businesses were deleted on the 2026-08-19 run. The review ceiling now demotes on the identical argument, having deleted 282 more on 2026-08-20: Google bills per CALL, so deleting a result cannot save a penny, and nothing remembered them, so every run paid to rediscover and re-delete the same businesses. Both reasons feed ONE demotion flag, so no gate can be fixed for one and left open for the other. Undemoted leads still go out first on every run, enforced twice: two arrays concatenated at the source, and a comparator term weighed ahead of tier and score. The per-category cap is spent only on undemoted leads, so a near-perfect or over-ceiling business cannot take a queue slot from the lead behind it. GP_BAND_MODE=cut and GP_SIZE_MODE=cut each restore the old delete exactly.`);
+      console.log(`✓ RATING BAND CHECK: the star rating reaches exactly one rung and that rung is internal-only, so it can never reach an email; the real ladder returns the same sayable findings at 4.6, 4.9 and 5.0, leading on the same one. Businesses outside the band are therefore demoted rather than deleted — 1,810 of 2,892 already-paid-for businesses were deleted on the 2026-08-19 run. The review ceiling now demotes on the identical argument, having deleted 282 more on 2026-08-20: Google bills per CALL, so deleting a result cannot save a penny, and nothing remembered them, so every run paid to rediscover and re-delete the same businesses. All THREE reasons feed ONE demotion flag since Round 143 added the trade review floor to them, so no gate can be fixed for some and left open for the others, and each reason travels on the lead so the call sheet can say which. Undemoted leads still go out first on every run, enforced twice: two arrays concatenated at the source, and a comparator term weighed ahead of tier and score that reads all three reasons. The per-category cap is spent only on undemoted leads, so a near-perfect, over-ceiling or thin-review business cannot take a queue slot from the lead behind it. GP_BAND_MODE=cut, GP_SIZE_MODE=cut and GP_FLOOR_MODE=cut each restore the old delete exactly.`);
     }
   } catch (e) {
     console.log(`⛔ RATING BAND CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+  // ══ THE REVIEW FLOOR DELETED THE BUSINESSES THE OWNER WANTS ═══════════════
+  // THE LIVE DEFECT THIS CHECK EXISTS FOR. Until Round 143 the press DELETED
+  // any business whose Google review count sat under its trade's floor, and the
+  // floor was 40 in eight trades. Three measurements say what that deleted:
+  //
+  //  · PACE. US home-service businesses collect a MEDIAN OF 2 Google reviews a
+  //    month (ProsperQR, 816,307 reviews across 3,739 US businesses), so a 40
+  //    floor reads "has been actively asking for about twenty months". A
+  //    twenty-year-old $4M plumbing company that never asks was deleted before
+  //    anybody looked at it.
+  //  · HOW MANY HAVE NONE. 26% of local businesses have zero reviews, and 20%
+  //    of those ranking in Google's TOP THREE have none at all (BrightLocal,
+  //    93,845 businesses, 26 industries).
+  //  · THE FLOOR PER TRADE WAS GUESSED. The median review count of businesses
+  //    actually ranking in the local top three (Local Falcon, 50.4M results
+  //    across 1,993 categories) is 47 in tree service and 56 in electrical,
+  //    against 244 in HVAC and 215 in plumbing. One 40 was simultaneously
+  //    deleting top-three businesses in two trades and meaningless in two
+  //    others.
+  //
+  // And it did no anti-spam work, which is what a floor is assumed to be for:
+  // the FTC's May 2026 action over "Premium Home Service" documents 15,000+
+  // fake profiles in these exact trades, and the named fakes carried 2, 14 and
+  // 37 reviews at about $5 each. A floor selects FOR review farms.
+  //
+  // EXECUTED, not read, in three places: the real reviewFloorFor over every
+  // searched category, the real call-site block lifted out of
+  // searchGooglePlaces and run on a 12-review lead, and the same block run with
+  // the knob set. Then the call site is pinned, because a fixture supplies its
+  // own arguments and cannot see a caller turning the demote back into a delete.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _src = selfSourceNoCommentsLF();
+    const _base = MIN_REVIEWS_BASE;
+
+    // ── 1. THE INVARIANT, OVER EVERY SEARCHED CATEGORY ────────────────────
+    // No trade's floor may exceed the median review count of the businesses
+    // ranking in its own local top three. Read off GP_CATEGORIES rather than a
+    // typed list, so a category added later is covered without anybody
+    // remembering to add it here.
+    let _withMedian = 0, _without = 0, _nullRows = 0;
+    for (const _cat of GP_CATEGORIES) {
+      const _label = String((_cat && _cat.label) || '');
+      if (!_label) continue;
+      const _f = reviewFloorFor(_label, _base);
+      const _med = tradeReviewMedian(_label);
+      if (!Number.isFinite(_f) || _f < 0) {
+        _fails.push(`"${_label}" has no usable review floor (${JSON.stringify(_f)}), so every business in that trade is compared against a number nobody can read`);
+        continue;
+      }
+      if (_med === null) {
+        _without++;
+        // Told apart on purpose: a NULL ROW is a trade somebody looked up and
+        // could not find a figure for, and an absent one is a trade nobody has
+        // looked up yet. Reporting them as one number would dress 46 unchecked
+        // trades as 46 checked ones.
+        if (Object.prototype.hasOwnProperty.call(TRADE_3PACK_REVIEW_MEDIAN, _label)) _nullRows++;
+        continue;
+      }
+      _withMedian++;
+      if (_f > _med) {
+        _fails.push(`"${_label}" is held to a review floor of ${_f} against a top-three median of ${_med} for its own trade, so the floor reaches businesses that are ranking in Google's local top three today`);
+      }
+    }
+    if (_withMedian < 9) {
+      _fails.push(`only ${_withMedian} searched categor(y/ies) carry a declared 3-pack median, so this invariant is being asserted over almost nothing - the table has lost rows or the labels no longer match GP_CATEGORIES`);
+    }
+    if (_without < 1) {
+      _fails.push('every searched category now claims a published 3-pack median, which is not true of the data - a median has been invented for a trade rather than left as a null row');
+    }
+    // The trades most likely to be given a neighbour's number are the ones
+    // that sit next to a measured trade, and every one of them must be a
+    // stated null rather than a silent absence.
+    if (_nullRows < 10) {
+      _fails.push(`only ${_nullRows} searched categor(y/ies) state "no published median for this trade" as a row, so the trades that sit beside a measured one have gone back to being silently absent - which is how a neighbour's number gets borrowed`);
+    }
+    // Every row DECLARES its source and its date, or a number nobody can trace
+    // decides which businesses a run buries. Same rule as the revenue table.
+    for (const [_k, _row] of Object.entries(TRADE_3PACK_REVIEW_MEDIAN)) {
+      if (!_row || typeof _row.source !== 'string' || _row.source.length < 12 || !/^\d{4}-\d{2}-\d{2}$/.test(String(_row.at || ''))) {
+        _fails.push(`the review median for "${_k}" is declared without a readable source and date, so nobody can check the number that decides where that trade sorts`);
+        break;
+      }
+      if (!(_row.median === null || (Number.isFinite(Number(_row.median)) && Number(_row.median) > 0))) {
+        _fails.push(`the review median for "${_k}" is neither a positive number nor an explicit null, so "we have no figure" and "we have a figure of zero" read the same`);
+        break;
+      }
+    }
+    // A NULL row must not borrow the neighbouring trade's number. That is the
+    // one tempting mistake at every row: "roofing 79" is residential and
+    // "dentist 346" is general dentistry, and both sit next to a searched
+    // category with no figure of its own.
+    for (const _label of ['Commercial Roofing', 'Cosmetic Dentistry', 'Home Builder']) {
+      if (tradeReviewMedian(_label) !== null) {
+        _fails.push(`"${_label}" now claims a 3-pack median of its own, but the published figure belongs to a different Google category - a neighbour's number has been borrowed rather than measured`);
+      }
+    }
+    // And the floor is DERIVED, not typed: a trade whose median moves must move
+    // its floor with it, or the table and the floor are two copies of one
+    // judgement waiting to disagree.
+    if (reviewFloorFor('Tree Service', _base) >= reviewFloorFor('Garage Doors', _base)) {
+      _fails.push('tree service (top-three median 47) is no longer held to a LOWER floor than garage doors (median 137), so the floor has stopped being derived from the measurement and is typed again');
+    }
+
+    // ── 2. THE 12-REVIEW BUSINESS IS NOT DELETED. THE REAL BLOCK, RUN. ────
+    // The block is lifted out of searchGooglePlaces's own source and executed,
+    // so this cannot pass on a build where the loop deletes. It is wrapped in a
+    // one-pass for loop because the delete is a `continue`: reaching the end of
+    // the loop body means the lead survived, and the continue means it is gone.
+    {
+      const _sp = String(searchGooglePlaces);
+      const _a = _sp.indexOf(_n('let _underFloor = false, ', "_underFloorWhy = '';"));
+      const _b = _a < 0 ? -1 : _sp.indexOf('\n', _sp.indexOf(_n('It decides sort position here and', ' nothing else.'), _a));
+      if (_a < 0 || _b < 0) {
+        _fails.push('the review-floor block could not be found in the press loop at all, so nothing here is checking what happens to a business with a thin review count');
+      } else {
+        const _block = _sp.slice(_a, _sp.indexOf('}', _b) + 1);
+        const _run = new Function('reviews', '_reviewFloor', 'GP_FLOOR_HARD_CUT', 'cat', 'skippedUnderFloor', 'demotedUnderFloor',
+          'for (let _i = 0; _i < 1; _i++) {' + _block
+          + ' return { kept: true, underFloor: _underFloor, why: _underFloorWhy, deleted: skippedUnderFloor, demoted: demotedUnderFloor }; }'
+          + ' return { kept: false, deleted: skippedUnderFloor, demoted: demotedUnderFloor };');
+        // The case from the brief: a 12-review business in the three trades
+        // whose floor was 40 or whose median is in the hundreds.
+        for (const _label of ['HVAC', 'Plumbing', 'Tree Service']) {
+          const _floor = reviewFloorFor(_label, _base);
+          const _r = _run(12, _floor, false, { label: _label }, 0, 0);
+          if (_r.kept !== true) {
+            _fails.push(`a ${_label} business with 12 Google reviews is DELETED by the press against a floor of ${_floor} - a twenty-year-old company that never asks for reviews sits here, and nothing remembers it, so the next run pays Google to find it and delete it again`);
+            continue;
+          }
+          if (_r.deleted !== 0) {
+            _fails.push(`a ${_label} business with 12 reviews is counted as a lead the run LOST while it is still in the run, so the yield line reports a loss that did not happen`);
+          }
+          if (12 < _floor) {
+            if (_r.underFloor !== true) _fails.push(`a ${_label} business under the ${_floor}-review floor is kept but carries no demotion mark, so it competes with the in-band leads it is supposed to sit behind`);
+            if (_r.demoted !== 1) _fails.push(`a ${_label} business demoted for a thin review count is not counted, so the run cannot report how many it ranked last instead of deleting`);
+            // The sentence the rep reads: what was measured about THIS
+            // business, and what it means for them.
+            const _why = String(_r.why || '');
+            if (!/\b12\b/.test(_why) || _why.indexOf(String(_floor)) < 0 || _why.indexOf(_label) < 0) {
+              _fails.push(`the note on a thin-review ${_label} lead does not say what was measured about it (12 reviews, the ${_floor} floor, the trade), so the rep is told it is last without being told why`);
+            }
+            if (!/47%/.test(_why)) {
+              _fails.push('the note no longer tells the rep that a thin review count is a problem worth selling (47% of consumers will not use a business with under 20 reviews), so a sellable finding reads as a disqualification');
+            }
+            if (/\bused to\b|\bthe old\b|\b2026-0/i.test(_why)) {
+              _fails.push(`the per-lead note carries the codebase's history instead of this business's facts: ${_why.slice(0, 70)}`);
+            }
+          }
+        }
+        // ── 3. THE KNOB. One variable restores the delete, exactly. ───────
+        const _cut = _run(12, 40, true, { label: 'Tree Service' }, 0, 0);
+        if (_cut.kept !== false || _cut.deleted !== 1) {
+          _fails.push('GP_FLOOR_MODE=cut no longer restores the review-floor delete, so this change cannot be reversed without a deploy');
+        }
+        // ── 4. AND A BUSINESS AT OR ABOVE THE FLOOR IS UNTOUCHED. ────────
+        // A fixture where every lead comes back demoted proves nothing.
+        const _over = _run(200, 15, false, { label: 'HVAC' }, 0, 0);
+        if (_over.kept !== true || _over.underFloor !== false || _over.demoted !== 0) {
+          _fails.push('a business at 200 reviews is marked as thin, so the floor is demoting every lead and the mark means nothing');
+        }
+      }
+    }
+
+    // ── 5. THE OPERATOR OVERRIDE CAN STILL ONLY RAISE THE FLOOR. ──────────
+    // A run asking for 60+ reviews must get 60, and a run asking for 1 must not
+    // lower a trade below what its own evidence says.
+    {
+      const _sp = String(searchGooglePlaces);
+      const _i = _sp.indexOf(_n('const _reviewFloor = Number.isFinite(', 'Number(_flt.minReviews))'));
+      if (_i < 0) {
+        _fails.push('the operator review-count override could not be found in the press loop, so nothing here is checking that a run asking for more reviews gets them');
+      } else {
+        const _stmt = _sp.slice(_i, _sp.indexOf(';', _sp.indexOf('reviewFloorFor(cat.label, MIN_REVIEWS);', _i)) + 1);
+        const _floorOf = new Function('_flt', 'cat', 'MIN_REVIEWS', 'reviewFloorFor', _stmt + ' return _reviewFloor;');
+        const _tree = reviewFloorFor('Tree Service', _base);
+        if (_floorOf({ minReviews: 60 }, { label: 'Tree Service' }, _base, reviewFloorFor) !== 60) {
+          _fails.push('an operator asking for 60+ reviews no longer gets 60, so the one control over this filter has stopped working');
+        }
+        if (_floorOf({ minReviews: 1 }, { label: 'Tree Service' }, _base, reviewFloorFor) !== _tree) {
+          _fails.push(`an operator asking for 1+ reviews now LOWERS the tree service floor below the ${_tree} its own evidence sets, so the override cuts both ways when it was only ever meant to raise`);
+        }
+        if (_floorOf({}, { label: 'Tree Service' }, _base, reviewFloorFor) !== _tree) {
+          _fails.push('a run with no override no longer gets the trade floor, so the evidence table decides nothing on an ordinary press');
+        }
+      }
+    }
+
+    // ── 6. THE CALL SITE, so the demote cannot silently become a delete. ──
+    // Needles assembled at runtime: written as literals they would sit in this
+    // check's own source and pass on a build where the demote is gone.
+    for (const [_needle, _msg] of [
+      [_n('const _demoted = _outsideBand || _tooBig', ' || _underFloor;'),
+        'the thin-review demotion no longer feeds the shared demotion flag, so a lead under its trade review floor takes a per-category cap slot and a queue position from an in-band lead'],
+      [_n('if (GP_FLOOR_HARD_CUT) { skippedUnderFloor++;', ' continue; }'),
+        'the review floor deletes on every run again rather than only when GP_FLOOR_MODE=cut is set - the businesses a five-figure engagement is for are the ones with the thinnest review counts'],
+      [_n('thinReviews: true, thinReview', 'Note: _underFloorWhy'),
+        'the thin-review mark and its sentence no longer travel on the lead, so the sort cannot put it last and the call sheet cannot say why it is'],
+      [_n('(a.outsideBand || a.aboveSizeCeiling || a.', 'thinReviews) ? 1 : 0'),
+        'the discovery sort no longer reads the thin-review demotion, so a lead the press put on the bench climbs straight back over an in-band lead on ICP score'],
+      [_n('tally.demotedUnderFloor = demoted', 'UnderFloor;'),
+        'the run no longer reports how many leads it ranked last for a thin review count, so the demotion is as invisible as the delete was'],
+      [_n("_row('demoted for a thin review count', _y.", 'demotedUnderFloor, false)'),
+        'the yield line has no row for the leads demoted at the review floor, so an operator reading a complete-looking report cannot see the largest thing the floor now does'],
+      [_n("['deleted under the trade review floor', _y.", 'underFloor],'),
+        'the yield line still calls the floor row a loss without saying it is a DELETE, so a run that kept every thin lead reads as a run that threw them away'],
+      [_n('const med = tradeReviewMedian', '(label);'),
+        'the review floor no longer reads the per-trade top-three median at all, so it is back to one guessed number for every vertical'],
+      [_n('if (med !== null) return Math.min(med, base,', ' Math.max(LOW_VOLUME_FLOOR,'),
+        "the floor is no longer capped by its own trade's top-three median, so a trade can be held to a number that deletes businesses ranking in the local top three today"],
+    ]) if (_src.indexOf(_needle) < 0) _fails.push(_msg);
+    // The demoted lead reaches the bench through the SAME two-array routing the
+    // other two reasons use; a third mechanism is a third thing to get wrong.
+    if (_src.indexOf(_n('if (_demoted) benched.push(_lead);', ' else out.push(_lead);')) < 0) {
+      _fails.push('demoted leads are no longer routed to their own array, so the thin-review lead competes with in-band leads directly');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ REVIEW FLOOR CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
+    } else {
+      console.log(`✓ REVIEW FLOOR CHECK: the trade review floor demotes instead of deleting, and its number per trade comes from a measurement rather than a judgement. A 12-review HVAC, plumbing and tree service business is KEPT on every one of the three - run on the real press block, lifted out of the loop - marked, counted and ranked last, with a note that says what was measured about that business and that a thin count is a problem worth selling (47% of consumers will not use a business with under 20 reviews). ${_withMedian} searched categories carry a declared top-three median with its source and date, and no floor exceeds its own trade's: tree service is 47 and electrical 56, so the 40 that used to apply to both was deleting businesses ranking in the local top three. ${_without} categories have no published median at all and keep the base floor and the two declared sets; ${_nullRows} of those are the ones sitting next to a measured trade, and each states "no figure for this trade" as its own row so nobody borrows the neighbour's number. The operator override still raises the floor and cannot lower it, a 200-review business is untouched, and GP_FLOOR_MODE=cut restores the delete exactly. Nine call sites are pinned with runtime-assembled needles, including the shared demotion flag, the sort term and both yield rows.`);
+    }
+  } catch (e) {
+    console.log(`⛔ REVIEW FLOOR CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ══ THE SIZE GATE WAS BLOCKING THE BUSINESSES WE SELL TO ══════════════════
   // Live run, 2026-08-20. The size gate blocked 15 leads: 9 on a VERIFIED
@@ -71576,32 +72833,59 @@ app.listen(PORT, () => {
       }
     }
 
-    // ── AND THE SINGLE LARGEST DELETER OF LEADS PER RUN ───────────────────
-    // reviewFloorFor decides how many jobs on record a trade needs before we
-    // will look at it, and nothing asserted a trade sat in the right set. The
-    // two directions cost opposite things: a high-ticket trade wrongly held to
-    // the base floor deletes the richest leads in the ICP (a $6m custom home
-    // builder may have nine reviews), and a high-volume trade wrongly given the
-    // low floor fills the queue with businesses that farm reviews.
+    // ── AND THE LINE THAT USED TO BE THE LARGEST DELETER OF LEADS ─────────
+    // reviewFloorFor decides where a trade's leads sort, and nothing asserted a
+    // trade sat in the right set. The two directions cost opposite things: a
+    // high-ticket trade wrongly held to the base floor buries the richest leads
+    // in the ICP (a $6m custom home builder may have nine reviews), and a
+    // high-volume trade wrongly given the low floor fills the queue with
+    // businesses that farm reviews.
     {
       const _base = MIN_REVIEWS_BASE;
       for (const label of LOW_VOLUME_HIGH_TICKET) {
         if (reviewFloorFor(label, _base) >= _base) {
-          _fails.push(`"${label}" is a high-ticket, low-review trade and is still held to the base floor of ${_base}, which deletes exactly the businesses a five-figure engagement is for`);
+          _fails.push(`"${label}" is a high-ticket, low-review trade and is still held to the base floor of ${_base}, which buries exactly the businesses a five-figure engagement is for`);
           break;
         }
       }
+      // ══ RE-AIMED IN ROUND 143, AND THE REVERSAL RECORDED ════════════════
+      // THIS ASSERTION USED TO SAY THE OPPOSITE. It required every trade in
+      // HIGH_VOLUME_LOW_TICKET to sit ABOVE the base floor, which is how the
+      // 40 got there, and it went red on the round that fixed the trade whose
+      // number was wrong: Garage Doors came out at 14 and this line called it
+      // a floor that "means nothing in the trade it was raised for".
+      //
+      // The measurement that reversed it: the MEDIAN review count of the
+      // businesses actually ranking in Google's local top three is 47 in tree
+      // service and 56 in electrical (10th percentile 4), so a 40 floor in
+      // those two trades was reaching businesses that rank in the top three
+      // today. A set membership is a judgement about review-per-dollar; a
+      // 3-pack median is a measurement of the position we sell. Where both
+      // exist the measurement wins, and the assertion now reads that way.
+      //
+      // Both directions are still asserted, because an assertion that only
+      // ever lowers a floor is one somebody satisfies by deleting the floor:
+      //   · with a median   -> capped by it, and never raised past the base
+      //   · without a median -> the declared set still raises it, and that is
+      //     safe now only because the floor demotes instead of deleting
       for (const label of HIGH_VOLUME_LOW_TICKET) {
-        if (reviewFloorFor(label, _base) <= _base) {
-          _fails.push(`"${label}" earns reviews by the hundred and is held to the base floor of ${_base}, so the floor means nothing in the trade it was raised for`);
+        const _med = tradeReviewMedian(label);
+        const _f = reviewFloorFor(label, _base);
+        if (_med === null) {
+          if (_f <= _base) {
+            _fails.push(`"${label}" earns reviews by the hundred, has no published 3-pack median, and is no longer held above the base floor of ${_base} - the declared judgement about it has been dropped rather than replaced by a measurement`);
+            break;
+          }
+        } else if (_f > _med || _f > _base) {
+          _fails.push(`"${label}" is held to a review floor of ${_f} against a top-three median of ${_med} for its own trade, so the floor reaches businesses that are ranking in Google's local top three today - the measurement has been overruled by the set again`);
           break;
         }
       }
-      // A trade in NEITHER set gets the base floor unchanged. That is the
-      // default and it must not drift, or every unclassified trade quietly
-      // changes how many leads a run deletes.
+      // A trade in NEITHER set and with no median gets the base floor
+      // unchanged. That is the default and it must not drift, or every
+      // unclassified trade quietly changes where a run's leads sort.
       if (reviewFloorFor('A Trade Nobody Declared', _base) !== _base) {
-        _fails.push('an unclassified trade no longer gets the base review floor, so adding a trade silently changes how many leads every run deletes');
+        _fails.push('an unclassified trade no longer gets the base review floor, so adding a trade silently changes where every run sorts its leads');
       }
       // And the two sets must not overlap, or one trade has two floors and
       // which one applies is decided by the order of a ternary.
@@ -71655,7 +72939,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ ICP FILTER CHECK: ${_fails.slice(0, 6).join(' | ')}${_fails.length > 6 ? ` | +${_fails.length - 6} more` : ''}.`);
     } else {
-      console.log(`✓ ICP FILTER CHECK: all 17 owner-operated names survive the size gate, including the five it wrongly blocked on the 2026-08-20 run — three builders whose legal suffix is "Construction Company" and two dermatology practices whose names contain "skin cancer center". All 17 real institutions are still refused, so the pattern was narrowed rather than gutted. Health is owned by one rule with a small-practice escape instead of two rules where the copy defeated the escape, and a verified headcount under ${ICP_EMPLOYEE_BLOCK} beats the name guess — that gate was right nine times out of nine while the name pattern was wrong five times out of six. The two biggest deleters now carry fixtures too: the franchise list, which is the only unconditional name-delete in the Places loop, and the trade review floor, which deletes more leads per run than anything else in the file.`);
+      console.log(`✓ ICP FILTER CHECK: all 17 owner-operated names survive the size gate, including the five it wrongly blocked on the 2026-08-20 run — three builders whose legal suffix is "Construction Company" and two dermatology practices whose names contain "skin cancer center". All 17 real institutions are still refused, so the pattern was narrowed rather than gutted. Health is owned by one rule with a small-practice escape instead of two rules where the copy defeated the escape, and a verified headcount under ${ICP_EMPLOYEE_BLOCK} beats the name guess — that gate was right nine times out of nine while the name pattern was wrong five times out of six. The two biggest deleters now carry fixtures too: the franchise list, which is the only unconditional name-delete left in the Places loop, and the trade review floor, which deleted more leads per run than anything else in the file until Round 143 turned it into a sort position - so each trade's floor is now capped by the median review count of the businesses ranking in its own local top three, and a trade held above the base without a measurement behind it fails here.`);
     }
   } catch (e) {
     console.log(`⛔ ICP FILTER CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -71690,28 +72974,141 @@ app.listen(PORT, () => {
         _fails.push(`the ICP name-gate loss comes out ${_got} where 500 leads in, 120 surviving the name filter and 7 blocked by name at the size gate is 387 - a count that reads one gate and not the other under-reports the run's biggest loss, which is worse than leaving the row blank`);
       }
     }
-    // 2. The row prints, and it can be chosen as the largest single loss.
-    const _ri = _rd.indexOf(_n('const _rows = ', '['));
+    // 2. THE ROW BLOCK PRINTS, EXECUTED. Lifted out of runDiscovery's own
+    //    source and RUN on counts, because a fixture supplies its own
+    //    arguments and can never see a caller.
+    const _ri = _rd.indexOf(_n('const _row = (say, n', ', loss)'));
     const _wi = _ri < 0 ? -1 : _rd.indexOf(_n('const _worst', ' = '), _ri);
     if (_ri < 0 || _wi < 0) {
       _fails.push('the FIND YIELD row block could not be found in runDiscovery, so nothing here is checking what the yield line prints');
     } else {
       const _block = _rd.slice(_ri, _rd.indexOf(';', _wi) + 1);
-      const _out = new Function('_y', '_bench', 'scored', 'SCALE_TIERS', '_large',
+      const _run = (_yy, _returned, _largeN) => new Function('_y', '_bench', 'scored', 'SCALE_TIERS', '_large', 'findYieldWorst',
         _block + ' return { rows: _rows, worst: _worst };')(
-        { seen: 500, underFloor: 12, notIcp: 387, franchise: 9, alreadyOwned: 4, catCap: 3, demoted: 6 },
-        [], [], SCALE_TIERS, []);
-      const _row = _out.rows.find(r => /ICP/.test(String(r[0])));
-      if (!_row) _fails.push('a Find run that lost 387 leads at the ICP name gate prints no row for them at all');
-      else if (Number(_row[1]) !== 387) _fails.push(`the ICP name-gate row prints ${JSON.stringify(_row[1])} rather than the 387 it was given`);
-      if (!_out.worst || !/ICP/.test(String(_out.worst[0]))) {
-        _fails.push(`the largest single loss is reported as "${_out.worst && _out.worst[0]}" on a run where the ICP name gate lost 387 of 500 - the sentence names a row it can reach instead of the worst one`);
+        _yy, [], new Array(_returned).fill({ source: 'google_places' }), SCALE_TIERS,
+        new Array(_largeN || 0).fill({ source: 'theirstack' }), findYieldWorst);
+      const _seek = (_o, _frag) => _o.rows.find(r => String(r.say).includes(_frag));
+      const _out = _run({ seen: 500, underFloor: 12, notIcp: 387, franchise: 9, alreadyOwned: 4, catCap: 3, demoted: 6 }, 0);
+      const _icpRow = _seek(_out, 'ICP');
+      if (!_icpRow) _fails.push('a Find run that lost 387 leads at the ICP name gate prints no row for them at all');
+      else if (_icpRow.n !== 387) _fails.push(`the ICP name-gate row prints ${JSON.stringify(_icpRow.n)} rather than the 387 it was given`);
+      if (!_out.worst || !/ICP/.test(String(_out.worst.say))) {
+        _fails.push(`the largest single loss is reported as "${_out.worst && _out.worst.say}" on a run where the ICP name gate lost 387 of 500 - the sentence names a row it can reach instead of the worst one`);
       }
+      // 3. AN OUTCOME NOBODY COUNTED IS ABSENT FROM THE LINE, NEVER A ZERO.
+      //    New branches arrive one round at a time and their counters arrive
+      //    with them; until then the row must not claim the outcome happened
+      //    to nobody. Unmeasured-treated-as-zero is the class this file
+      //    records most, and in a report it is the shape that stops an
+      //    operator looking for the loss he is actually taking.
+      // The anchor is a row NAME, so renaming that row would quietly widen the
+      // window to the end of the list again. It is asserted to exist, by the
+      // exact name, on the real row list.
+      if (!_out.rows.some(r => r.say === 'returned')) {
+        _fails.push("the yield line has no row called exactly 'returned' any more - that name is where the loss window ends, so renaming it silently makes every row appended afterwards eligible to be called the run's biggest loss");
+      }
+      const _newOutcomes = ['listing risk', 'phone collision', 'thin review count', 'no website at all'];
+      for (const _absent of _newOutcomes) {
+        const _r = _seek(_out, _absent);
+        if (_r) _fails.push(`the "${_r.say}" row prints ${JSON.stringify(_r.n)} on a run where no branch counted it - an outcome nobody increments must be missing from the report rather than reported as none`);
+      }
+      //    AND A COUNTER THAT ARRIVES AS null IS NOT A ZERO EITHER. Number(null)
+      //    is 0 and 0 is finite - the trap this file records more than any
+      //    other - so a row filtered on Number(x) would print "and it happened
+      //    to nobody" for a branch that handed over nothing at all.
+      {
+        const _nulls = _run({ seen: 500, underFloor: 12, notIcp: 20, franchise: 9, alreadyOwned: 4, catCap: 3, demoted: 6,
+          skippedListingRisk: null, skippedListingPhone: null, demotedUnderFloor: null, noWebsite: null, builderSite: null }, 0);
+        for (const _absent of _newOutcomes) {
+          const _r = _seek(_nulls, _absent);
+          if (_r) _fails.push(`the "${_r.say}" row prints ${JSON.stringify(_r.n)} from a counter that arrived as null - Number(null) is 0 and 0 is finite, and that laundered zero reads as "we counted, and it was nobody"`);
+        }
+      }
+      // 4. THE LIVE DEFECT OF 2026-09-12, ON THE SHAPE THAT PRODUCED IT. The
+      //    ranking window was _rows.slice(2, -1), which is the set of losses
+      //    only while 'returned' is the last row - and Round 114 appends the
+      //    email-lane row after it on any run that serves a large company,
+      //    which is most runs (GP_LARGE_SHARE is 0.1). The line then read
+      //    "The largest single loss is returned at N": the survivors reported
+      //    as the loss, on the one sentence whose whole job is naming the gate
+      //    that kills the most. The fixture carries BOTH ways of getting it
+      //    wrong - 700 returned with three large companies appended after it,
+      //    and 400 demotions, the biggest number in the list - against a
+      //    biggest real loss of 20.
+      {
+        const _full = _run({ seen: 900, underFloor: 5, notIcp: 20, franchise: 9, alreadyOwned: 4, catCap: 3,
+          demoted: 400, demotedUnderFloor: 380, skippedListingRisk: 7, skippedListingPhone: 4, noWebsite: 11, builderSite: 6 }, 700, 3);
+        const _last = _full.rows[_full.rows.length - 1];
+        if (!_last || String(_last.say) === 'returned') {
+          _fails.push('the fixture no longer appends a row AFTER the returned row, so a positional window would pass here by luck and everything below proves nothing');
+        }
+        if (!(_seek(_full, 'returned') && _seek(_full, 'returned').n === 700)) {
+          _fails.push('the fixture no longer returns more leads than any single filter took, so nothing here would notice the window swallowing the returned row');
+        }
+        for (const [_frag, _want] of [['listing risk', 7], ['phone collision', 4], ['no website at all', 11], ['free page builder', 6], ['thin review count', 380]]) {
+          const _r = _seek(_full, _frag);
+          if (!_r) _fails.push(`a run that recorded ${_want} lead(s) as "${_frag}" prints no row for them, so an outcome that was measured is thrown away before the operator sees it`);
+          else if (_r.n !== _want) _fails.push(`the "${_r.say}" row prints ${JSON.stringify(_r.n)} rather than the ${_want} it was given`);
+        }
+        if (!_full.worst || _full.worst.say !== 'not our ICP by name' || _full.worst.n !== 20) {
+          _fails.push(`the largest single loss is reported as "${_full.worst && _full.worst.say}" at ${_full.worst && _full.worst.n} on a run that returned 700, served 3 large companies on a row appended after that one, and demoted 400 - the biggest thing this run actually LOST was 20 leads at the ICP name gate. A row that is not a loss is being ranked, and neither of those two is one: the returned leads are the survivors, and a demoted lead was kept and is on the bench`);
+        }
+        // No row may claim the loss flag AFTER the anchor, in the REAL list.
+        // Dropping a real loss from the ranking in silence is the same lie
+        // pointed the other way, so it is refused by name here.
+        const _stranded = findYieldStranded(_full.rows);
+        if (_stranded.length) _fails.push(`the row "${_stranded[0].say}" is flagged as a loss but sits after the returned row, where the ranking cannot see it - move it above 'returned' or take the flag off it, because a loss the sentence can never name is worse than no row at all`);
+      }
+      // 5. AND THE RULE ITSELF, ON ROWS A RUN CANNOT PRODUCE YET. This is the
+      //    only way to test the row somebody has not appended yet, which is
+      //    exactly the row that broke it: findYieldWorst is pure and at module
+      //    scope so it can be run on a list this file invents.
+      {
+        const _R = (say, n, loss) => ({ say, n, loss });
+        const _ok = [_R('deleted under the trade review floor', 5, true), _R('not our ICP by name', 20, true),
+          _R('demoted to the bench', 400, false), _R('returned', 700, false)];
+        const _w = (rows) => findYieldWorst(rows) || { say: 'nothing', n: -1 };
+        if (_w(_ok).say !== 'not our ICP by name') _fails.push(`the rule names "${_w(_ok).say}" on a list whose only real losses are 5 and 20 - the biggest genuine loss is not being found at all`);
+        // A row appended after 'returned' - whoever appends it, and whatever
+        // they flag it. Both shapes are here: the email-lane row Round 114
+        // appends, and a future outcome somebody flags as a loss by copying
+        // the row above it.
+        const _after = _ok.concat([_R('large companies served for the email lane', 900, false), _R('an outcome appended later', 5000, true)]);
+        if (_w(_after).say !== 'not our ICP by name') {
+          _fails.push(`a row appended AFTER the returned row is being ranked ("${_w(_after).say}") - the window is positional again, which makes every row anybody appends a way to break the one sentence this report exists for`);
+        }
+        if (!findYieldStranded(_after).length) _fails.push('a loss row sitting after the returned row is not reported as stranded, so it would be dropped from the ranking in silence instead of refused');
+        if (findYieldStranded(_ok).length) _fails.push('an ordinary row list reports a stranded loss, so the refusal would fire on every clean run and be turned off');
+        // A DEMOTION CANNOT BE NAMED, however big. The lead was kept.
+        const _dem = [_R('demoted to the bench', 5000, false), _R('per-category cap', 1, true), _R('returned', 3, false)];
+        if (_w(_dem).say !== 'per-category cap') {
+          _fails.push(`a demotion of 5,000 leads is named as the largest single loss ("${_w(_dem).say}") over a real loss of 1 - a demoted lead is on the bench and will be served, and announcing it as a loss sends somebody hunting for leads that are sitting there waiting`);
+        }
+        // Nothing eligible means nothing claimed - and no row at all must not
+        // throw, because the line is built from whatever the run produced.
+        if (findYieldWorst([_R('seen from Google', 50, false), _R('returned', 50, false)])) _fails.push('a run with no loss row at all still names a largest single loss');
+        if (findYieldWorst([]) || findYieldWorst(null)) _fails.push('an empty row list produces a largest single loss out of nothing');
+        // A list with no 'returned' anchor still ranks its losses rather than
+        // going silent: the anchor narrows the window, it is not the gate.
+        if (_w([_R('per-category cap', 3, true)]).say !== 'per-category cap') _fails.push('a row list with no returned row ranks nothing, so a partial run would report no loss at all');
+      }
+    }
+    // 6. AND THE TWO WEBSITE LANES ACTUALLY REACH THE TALLY. A row the line
+    //    knows how to print is worth nothing if nobody writes the number:
+    //    computed-and-not-passed is the class this file produces most, and it
+    //    is exactly how the ICP name-gate row came to be structurally missing
+    //    from a complete-looking report. Read off the LIVE function.
+    {
+      const _sgp = String(searchGooglePlaces);
+      for (const [_needle, _msg] of [
+        [_n('tally.noWebsite = kept', 'NoWebsite;'), 'the count of businesses with NO WEBSITE AT ALL never reaches the tally, so its row is dropped from the yield line and a run cannot say how much of the call lane it found - the lane whose pitch is the website that does not exist'],
+        [_n('tally.builderSite = kept', 'Builder;'), 'the count of businesses on a free page builder never reaches the tally, so the rebuild lane is invisible in the one line that adds a run up'],
+      ]) if (!_sgp.includes(_needle)) _fails.push(_msg);
     }
     if (_fails.length) {
       console.log(`⛔ FIND YIELD CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
     } else {
-      console.log('✓ FIND YIELD CHECK: the yield report can name its own worst loss. The ICP name gate is counted where both halves of it settle - the name filter every source passes through and the size gate\'s name blocks - so the number is the difference each filter actually made rather than a counter somebody has to remember to increment; the row survives the line\'s own finite-number filter; and on a run that lost 387 leads of 500 that way, the line names it as the largest single loss instead of the biggest row it happens to be able to reach.');
+      console.log('✓ FIND YIELD CHECK: the yield report can name its own worst loss, and cannot name the survivors. Every row DECLARES whether it is a loss, so the sentence can no longer pick the returned count, a per-tier row, the email-lane row Round 114 appends after it, or a lead that was merely demoted to the bench - the window is anchored on the returned row by NAME rather than on a slice position, which is the live defect of 2026-09-12, and a row flagged as a loss after that anchor is refused by name instead of dropped in silence. Executed both ways: the row block is lifted out of the Find run and run on a press of 900 that returned 700, served three large companies on a row appended afterwards and demoted 400, where the biggest thing actually lost was 20 leads at the ICP name gate; and the rule itself is run on rows no press can produce yet, because the row that broke this was the one nobody had appended. The ICP name-gate loss is still counted where both halves of it settle, and an outcome whose counter no branch assigns - or assigns as null - is absent from the line instead of reported as none.');
     }
   } catch (e) {
     console.log(`⛔ FIND YIELD CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -75797,6 +77194,405 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ CHAIN OUTLET CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE SYSTEM HAD NO TEST FOR A FAKE LISTING AT ALL ══════════════════════
+  // Not a weak one: none. Grep found no address test, no shared-phone test and
+  // no virtual-office test anywhere in this file, while the FTC's May 2026
+  // action over "Premium Home Service" documents 15,000+ fake Google profiles
+  // in these exact trades, run for eight years, with every one of 7,600+ phone
+  // numbers routed to one call centre.
+  //
+  // The tests that must NOT exist are listed at the press field mask with the
+  // numbers that refuted each one. What is asserted here is the half that can
+  // be: Google's own four fields, read by KIND rather than by degree, with the
+  // unrecognised case landing on the safe side.
+  //
+  // EXECUTED on fixtures rather than read from source, because the whole
+  // question is what the function ANSWERS - and both directions are asserted,
+  // since a filter that deletes real owner-operated businesses is the more
+  // expensive failure and they are the entire market.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _press = String(searchGooglePlaces).replace(/\r/g, '');
+
+    // ── 1. EVERY DROP REASON, EXECUTED ────────────────────────────────────
+    const _closedP = readListingRisk({ businessStatus: 'CLOSED_PERMANENTLY' });
+    if (!_closedP.drop || _closedP.reason !== 'closed' || _closedP.demote) _fails.push(`a permanently closed listing reads drop=${_closedP.drop}/${_closedP.reason} instead of a plain drop - nobody is there to take the call`);
+    if (readListingRisk({ businessStatus: 'CLOSED_TEMPORARILY' }).reason !== 'closed') _fails.push('a temporarily closed listing is kept, so the rep dials a business that is not open');
+    if (!/Dead, not fake/.test(_closedP.why)) _fails.push('the closed drop does not say it is a dead listing rather than a fake one, so the log would file it as spam');
+    // The breadth of the line this replaces: anything not OPERATIONAL goes,
+    // and an ABSENT status is not a claim either way.
+    if (!readListingRisk({ businessStatus: 'SOMETHING_GOOGLE_ADDS_LATER' }).drop) _fails.push('a status word we have never seen walks through the closed rule - the press line this replaces dropped anything that was not OPERATIONAL, and narrowing it to two names is how a new status gets in');
+    if (readListingRisk({ businessStatus: 'OPERATIONAL' }).drop || readListingRisk({}).drop) _fails.push('an open business, or one whose status Google did not send, is being dropped as closed');
+    const _moved = readListingRisk({ movedPlaceId: 'places/ChIJmoved' });
+    if (!_moved.drop || _moved.reason !== 'moved') _fails.push(`a listing Google says has MOVED reads ${_moved.reason || 'clean'}, so the address, the phone and the reviews of the old premises reach the sheet as current`);
+    // BOTH of Google's two moved fields, because either can be the one that
+    // arrives and reading only one leaves half the moved listings on the sheet.
+    const _moved2 = readListingRisk({ movedPlace: 'places/ChIJnewpremises' });
+    if (!_moved2.drop || _moved2.reason !== 'moved') _fails.push(`a listing that carries Google's OTHER moved field and not the first reads ${_moved2.reason || 'clean'} - the two are documented side by side and either one is the whole answer`);
+    // The fixtures below use Google's MEASURED ConsumerAlert shape - overview
+    // and details.description. The first cut of this check used a guessed
+    // `text` key, and once the reader stopped walking unknown keys those
+    // fixtures classified as unread: a fixture written against a shape that
+    // does not exist measures nothing.
+    const _policy = readListingRisk({ consumerAlert: { overview: 'This business violates our policies' } });
+    if (!_policy.drop || _policy.reason !== 'policy_alert') _fails.push(`a listing Google says violates its policies reads ${_policy.reason || 'clean'} instead of a drop`);
+    if (!/violates our policies/.test(_policy.googleText)) _fails.push("Google's own wording is not carried on the verdict, so nothing downstream can quote the reason");
+
+    // ── 2. EVERY DEMOTE REASON, EXECUTED ──────────────────────────────────
+    // THE SPLIT THAT MATTERS: a legitimate business hit by a review-extortion
+    // campaign carries the SAME flag, has a real problem, and may be a good
+    // prospect. Dropping it would delete a good lead over somebody's attack.
+    const _revAlert = readListingRisk({ consumerAlert: 'We have detected suspicious review activity on this business' });
+    if (_revAlert.drop || !_revAlert.demote || _revAlert.reason !== 'review_alert') _fails.push(`a suspicious-review-activity alert reads drop=${_revAlert.drop}/${_revAlert.reason} - a legitimate business under a review-extortion campaign carries this exact flag and must be demoted, never deleted`);
+    if (!/suspicious review activity/.test(_revAlert.why)) _fails.push("the review alert does not surface Google's own text, so the rep is given a penalty with no reason he can check");
+    // ORDER IS LOAD-BEARING: text carrying both ideas takes the SAFE branch.
+    const _both = readListingRisk({ consumerAlert: { details: { description: 'suspicious review activity which violates our policies' } } });
+    if (_both.drop || _both.reason !== 'review_alert') _fails.push('an alert whose wording carries BOTH ideas is dropped rather than demoted - the review kind is tested first on purpose, because the exact strings Google returns are not verified and the safe branch has to win the ambiguous case');
+    const _box = readListingRisk({ containingPlaces: [{ displayName: { text: 'The UPS Store' } }] });
+    if (_box.drop || !_box.demote || _box.reason !== 'mailbox_address') _fails.push(`a listing sitting inside a mailbox store reads drop=${_box.drop}/${_box.reason} - a real small business does register at one, so this demotes and never drops`);
+    if (!/UPS Store/.test(_box.why)) _fails.push('the mailbox demote does not name what the listing sits inside, so the reason is not checkable');
+    if (readListingRisk({ containingPlaces: [{ displayName: { text: 'Northlake Mall' } }] }).reason) _fails.push('an ordinary shopping centre is being read as a mailbox drop-box');
+    // A container we can only see as a resource id yields NOTHING. An id is
+    // not a name and must never be treated as one. Asserted on the reader
+    // itself, not through the verdict: a resource id never matches the mailbox
+    // list anyway, so the verdict cannot tell the two apart and an assertion
+    // there would pass whatever the reader did. It is the FIRST cut of this
+    // check that did exactly that, and the falsification caught it.
+    if (readListingRisk({ containingPlaces: [{ name: 'places/ChIJabc', id: 'ChIJabc' }] }).reason) _fails.push('a containing place we can only see as an id produces a verdict, so the mailbox test is answering off something it never read');
+    if (listingContainerNames([{ name: 'places/ChIJabc', id: 'ChIJabc' }]).length) _fails.push('a containing place carrying only a resource name is reported as a readable business name, so an id is being matched against the mailbox list as though Google had named the place');
+    if (listingContainerNames(['places/ChIJabc']).length) _fails.push('a containing place arriving as a bare resource string is reported as a name - same defect, the other shape');
+    if (listingContainerNames([{ displayName: { text: 'The UPS Store' } }])[0] !== 'The UPS Store') _fails.push('a container Google DID name is not read at all, so the mailbox test can never fire on anything');
+    if (listingContainerNames([{ name: 'The UPS Store' }])[0] !== 'The UPS Store') _fails.push('a readable name arriving in the name field is thrown away with the resource ids, so a real mailbox container is missed');
+    // THE SAME CLASS AS THE HELP LINK, one field over: a URL or a bare id is
+    // not something a person called this place, and matching the mailbox
+    // brands against one would let a link decide a verdict. Every path in
+    // goes through the one guard, so no field can be the hole.
+    for (const [_c, _what] of [
+      [{ displayName: { text: 'https://www.theupsstore.com/1234' } }, 'a URL in displayName'],
+      [{ title: 'https://locations.regus.com/us/ny' }, 'a URL in title'],
+      [{ name: 'https://www.wework.com/buildings/x' }, 'a URL in name'],
+      [{ displayName: { text: 'ChIJregusABCDEFGHIJKLMN' } }, 'a bare place id that happens to contain a brand'],
+      [{ name: 'places/ChIJwework123456789' }, 'a resource name that happens to contain a brand'],
+      ['https://support.google.com/maps/answer/1?q=regus', 'a bare URL string'],
+    ]) {
+      if (listingContainerNames([_c]).length) _fails.push(`${_what} is read as a readable business name, so the mailbox list is matched against something nobody called this place`);
+      if (readListingRisk({ containingPlaces: [_c] }).reason) _fails.push(`${_what} produces a listing verdict - a URL or an id is deciding whether a real business is demoted`);
+    }
+    // And the id field is never read at all, whatever is in it.
+    if (listingContainerNames([{ id: 'The UPS Store' }]).length) _fails.push('the containing place id is being read as a name, and an id is not a name however it is spelled');
+
+    // ── 2b. THE HELP LINK MUST NEVER CLASSIFY THE ALERT ───────────────────
+    // THE DEFECT THIS EXISTS FOR. ConsumerAlert carries details.aboutLink -
+    // Google's "learn more about this alert" pointer - and that link goes to a
+    // support page about review or content policies. The first cut of the
+    // reader collected every string leaf, so the word in that link arrived in
+    // the text the kind table reads, and an alert whose OWN prose said nothing
+    // about reviews matched the policy pattern on the LINK and dropped the
+    // lead. The safe default became unreachable for every case it was written
+    // for, and legitimate businesses were deleted on the wording of a Google
+    // help page. Assembled from halves so neither one carries the whole word.
+    const _pol = _n('polic', 'ies');
+    const _linked = readListingRisk({ consumerAlert: {
+      overview: 'Google has placed a notice on this business listing.',
+      details: { title: 'Notice about this listing', description: 'There is a notice on this business.',
+        aboutLink: { title: `Learn more about our ${_pol}`, uri: `https://support.google.com/maps/answer/12345?hl=en#${_pol}` } },
+      languageCode: 'en' } });
+    if (_linked.drop) _fails.push(`an alert whose own prose says nothing about reviews, carrying Google's help LINK about ${_pol}, DROPS the lead - the link is being read as though Google had said it about the business, and since that link is on essentially every alert the safe default is unreachable for every case it exists for`);
+    if (_linked.reason !== 'alert_unread' || !_linked.demote) _fails.push(`the same alert reads "${_linked.reason}" rather than the unread default, so the help link is still reaching the kind table`);
+    if (/[Pp]olic/.test(_linked.googleText)) _fails.push(`the text handed to the classifier still carries the word from Google's help link ("${_linked.googleText.slice(0, 120)}") - the link has to be excluded by construction, not by a pattern somebody can loosen`);
+    if (_linked.googleText.indexOf('support.google.com') >= 0) _fails.push('the help URL itself is inside the text the classifier reads');
+    // The link is still SHOWN to the rep - on its own key, which the verdict
+    // provably never classifies on.
+    if (_linked.alertLink.indexOf('support.google.com') < 0) _fails.push("Google's own explanation of the alert never reaches the row, so a rep is handed a demoted lead with nowhere to read why");
+    // 2. NOT OVER-CORRECTED: a real policy breach in the alert's OWN prose
+    //    still drops. Asserted in both prose fields, because a fix that only
+    //    read overview would leave description unclassified.
+    for (const [_alert, _where] of [
+      [{ overview: `This business ${_n('viol', 'ates')} our ${_pol}.` }, 'overview'],
+      [{ details: { description: `This listing ${_n('viol', 'ates')} our ${_pol}.` } }, 'details.description'],
+      [{ details: { title: `${_n('Viol', 'ation')} of our ${_pol}` } }, 'details.title'],
+    ]) {
+      const _r = readListingRisk({ consumerAlert: _alert });
+      if (!_r.drop || _r.reason !== 'policy_alert') _fails.push(`an alert whose own ${_where} says the listing breaks Google's rules reads "${_r.reason}" instead of dropping - excluding the help link has been over-corrected into never dropping anything`);
+    }
+    // 4. languageCode is a tag, not something Google said about the business.
+    const _lang = readListingRisk({ consumerAlert: { languageCode: 'en' } });
+    if (_lang.reason !== 'alert_unread' || _lang.drop) _fails.push(`an alert carrying nothing but a language code reads "${_lang.reason}" - a locale tag is being classified as prose about the business`);
+    if (_lang.googleText) _fails.push(`the language code "${_lang.googleText}" is being shown to the rep as Google's own words about the business`);
+    // A HOSTILE value rather than a realistic one, deliberately: a real locale
+    // tag can never contain these words, so asking whether "en" changes the
+    // verdict tests nothing. What has to be true is that a field which is not
+    // prose CANNOT REACH the classifier at all, and that is what this asks.
+    const _langHostile = readListingRisk({ consumerAlert: {
+      overview: 'Google has placed a notice on this listing.',
+      languageCode: `en ${_n('viol', 'ates')} our ${_pol}` } });
+    if (_langHostile.drop || _langHostile.reason !== 'alert_unread') _fails.push(`a language code can still reach the kind table (the verdict came back "${_langHostile.reason}") - a field that is not prose about the business must be unable to decide anything, whatever is written in it`);
+    // Named fields only. A generic walk over unknown keys is what caused this,
+    // so re-admitting one must fail here rather than in six months.
+    if (LISTING_ALERT_PROSE_FIELDS.join(',') !== 'overview,details.title,details.description') _fails.push(`the prose fields are now ${LISTING_ALERT_PROSE_FIELDS.join(', ')} - the list is what keeps the help link out, and it is declared so that adding a field is a decision rather than an accident`);
+    if (/Object\.keys|for\s+in|JSON\.stringify/.test(String(listingAlertProse))) _fails.push('the alert reader walks unknown keys again, so whatever Google adds next - starting with the help link - classifies the alert');
+    if (String(listingAlertProse).indexOf('aboutLink') >= 0) _fails.push('the help link is named inside the reader that feeds the classifier');
+
+    // ── 3. THE UNRECOGNISED ALERT TAKES THE SAFE DEFAULT ──────────────────
+    // Nothing here has been matched against a live Google response. So the
+    // classifier is a declared table with a documented default, and the
+    // default must be the one that keeps the lead.
+    for (const [_alert, _what] of [
+      [{ code: 'SOMETHING_WE_HAVE_NEVER_SEEN' }, 'a code with no wording we recognise'],
+      [true, 'a bare flag with no text at all'],
+      [{}, 'an alert object carrying nothing'],
+      ['', 'an empty string'],
+    ]) {
+      const _r = readListingRisk({ consumerAlert: _alert });
+      if (_alert === '') {
+        if (_r.reason) _fails.push('an empty consumerAlert is being treated as an alert - absent is not a flag');
+        continue;
+      }
+      if (_r.drop) _fails.push(`${_what} DROPS the lead - the documented default for an alert we cannot classify is demote, because the strings are unverified and deleting a real business costs more than demoting a flagged one`);
+      if (_r.reason !== 'alert_unread') _fails.push(`${_what} reads "${_r.reason || 'clean'}" rather than the declared unread reason, so an alert Google sent is either thrown away or filed as something it is not`);
+      else if (!_r.demote && !_r.drop) _fails.push(`${_what} lands on the unread reason and is neither dropped nor demoted, so a listing Google has flagged takes an ordinary seat`);
+    }
+    if (LISTING_ALERT_DEFAULT.drop === true) _fails.push('the declared default for an unrecognised alert is now a DROP - the whole reason it is declared is that it must be the safe one');
+    if (LISTING_ALERT_KINDS[0].reason !== 'review_alert' || LISTING_ALERT_KINDS[0].drop === true) _fails.push('the alert table no longer reads the SAFE kind first, so an ambiguous wording deletes the lead');
+    for (const _k of LISTING_ALERT_KINDS.concat([LISTING_ALERT_DEFAULT])) {
+      if (!_k.say || !_k.reason || LISTING_RISK_REASONS.indexOf(_k.reason) < 0) _fails.push(`an alert kind is declared without a sentence or with a reason (${_k.reason}) that is not in the declared list`);
+    }
+
+    // ── 4. A HIDDEN ADDRESS IS PROTECTIVE, NEVER A PENALTY ────────────────
+    // Google INSTRUCTS a home-based plumber to hide his address. This marks a
+    // real one-van operator, which is the ICP.
+    const _sab = readListingRisk({ pureServiceAreaBusiness: true });
+    if (_sab.drop || _sab.demote) _fails.push('a business whose listing hides its address is being penalised for doing what Google told it to do - that is the one-van owner-operator this whole system is looking for');
+    if (_sab.reason !== 'service_area' || !_sab.serviceArea || !_sab.label) _fails.push(`a service-area listing reads ${_sab.reason || 'nothing'} with serviceArea=${_sab.serviceArea}, so the row cannot show the label`);
+    // And it must survive a verdict about something else, or §103's duplicate
+    // rule loses the one fact that makes its answer honest.
+    const _sabAlert = readListingRisk({ pureServiceAreaBusiness: true, consumerAlert: 'suspicious review activity' });
+    if (!_sabAlert.demote || _sabAlert.serviceArea !== true) _fails.push('a service-area business that also carries an alert loses the hidden-address fact, and the duplicate-listing rule needs it to say WHY it could not check rather than "no duplicate found"');
+    // Reused, not re-invented: the per-lead profile read already decides this
+    // with the same test, and two copies of one rule is the recorded disease.
+    if (!/pureServiceAreaBusiness\s*===\s*true/.test(String(readListingRisk))) _fails.push('the hidden-address test is no longer the same strict comparison the profile read uses, so a missing field could read as false at one site and true at the other');
+
+    // ── 5. A CLEAN LISTING PASSES CLEAN, AND NOTHING CRASHES ──────────────
+    const _clean = readListingRisk({ businessStatus: 'OPERATIONAL', displayName: { text: 'Darrel Plumbing' }, rating: 4.6, userRatingCount: 120 });
+    if (_clean.drop || _clean.demote || _clean.reason || _clean.label || _clean.why) _fails.push(`an ordinary open business with none of these flags reads ${JSON.stringify(_clean)} - every lead would carry a penalty`);
+    for (const _bad of [null, undefined, 'a string', 42, []]) {
+      const _r = readListingRisk(_bad);
+      if (_r.drop || _r.demote || _r.reason) _fails.push(`readListingRisk(${JSON.stringify(_bad)}) invents a verdict instead of answering clean`);
+    }
+    // The shape is DECLARED, so nothing downstream can read a key that is
+    // sometimes absent - the computed-but-not-passed class arriving as undefined.
+    const _keys = Object.keys(LISTING_RISK_CLEAN).sort().join(',');
+    for (const [_r, _what] of [[_closedP, 'a drop'], [_revAlert, 'a demote'], [_sab, 'a label'], [_clean, 'a clean lead']]) {
+      if (Object.keys(_r).sort().join(',') !== _keys) _fails.push(`${_what} verdict returns a different set of keys from the declared shape (${Object.keys(_r).sort().join(',')}), so a reader gets undefined on some leads and a value on others`);
+    }
+
+    // ── 6. THE FOUR FIELDS ARE IN THE PRESS MASK, PINNED ──────────────────
+    // Needles assembled at runtime from two halves, and searched in the press
+    // function's OWN source rather than in this file, so neither half can find
+    // itself here. Google bills at the highest tier in the mask and this mask
+    // already asks for the rating, the review count, the website and the
+    // phone, so all four of these are free on a call we already make.
+    const _maskLine = _press.split('\n').find((l) => l.indexOf(_n('const FIELD_MASK = ', "'places.id")) >= 0) || '';
+    let _maskOk = !!_maskLine;
+    const _maskFields = _maskLine ? _maskLine.replace(/^[^']*'/, '').replace(/'[^']*$/, '').split(',') : [];
+    if (!_maskLine) {
+      _fails.push('the press field mask cannot be found in searchGooglePlaces any more, so nothing here is asserting what we ask Google for');
+    } else {
+      for (const [_field, _what] of [
+        ['consumerAlert', "Google's OWN flag on a listing, which is the only judgement here that is not our inference"],
+        ['pureServiceAreaBusiness', 'the mark of a listing that legitimately hides its address, which is the protective half and stops a real one-van operator being read as a fake'],
+        ['containingPlaces', 'what the listing sits inside, which is the only way to see a mailbox store or a rented desk'],
+        ['movedPlaceId', 'the flag that says the address, phone and reviews on this listing belong to premises they have left'],
+        ['movedPlace', 'the other half of the moved flag - Google documents both and either one can be the field that is present'],
+      ]) {
+        if (PLACES_RISK_FIELDS.indexOf(_n('places.', _field)) < 0) { _maskOk = false; _fails.push(`the press no longer asks Google for ${_field} - ${_what}. It costs nothing extra at this tier, and without it readListingRisk is reading a field that was never requested, which reads exactly like a clean listing`); }
+      }
+      // The declared table is EXECUTED against the mask, so the two cannot
+      // drift: the fallback below removes exactly what the mask adds, and a
+      // field in one list and not the other breaks that on the day it matters.
+      for (const _f of PLACES_RISK_FIELDS) {
+        if (_maskFields.indexOf(_f) < 0) { _maskOk = false; _fails.push(`${_f} is declared as a fake-listing field and is NOT in the press mask, so the fallback would strip a field nothing ever asked for while the verdict reads one that was never requested`); }
+      }
+    }
+    if (_press.indexOf(_n("'X-Goog-FieldMask': ", '`${_maskFor()},nextPageToken`')) < 0) _fails.push('the mask is no longer the one sent on the request, so the fields can be declared and never asked for - and the INVALID_ARGUMENT fallback cannot take effect either');
+
+    // ── 6b. ONE WRONG FIELD NAME MUST NOT ZERO THE PRESS ──────────────────
+    // The error branch in the press treats any error as "this query taught us
+    // nothing" and breaks, so an unknown field in the mask returns zero leads
+    // for a whole run - on the one stage in daily use. These five field names
+    // are the newest part of the mask and the least proven thing in it.
+    const _safeFields = _maskFields.filter((f) => PLACES_RISK_FIELDS.indexOf(f) < 0);
+    if (_maskLine && _safeFields.length !== _maskFields.length - PLACES_RISK_FIELDS.length) _fails.push('the mask the press falls back to is not the mask minus exactly the declared fields, so the fallback is either dropping something it needs or keeping the field that was refused');
+    for (const _must of ['id', 'displayName', 'websiteUri', 'userRatingCount', 'internationalPhoneNumber', 'businessStatus']) {
+      if (_maskLine && _safeFields.indexOf(_n('places.', _must)) < 0) _fails.push(`the mask the press falls back to has lost ${_must}, so a run after the fallback would produce leads with no ${_must} at all - a fallback has to be a press that still works, not a quieter one`);
+    }
+    if (_press.indexOf(_n("const FIELD_MASK_SAFE = FIELD_MASK.split(','", ").filter((f) => PLACES_RISK_FIELDS.indexOf(f) < 0).join(',');")) < 0) _fails.push('the safe mask is no longer derived from the one mask by removing the declared fields, so there are two hand-kept copies of one field list and they will disagree');
+    if (_press.indexOf(_n('PLACES_MASK_FALLBACK = ', 'true;')) < 0) _fails.push('nothing latches the fallback, so either it never fires or it re-probes a refused mask on every query of every run');
+    // The label only, NOT the call around it: writing notePlacesCall( here put
+    // this check's own needle halves on one line, PLACES LABEL CHECK's scanner
+    // read them as a real call site, and it failed the boot for a Places call
+    // that does not exist. A needle is text in a file somebody else also greps.
+    if (_press.indexOf(_n("'find-discovery-", "maskretry'")) < 0) _fails.push('the retry after a refused mask is not named to the Places meter, so the extra call prints as ordinary discovery and the invoice question stays unanswerable');
+    if (_press.indexOf(_n('&& !/API key|denied|disabled|billing|PERMISSION/i.test(', '_err)')) < 0) _fails.push('the fallback is not fenced off from a key, permission or billing refusal - asking again with fewer fields would hide the failure that actually needs a human');
+    if (!PLACES_MASK_REFUSED_RE.test('INVALID_ARGUMENT') || !PLACES_MASK_REFUSED_RE.test('Unknown field: places.nope')) _fails.push('the refusal pattern no longer matches what Google says when a mask field is not a field, so the fallback can never fire');
+    if (PLACES_MASK_REFUSED_RE.test('The provided API key is expired') || PLACES_MASK_REFUSED_RE.test('billing is disabled')) _fails.push('the refusal pattern matches a key or billing failure, so a problem that needs a human would be answered by quietly asking for fewer fields');
+
+    // ── 7. THE CALL SITE. A fixture supplies its own arguments, so a pure
+    //      function that nothing calls protects no lead at all. ───────────
+    const _iRisk = _press.indexOf(_n('readListingRisk', '('));
+    const _iLead = _press.indexOf(_n('const _lead = {', '\n'));
+    if (_iRisk >= 0) {
+      const _after = _press.slice(_iRisk);
+      if (!/\.\s*drop\b/.test(_after)) _fails.push('the listing verdict is computed at the press and its drop is never read - computed-but-not-passed, the class this file produces most, and the closed, moved and policy-alert listings all reach the sheet');
+      if (!/\.\s*demote\b/.test(_after)) _fails.push('the verdict is read for its drop and not for its demote, so a listing Google has flagged for review activity takes an ordinary seat ahead of a clean business');
+      if (_iLead >= 0 && !(_iRisk < _iLead)) _fails.push('the verdict is read AFTER the lead has been built, so a dropped listing has already taken its category slot');
+      if (!/serviceAreaOnly/.test(_after)) _fails.push('the hidden-address fact is not carried onto the lead, so the duplicate-listing rule still has to buy a profile read to learn it');
+      // ONE DEMOTION FLAG, which is what RATING BAND CHECK section 7 is about:
+      // a gate that names one reason lets the other reason's leads take cap
+      // slots and queue positions from the lead behind them. Reading .demote
+      // into a variable nobody gates on would satisfy the test above and
+      // change nothing about where the lead sits.
+      if (!/const _demoted = [^\n;]*\.\s*demote/.test(_press)) _fails.push("the listing demote does not feed the press's one demotion flag, so a listing Google has flagged still takes a category slot and a queue position from a clean business - the exact failure RATING BAND CHECK section 7 exists to prevent");
+    }
+    const _iPhone = _press.indexOf(_n('detectPhoneCollisions', '('));
+    if (_iPhone >= 0) {
+      const _after = _press.slice(_iPhone);
+      if (!/reasonFor\s*\(/.test(_after)) _fails.push('the phone-collision detector is called and nothing asks it about a lead, so every collision it found is discarded');
+      // Anchored to the END of the paging loop, not to the lead. Comparing it
+      // against the lead only catches a call placed EARLY in the loop, and a
+      // falsification that put the call late in the loop went red on the wrong
+      // line - which is the "message naming the wrong cause" trap.
+      const _iLoopEnd = _press.indexOf(_n('} while (', '_pageToken);'));
+      if (_iLoopEnd >= 0 && !(_iLoopEnd < _iPhone)) _fails.push('the collision test runs INSIDE the loop that reads Google results rather than after it, so it can only ever see part of the run - and a cross-lead test that sees part of the run finds no collisions and drops nothing');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ LISTING RISK CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
+    } else {
+      console.log(`✓ LISTING RISK CHECK: the press asks Google what it thinks of a listing - ${LISTING_RISK_REASONS.length} declared reasons, executed on a fixture each. A closed, a moved and a policy-breach listing DROP; an unknown status word drops with them, the way the single press line it replaces always did. A suspicious-review-activity alert DEMOTES and carries Google's own words, because a legitimate business under a review-extortion campaign wears the identical flag and may be a better prospect than a clean one. An alert we cannot classify - a new code, a bare flag, an empty object - takes the declared default, and the default is demote: the exact strings are UNVERIFIED, so the safe branch also wins any wording carrying both ideas. A mailbox store demotes and never drops, an ordinary mall is nothing, and a container we can only see as a resource id yields nothing rather than a guess. A hidden address is a LABEL and never a penalty, and it travels under every other verdict. THE CLASSIFIER READS PROSE ONLY: Google's alert carries a "learn more" link to a support page about its POLICIES, and a reader that swept up every string matched the policy pattern on that link on essentially every alert - so an alert saying nothing about reviews dropped the lead and the safe default became unreachable. The three prose fields (${LISTING_ALERT_PROSE_FIELDS.join(', ')}) are named, the link is excluded by construction and travels on its own key for the rep to open, a language code classifies nothing, and a real breach in the alert's own prose still drops from any of the three. The same guard covers what a listing sits inside: a URL, a resource name and a bare id are none of them something a person called this place. ${PLACES_RISK_FIELDS.length} free fields carry all of it, pinned against the mask line itself with runtime-assembled needles (${_maskLine ? 'the mask is in place' : 'THE MASK IS MISSING'}), and a mask Google REFUSES falls back to the ten fields the press used for months - derived by removing these, never a second copy - so one wrong field name costs the flags rather than the whole run. HONEST SHAPE: the field names and the alert's shape are read off Google's own reference, but no live response has been scored through this build, so the WORDING Google puts in that prose is the one thing still declared rather than measured - which is why it is patterns with a safe default rather than a rule.`);
+    }
+    // The wiring, said out loud either way. A pure function nobody calls
+    // cannot protect a lead, and a ✓ above would otherwise report a guard that
+    // is not guarding - the shape this repo records more than twenty times.
+    if (_iRisk < 0 || _iPhone < 0) {
+      console.log(`⚠ LISTING RISK WIRING: built and NOT WIRED into the press - ${_iRisk < 0 ? 'readListingRisk' : ''}${_iRisk < 0 && _iPhone < 0 ? ' and ' : ''}${_iPhone < 0 ? 'detectPhoneCollisions' : ''} ${(_iRisk < 0 && _iPhone < 0) ? 'are' : 'is'} called by nothing inside searchGooglePlaces, so no fake listing is dropped from a real Find press yet. The ${PLACES_RISK_FIELDS.length} fields ${_maskOk ? 'ARE' : 'are NOT'} being requested${_fails.length ? ' and the check above is RED, so the verdicts are not proven either' : ' and the verdicts ARE proven on fixtures; only the call is missing'}. Wiring it turns the source assertions above into hard failures automatically.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LISTING RISK CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ NAIVE NUMBER-SHARING WOULD HAVE DELETED EVERY REAL CHAIN ══════════════
+  // A phone number appearing on 99 listings is only 26.9% abusive: legitimate
+  // multi-branch businesses, answering services and franchise call lines
+  // dominate the shared-number population. So sharing is NOT the signal -
+  // name-variance and metro-variance are, and the negative case is asserted as
+  // hard as the positive one here, because a filter that eats real chains
+  // deletes exactly the $5-15M operators the ICP is made of.
+  //
+  // Both fixtures come off the shapes already recorded in this file: Ram Jack,
+  // the franchise §24 is an entire entry about, and Tuck & Howell, the genuine
+  // Charlotte-and-Raleigh two-market operator CHAIN OUTLET CHECK protects.
+  try {
+    const _fails = [];
+    const _mk = (name, phone, city, placeId) => ({ name, phone, marketsSeen: [city], placeId });
+
+    // ── 1. THE FAKE NETWORK: different names, different metros, one number ─
+    // The FTC's own names, which is why the name test can never be a shape
+    // test: "Levine Heating and Cooling" is what a real one-truck HVAC company
+    // is called.
+    const _fake = [
+      _mk('Levine Heating and Cooling', '+1 704-555-0199', 'Charlotte NC', 'f1'),
+      _mk('Horton Electrical Service', '(704) 555-0199', 'Phoenix AZ', 'f2'),
+    ];
+    const _dFake = detectPhoneCollisions(_fake);
+    if (!_dFake.reasonFor(_fake[0]) || !_dFake.reasonFor(_fake[1])) _fails.push('two differently-named businesses in two metros publishing ONE number are not caught, which is the only cross-lead fake test that survived measurement');
+    if (!/2 metros/.test(_dFake.reasonFor(_fake[0]))) _fails.push(`the reason does not name the spread, so a log line about it says nothing checkable - it reads "${_dFake.reasonFor(_fake[0])}"`);
+    // The number is normalised before comparing, or none of this fires: Google
+    // returns "+1 704-555-0199" and the sheet holds "(704) 555-0199".
+    if (_dFake.groups.size !== 1) _fails.push(`the same number written three ways grouped into ${_dFake.groups.size} groups - the digits have to be compared, not the punctuation`);
+
+    // ── 2. MUST SURVIVE: the legitimate multi-branch business ─────────────
+    // The same name in three cities on one central number is a real company
+    // with three branches. This negative case is as important as the positive.
+    const _branch = [
+      _mk('Blue Ridge Plumbing', '+1 704-555-0100', 'Charlotte NC', 'b1'),
+      _mk('Blue Ridge Plumbing', '704-555-0100', 'Raleigh NC', 'b2'),
+      _mk('Blue Ridge Plumbing', '17045550100', 'Nashville TN', 'b3'),
+    ];
+    const _dBranch = detectPhoneCollisions(_branch);
+    if (_dBranch.reasonFor(_branch[0]) || _dBranch.reasonFor(_branch[2])) _fails.push(`a business trading under ONE name in three cities on one central number is dropped as a fake network - "${_dBranch.reasonFor(_branch[0])}". That is a real multi-branch company and the exact $5-15M operator the ICP is made of`);
+    // And the same brand with the city bolted on is still one business: this
+    // is why the identity key is the brand key first.
+    const _ram = [
+      _mk('Ram Jack Durham', '+1 919-555-0111', 'Raleigh NC', 'r1'),
+      _mk('Ram Jack Texas', '+1 919-555-0111', 'Dallas TX', 'r2'),
+    ];
+    if (detectPhoneCollisions(_ram).reasonFor(_ram[0])) _fails.push('a franchise brand with the city bolted onto each outlet name is read as differently-named businesses, so the chain rule and this rule would both fire and the log would name the wrong cause');
+    const _twoMarket = [
+      _mk('Tuck and Howell Plumbing', '+1 704-555-0122', 'Charlotte NC', 't1'),
+      _mk('Tuck and Howell Plumbing Raleigh', '704.555.0122', 'Raleigh NC', 't2'),
+    ];
+    if (detectPhoneCollisions(_twoMarket).reasonFor(_twoMarket[0])) _fails.push('the genuine two-market operator CHAIN OUTLET CHECK protects is deleted here instead - Charlotte to Raleigh is 140 miles and the coverage-gap finding is built on exactly this shape');
+
+    // ── 3. MUST SURVIVE: everything that is not BOTH kinds of variance ─────
+    const _oneMetro = [
+      _mk('Levine Heating', '+1 704-555-0133', 'Charlotte NC', 'o1'),
+      _mk('Horton Electric Service', '+1 704-555-0133', 'Charlotte NC', 'o2'),
+    ];
+    if (detectPhoneCollisions(_oneMetro).reasonFor(_oneMetro[0])) _fails.push('two names on one number in ONE metro is dropped - that is a shared answering service or two trades run from one office, and metro-variance is half the rule');
+    const _twice = [
+      _mk('Peters Roofing', '+1 317-555-0144', 'Indianapolis IN', 'x1'),
+      _mk('Peters Roofing', '+1 317-555-0144', 'Indianapolis IN', 'x1'),
+    ];
+    if (detectPhoneCollisions(_twice).reasonFor(_twice[0])) _fails.push('one listing found twice is evidence of a network of itself, so a business found by two searches collides with its own second copy');
+    // THE SHAPE THAT ACTUALLY REACHES THE PLACE-ID GUARD. Identical rows are
+    // already collapsed by the Sets, so the first cut of this check asserted
+    // something it could not fail on and the falsification said so. The real
+    // case is ONE listing held twice under a STALE name and an older market -
+    // the bench row and this run's row - which without the guard supplies both
+    // variances by itself and deletes a real business.
+    const _samePlace = [
+      { name: 'Peters Roofing', phone: '+1 317-555-0188', marketsSeen: ['Indianapolis IN'], placeId: 'same1' },
+      { name: 'Peters Brothers Roofing', phone: '+1 317-555-0188', marketsSeen: ['Columbus OH'], placeId: 'same1' },
+    ];
+    if (detectPhoneCollisions(_samePlace).reasonFor(_samePlace[0])) _fails.push('one Google listing held twice - the bench row under an older name and market beside this run\'s row - supplies both variances on its own and the business is dropped for colliding with itself. A place id seen before has to count once');
+    const _noMetro = [
+      { name: 'A Roofing', phone: '+1 704-555-0155', placeId: 'm1' },
+      { name: 'B Plumbing', phone: '+1 704-555-0155', placeId: 'm2' },
+    ];
+    if (detectPhoneCollisions(_noMetro).reasonFor(_noMetro[0])) _fails.push('two leads carrying NO metro at all are dropped for differing in one - unmeasured treated as a value, the recorded class');
+    const _noPhone = [_mk('A Roofing', '', 'Charlotte NC', 'n1'), _mk('B Roofing', '555', 'Dallas TX', 'n2')];
+    if (detectPhoneCollisions(_noPhone).groups.size) _fails.push('leads with no usable number are being grouped, so two businesses that published nothing collide on emptiness');
+    for (const _bad of [null, undefined, 'x', 42, [null, 'x', 7]]) {
+      if (detectPhoneCollisions(_bad).groups.size) _fails.push(`detectPhoneCollisions(${JSON.stringify(_bad)}) invents a group`);
+    }
+
+    // ── 4. THE RAW PLACES FIELD, AND THE THRESHOLD ────────────────────────
+    const _raw = [
+      { name: 'A Roofing', internationalPhoneNumber: '+1 704-555-0177', marketsSeen: ['Charlotte NC'], placeId: 'i1' },
+      { name: 'B Plumbing', internationalPhoneNumber: '+1 704-555-0177', marketsSeen: ['Dallas TX'], placeId: 'i2' },
+    ];
+    if (!detectPhoneCollisions(_raw).reasonFor(_raw[0])) _fails.push('a raw Places result cannot be passed in - internationalPhoneNumber is the field name Google uses and the press renames it, so both have to be read');
+    if (detectPhoneCollisions(_fake, 3).reasonFor(_fake[0])) _fails.push('the threshold is not a knob, so it cannot be raised to three the way GP_CHAIN_MIN_METROS is if two ever proves too tight');
+    if (detectPhoneCollisions(_fake, 1).reasonFor(_fake[0]) && detectPhoneCollisions([_fake[0]]).groups.size) _fails.push('the floor of two can be argued down to one, and one listing would then be a network of itself');
+
+    // ── 5. ONE COPY OF THE NAME RULE ──────────────────────────────────────
+    // The discovery dedupe and this test ask the identical question, and the
+    // rule was declared inside runDiscovery where nothing else could reach it.
+    if (bizNameKey('James River Remodeling LLC') !== bizNameKey('James River Remodeling, L.L.C.')) _fails.push('the shared name rule no longer reads a legal suffix and its punctuation as the same business, and the discovery dedupe is built on that');
+    if (bizNameKey('Tuck & Howell Plumbing, Heating & Air') !== bizNameKey('Tuck and Howell Plumbing Heating Air')) _fails.push('"&" and "and" are no longer one word to the name rule, so one shop written by two sources reads as two businesses');
+    if (String(runDiscovery).indexOf(['const _normName = ', 'bizNameKey'].join('')) < 0) _fails.push('the discovery dedupe has its own copy of the name rule again - two hand-kept copies of one rule is the class this file records most, and these two must answer identically or a lead is deduped by one rule and grouped by another');
+
+    if (_fails.length) {
+      console.log(`⛔ PHONE COLLISION CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
+    } else {
+      console.log(`✓ PHONE COLLISION CHECK: one number answering for several differently-named businesses in several metros is caught from the run's own results, executed on the FTC's own names - "Levine Heating and Cooling" and "Horton Electrical Service", a surname and a trade, indistinguishable from a real one-truck operator, which is why no name-shape test can ever be built. Sharing alone is refused as a signal: a number on 99 listings is only 26.9% abusive. So BOTH variances are required, and every shape that has only one survives - one name in three cities (a real multi-branch business), a franchise brand with the city bolted on, the Charlotte-and-Raleigh two-market operator, two names inside one metro, one listing found twice, and leads carrying no metro or no number at all. The number is compared as digits with a country code dropped, the threshold is a knob defaulting to 2 with a hard floor of 2, and the name rule is the SAME function the discovery dedupe uses rather than a second copy of it. HONEST SHAPE: no live run has been scored through this yet, so what it drops from a real press is unproven.`);
+    }
+  } catch (e) {
+    console.log(`⛔ PHONE COLLISION CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ AN INVENTED PRICE IS A FABRICATION WHEREVER IT SITS ═══════════════════
