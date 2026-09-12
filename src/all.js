@@ -6018,8 +6018,26 @@ const predictReachability = (name, website, opts = {}) => {
   // findOwnerViaBrain carries the highest source weight (45) and it can only run on
   // a real site. No website at all means that source, the site-scraped email, and
   // the eponymous-mailbox path are ALL dead before Research starts.
+  //
+  // ══ AND THAT COST US THE PUREST WEBSITE PROSPECT THERE IS ══════════════
+  // This subtracted 14 until 2026-09-11, which ranked a business with NO SITE
+  // AT ALL below one with a site we can read - and the pitch is websites. A
+  // business with no site has nothing to critique, everything to sell, and no
+  // competitor has built them one. Vin's ruling: "Keep them, but separate from
+  // the rest" - a different pitch and a different risk, not a worse lead.
+  //
+  // The deduction is GONE rather than reversed into a bonus, because this
+  // function estimates ONE thing - can we name and reach the owner for free -
+  // and an absent website is no evidence either way about that. What it is
+  // evidence about (what there is to sell) is not this number's job, and
+  // paying a reachability bonus for it would be the same mistake as the rating
+  // bonus that paid for the property which demoted the lead.
+  //
+  // The sentence stays: the row still says the site is missing, and that is
+  // what routes the lead to the call lane (leadChannel 'call', noWebsite on
+  // the lead, the CALL LEADS line and the no-website row on FIND YIELD).
   if (!website) {
-    score -= 14; why.push('no website — their own site is the strongest owner source and it does not exist');
+    why.push('no website at all - nothing of theirs to read, so the owner is asked for by phone rather than found on a page; the missing site is what we sell, not a mark against the lead');
   } else if (SITE_BUILDER_HOST.test(String(website))) {
     score -= 8; why.push('site-builder or social page rather than an owned domain — thin site, rarely a leadership page or a real mailbox');
   }
@@ -7833,7 +7851,33 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
     tally.catCap = skippedCatCap;
     tally.demoted = benched.length;
     tally.lowRatingKept = lowRatingKept;
+    // ══ THE TWO WEBSITE-SALE LANES, COUNTED FROM THIS RUN'S OWN COUNTERS ════
+    // Both of these already printed their own line (CALL LEADS, REBUILD LEADS)
+    // and neither reached the end-of-run report, so the one thing the rep's
+    // pitch is built on - the state of their website - was missing from the
+    // only line that adds a run up. Neither is a LOSS: a business with no site
+    // at all is the purest thing this pitch has, and the yield line marks them
+    // as shapes of the run so they can never be named as its largest loss.
+    tally.noWebsite = keptNoWebsite;
+    tally.builderSite = keptBuilder;
     tally.queries = calls;
+    // ══ THE OUTCOMES THIS BLOCK DOES NOT YET WRITE ═══════════════════
+    // The FIND YIELD line already carries a row for each of the three below,
+    // and each row is DROPPED from the line while nothing assigns its counter
+    // - absent, not a confident zero, because "nobody increments it" and "it
+    // happened to nobody" are different facts and this file records what it
+    // costs to confuse them. Whoever adds one of those branches assigns it
+    // here, in this same block, and its row starts printing on its own:
+    //   tally.skippedListingRisk   dropped because the listing is permanently
+    //                              closed, has moved, or carries Google's own
+    //                              consumer alert - one counter, because the
+    //                              consequence is the same: nobody is there
+    //   tally.skippedListingPhone  dropped because the number is already on
+    //                              another business in this run
+    //   tally.demotedUnderFloor    DEMOTED for a thin review count rather than
+    //                              deleted - kept, so the yield line declares
+    //                              it not a loss and it can never be named as
+    //                              the largest one
   }
   return interleaved.concat(_benchInterleaved);
 };
@@ -39058,6 +39102,11 @@ const demotionPenalty = (lead) => {
 //
 // The curve itself is unchanged. What changed is the two places it argued with
 // the rest of the system; both are commented at the line that fixes them.
+// The coverage term's two knobs, declared where the curve that reads them is,
+// so the boot check asserts the OUTCOME against the same numbers rather than
+// against a second copy of them typed into the check.
+const TRIAGE_MARKET_POINTS = 3;   // per metro beyond the first
+const TRIAGE_MARKET_CAP = 9;      // and never more than this, whatever the count
 const placesTriageScore = (m) => {
   const rv = Number(m && m.reviewCount) || 0;
   const rating = Number(m && m.rating) || 0;
@@ -39148,6 +39197,41 @@ const placesTriageScore = (m) => {
   // up telling an operator two different things about one lead, which is the
   // defect this file just finished fixing for the demotion penalty.
   base += affordabilityBand(m || {}).points;
+  // ══ COVERAGE ACROSS METROS: THE ONE SIZE SIGNAL GOOGLE GIVES US FREE ══════
+  // A one-truck operator comes back in one metro. An operator with crews, trucks
+  // and a payroll comes back in several, and the press has counted that ever
+  // since the repeat sighting stopped being discarded - the run even prints
+  // "Work these first" about the multi-market operators. The score did not read
+  // it, so the queue it ordered disagreed with the line printed underneath it.
+  //
+  // WEIGHT, DECLARED AND EXPLAINED: TRIAGE_MARKET_POINTS for each metro beyond
+  // the first, capped at TRIAGE_MARKET_CAP. One extra metro is worth about what
+  // a published crew signal is worth in the affordability band ('crewed' +3,
+  // 'staffed' +3), and the cap sits just above the strongest published-team
+  // term there ('teamReal' +6) because this is the SAME claim - crews and a
+  // payroll - measured off Google's own index instead of off a page they wrote
+  // about themselves. It stays far under the review curve's 26, so coverage can
+  // move a lead within its band and can never manufacture one out of a trade
+  // that cannot pay: a tier-C trade in twelve metros still scores below a
+  // tier-A trade in one, which is asserted at boot.
+  //
+  // AND THE CAP IS NOT ONLY ABOUT PROPORTION. Past a handful of metros the
+  // shape stops being a crewed local operator and starts being a regional brand
+  // whose owner does not take the call - predictReachability already docks that
+  // by review volume and detectChainOutlets drops it outright at
+  // GP_CHAIN_MIN_METROS metros under distinct names. A term that kept rising
+  // would end up paying for the property that makes the lead worse for us,
+  // which is the exact mistake the rating bonus above had to be guarded from.
+  //
+  // SKIPPED, never read as zero. Number(null) is 0 and 0 is finite, so a
+  // laundered count would read as "absent from its own market" on a lead nobody
+  // measured. One metro and an unmeasured metro count score identically, which
+  // is the honest answer for both: a single-market business is the default
+  // shape of this ICP and is not being marked down for it.
+  const _mkt = Number(m && m.marketCount);
+  if (typeof (m && m.marketCount) === 'number' && Number.isFinite(_mkt) && _mkt > 1) {
+    base += Math.min((_mkt - 1) * TRIAGE_MARKET_POINTS, TRIAGE_MARKET_CAP);
+  }
   // == THE DEMOTION IS IN THE NUMBER ========================================
   // Same table the contact ranker reads, so the Find card and the contact list
   // can no longer hand an operator two different verdicts on one business.
@@ -40473,6 +40557,62 @@ app.get('/api/cron/discover', async (req, res) => {
   res.json({ ok: true, added: rows.length, theirstackRan: runTheirStack, breakdown: data.breakdown });
 });
 
+// == findYieldWorst - which row of the yield report is the run's biggest loss =
+//
+// LIVE DEFECT, 2026-09-12. This was `_rows.slice(2, -1)`: everything except the
+// first two rows and the last. That window is the set of losses only while
+// 'returned' happens to be the LAST row, and it is not - Round 114 appends a
+// 'large companies served for the email lane' row after it whenever a
+// size-demoted large company is served (GP_LARGE_SHARE is 0.1 by default, so
+// that is most runs), and the per-tier rows append too. On any such run
+// 'returned' fell inside the ranking window, was usually the biggest number in
+// it, and the line announced:
+//
+//     The largest single loss is "returned" at 12.
+//
+// The survivors, reported as the loss. The one job of that sentence is to name
+// the gate that kills the most, and it named the leads we kept. It surfaced
+// only when another agent made the test harness's fake Google actually return
+// businesses; before that the press returned nothing and the row was 0.
+//
+// TWO THINGS ARE WRONG WITH A POSITIONAL WINDOW and only one of them is the
+// off-by-one: the real fault is that every row anybody appends is a fresh
+// chance to break it, and two different agents added rows to this list in one
+// round. So eligibility is DECLARED on the row (loss: true) rather than
+// inferred from where it sits or from a string match on its label, and:
+//
+//   · a row that is not a loss can never be named, however big. 'returned' is
+//     not a loss. Neither is a DEMOTED lead: it was kept and sorted lower, and
+//     announcing it as the run's largest loss sends somebody looking for
+//     leads that are still on the bench waiting to be worked.
+//   · the window still ends at 'returned', found by NAME, so a row appended
+//     after it cannot corrupt the ranking whoever appends it and whatever they
+//     flag it. That is belt and braces on purpose - the flag is the rule, the
+//     anchor is what survives a copy-pasted neighbouring row.
+//   · and a flagged loss sitting AFTER 'returned' is not silently dropped: the
+//     boot check refuses it by name, because quietly ignoring a real loss is
+//     the same lie in the other direction.
+//
+// PURE and at module scope so the boot check can run it on rows the real run
+// cannot produce yet, which is the only way to test a row somebody has not
+// appended yet.
+const findYieldWorst = (rows) => {
+  const list = Array.isArray(rows) ? rows : [];
+  const end = list.findIndex(r => r && r.say === 'returned');
+  const before = end < 0 ? list : list.slice(0, end);
+  return before
+    .filter(r => r && r.loss === true && typeof r.n === 'number' && Number.isFinite(r.n))
+    .sort((a, b) => b.n - a.n)[0];
+};
+// Any row carrying the loss flag that sits AFTER the 'returned' anchor - the
+// shape that would be silently dropped from the ranking. Read by the boot
+// check, which is where it has to be loud.
+const findYieldStranded = (rows) => {
+  const list = Array.isArray(rows) ? rows : [];
+  const end = list.findIndex(r => r && r.say === 'returned');
+  return end < 0 ? [] : list.slice(end + 1).filter(r => r && r.loss === true);
+};
+
 // == runDiscovery - the Find run, with no HTTP request holding it open =======
 //
 // This was the body of app.post('/api/discover') and it ran for 102-120
@@ -41607,6 +41747,11 @@ const WEIGHTS = {
             tier: CATEGORY_TIER[c.industry] || null,
             hours: c.publishedHours || null,
             teamCount: typeof c.teamCount === 'number' ? c.teamCount : null,
+            // How many of the searched metros this business came back in,
+            // counted at the press and free (see placesTriageScore). typeof,
+            // not ||: an unmeasured count must stay unmeasured, because zero
+            // metros is not a shape a lead that exists can have.
+            marketCount: typeof c.marketCount === 'number' ? c.marketCount : null,
             outsideBand: c.outsideBand === true,
             aboveSizeCeiling: c.aboveSizeCeiling === true,
           };
@@ -41840,24 +41985,67 @@ const WEIGHTS = {
     // loss is visible without reading the code that caused it.
     {
       const _y = _findYield;
+      // ══ EVERY ROW DECLARES WHETHER IT IS A LOSS ═══════════════════
+      // `loss` is the ONLY thing the largest-single-loss sentence may look at,
+      // and findYieldWorst above records what a positional window cost. The
+      // rule in one line: a row is a loss when the lead is GONE. A lead that
+      // was kept and sorted lower is not, and neither is a lead we returned.
+      //
+      // AND AN OUTCOME NOBODY COUNTS READS AS ABSENT, NOT AS ZERO. The filter
+      // below asks for a real number, so a row whose counter no branch assigns
+      // - a new drop that lands a round before its counter does - is dropped
+      // from the line rather than printed as 0. "Nobody increments it" and "it
+      // happened to nobody" are different facts, and reporting the first as
+      // the second is the unmeasured-treated-as-zero class this file records
+      // more than any other. Number(null) is 0 and 0 is finite, so the filter
+      // asks the TYPE and not what Number() makes of it.
+      //
+      // The keys are assigned at the end of searchGooglePlaces, where they are
+      // listed; a key that is not written yet simply has no row yet.
+      const _row = (say, n, loss) => ({ say, n, loss: loss === true });
       const _rows = [
-        ['seen from Google', _y.seen], ['bench served', _bench.length],
-        ['under the trade review floor', _y.underFloor],
-        ['not our ICP by name', _y.notIcp],
-        ['franchise or chain outlet', _y.franchise],
-        ['already in the pipeline', _y.alreadyOwned],
-        ['per-category cap', _y.catCap],
-        ['demoted to the bench', _y.demoted],
-        ['returned', scored.length],
+        _row('seen from Google', _y.seen, false), _row('bench served', _bench.length, false),
+        _row('deleted under the trade review floor', _y.underFloor, true),
+        _row('not our ICP by name', _y.notIcp, true),
+        _row('franchise or chain outlet', _y.franchise, true),
+        _row('already in the pipeline', _y.alreadyOwned, true),
+        _row('per-category cap', _y.catCap, true),
+        // ══ THE DROPS THAT ARE NOT ABOUT THE BUSINESS AT ALL ════════════
+        // A listing that is permanently closed, has moved away, or carries
+        // Google's own consumer alert is one drop with one counter, because
+        // the consequence is identical: there is nobody at that listing to
+        // sell to. A number that already belongs to another business in this
+        // run is the second. Both are DELETIONS - the lead does not come back
+        // on the bench - so each can be named as the worst one.
+        _row('dropped on a listing risk - closed, moved or flagged by Google', _y.skippedListingRisk, true),
+        _row('dropped on a phone collision', _y.skippedListingPhone, true),
+        // ══ KEPT, AND SORTED LOWER ═══════════════════════════
+        // A demotion is not a loss. These leads are on the bench, they are
+        // returned behind every in-band lead, and the run can serve them
+        // tomorrow - so the sentence must never send somebody hunting for
+        // leads that are sitting there waiting to be worked. The thin-review
+        // count is a SHAPE of the demotion total above it as well, so ranking
+        // it would let a subset outrank the total it belongs to.
+        _row('demoted to the bench', _y.demoted, false),
+        _row('demoted for a thin review count', _y.demotedUnderFloor, false),
+        // ══ AND THE TWO WEBSITE LANES, WHICH ARE THE PITCH ══════════════
+        // Leads we RETURNED, counted here because the rep opens on their
+        // website: a business with no site at all is the purest prospect this
+        // pitch has (nothing to critique, everything to sell), and one on a
+        // free page builder is the rebuild lane. Both printed their own line
+        // and neither reached the one line that adds a run up.
+        _row('no website at all - the call lane', _y.noWebsite, false),
+        _row('on a free page builder - the rebuild lane', _y.builderSite, false),
+        _row('returned', scored.length, false),
         // Round 111: the TheirStack lane's leads by tier - the one lane whose
         // size is known at Find time. A Places lead is tiered on its contact read.
-        ...SCALE_TIERS.map(t => [`TheirStack ${t.replace('_', ' ')}`, scored.filter(c => c.source === 'theirstack' && c.scaleTier === t).length]).filter(r => r[1] > 0),
+        ...SCALE_TIERS.map(t => _row(`TheirStack ${t.replace('_', ' ')}`, scored.filter(c => c.source === 'theirstack' && c.scaleTier === t).length, false)).filter(r => r.n > 0),
         // Round 114: how many of the size-demoted large companies the slice served.
-        ...(_large.length ? [['large companies served for the email lane', _large.length]] : []),
-      ].filter(r => Number.isFinite(Number(r[1])));
-      const _worst = _rows.slice(2, -1).sort((a, b) => Number(b[1]) - Number(a[1]))[0];
-      console.log(`\u{1F4C9} FIND YIELD: ${_rows.map(r => `${r[0]} ${r[1]}`).join(' \u2192 ')}.` +
-        (_worst && Number(_worst[1]) > 0 ? ` The largest single loss is "${_worst[0]}" at ${_worst[1]}.` : '') +
+        ...(_large.length ? [_row('large companies served for the email lane', _large.length, false)] : []),
+      ].filter(r => typeof r.n === 'number' && Number.isFinite(r.n));
+      const _worst = findYieldWorst(_rows);
+      console.log(`\u{1F4C9} FIND YIELD: ${_rows.map(r => `${r.say} ${r.n}`).join(' \u2192 ')}.` +
+        (_worst && _worst.n > 0 ? ` The largest single loss is "${_worst.say}" at ${_worst.n}.` : '') +
         ` The Google budget for this run was ${_placesBudget} quer${_placesBudget === 1 ? 'y' : 'ies'}, and the bench contributed ${_bench.length} lead(s) toward the ${MAX_TOTAL} this run can return - if those two numbers disagree badly, the budget assumption is what to change, not the market.`);
     }
     console.log('Breakdown:', breakdown);
@@ -66259,6 +66447,55 @@ app.listen(PORT, () => {
       }
     }
 
+    // 6b. COVERAGE ACROSS METROS, WHICH THE NUMBER IGNORED FOR ITS WHOLE LIFE.
+    //     The press has counted the metros a business comes back in ever since
+    //     the repeat sighting stopped being discarded, and the run prints
+    //     "Coverage across metros means crews and a payroll ... Work these
+    //     first" about them - while the score they are sorted by could not see
+    //     the count at all. The line and the queue disagreed.
+    {
+      // ITS OWN FIXTURE, because _base scores 87 and the score clamps at 97:
+      // four metros would sit one point under the ceiling and twelve would be
+      // held there by the CLAMP rather than by the cap, so the cap assertion
+      // below would pass for the wrong reason. A fixture arranged so the
+      // assertion holds whether or not the mechanism exists is the trap this
+      // file records, and the headroom is asserted rather than assumed.
+      const _cov = { reviewCount: 60, rating: 4.4, reachScore: 22, tier: 'B', label: 'Plumbing' };
+      const _m1 = placesTriageScore({ ..._cov, marketCount: 1 });
+      const _m2 = placesTriageScore({ ..._cov, marketCount: 2 });
+      const _m4 = placesTriageScore({ ..._cov, marketCount: 4 });
+      const _m12 = placesTriageScore({ ..._cov, marketCount: 12 });
+      const _mNone = placesTriageScore(_cov);
+      if (_m4 >= 97 || _m12 >= 97) _fails.push(`the coverage fixture scores ${_m4} against the 97 ceiling, so the clamp is standing in for the cap and everything below it proves nothing - the fixture needs headroom`);
+      if (!(_m2 > _m1)) {
+        _fails.push(`an operator that came back in two metros scores ${_m2} against ${_m1} for the same business in one - the only size signal the press measures for free is not in the number, and the run tells the operator to work those leads first`);
+      }
+      if (!(_m4 > _m2)) _fails.push(`four metros scores ${_m4} against two at ${_m2} - the term is flat, so coverage is being read as a yes-or-no when it is a count`);
+      // Against the DECLARED knobs, not a second copy of them typed here.
+      if (_m2 - _m1 !== TRIAGE_MARKET_POINTS) _fails.push(`one extra metro moved the score by ${_m2 - _m1} rather than the declared ${TRIAGE_MARKET_POINTS}`);
+      if (_m4 - _m1 !== TRIAGE_MARKET_CAP) _fails.push(`three extra metros moved the score by ${_m4 - _m1} rather than the declared cap of ${TRIAGE_MARKET_CAP}`);
+      if (_m12 !== _m4) {
+        _fails.push(`a business in twelve metros scores ${_m12} against ${_m4} in four - the cap is not holding, and past a handful of metros the shape is a regional brand whose owner does not take the call, which is the property this term must not pay for`);
+      }
+      // UNMEASURED IS NOT ZERO METROS. A lead that exists came back in at least
+      // one market, so a laundered count would read as absent from its own.
+      if (_mNone !== _m1) _fails.push(`a lead with no metro count measured scores ${_mNone} against ${_m1} for one measured market - "we did not count" is being read as a number`);
+      for (const _bad of [null, undefined, 0, '', '3', [], {}, NaN, false, true]) {
+        if (placesTriageScore({ ..._cov, marketCount: _bad }) !== _mNone) {
+          _fails.push('a metro count of ' + JSON.stringify(_bad) + ' changed the score, so something is being coerced - Number(null) is 0 and 0 is finite');
+          break;
+        }
+      }
+      // AND COVERAGE CANNOT BUY A TRADE THAT CANNOT PAY. The term orders leads
+      // inside their band; it does not promote one out of a job value where
+      // nothing we sell is affordable.
+      const _cWide = placesTriageScore({ ..._cov, tier: 'C', marketCount: 12 });
+      const _aOne = placesTriageScore({ ..._cov, tier: 'A', marketCount: 1 });
+      if (!(_aOne > _cWide)) {
+        _fails.push(`a tier-C trade in twelve metros scores ${_cWide} against a tier-A trade in one at ${_aOne} - the coverage term has grown big enough to outrank the job value, which is the one thing that decides whether they can write the cheque`);
+      }
+    }
+
     // 7. THE CALL SITE. A fixture supplies its own arguments and therefore cannot
     //    see a caller: the handler could stop passing the demotion flags entirely
     //    and every assertion above would stay green.
@@ -66268,6 +66505,7 @@ app.listen(PORT, () => {
                           _n('aboveSizeCeiling: c.aboveSize', 'Ceiling === true,'),
                           _n('label: c.industry', " || '',"),
                           _n('hours: c.publishedHours', ' || null,'),
+                          _n('marketCount: typeof c.marketCount', " === 'number' ? c.marketCount : null,"),
                           _n('_hours = readPublished', 'Hours(p.regularOpeningHours)'),
                           _n('triage = placesTriage', 'Score(_affIn)')]) {
       if (!_src.includes(_needle)) _fails.push('the Find handler no longer passes ' + _needle.slice(0, 30) + ' into the score');
@@ -66456,10 +66694,191 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`\u26d4 FIND SCORE CHECK: ${_fails.slice(0, 5).join(' | ')}.`);
     } else {
-      console.log(`\u2713 FIND SCORE CHECK: the Find card's number was EXECUTED, not read. A demoted lead scores lower than the same business undemoted and two demotions cost more than one; the penalty comes from the same declared table the contact list reads, so one app can no longer hold two verdicts about one business; a 4.9 above the star ceiling no longer earns the bonus for the very rating that demoted it, while an in-band 4.9 keeps every point; and a reachability nobody measured is skipped rather than laundered into a confident zero. The handler is pinned at its call site.`);
+      console.log(`\u2713 FIND SCORE CHECK: the Find card's number was EXECUTED, not read. A demoted lead scores lower than the same business undemoted and two demotions cost more than one; the penalty comes from the same declared table the contact list reads, so one app can no longer hold two verdicts about one business; a 4.9 above the star ceiling no longer earns the bonus for the very rating that demoted it, while an in-band 4.9 keeps every point; and a reachability nobody measured is skipped rather than laundered into a confident zero. Coverage across metros is in the number at last: +${TRIAGE_MARKET_POINTS} a metro beyond the first to a cap of ${TRIAGE_MARKET_CAP}, so a crewed operator seen in four markets outranks the same business seen in one, a twelfth market buys nothing more, an unmeasured count scores exactly as one market does, and twelve metros cannot lift a trade whose job value cannot fund anything we sell. The handler is pinned at its call site.`);
     }
   } catch (e) {
     console.log(`\u26d4 FIND SCORE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
+  }
+
+  // == SPAM TEST BAN CHECK ===================================================
+  //
+  // WHAT THIS PINS: the ABSENCE, by name, of every fake-listing test that was
+  // measured and REFUTED. None of these may be built, because each one deletes
+  // real businesses - and the ones it deletes are disproportionately ours.
+  //
+  //   1. A KEYWORD-STUFFED BUSINESS NAME. Sterling Sky followed 5,306 reported
+  //      listings across 16 industries for 4 years: garage door repair had
+  //      87.6% of reported listings REMOVED by Google, and only 0.15% of the
+  //      reported listings were keyword-stuffed. The stuffing is not what the
+  //      fakes are made of; it is what an honest local business does to its
+  //      own name because an agency told it to.
+  //   2. A RESIDENTIAL ADDRESS. The FTC's 15,000-profile fake network used
+  //      COMMERCIAL addresses - a donut shop, an Arby's, a wine bar. A trade
+  //      run out of the owner's house is the shape of our ideal customer, and
+  //      it is the shape this test deletes.
+  //   3. NO WEBSITE, OR A FREE-BUILDER WEBSITE. About 35% of suspended
+  //      listings had no website either, which is why this looks like a
+  //      signal - and having no website is this system's single best buying
+  //      signal, because the pitch IS websites. This test would delete the
+  //      purest prospect the machine finds.
+  //   4. A TOLL-FREE OR TRACKING PHONE NUMBER. The same FTC network ran 250+
+  //      LOCAL area codes. A tracking number is what a business that already
+  //      pays somebody for marketing has; that is a reason to call them.
+  //   5. OPEN 24/7 HOURS. In the FTC's own exhibits it is the LEGITIMATE
+  //      competitors that show "Open 24 hours" while the fake profile shows
+  //      "Closes 8 PM". In the emergency trades always-open is the normal
+  //      shape, and this file already reads it as a capacity signal.
+  //   6. A VOIP CARRIER LOOKUP. A paid lookup per lead to learn a fact that
+  //      does not separate the two populations: small businesses of every kind
+  //      moved to VoIP years ago.
+  //   7. THIN CONTENT, STOCK IMAGERY OR NO NAMED HUMAN. These are our own
+  //      SALES FINDINGS - the website critique is the product - and turning
+  //      the same measurement into a fake-listing verdict would delete the
+  //      business we were about to sell a website to.
+  //
+  // WHAT IT CAN CATCH: a mechanism written into this file under any of the
+  // marker names below, which is what such a test needs in order to exist -
+  // plus two behaviours EXECUTED rather than read, because those two are the
+  // ones a rewrite could reintroduce without naming anything: a deduction for
+  // having no website, and a deduction for publishing always-open hours.
+  //
+  // WHAT IT CANNOT CATCH: a mechanism named something nobody here thought of;
+  // one written in index.html, which is not this file and deploys separately;
+  // one expressed as an instruction in a prompt rather than as code (PART 3:
+  // instructional guards do not hold, which cuts both ways); a third-party API
+  // that returns its own fakeness score which this code then reads under an
+  // innocent name; or a person filtering the sheet by hand. It is a scan, and
+  // it says so.
+  //
+  // AN ABSENCE SCAN FAILS THE OPPOSITE WAY ROUND, which is the good way: a
+  // needle written as one literal would find ITSELF and the check would go
+  // RED, loudly, instead of passing while the defect is live. The halves are
+  // still assembled at runtime - every marker below is two non-empty pieces
+  // and neither piece is the whole - because a red on a clean build is still a
+  // wasted hour. The quiet failure left is a marker nobody would ever type,
+  // and the positive control below is what stops the scan going blind.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _src = selfSourceNoCommentsLF();
+    // ONE declared table. The id says which refuted test it is, the sentence
+    // says what building it would have deleted, and the markers are what the
+    // mechanism cannot exist without. Adding one of these measurements means
+    // changing THIS TABLE on purpose, which is the whole point of pinning an
+    // absence by name: it cannot arrive by accident, only by a decision.
+    const _BANNED = [
+      { id: 'stuffed name', say: 'a keyword-stuffed business name read as a fake listing - 0.15% of 5,306 reported listings were stuffed, and 87.6% of garage door listings were removed anyway',
+        markers: [_n('keyword', 'Stuffed'), _n('stuffed', 'Name'), _n('name', 'Stuffing'), _n('KEYWORD_', 'STUFF'), _n('keyword', 'Spam')] },
+      { id: 'residential address', say: 'a home address read as a fake listing - the FTC network used a donut shop, an Arby\'s and a wine bar, while a trade run from the owner\'s house is our ideal customer',
+        markers: [_n('residential', 'Address'), _n('isResident', 'ial'), _n('RESIDENTIAL_', 'ADDRESS'), _n('residential', 'Listing'), _n('residential', 'Spam')] },
+      { id: 'no website', say: 'no website, or a free-builder website, read as a fake listing - 35% of suspended listings had no site, and no site at all is the best buying signal this machine has',
+        markers: [_n('fake', 'NoWebsite'), _n('noWebsite', 'Spam'), _n('spam', 'NoWebsite'), _n('noWebsite', 'Fake'), _n('builderSite', 'Spam'), _n('freeBuilder', 'Spam'), _n('siteless', 'Spam')] },
+      { id: 'phone shape', say: 'a toll-free or tracking number read as a fake listing - the FTC network ran 250+ local area codes, and a tracking number means somebody is already being paid for their marketing',
+        markers: [_n('toll', 'Free'), _n('TOLL_', 'FREE'), _n('tracking', 'Number'), _n('spam', 'Phone'), _n('phone', 'Spam'), _n('tracking', 'Phone')] },
+      { id: 'always open', say: 'always-open hours read as a fake listing - in the FTC exhibits the LEGITIMATE competitors are the ones open 24 hours, and this file already reads those hours as capacity',
+        markers: [_n('open24', 'Spam'), _n('open24', 'Fake'), _n('always', 'OpenSpam'), _n('suspicious', 'Hours'), _n('fake', 'Hours'), _n('hours', 'Spam')] },
+      { id: 'voip lookup', say: 'a paid carrier lookup to learn whether their number is VoIP - a fact that does not separate the two populations, because every kind of small business moved years ago',
+        markers: [_n('voip', 'Check'), _n('voip', 'Carrier'), _n('carrier', 'Lookup'), _n('voip', 'Lookup'), _n('voipNum', 'ber'), _n('lookups.', 'twilio.com'), _n('numveri', 'fy.com'), _n('carrier', 'Name')] },
+      { id: 'thin site or no human', say: 'thin content, stock imagery or no named human read as a fake listing - these are our own sales findings, and the verdict would delete the business we were about to sell a website to',
+        markers: [_n('stockImagery', 'Spam'), _n('stock', 'PhotoFake'), _n('thinContent', 'Spam'), _n('thinContent', 'Fake'), _n('noNamed', 'Human'), _n('namedHuman', 'Missing')] },
+      // The verdict itself. No test above can act without somewhere to put its
+      // answer, so this row is the net under the seven: a mechanism named
+      // something nobody predicted still needs one of these to do anything.
+      { id: 'a fakeness verdict', say: 'somewhere to keep a fakeness verdict, which every test above needs before it can delete anything',
+        markers: [_n('spam', 'Score'), _n('looks', 'Fake'), _n('fake', 'Listing'), _n('is', 'FakeBusiness'), _n('SPAM_', 'SIGNALS'), _n('spam', 'Signal'), _n('fake', 'Score'), _n('spam', 'Risk'), _n('fake', 'Risk'), _n('listing', 'Spam'), _n('spam', 'Flag'), _n('suspicious', 'Listing'), _n('skipped', 'Spam'), _n('skipped', 'Fake'), _n('dropped', 'AsFake')] },
+    ];
+    // 1. THE SCAN.
+    for (const _b of _BANNED) {
+      for (const _m of _b.markers) {
+        if (_src.includes(_m)) {
+          _fails.push(`"${_m}" is in the source: that is ${_b.say}. This was measured and refuted - if the NAME is wanted for something else it has to be called something else, and if the TEST is wanted, this table is where that decision gets made`);
+        }
+      }
+    }
+    // 2. THE SCAN IS STILL LOOKING. Eight rows, every one with markers, none
+    //    of them short enough to match ordinary code - and a haystack that
+    //    plainly contains one must come back flagged. An absence check that
+    //    has quietly stopped matching reports a clean pass forever, which is
+    //    this file's most-recorded way for a check to lie.
+    if (_BANNED.length < 8) _fails.push(`only ${_BANNED.length} refuted test(s) are pinned, so one of the seven that were measured has been dropped from the table along with the evidence that refuted it`);
+    for (const _b of _BANNED) {
+      if (!_b.markers.length) _fails.push(`"${_b.id}" is pinned with no markers at all, so it is a comment rather than a check`);
+      for (const _m of _b.markers) {
+        if (!_m || _m.length < 7) _fails.push(`the marker "${_m}" under "${_b.id}" is too short to identify a mechanism, so it would match ordinary code or nothing`);
+      }
+    }
+    {
+      const _probe = _BANNED[0].markers[0];
+      const _control = ['const drop = (name) => ', _probe, '(name) && kill(name);'].join('');
+      if (!_BANNED.some(_b => _b.markers.some(_m => _control.includes(_m)))) {
+        _fails.push('the scanner cannot find a banned marker in a haystack that plainly contains one, so its needles are broken and its silence about this file means nothing');
+      }
+    }
+    // 3. NO WEBSITE IS NOT A MARK AGAINST THE LEAD, EXECUTED. A rewrite could
+    //    reintroduce the deduction without naming anything, and this is the
+    //    lead the whole pitch is aimed at: nothing to critique, everything to
+    //    sell, and no competitor has built them a site.
+    {
+      const _plain = predictReachability('Jose Barrera Roofing', 'https://example.com');
+      const _none = predictReachability('Jose Barrera Roofing', '');
+      if (!(_none.score >= _plain.score)) {
+        _fails.push(`a business with NO WEBSITE scores ${_none.score}/40 against ${_plain.score}/40 for the same name with a site that tells us nothing - the absent site is what we sell, and it is being charged to the lead again`);
+      }
+      if (!(_none.score > 0)) _fails.push('a named owner with no website scores zero on owner-findability, so the call lane sorts below every business we cannot even name');
+      if (!/no website/i.test(String(_none.why))) _fails.push('the row no longer says the site is missing, so nothing tells the rep why this lead is a phone call rather than an audit');
+      // A free-builder page is marked down as a thin OWNER SOURCE and kept -
+      // never dropped, and never below the lead that has no site at all.
+      const _builder = predictReachability('Jose Barrera Roofing', 'https://site123.wixsite.com');
+      if (!(_builder.score > 0)) _fails.push('a business on a free page builder scores zero, which is a deletion wearing a deduction');
+      if (!(_none.score >= _builder.score)) _fails.push(`a business with no website at all (${_none.score}/40) ranks below one on a free page builder (${_builder.score}/40) - there is less to sell the second one, not more`);
+    }
+    // 4. ALWAYS-OPEN HOURS ARE NOT A MARK AGAINST THE LEAD, EXECUTED. The FTC
+    //    exhibit is the other way round: the fake closes at 8 PM.
+    {
+      const _all = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+      const _h247 = readPublishedHours({ weekdayDescriptions: _all.map(d => `${d}: Open 24 hours`) });
+      const _h95 = readPublishedHours({ weekdayDescriptions: _all.map((d, i) => i < 5 ? `${d}: 9:00 AM – 5:00 PM` : `${d}: Closed`) });
+      if (_h247.open24 !== true) _fails.push('the always-open fixture is not being read as always open, so nothing here is testing what the FTC exhibits actually showed');
+      const _lead = (hours) => ({ reviewCount: 120, rating: 4.5, reachScore: 30, tier: 'A', label: 'Plumbing', hours });
+      const _s247 = placesTriageScore(_lead(_h247));
+      const _s95 = placesTriageScore(_lead(_h95));
+      if (!(_s247 >= _s95)) {
+        _fails.push(`a business open 24 hours scores ${_s247} against ${_s95} for the same business open nine to five - always-open is the normal shape of an emergency trade, and in the FTC's own exhibits it is the honest competitors who show it`);
+      }
+      if (!(affordabilityBand(_lead(_h247)).points >= affordabilityBand(_lead(_h95)).points)) {
+        _fails.push('always-open hours cost a lead points in the affordability band, where seven open days is supposed to MEAN staff');
+      }
+    }
+    // 5. THE NAMES THE FAKES ACTUALLY USED MUST STILL PASS. The FTC network's
+    //    own naming shape is surname-plus-trade - "Levine Heating and Cooling"
+    //    - which is the exact shape this system's owner-findability predictor
+    //    rewards, and a stuffed name is what a real local business does to its
+    //    own listing. Both survive every name gate we own, executed.
+    {
+      // The baseline is an impersonal name that is NOT stuffed. A stuffed name
+      // has no person in it to find, and scoring 0 for that is the predictor
+      // doing its job - what must never happen is the stuffing itself costing
+      // the lead points on top, which is the only thing this compares.
+      const _brand = predictReachability('Premier Roofing', '').score;
+      for (const _nm of ['Levine Heating and Cooling', 'Garage Door Repair Denver Same Day Garage Door Service', 'Emergency Plumber Plumbing Repair Phoenix']) {
+        if (looksLikeEnterpriseByName(_nm)) _fails.push(`"${_nm}" is refused by the cheap pre-spend name screen - a surname-plus-trade name and a stuffed trade name are what REAL local businesses are called, and refusing them costs us the lead and teaches us nothing`);
+        if (GP_FRANCHISE.test(_nm)) _fails.push(`"${_nm}" is caught by the franchise list, which is the only unconditional name-delete at the press`);
+        const _sc = predictReachability(_nm, '').score;
+        if (_sc < _brand) _fails.push(`"${_nm}" scores ${_sc}/40 against ${_brand}/40 for an impersonal name nobody stuffed - the stuffing itself is costing the lead points, and 0.15% is how much of it the removed listings actually had`);
+      }
+      // And the surname-plus-trade shape still reads as a PERSON, which is why
+      // the FTC's fake network copied it: it is what an ordinary family trade
+      // is called, so it can never be evidence of the opposite.
+      const _surname = predictReachability('Levine Heating and Cooling', '').score;
+      if (!(_surname > _brand)) _fails.push(`a surname-plus-trade name scores ${_surname}/40 against ${_brand}/40 for a plain brand name - that shape is a family business with a findable owner, and reading it as anything else is reading the FTC's exhibit backwards`);
+    }
+    if (_fails.length) {
+      console.log(`⛔ SPAM TEST BAN CHECK: ${_fails.slice(0, 5).join(' | ')}${_fails.length > 5 ? ` | +${_fails.length - 5} more` : ''}.`);
+    } else {
+      console.log(`✓ SPAM TEST BAN CHECK: ${_BANNED.length} refuted fake-listing tests are pinned ABSENT by name (${_BANNED.map(b => b.id).join(', ')}), the scanner is proven to still find a marker in a haystack that carries one, and the two a rewrite could reintroduce without naming anything are EXECUTED: a business with no website at all scores no worse on owner-findability than the same name with a site that tells us nothing, a free-builder page is marked down as a thin owner source and never deleted, a business open 24 hours scores no worse than the same business open nine to five in both the Find number and the affordability band, and the two name shapes the research says are ordinary - surname-plus-trade, which is what the FTC's own fake network used, and a stuffed trade name - pass every name gate we own. HONEST LIMIT: this is a scan over this file, so it cannot see a mechanism named something nobody predicted, one built in index.html, one written as an instruction in a prompt, or a vendor that sells us its own fakeness score under an innocent name.`);
+    }
+  } catch (e) {
+    console.log(`⛔ SPAM TEST BAN CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
   // ---- NOT READY IS NOT A STATE THAT TAKES WORK ---------------------------
   // A lead worked during the boot window prints its own refusal glyphs, and
@@ -71690,28 +72109,141 @@ app.listen(PORT, () => {
         _fails.push(`the ICP name-gate loss comes out ${_got} where 500 leads in, 120 surviving the name filter and 7 blocked by name at the size gate is 387 - a count that reads one gate and not the other under-reports the run's biggest loss, which is worse than leaving the row blank`);
       }
     }
-    // 2. The row prints, and it can be chosen as the largest single loss.
-    const _ri = _rd.indexOf(_n('const _rows = ', '['));
+    // 2. THE ROW BLOCK PRINTS, EXECUTED. Lifted out of runDiscovery's own
+    //    source and RUN on counts, because a fixture supplies its own
+    //    arguments and can never see a caller.
+    const _ri = _rd.indexOf(_n('const _row = (say, n', ', loss)'));
     const _wi = _ri < 0 ? -1 : _rd.indexOf(_n('const _worst', ' = '), _ri);
     if (_ri < 0 || _wi < 0) {
       _fails.push('the FIND YIELD row block could not be found in runDiscovery, so nothing here is checking what the yield line prints');
     } else {
       const _block = _rd.slice(_ri, _rd.indexOf(';', _wi) + 1);
-      const _out = new Function('_y', '_bench', 'scored', 'SCALE_TIERS', '_large',
+      const _run = (_yy, _returned, _largeN) => new Function('_y', '_bench', 'scored', 'SCALE_TIERS', '_large', 'findYieldWorst',
         _block + ' return { rows: _rows, worst: _worst };')(
-        { seen: 500, underFloor: 12, notIcp: 387, franchise: 9, alreadyOwned: 4, catCap: 3, demoted: 6 },
-        [], [], SCALE_TIERS, []);
-      const _row = _out.rows.find(r => /ICP/.test(String(r[0])));
-      if (!_row) _fails.push('a Find run that lost 387 leads at the ICP name gate prints no row for them at all');
-      else if (Number(_row[1]) !== 387) _fails.push(`the ICP name-gate row prints ${JSON.stringify(_row[1])} rather than the 387 it was given`);
-      if (!_out.worst || !/ICP/.test(String(_out.worst[0]))) {
-        _fails.push(`the largest single loss is reported as "${_out.worst && _out.worst[0]}" on a run where the ICP name gate lost 387 of 500 - the sentence names a row it can reach instead of the worst one`);
+        _yy, [], new Array(_returned).fill({ source: 'google_places' }), SCALE_TIERS,
+        new Array(_largeN || 0).fill({ source: 'theirstack' }), findYieldWorst);
+      const _seek = (_o, _frag) => _o.rows.find(r => String(r.say).includes(_frag));
+      const _out = _run({ seen: 500, underFloor: 12, notIcp: 387, franchise: 9, alreadyOwned: 4, catCap: 3, demoted: 6 }, 0);
+      const _icpRow = _seek(_out, 'ICP');
+      if (!_icpRow) _fails.push('a Find run that lost 387 leads at the ICP name gate prints no row for them at all');
+      else if (_icpRow.n !== 387) _fails.push(`the ICP name-gate row prints ${JSON.stringify(_icpRow.n)} rather than the 387 it was given`);
+      if (!_out.worst || !/ICP/.test(String(_out.worst.say))) {
+        _fails.push(`the largest single loss is reported as "${_out.worst && _out.worst.say}" on a run where the ICP name gate lost 387 of 500 - the sentence names a row it can reach instead of the worst one`);
       }
+      // 3. AN OUTCOME NOBODY COUNTED IS ABSENT FROM THE LINE, NEVER A ZERO.
+      //    New branches arrive one round at a time and their counters arrive
+      //    with them; until then the row must not claim the outcome happened
+      //    to nobody. Unmeasured-treated-as-zero is the class this file
+      //    records most, and in a report it is the shape that stops an
+      //    operator looking for the loss he is actually taking.
+      // The anchor is a row NAME, so renaming that row would quietly widen the
+      // window to the end of the list again. It is asserted to exist, by the
+      // exact name, on the real row list.
+      if (!_out.rows.some(r => r.say === 'returned')) {
+        _fails.push("the yield line has no row called exactly 'returned' any more - that name is where the loss window ends, so renaming it silently makes every row appended afterwards eligible to be called the run's biggest loss");
+      }
+      const _newOutcomes = ['listing risk', 'phone collision', 'thin review count', 'no website at all'];
+      for (const _absent of _newOutcomes) {
+        const _r = _seek(_out, _absent);
+        if (_r) _fails.push(`the "${_r.say}" row prints ${JSON.stringify(_r.n)} on a run where no branch counted it - an outcome nobody increments must be missing from the report rather than reported as none`);
+      }
+      //    AND A COUNTER THAT ARRIVES AS null IS NOT A ZERO EITHER. Number(null)
+      //    is 0 and 0 is finite - the trap this file records more than any
+      //    other - so a row filtered on Number(x) would print "and it happened
+      //    to nobody" for a branch that handed over nothing at all.
+      {
+        const _nulls = _run({ seen: 500, underFloor: 12, notIcp: 20, franchise: 9, alreadyOwned: 4, catCap: 3, demoted: 6,
+          skippedListingRisk: null, skippedListingPhone: null, demotedUnderFloor: null, noWebsite: null, builderSite: null }, 0);
+        for (const _absent of _newOutcomes) {
+          const _r = _seek(_nulls, _absent);
+          if (_r) _fails.push(`the "${_r.say}" row prints ${JSON.stringify(_r.n)} from a counter that arrived as null - Number(null) is 0 and 0 is finite, and that laundered zero reads as "we counted, and it was nobody"`);
+        }
+      }
+      // 4. THE LIVE DEFECT OF 2026-09-12, ON THE SHAPE THAT PRODUCED IT. The
+      //    ranking window was _rows.slice(2, -1), which is the set of losses
+      //    only while 'returned' is the last row - and Round 114 appends the
+      //    email-lane row after it on any run that serves a large company,
+      //    which is most runs (GP_LARGE_SHARE is 0.1). The line then read
+      //    "The largest single loss is returned at N": the survivors reported
+      //    as the loss, on the one sentence whose whole job is naming the gate
+      //    that kills the most. The fixture carries BOTH ways of getting it
+      //    wrong - 700 returned with three large companies appended after it,
+      //    and 400 demotions, the biggest number in the list - against a
+      //    biggest real loss of 20.
+      {
+        const _full = _run({ seen: 900, underFloor: 5, notIcp: 20, franchise: 9, alreadyOwned: 4, catCap: 3,
+          demoted: 400, demotedUnderFloor: 380, skippedListingRisk: 7, skippedListingPhone: 4, noWebsite: 11, builderSite: 6 }, 700, 3);
+        const _last = _full.rows[_full.rows.length - 1];
+        if (!_last || String(_last.say) === 'returned') {
+          _fails.push('the fixture no longer appends a row AFTER the returned row, so a positional window would pass here by luck and everything below proves nothing');
+        }
+        if (!(_seek(_full, 'returned') && _seek(_full, 'returned').n === 700)) {
+          _fails.push('the fixture no longer returns more leads than any single filter took, so nothing here would notice the window swallowing the returned row');
+        }
+        for (const [_frag, _want] of [['listing risk', 7], ['phone collision', 4], ['no website at all', 11], ['free page builder', 6], ['thin review count', 380]]) {
+          const _r = _seek(_full, _frag);
+          if (!_r) _fails.push(`a run that recorded ${_want} lead(s) as "${_frag}" prints no row for them, so an outcome that was measured is thrown away before the operator sees it`);
+          else if (_r.n !== _want) _fails.push(`the "${_r.say}" row prints ${JSON.stringify(_r.n)} rather than the ${_want} it was given`);
+        }
+        if (!_full.worst || _full.worst.say !== 'not our ICP by name' || _full.worst.n !== 20) {
+          _fails.push(`the largest single loss is reported as "${_full.worst && _full.worst.say}" at ${_full.worst && _full.worst.n} on a run that returned 700, served 3 large companies on a row appended after that one, and demoted 400 - the biggest thing this run actually LOST was 20 leads at the ICP name gate. A row that is not a loss is being ranked, and neither of those two is one: the returned leads are the survivors, and a demoted lead was kept and is on the bench`);
+        }
+        // No row may claim the loss flag AFTER the anchor, in the REAL list.
+        // Dropping a real loss from the ranking in silence is the same lie
+        // pointed the other way, so it is refused by name here.
+        const _stranded = findYieldStranded(_full.rows);
+        if (_stranded.length) _fails.push(`the row "${_stranded[0].say}" is flagged as a loss but sits after the returned row, where the ranking cannot see it - move it above 'returned' or take the flag off it, because a loss the sentence can never name is worse than no row at all`);
+      }
+      // 5. AND THE RULE ITSELF, ON ROWS A RUN CANNOT PRODUCE YET. This is the
+      //    only way to test the row somebody has not appended yet, which is
+      //    exactly the row that broke it: findYieldWorst is pure and at module
+      //    scope so it can be run on a list this file invents.
+      {
+        const _R = (say, n, loss) => ({ say, n, loss });
+        const _ok = [_R('deleted under the trade review floor', 5, true), _R('not our ICP by name', 20, true),
+          _R('demoted to the bench', 400, false), _R('returned', 700, false)];
+        const _w = (rows) => findYieldWorst(rows) || { say: 'nothing', n: -1 };
+        if (_w(_ok).say !== 'not our ICP by name') _fails.push(`the rule names "${_w(_ok).say}" on a list whose only real losses are 5 and 20 - the biggest genuine loss is not being found at all`);
+        // A row appended after 'returned' - whoever appends it, and whatever
+        // they flag it. Both shapes are here: the email-lane row Round 114
+        // appends, and a future outcome somebody flags as a loss by copying
+        // the row above it.
+        const _after = _ok.concat([_R('large companies served for the email lane', 900, false), _R('an outcome appended later', 5000, true)]);
+        if (_w(_after).say !== 'not our ICP by name') {
+          _fails.push(`a row appended AFTER the returned row is being ranked ("${_w(_after).say}") - the window is positional again, which makes every row anybody appends a way to break the one sentence this report exists for`);
+        }
+        if (!findYieldStranded(_after).length) _fails.push('a loss row sitting after the returned row is not reported as stranded, so it would be dropped from the ranking in silence instead of refused');
+        if (findYieldStranded(_ok).length) _fails.push('an ordinary row list reports a stranded loss, so the refusal would fire on every clean run and be turned off');
+        // A DEMOTION CANNOT BE NAMED, however big. The lead was kept.
+        const _dem = [_R('demoted to the bench', 5000, false), _R('per-category cap', 1, true), _R('returned', 3, false)];
+        if (_w(_dem).say !== 'per-category cap') {
+          _fails.push(`a demotion of 5,000 leads is named as the largest single loss ("${_w(_dem).say}") over a real loss of 1 - a demoted lead is on the bench and will be served, and announcing it as a loss sends somebody hunting for leads that are sitting there waiting`);
+        }
+        // Nothing eligible means nothing claimed - and no row at all must not
+        // throw, because the line is built from whatever the run produced.
+        if (findYieldWorst([_R('seen from Google', 50, false), _R('returned', 50, false)])) _fails.push('a run with no loss row at all still names a largest single loss');
+        if (findYieldWorst([]) || findYieldWorst(null)) _fails.push('an empty row list produces a largest single loss out of nothing');
+        // A list with no 'returned' anchor still ranks its losses rather than
+        // going silent: the anchor narrows the window, it is not the gate.
+        if (_w([_R('per-category cap', 3, true)]).say !== 'per-category cap') _fails.push('a row list with no returned row ranks nothing, so a partial run would report no loss at all');
+      }
+    }
+    // 6. AND THE TWO WEBSITE LANES ACTUALLY REACH THE TALLY. A row the line
+    //    knows how to print is worth nothing if nobody writes the number:
+    //    computed-and-not-passed is the class this file produces most, and it
+    //    is exactly how the ICP name-gate row came to be structurally missing
+    //    from a complete-looking report. Read off the LIVE function.
+    {
+      const _sgp = String(searchGooglePlaces);
+      for (const [_needle, _msg] of [
+        [_n('tally.noWebsite = kept', 'NoWebsite;'), 'the count of businesses with NO WEBSITE AT ALL never reaches the tally, so its row is dropped from the yield line and a run cannot say how much of the call lane it found - the lane whose pitch is the website that does not exist'],
+        [_n('tally.builderSite = kept', 'Builder;'), 'the count of businesses on a free page builder never reaches the tally, so the rebuild lane is invisible in the one line that adds a run up'],
+      ]) if (!_sgp.includes(_needle)) _fails.push(_msg);
     }
     if (_fails.length) {
       console.log(`⛔ FIND YIELD CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
     } else {
-      console.log('✓ FIND YIELD CHECK: the yield report can name its own worst loss. The ICP name gate is counted where both halves of it settle - the name filter every source passes through and the size gate\'s name blocks - so the number is the difference each filter actually made rather than a counter somebody has to remember to increment; the row survives the line\'s own finite-number filter; and on a run that lost 387 leads of 500 that way, the line names it as the largest single loss instead of the biggest row it happens to be able to reach.');
+      console.log('✓ FIND YIELD CHECK: the yield report can name its own worst loss, and cannot name the survivors. Every row DECLARES whether it is a loss, so the sentence can no longer pick the returned count, a per-tier row, the email-lane row Round 114 appends after it, or a lead that was merely demoted to the bench - the window is anchored on the returned row by NAME rather than on a slice position, which is the live defect of 2026-09-12, and a row flagged as a loss after that anchor is refused by name instead of dropped in silence. Executed both ways: the row block is lifted out of the Find run and run on a press of 900 that returned 700, served three large companies on a row appended afterwards and demoted 400, where the biggest thing actually lost was 20 leads at the ICP name gate; and the rule itself is run on rows no press can produce yet, because the row that broke this was the one nobody had appended. The ICP name-gate loss is still counted where both halves of it settle, and an outcome whose counter no branch assigns - or assigns as null - is absent from the line instead of reported as none.');
     }
   } catch (e) {
     console.log(`⛔ FIND YIELD CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
