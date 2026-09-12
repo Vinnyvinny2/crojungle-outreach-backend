@@ -38563,14 +38563,31 @@ const _findEmailFireproofCore = async ({ website, ceoName, ceoTitle, ceoVouched 
   // because our verifier is down is worth re-running, and one blocked because the
   // mail server denied every address is not.
   const inferred = candidates[0];
-  const _blockWhy = !verifierAnyAvailable(undefined, verifierKey)
-    ? 'every configured email checker is unavailable, so nothing could be checked'
+  // ══ THE MOST SPECIFIC RECORDED CAUSE WINS, NOT THE FIRST GENERIC ONE ═════
+  // ROUND 146. This ladder tested "every configured email checker is
+  // unavailable" FIRST, and _lookupBlocked LAST. On an instance with NO
+  // verifier key that first branch is always true - and Vin's Render instance
+  // has had no verifier key since he removed the BounceBan one - so EVERY
+  // blocked address on EVERY lead reported a verifier outage, whatever had
+  // actually happened. A Hunter timeout, a rejected key and an empty balance
+  // all came out as "the checkers are down".
+  //
+  // Found by the servercheck agent driving the new Hunter-timeout path end to
+  // end: the row said the checkers were unavailable while the log, two lines
+  // above, said the lookup did not complete. Two different causes with two
+  // different next actions - top up, fix the key, or just re-run this lead -
+  // collapsed into the one that happened to be tested first.
+  //
+  // _lookupBlocked is a fact we RECORDED about a specific paid route on this
+  // specific lead. The verifier line is a statement about our own capability
+  // and is true of every lead at once, so it can only ever be the fallback.
+  const _blockWhy = _lookupBlocked ? hunterBlockedSay(_lookupBlocked)
     : _stalls
     ? 'their mail host stalls address probes by design, so no mailbox check was spent on a question it will not answer'
     : (catchAll !== true && catchAll !== false)
     ? 'we have no catch-all verdict for this domain, so an SMTP answer would prove nothing either way'
-
-    : _lookupBlocked ? hunterBlockedSay(_lookupBlocked)
+    : !verifierAnyAvailable(undefined, verifierKey)
+    ? 'every configured email checker is unavailable, so nothing could be checked'
     : 'no evidence of this mailbox from any source';
   console.log(`⚠ EMAIL [${domain}] T4 inferred only \u2014 ${inferred.email} is a GUESS and is BLOCKED from sending. Reason: ${_blockWhy}.`);
   return { email: inferred.email, ...EMAIL_TIERS.PATTERN_INFERRED, name, pattern: inferred.pattern, blockReason: _blockWhy };
@@ -83283,8 +83300,23 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
       for (const [_needle, _msg] of [
         [_n('could NOT check ${name} \u2014 ${hunterBlockedSay(', '_lookupBlocked)}'), 'the route that spends the credit renders its own English again, so a rate limit, a dead key and an unreachable Hunter collapse into "Hunter out of credits"'],
         [_n(': (_lookupBlocked && !_smtpActuallyRan) ? hunterBlockedSay', '(_lookupBlocked)'), 'the NOT RESOLVED line renders its own English again, so a lookup that never completed is reported there as an empty balance'],
-        [_n(': _lookupBlocked ? hunterBlockedSay', '(_lookupBlocked)'), 'the T4 block reason renders its own English again, so the row shows a blocked guess under a cause that did not happen'],
+        [_n('const _blockWhy = _lookupBlocked ? hunterBlockedSay', '(_lookupBlocked)'), 'the T4 block reason no longer tests the recorded Hunter cause FIRST, so on an instance with no verifier key every blocked address reports a checker outage whatever actually happened - which is what it did until Round 146'],
       ]) if (_src.indexOf(_needle) < 0) _fails.push(_msg);
+      // ══ AND THE ORDER, WHICH IS THE ACTUAL RULE ══════════════════════════
+      // A needle proves the branch exists; only the order proves it WINS. The
+      // defect was never a missing branch - _lookupBlocked was in this ladder
+      // all along, sitting last, behind a test that is true of every lead at
+      // once on an instance with no verifier key. Vin's Render instance has
+      // had no verifier key since he removed the BounceBan one, so that is
+      // every lead. Pinned as an offset comparison rather than as a literal,
+      // because the literal is what let it drift.
+      {
+        const _ladder = _src.slice(_src.indexOf(_n('const _blockWhy =', ' _lookupBlocked')));
+        const _iRecorded = _ladder.indexOf(_n('_lookupBlocked ? hunterBlocked', 'Say(_lookupBlocked)'));
+        const _iGeneric = _ladder.indexOf(_n('!verifierAnyAvailable(undefined,', ' verifierKey)'));
+        if (_iRecorded < 0 || _iGeneric < 0) _fails.push('the T4 block-reason ladder no longer contains both the recorded Hunter cause and the checker-outage fallback, so one of the two cannot be reported at all');
+        else if (_iRecorded > _iGeneric) _fails.push('the checker-outage fallback is tested BEFORE the recorded Hunter cause again, so a lookup that timed out, a rejected key and an empty balance all report as "the checkers are down" on any instance without a verifier key');
+      }
       const _uses = _src.split(_n('hunterBlockedSay(_lookup', 'Blocked)')).length - 1;
       if (_uses !== 3) _fails.push(`the block reason is rendered from the one table at ${_uses} places, not the three that print it - a fourth copy is a fourth chance to miss a state`);
     }

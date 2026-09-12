@@ -291,10 +291,48 @@ const GP_FIND_CAST = [
   { tag: 'busy', name: 'Pecan Grove Plumbing', cities: ['Dallas TX'], reviews: 400, rating: 4.4,
     site: 'https://pecangroveplumbing.example', phone: '+1 214-555-0107',
     expect: 'kept', why: 'a control: 400 reviews is inside the 2000 review ceiling' },
+  // ══ ROUND 146: THE RATING MOVES NOTHING, IN EITHER DIRECTION ═══════════
+  // OLD RULE: above the 4.85 ceiling this business was marked outsideBand,
+  // docked ten points and served behind every in-band lead.
+  // NEW RULE, Vin 2026-09-12, asked twice and answered twice ("trteat grate
+  // reviews as normal we dont not care fi there is anyhting abotu bad reviews
+  // that is irrlevant buisnesses ... take that out completley"): it is an
+  // ORDINARY in-band lead. Measured cause: 259 of the 480 businesses in that
+  // day's 17:33 press were docked ten points for sitting above the ceiling -
+  // 259 of that run's 274 demotions - on the one measurement the ladder has
+  // already proved it does not use. GP_BAND_MODE=cut still restores the delete
+  // exactly, and the boot's RATING BAND CHECK is where that escape is asserted.
   { tag: 'band49', name: 'Bishop Arts Plumbing', cities: ['Dallas TX'], reviews: 88, rating: 4.9,
     site: 'https://bishopartsplumbing.example', phone: '+1 214-555-0108',
-    expect: 'demoted', demote: 'outsideBand',
-    why: 'above the 4.85 rating ceiling: demoted behind every in-band lead, never deleted' },
+    expect: 'kept', why: 'above the 4.85 rating ceiling and ranked exactly like every other lead since 2026-09-12: no mark, no mark-down, no bench - and no bonus either' },
+  // ITS TWIN, AND THE RATING IS THE ONLY THING THE SCORE CAN SEE BETWEEN
+  // THEM. Same trade, the same 88 reviews, the same website, one metro each: so
+  // "the rating moves nothing in either direction" becomes an EQUALITY this
+  // fixture can measure instead of a sentence in a comment. Without it, "no
+  // mark-down" would pass on a build that had quietly turned the ceiling into a
+  // BONUS.
+  // AUSTIN, AND NOT DALLAS, FOR A MECHANICAL REASON: the fake honours pageSize
+  // exactly as the API does and the press asks for 20, so Dallas was already at
+  // 19 of its page. Adding two more silently dropped the last Dallas entry -
+  // a listing Google says has MOVED - out of the answer, and four counters went
+  // red pointing at code that was fine. Nothing city-shaped reaches
+  // placesTriageScore or predictReachability (the score's whole argument object
+  // is reviews, rating, risk, reach, trade, tier, hours, team, markets, the two
+  // demotion marks and the website verdict), so the metro cannot move the number
+  // this pair exists to compare. The page ceiling itself is asserted in P.
+  { tag: 'band44', name: 'Barton Springs Plumbing', cities: ['Austin TX'], reviews: 88, rating: 4.4,
+    site: 'https://bartonspringsplumbing.example', phone: '+1 512-555-0120',
+    expect: 'kept', why: 'the in-band half of the rating pair: 4.4 stars on the same 88 reviews, so its Find score must equal band49\'s exactly' },
+  // AND THE HALF VIN KEPT. The 4.2 floor was retired on 2026-08-28 - "the ones
+  // with lower ratings have way more pain, especially visibility pain - if they
+  // can afford us then these leads are gold as well" - so a business under the
+  // floor is KEPT, ranked, and marked with a note the rep can read. This is the
+  // case that proves the two entries above did not simply stop reading the
+  // rating: a check that ignores the field passes an equality and fails this.
+  // Houston, for the page-ceiling reason given on band44 above.
+  { tag: 'lowrating', name: 'Oak Forest Plumbing', cities: ['Houston TX'], reviews: 70, rating: 3.2,
+    site: 'https://oakforestplumbing.example', phone: '+1 713-555-0121',
+    expect: 'kept', why: 'below the rating floor: kept, ranked and carrying the lowRating note - rating was never a revenue signal, and a low-rated business is genuinely harder to find on Google' },
   // And the OTHER ceiling, the only size ceiling the press can reach without
   // paying a size lookup: 2400 reviews is past GP_MAX_REVIEWS, so the business
   // is benched as an email lead (round 114 - a big company is an email lead,
@@ -469,7 +507,11 @@ const gpFindAnswer = (textQuery, mask, pageSize) => {
   const m = String(textQuery || '').match(/^(.+) in (.+)$/);
   const city = (m && m[1] === GP_FIND_QUERY && GP_FIND_CITIES.includes(m[2])) ? m[2] : '';
   const rows = city ? GP_FIND_CAST.filter(c => c.cities.includes(city)) : [];
-  state.gpFind.push({ textQuery: String(textQuery || ''), city, served: rows.length, mask });
+  // pageSize rides along from Round 146: the cast outgrew a page once and the
+  // symptom was four counters that could not be reconciled, so the page itself
+  // is a measurement now rather than an assumption.
+  state.gpFind.push({ textQuery: String(textQuery || ''), city, served: rows.length, mask,
+    pageSize: Math.max(1, Number(pageSize) || 20) });
   // pageSize is honoured, and no nextPageToken is ever sent - see the note above.
   return { places: rows.slice(0, Math.max(1, Number(pageSize) || 20)).map(c => gpFindPlace(c, city, mask)) };
 };
@@ -532,7 +574,14 @@ const anthropicAnswer = (bodyText, b) => {
     // settle cannot fire either. Without this the callOnly lead would settle at
     // stage 1 like the golden one and the scenario would report a clean pass
     // while exercising nothing - the vacuous-check trap.
-    if (state.mode === 'nosettle') {
+    // Round 146: 'nonames' answers the same way, and it has to twice over. Its
+    // pages name nobody, so a fixture handing back a name would be inventing
+    // one the page does not carry; and a lead that SETTLES at stage 1 never
+    // reaches the paid wave at all, which would make the stand-down's "zero
+    // search-wave queries" assertion hold whether the stand-down existed or
+    // not. A fixture arranged so the assertion passes either way is the trap
+    // this file records - this keeps the wave genuinely on the table.
+    if (state.mode === 'nosettle' || state.mode === 'nonames') {
       return wrap({ name: null, title: null, evidence: '', confidence: 'low' });
     }
     return wrap({ name: 'Pete Barnes', title: 'Owner', evidence: 'Pete Barnes, Owner appears on the homepage', confidence: 'high' });
@@ -585,6 +634,29 @@ const FIND_CAREERS_HTML = (b) => `<!doctype html><html><body><h1>Careers</h1><p>
   + `"title":"Marketing Manager","datePosted":"${new Date(Date.now() - 21 * 864e5).toISOString().slice(0, 10)}"}</script>`
   + `<p>${'Join a crew that turns up on time and finishes what it starts. '.repeat(12)}</p>`
   + `</body></html>`;
+// ══ ROUND 146: PAGES THAT ARE READABLE AND NAME NOBODY ══════════════════════
+// The owner stand-down fires on EVIDENCE now - their own READABLE pages naming
+// nobody - and 'nosettle' cannot reach it. Measured here: a nosettle homepage
+// carries 270 characters of text and readFindIcpSignals will not call an
+// absence an absence under 800, so ownPagesNameNobody answers "we could not
+// look" and the wave is correctly bought. A fixture that cannot reach the
+// mechanism proves the absence of the case, not the presence of the rule.
+//
+// So: one long prose page, three nav links, no roster page anywhere, and none
+// of FOUNDER_PHRASE_RE's sentences ("family owned", "owner-operated",
+// "locally owned and operated" ...) - because a founder sentence is naming
+// somebody and would switch the rule off. `ownerLine` is the second shape:
+// pages that DO name a person and publish no address, which is the only way to
+// reach the Hunter email finder at all.
+const FIND_NONAME_HTML = (b, ownerLine) => `<!doctype html><html><head><title>${b.company}</title>`
+  + `<meta name="viewport" content="width=device-width"></head><body>`
+  + `<nav><a href="https://${b.host}/about">About</a> <a href="https://${b.host}/services">Services</a>`
+  + ` <a href="https://${b.host}/contact">Contact</a></nav>`
+  + `<h1>${b.company}</h1>${ownerLine || ''}`
+  + `<p>${'We have replaced roofs across this county for many years and we take every job seriously, from the first phone call to the final inspection. '.repeat(12)}</p>`
+  + `<form action="/contact"><input type="email" name="email"><textarea name="msg"></textarea></form>`
+  + `<a href="tel:+12145550188">(214) 555-0188</a>`
+  + `<footer>&copy; 2026 ${b.company}</footer></body></html>`;
 
 // ── THE FAKE POSTGREST (round 124) ──────────────────────────────────────────
 // The server owns the Find queue now, and a run that survives a closed tab is
@@ -608,6 +680,10 @@ state.sb = {};        // table -> rows
 state.sbFail = null;  // { table, method, code, times }: answer that status for the next N matching calls
 state.sbLog = [];     // every hit: { method, table, query, prefer }
 state.slowMs = 0;     // a pause on every page of a business's own site
+// Round 146: with this on, the fake NEVER answers an email-finder request, so
+// the finder's own 10-second cap fires and hunterFindPersonEmail's catch runs
+// for real. Off unless a case turns it on, so every other scenario is unchanged.
+state.hunterHang = false;
 const sbTable = (t) => (state.sb[t] = state.sb[t] || []);
 const sbUnknownColumn = (table, keys) => { const cols = SB_COLUMNS[table]; return cols ? (keys.find(k => !cols.includes(k)) || '') : ''; };
 const sbRefuse = (res, table, col) => send(res, 400, { code: 'PGRST204', message: `Could not find the '${col}' column of '${table}' in the schema cache` });
@@ -864,6 +940,11 @@ const fake = http.createServer(async (req, res) => {
     if (state.mode === 'findblocked') return send(res, 403, '<html><body>Access Denied. You have been blocked.</body></html>');
     // A resolved domain serving SOMEBODY ELSE'S site: never names the business.
     if (state.mode === 'findstranger') return send(res, 200, FIND_STRANGER_HTML());
+    // Round 146: the two shapes above. 'nonames' is what the owner stand-down
+    // fires on; 'nomailbox' names a person and publishes no address, which is
+    // the only lead shape that reaches the Hunter email finder.
+    if (state.mode === 'nonames') return send(res, 200, FIND_NONAME_HTML(b, ''));
+    if (state.mode === 'nomailbox') return send(res, 200, FIND_NONAME_HTML(b, '<p>Pete Barnes, Owner.</p>'));
     if (state.mode === 'findrich') {
       if (/our-team/.test(path)) return send(res, 200, FIND_TEAM_HTML(b));
       if (/contact/.test(path)) return send(res, 200, FIND_CONTACT_HTML(b));
@@ -924,6 +1005,13 @@ const bootServer = (extraEnv) => new Promise((resolve, reject) => {
       ANTHROPIC_API_KEY: 'sk-servercheck',
       FIRECRAWL_KEY: 'fc-servercheck',
       APIFY_TOKEN: 'ap-servercheck',
+      // ══ ROUND 146: WITHOUT THIS KEY THE EMAIL FINDER IS UNREACHABLE ══════
+      // hunterFindPersonEmail's own credit guard is `hunterKey && name && ...`,
+      // so on an instance with no HUNTER_KEY worthACredit can never be true and
+      // the whole email-finder route - the throw path Round 146 fixed included -
+      // is dark in this harness whatever any fixture answers. A fixture key: the
+      // FAKE_UPSTREAM seam sends every Hunter call to the fake network.
+      HUNTER_KEY: 'hk_servercheck',
       // Round 126: the access code and the origin list. Every helper below
       // sends the code; AUTH1 sends none, a wrong one, and reads the public paths.
       APP_TOKEN: SC_TOKEN,
@@ -1200,7 +1288,18 @@ const runLead = async (b, over, capMs) => {
     // pages here and exactly one picture is bought.
     ok(hFcShot === 1, `the contact read took ${hFcShot} homepage render(s) on one lead - it is one picture of the first screen, once`);
     const HSite = HJ.site || {};
-    ok(HSite.looks === 'bad' && HSite.looksMeasured === true, `the eyes called this homepage old, an untouched template and not credible, and the lead came back looks=${HSite.looks} measured=${HSite.looksMeasured}`);
+    // ── ROUND 146 RE-AIMED THIS ONE, AND SAYS SO ──────────────────────────
+    // OLD RULE: three eyes faults - the design years out of date, an untouched
+    // template, a page a stranger would not trust - landed on the word 'bad',
+    // which was the bottom of a three-word scale.
+    // NEW RULE: the scale is four words - good, fair, bad, POOR - so the same
+    // three faults now land on 'poor'. Nothing about the picture or the faults
+    // changed; the band edges did. The FAULTS are asserted beside the word, so
+    // a build that reached the same word off different evidence goes red
+    // instead of reading as agreement.
+    ok(HSite.looks === 'poor' && HSite.looksMeasured === true
+      && ['oldDesign', 'template', 'notCredible'].every(f => (HSite.looksFaults || []).includes(f)),
+      `the eyes called this homepage old, an untouched template and not credible, and the lead came back looks=${HSite.looks} measured=${HSite.looksMeasured} on ${JSON.stringify(HSite.looksFaults)} - three faults is the bottom band of the four-word scale`);
     ok(/out of date/.test(String(HSite.looksWhy || '')), `the visual verdict arrived with no reason a person could check: ${JSON.stringify(HSite.looksWhy)}`);
     // THE BLAST RADIUS, on a live route rather than on a fixture: the picture
     // said "bad" and the technical grade the audit and the Find score read is
@@ -1209,7 +1308,13 @@ const runLead = async (b, over, capMs) => {
       `the technical website grade MOVED when the visual one arrived: word=${HSite.word} gap=${HSite.gap} grade=${HSite.grade} on ${(HSite.faults || []).map(f => f.id).join(',') || 'no faults'} - every audit finding and the Find score read those three`);
     ok(HSite.looks !== HSite.word, 'the two website verdicts have collapsed into one word, so the toggle and the audit can no longer disagree - which is the whole reason there are two');
     ok((HJ.spend || {}).render === 1, `the lead reports ${JSON.stringify((HJ.spend || {}).render)} credit(s) on the homepage render - the footer figure is what settles the 1-versus-5 rate against the dashboard`);
-    ok(/SITE LOOKS \[[^\]]*\]: bad to a visitor/.test(srv.log().slice(hLog0)), 'the visual verdict never reaches the log, so a batch cannot be read for it');
+    // Re-aimed with the scale above, and the needle is now built from the word
+    // the ROW came back with rather than a typed copy of it: the log line and
+    // the row cannot disagree, and a fifth word added to the scale is covered
+    // the day it lands. (The word itself is pinned by the assertion above, so
+    // this cannot go vacuous on an empty verdict.)
+    ok(new RegExp('SITE LOOKS \\[[^\\]]*\\]: ' + String(HSite.looks) + ' to a visitor').test(srv.log().slice(hLog0)),
+      `the visual verdict on the row (${HSite.looks}) never reaches the log, so a batch cannot be read for it`);
     ok(/of them the homepage render/.test(srv.log().slice(hLog0)), 'the FIND CONTACT footer does not carry what the render cost this lead');
     ok(HJ.sizeLookup && HJ.sizeLookup.bought === false && /team page lists 3 people/.test(String(HJ.sizeLookup.why || '')), `the size lookup on a three-person team page reads ${JSON.stringify(HJ.sizeLookup)} - it must be not bought, and name the reason`);
     ok(/SIZE LOOKUP \[[^\]]*\]: not bought - their own team page lists 3 people/.test(srv.log().slice(hLog0)), 'the size search was stood down and no line says why - a saving the operator cannot see reads as a broken feature');
@@ -1263,8 +1368,16 @@ const runLead = async (b, over, capMs) => {
       // enforced: never-looked must never read as looks-fine. It is proven on
       // the dropped lead below, which comes back 'unknown' off this same live
       // route, and on BOTH halves of the boot's SITE LOOKS CHECK.
-      ok(NSS.looksMeasured === true && NSS.looks !== 'modern' && NSS.looks !== 'unknown',
-        `the picture never came back and their own markup was read fine, and the lead came back looks=${NSS.looks} measured=${NSS.looksMeasured} - the free code read is the second pair of eyes, so this is judged, not unknown`);
+      // ── AND ROUND 146 RE-AIMED IT AGAIN ─────────────────────────────
+      // 'modern' was retired with the three-word scale, so that clause could
+      // never fail again: a needle for a word nothing produces is coverage
+      // nobody can trip, which is worse than no guard. The invariant is
+      // unchanged and the word carrying it is now 'good' - never-looked must
+      // never read as looks-fine - so a lead judged off markup alone must be
+      // measured, must not be 'unknown', and must not be waved through as
+      // 'good' on a page whose own markup the technical read found faults on.
+      ok(NSS.looksMeasured === true && NSS.looks !== 'good' && NSS.looks !== 'unknown',
+        `the picture never came back and their own markup was read, and the lead came back looks=${NSS.looks} measured=${NSS.looksMeasured} on ${JSON.stringify(NSS.looksFaults)} - the free code read is the second pair of eyes, so this is judged: not unknown, and not waved through as fine`);
       ok(/markup/.test(String(NSS.looksWhy || '')) && /no picture/.test(String(NSS.looksWhy || '')),
         `the row is not told that nobody could see their homepage AND that the verdict came off their code instead: ${JSON.stringify(NSS.looksWhy)}`);
       // The one that cannot be allowed to drift: the markup verdict must agree
@@ -1315,6 +1428,19 @@ const runLead = async (b, over, capMs) => {
     {
       const _isOwnerSearch = (q) => q.host === 'api.firecrawl.dev' && /\/v1\/search/.test(q.path)
         && !_isSizeQ(q.query) && /owner|principal|founder|president|license|linkedin\.com\/in/i.test(String(q.query || ''));
+      // ══ ROUND 146: THE LICENCE QUERY IS NOT ONE OF THE SEARCHES ══════════
+      // Vin, 2026-09-12: "Stand down on the searches, keep the licence stage."
+      // The stand-down skips findOwnerViaWebSearch and nothing else, and the
+      // state licence register is still bought DELIBERATELY - that is where a
+      // sole proprietor is filed and he is on nobody's roster. Every licence
+      // query this file can build carries the word "license" (the trades branch
+      // is `contractor license "license holder" OR qualifier OR owner`, the
+      // senior-care one `administrator OR "executive director" OR owner OR
+      // "operated by" license`), which is exactly why the predicate above
+      // matches it too - so "zero owner searches" could never hold on a
+      // stood-down lead and was never the rule. These two split it in half.
+      const _isLicenceQ = (q) => /\blicen[cs]e\b/i.test(String(q.query || ''));
+      const _isSearchWave = (q) => _isOwnerSearch(q) && !_isLicenceQ(q);
       // The MODE decides whether their pages carry a roster at all: only
       // 'findrich' serves a team page. 'nosettle' strips the owner sentence
       // from a plain homepage, so those leads name nobody anywhere - which is
@@ -1329,32 +1455,90 @@ const runLead = async (b, over, capMs) => {
           keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test', verifierKey: '' },
         });
         state.mode = _prevMode;
-        return { r: _r, j: _r.json || {}, searches: state.requests.slice(_i0).filter(_isOwnerSearch).length };
+        const _after = state.requests.slice(_i0);
+        return { r: _r, j: _r.json || {},
+          searches: _after.filter(_isOwnerSearch).length,
+          wave: _after.filter(_isSearchWave).length,
+          licence: _after.filter(q => _isOwnerSearch(q) && _isLicenceQ(q)).length };
       };
 
-      // THE CONTROL FIRST, or none of this proves anything: a plain trade whose
-      // pages name nobody must still buy the wave. Without this the two
-      // assertions below would both pass on a build that never searches at all.
+      // ══ THE CONTROL, RE-AIMED BY ROUND 146 ══════════════════════════════
+      // OLD RULE (Round 144): the stand-down needed BOTH an ownerRisk category
+      // AND pages naming nobody, so this lead - a plain Roofing contractor -
+      // was the control because its TRADE held the wave open.
+      // NEW RULE (Vin, 2026-09-12): the trade decides nothing, the evidence
+      // decides alone. What holds this lead's wave open now is the other half
+      // of the same rule, and it is PART 3's: an absence requires that we
+      // actually looked. Its pages carry 270 characters of text, under
+      // readFindIcpSignals' 800-character floor, so nothing could have named
+      // anybody and ownPagesNameNobody answers "we could not look" rather than
+      // "nobody is there".
+      // It is also the only case here that proves the wave is REACHABLE. A
+      // stand-down firing on every lead would save every credit, find nobody,
+      // and pass a naive check.
       const _ctl = await _run('Rw1', 'Roofing', 'nosettle');
       ok(_ctl.r.code === 200, `the control lead for the owner-wave stand-down answered ${_ctl.r.code}`);
-      ok(_ctl.searches > 0, 'the CONTROL lead - a roofing contractor whose own pages name nobody - bought zero owner searches, so this fixture cannot reach the paid wave at all and the two assertions below prove nothing');
-      ok(_ctl.j.paidOwnerRiskStandDown === false, 'a plain roofing contractor is marked as an ownerRisk stand-down, so the rule has escaped the flagged categories');
+      ok(_ctl.searches > 0, 'the CONTROL lead - a contractor whose pages nobody could read - bought zero owner searches of any kind, so this fixture cannot reach the paid wave at all and every assertion below it proves nothing');
+      ok(_ctl.wave > 0, `the control bought ${_ctl.wave} of the paid SEARCH wave's queries (the licence query excluded, because the stand-down keeps that one) - the half the stand-down actually skips is unreachable here, so the "zero" asserted below would be zero either way`);
+      // AND THE CASE HAS TO BE WHAT IT SAYS IT IS. Without this the control
+      // could be green because its pages WERE readable and named somebody,
+      // which is a different branch passing under this one's name.
+      ok((_ctl.j.signals || {}).readable !== true,
+        `the control lead's pages came back readable (${JSON.stringify({ readable: (_ctl.j.signals || {}).readable, textChars: (_ctl.j.signals || {}).textChars })}), so it is no longer the did-we-look case and the wave is being held open by something else`);
+      ok(_ctl.j.paidOwnerRiskStandDown === false, 'a lead whose own pages nobody could read is stood down, so an absence is being claimed off a page we never managed to read - PART 3, and the one branch that keeps this wave reachable at all');
 
-      // THE CASE. Northgate Park and The Colonnade, in one assertion.
-      const _risk = await _run('Rw2', 'Senior Care', 'nosettle');
+      // ══ THE CASE, RE-AIMED AND WIDENED BY ROUND 146 ═════════════════════
+      // OLD RULE: a lead in one of the twelve flagged ownerRisk categories
+      // whose own pages named nobody. OLD ASSERTION: it bought ZERO owner
+      // searches - which could never hold once the licence query survived the
+      // stand-down, because that query carries the word "license" and the
+      // predicate matches it.
+      // NEW RULE (Vin, 2026-09-12, measured): the stand-down fires on the
+      // evidence alone, whatever the trade. Glow Up, McCall and Bobcat named
+      // nobody between them and took 28 of that batch's 68 credits - 41% - and
+      // about 620 seconds, and not one of the three sat in a flagged category.
+      // So what is asserted now is: zero queries of the SEARCH wave, and the
+      // licence query STILL BOUGHT.
+      // 'nonames' rather than 'nosettle', and that is why that fixture exists:
+      // nosettle's pages sit under the readable floor, so the rule answers "we
+      // could not look" and this case could not be reached from this harness
+      // at all. A mechanism no fixture can reach is the class this file records.
+      const _risk = await _run('Rw2', 'Senior Care', 'nonames');
       ok(_risk.r.code === 200, `a senior care lead answered ${_risk.r.code} - the stand-down must change what is BOUGHT, never whether the lead completes`);
       ok(_risk.j.notIcp !== true, 'a senior care lead was DROPPED rather than stood down - the lead is kept, only the paid search is skipped');
-      ok(_risk.searches === 0, `a senior care business whose own pages name nobody still bought ${_risk.searches} owner search(es) against the control's ${_ctl.searches} - that is 21 of the 32 credits the 2026-09-11 batch spent, for three owners who were never there`);
+      // THE FIXTURE IS THE CASE: readable pages, no roster row that reads as a
+      // person, no founder sentence. If any of the three drifts, the two
+      // assertions under it stop being about the stand-down at all.
+      ok((_risk.j.signals || {}).readable === true
+        && !(((_risk.j.signals || {}).teamNames) || []).length
+        && !(_risk.j.signals || {}).founderPhrase,
+        `the stand-down case is not the shape it claims to be: ${JSON.stringify({ readable: (_risk.j.signals || {}).readable, textChars: (_risk.j.signals || {}).textChars, teamNames: (_risk.j.signals || {}).teamNames, founderPhrase: (_risk.j.signals || {}).founderPhrase })} - it needs READABLE pages that name nobody, or it is measuring a different branch`);
+      ok(_risk.wave === 0, `a business whose own readable pages name nobody still bought ${_risk.wave} of the paid SEARCH wave's queries against the control's ${_ctl.wave} - that is 28 of the 68 credits the 2026-09-12 batch spent and about 620 seconds, for three owners who were never there`);
+      ok(_risk.licence > 0, `the stood-down lead bought ${_risk.licence} licence-register quer(ies) - Vin, 2026-09-12: "Stand down on the searches, keep the licence stage." That register is where a sole proprietor is filed and it is the only route left to Darrel on a lead whose own pages name nobody, so standing it down with the wave loses him`);
       ok(_risk.j.paidOwnerRiskStandDown === true, 'the row does not record that the wave was stood down, so a batch that saved the credits reads identically to one that never had the leads');
 
-      // AND THE HALF THAT KEEPS DARREL. The same consolidated category, but
-      // their own team page names people - so there IS an owner to find here
-      // and the wave must still be bought. This is the assertion that stops
-      // the stand-down quietly becoming a category ban.
+      // ══ AND THE TRADE DECIDES NOTHING, WHICH IS THE WHOLE CHANGE ════════
+      // The same readable, name-free pages on a PLAIN Roofing contractor - a
+      // trade carrying no ownerRisk flag at all - must stand down identically.
+      // This is the assertion that would have caught the three leads that spent
+      // 41% of the 2026-09-12 batch looking for people nobody had named.
+      const _plain = await _run('Rw4', 'Roofing', 'nonames');
+      ok(_plain.r.code === 200, `the plain-trade stand-down lead answered ${_plain.r.code}`);
+      ok(_plain.j.paidOwnerRiskStandDown === true && _plain.wave === 0,
+        `a Roofing contractor whose own readable pages name nobody was not stood down (flag ${JSON.stringify(_plain.j.paidOwnerRiskStandDown)}, ${_plain.wave} search-wave quer(ies)) - the category half is gone, so an unflagged trade has to behave exactly like the flagged one above`);
+      ok(_plain.licence > 0, `the plain-trade stood-down lead bought ${_plain.licence} licence-register quer(ies) - the licence stage survives the stand-down on every trade, not only on the flagged ones`);
+
+      // ══ AND THE HALF THAT KEEPS DARREL, RE-AIMED ═══════════════════════
+      // Round 144 read this case as "the same consolidated CATEGORY, but their
+      // own team page names people". Since 2026-09-12 the category is out of
+      // the rule altogether, so what this case proves now is the NAMED half on
+      // its own: pages that name a person give a search index something to
+      // corroborate, so the wave is not stood down - whatever the trade. It is
+      // the assertion that stops the stand-down becoming "never search".
       const _named = await _run('Rw3', 'Senior Care', 'findrich');
       ok(_named.r.code === 200, `a senior care lead with a roster answered ${_named.r.code}`);
       ok(Number((_named.j.signals || {}).teamCount) > 0, `the senior care lead with a roster read teamCount ${JSON.stringify((_named.j.signals || {}).teamCount)} - without a roster on the row this assertion is testing the fixture, not the rule`);
-      ok(_named.j.paidOwnerRiskStandDown === false, 'a senior care business that names people on its own team page is still stood down - the category was never meant to decide this alone, and an owner-run home in a consolidated field is exactly the lead worth finding');
+      ok(_named.j.paidOwnerRiskStandDown === false, 'a business that names people on its own team page is still stood down, so the rule has stopped reading the only fact it is allowed to read - an owner-run home in a consolidated field is exactly the lead worth finding, and a roster is a name a search index can corroborate');
       // NOT asserted here: that this lead then BOUGHT searches. Their own team
       // page names Pete Barnes as Owner, so stage 1 settles and the wave is
       // rightly never reached - asserting a buy would be asserting the fixture.
@@ -1363,6 +1547,59 @@ const runLead = async (b, over, capMs) => {
       ok((_named.j.owner || {}).name, 'the roster lead found nobody at all, so the stand-down flag above was read on a lead whose pages we apparently could not read either');
 
       state.biz = hBiz;
+    }
+
+    // ══ ROUND 146: THE HUNTER LOOKUP THAT NEVER CAME BACK ════════════════
+    // NEW COVERAGE, not a re-aim. hunterFindPersonEmail's catch returned a bare
+    // `null`, which is indistinguishable from a genuinely empty index - so a
+    // lookup that TIMED OUT told the row "its index has no address for them.
+    // One credit spent": a false statement about a business, built on a failure
+    // of ours, and it fired 3 times in a batch of 10.
+    //
+    // Nothing here could reach it. The fake answered every Hunter request 200
+    // with an empty body, so the catch was unreachable and the existing fixture
+    // proved the ABSENCE of the case rather than the presence of the rule.
+    // state.hunterHang makes the fake never answer an email-finder request, so
+    // the finder's own 10-second cap fires and the catch runs.
+    //
+    // 'nomailbox' is the only lead shape that reaches the finder at all: their
+    // pages must NAME a person (worthACredit needs a real name) and publish NO
+    // address, because a published one returns before the finder is ever asked
+    // - which is why scenario H's own lead, whose contact page publishes
+    // pete@, cannot host this and a separate business is registered for it.
+    {
+      const hhBiz = bizReg('Hhang'); state.biz = hhBiz;
+      const _hhMode = state.mode; state.mode = 'nomailbox';
+      const hhLog0 = srv.log().length; const hhReq0 = state.requests.length;
+      state.hunterHang = true;
+      const HH = await httpPost(`http://127.0.0.1:${SRV_PORT}/api/find-contact`, {
+        company: { name: hhBiz.company, website: `https://${hhBiz.host}`, phone: '(214) 555-0188',
+                   location: 'Dallas, TX', industry: 'Roofing', reviewCount: 180, rating: 4.6 },
+        keys: { anthropicKey: 'k-test', firecrawlKey: 'fc-test', verifierKey: '' },
+      });
+      state.hunterHang = false; state.mode = _hhMode; state.biz = hBiz;
+      const HHJ = HH.json || {};
+      const hhLog = srv.log().slice(hhLog0);
+      const hhAsked = state.requests.slice(hhReq0).filter(q => q.host === 'api.hunter.io' && /email-finder/.test(q.path)).length;
+      ok(HH.code === 200, `the lead whose Hunter lookup hung answered ${HH.code}: ${String(HHJ.error || '').slice(0, 160)} - a timeout at the finder costs the address, never the lead`);
+      // THE FIXTURE REACHED THE MECHANISM. Without this line every assertion
+      // below it is green on a lead that never asked Hunter anything, which is
+      // exactly the state this whole case exists to leave behind.
+      ok(hhAsked === 1, `the email finder was asked ${hhAsked} time(s) on a lead with a named owner and no published address - it has to be asked exactly once, or the catch was never entered and this case proves nothing`);
+      ok(/HUNTER FINDER \[[^\]]*\]: the lookup for [^\n]*did not complete/.test(hhLog),
+        `a Hunter lookup that never came back did not say so: ${JSON.stringify((hhLog.match(/HUNTER FINDER[^\n]{0,200}/) || ['(no HUNTER FINDER line at all)'])[0])}. A request that may never have arrived is a failure of ours, and the line has to say the lookup did not complete`);
+      // AND THE SENTENCE THAT MUST NOT BE THERE, which IS the defect: a throw
+      // returning a bare null took the same exit as an empty index, so the log
+      // stated a fact about their record off a request that never arrived.
+      // Scoped to THIS lead's window, because that line is correct on every
+      // other lead in this run.
+      ok(!/index has no address for them/.test(hhLog),
+        `a Hunter lookup that timed out was reported as their index having no address for them: ${JSON.stringify((hhLog.match(/[^\n]*index has no address for them[^\n]*/) || [''])[0])}. That is a false statement about a business, built on a failure of ours`);
+      ok(/could NOT check [^\n]*not evidence that no address exists/.test(hhLog),
+        `the address row was not told the last paid route was CLOSED rather than empty: ${JSON.stringify((hhLog.match(/EMAIL \[[^\]]*\]: could NOT check[^\n]{0,220}/) || ['(no line)'])[0])} - one is a fact about them and the other is a fact about us, and they need opposite next actions`);
+      // NOT ASSERTED HERE, DELIBERATELY: that a credit was or was not spent.
+      // Nothing on this path measures it - the request may never have reached
+      // Hunter - and "One credit spent" was the invented half of the old line.
     }
     ok(/plain fetch/.test(String(HJ.readVia || '')), `readVia says "${HJ.readVia}" rather than naming the free read`);
     // Their own navigation, not a paid sitemap: the team, contact and careers
@@ -1702,12 +1939,27 @@ const runLead = async (b, over, capMs) => {
           const _noSite = _cos.filter(c => c && !c.website);
           ok(/PRESS SITE READ/.test(srv.log()), 'the press never read a single homepage - the free site read did not run at all, so every assertion below it would be measuring nothing');
           ok(_withSite.length > 0, 'no pressed lead carries a website, so the free read had nothing to look at and this scenario cannot measure it');
-          // The verdict is on the lead. Only 'dated', 'bad' and 'unknown' are
-          // reachable here: the press never takes a picture, and readSiteLooks
-          // holds that clean code alone is not evidence a site looks good.
+          // ── ROUND 146 RE-AIMED THIS, AND SAYS WHY ──────────────────────
+          // OLD RULE: three words, of which only 'dated', 'bad' and 'unknown'
+          // were reachable without a picture - so this line read as "'modern'
+          // needs a picture and the press never takes one".
+          // NEW RULE: four words - good, fair, bad, poor - and ALL FOUR are
+          // reachable from markup alone (datedDesign 4, noForm 3,
+          // noClickToCall 1, banded at 2 / 4 / 7). So the WORD can no longer
+          // tell a press verdict from a picture verdict, and the invariant the
+          // old line was written to hold has moved onto the EVIDENCE: the press
+          // buys no render, so every verdict it writes has to say it came off
+          // their own markup with nobody looking at the page itself. That
+          // sentence is readSiteLooks' own, so no second copy of the rule lives
+          // here to go stale.
+          const _grades = ['poor', 'bad', 'fair', 'good'];
+          const _anyWord = _grades.concat(['unknown', '', undefined]);
           const _graded = _withSite.filter(c => c.siteLooksMeasured === true);
-          ok(_withSite.every(c => ['dated', 'bad', 'unknown', '', undefined].includes(c.siteLooks)),
-            `a pressed lead carries a website verdict the press cannot support (${JSON.stringify(_withSite.map(c => c.siteLooks).filter(v => !['dated', 'bad', 'unknown', '', undefined].includes(v)).slice(0, 3))}) - 'modern' needs a picture and the press never takes one`);
+          ok(_withSite.every(c => _anyWord.includes(c.siteLooks)),
+            `a pressed lead carries a website verdict that is not one of the four declared grades (${JSON.stringify(_withSite.map(c => c.siteLooks).filter(v => !_anyWord.includes(v)).slice(0, 3))}) - ${_grades.join('/')}, or unknown when nobody looked, and nothing else`);
+          ok(_graded.every(c => /read free from their own markup/.test(String(c.siteLooksWhy || ''))
+            && /Nobody looked at the page itself/.test(String(c.siteLooksWhy || ''))),
+            `a pressed lead carries a GRADED website verdict that does not say it came off their own markup: ${JSON.stringify(_graded.filter(c => !/read free from their own markup/.test(String(c.siteLooksWhy || ''))).map(c => [c.name, c.siteLooks, String(c.siteLooksWhy || '').slice(0, 90)]).slice(0, 2))} - the press never buys a picture, so a verdict it cannot attribute to markup was read off something nobody paid for`);
           ok(_graded.length > 0, 'the press read homepages and graded NONE of them - the markup-only verdict is the whole round and it is not reaching a single lead');
           // A lead with no website is its own lane, never a failed look.
           ok(_noSite.every(c => c.siteLooksMeasured !== true), 'a lead with no website at all carries a measured website verdict - there was nothing to read');
@@ -1717,7 +1969,12 @@ const runLead = async (b, over, capMs) => {
           // (launch night, round 42), and the server has no strip-and-retry.
           const _qGraded = _q.filter(r => r.extra && r.extra.siteLooksMeasured === true);
           ok(_qGraded.length > 0, 'the website verdict never reached the queue row - it is computed at the press and dropped before the draw order and the bad-websites toggle can read it, which is the computed-but-not-passed class this file records most');
-          ok(_qGraded.every(r => r.extra.siteLooks === 'dated' || r.extra.siteLooks === 'bad'), 'a queue row carries a measured verdict that is neither dated nor bad, so something is being written as measured that the press cannot measure');
+          // Re-aimed onto the four-word scale (see above). The half of this
+          // line that was doing the work is unchanged: a row must never claim
+          // to be MEASURED while carrying 'unknown' or an empty word, which is
+          // the unmeasured-as-measured class.
+          ok(_qGraded.every(r => _grades.includes(r.extra.siteLooks)),
+            `a queue row claims a MEASURED website verdict of ${JSON.stringify([...new Set(_qGraded.map(r => r.extra.siteLooks).filter(v => !_grades.includes(v)))])}, which is not one of the four grades the press can produce - something unmeasured is riding the row as measured`);
           // NAMED, both directions. Grim Site Plumbing's markup is out of date
           // and offers no way to make contact; Refused Site Plumbing will not
           // answer a plain read at all. One must be graded and the other must
@@ -1726,8 +1983,15 @@ const runLead = async (b, over, capMs) => {
           const _grim = _cos.find(c => /Grim Site/.test(c.name || ''));
           const _ref = _cos.find(c => /Refused Site/.test(c.name || ''));
           if (_grim) {
-            ok(_grim.siteLooksMeasured === true && (_grim.siteLooks === 'bad' || _grim.siteLooks === 'dated'),
-              `Grim Site Plumbing - a homepage with a 2011 copyright and no way to contact them - graded "${_grim.siteLooks}" (measured=${_grim.siteLooksMeasured}). The press must be able to grade that from markup alone, with no picture and no credit spent`);
+            // Re-aimed: on the four-word scale a 2011 copyright plus no way
+            // to make contact is 'poor' - datedDesign 4 and noForm 3 is 7, the
+            // top band - where the three words called it 'bad'. The FAULTS are
+            // asserted beside the word so a build reaching the same word off
+            // different evidence goes red instead of reading as agreement.
+            ok(_grim.siteLooksMeasured === true && (_grim.siteLooks === 'poor' || _grim.siteLooks === 'bad')
+              && (_grim.siteLooksFaults || []).includes('datedDesign')
+              && (_grim.siteLooksFaults || []).includes('noForm'),
+              `Grim Site Plumbing - a homepage with a 2011 copyright and no way to contact them - graded "${_grim.siteLooks}" on ${JSON.stringify(_grim.siteLooksFaults)} (measured=${_grim.siteLooksMeasured}). The press must be able to grade that from markup alone, with no picture and no credit spent, and the design age and the missing enquiry route are the two things a visitor actually meets`);
           } else ok(false, 'the press did not return Grim Site Plumbing, so the one cast business with a bad website never reached the verdict and the graded path is untested');
           if (_ref) {
             ok(_ref.siteLooksMeasured !== true, `Refused Site Plumbing refused a plain read and still came back measured as "${_ref.siteLooks}" - a site nobody could read must never be reported as a site that passed`);
@@ -1780,13 +2044,19 @@ const runLead = async (b, over, capMs) => {
       // and each time the ordering assertion below quietly measured the wrong
       // pool. A field the app derives cannot go stale that way.
       const _dem = (c) => Number((c || {}).demotionPoints) < 0;
+      // outsideBand STAYS ON THIS LIST although nothing writes it any more,
+      // and that is the point: since 2026-09-12 the rating marks nothing, so
+      // the else-branch below now asserts on EVERY in-band lead that the mark
+      // has not come back. A retired flag taken off this list is a flag that
+      // can return silently, which is the class this repo records most.
       const _demFlags = ['outsideBand', 'aboveSizeCeiling', 'thinReviews', 'listingRisk'];
       // EVERY CASE THIS SCENARIO ASSERTS ON STILL EXISTS. A business nobody
       // declared can never be found in the answer, so a deleted or renamed cast
       // entry would turn each "was it dropped?" assertion below into a green
       // line about nothing.
       const _tags = ['quiet', 'floorsep', 'fakeA', 'fakeB', 'chainA', 'chainB', 'closedperm', 'closedtemp',
-        'nosite', 'multi', 'busy', 'band49', 'huge', 'branch', 'alert', 'alertneutral', 'alertpolicy',
+        'nosite', 'multi', 'busy', 'band49', 'band44', 'lowrating', 'huge', 'branch', 'alert',
+        'alertneutral', 'alertpolicy',
         'puresab', 'inside', 'insidetext', 'moved', 'movedonly'];
       ok(_tags.every(t => GP_FIND_CAST.some(c => c.tag === t)),
         `the cast no longer carries ${JSON.stringify(_tags.filter(t => !GP_FIND_CAST.some(c => c.tag === t)))}, so the assertions about those businesses are passing on a business that was never served`);
@@ -1796,6 +2066,17 @@ const runLead = async (b, over, capMs) => {
       const _pq = state.gpFind.filter(q => q.city);
       ok(new Set(_pq.map(q => q.city)).size === GP_FIND_CITIES.length,
         `the press searched ${JSON.stringify([...new Set(_pq.map(q => q.city))])} of the ${GP_FIND_CITIES.length} metros it was asked for - a grid that misses a metro cannot measure coverage, and every "absent from" claim is then made about a market nobody looked in`);
+      // ══ AND NO CITY'S LISTINGS ARE BEING TRUNCATED ══════════════════════
+      // The fake honours pageSize exactly as the API does. On 2026-09-12 three
+      // businesses were added to Dallas, its list went to 21 against a page of
+      // 20, and the last entry - a listing Google says has MOVED - simply never
+      // arrived: "27 seen of 28", the listing-risk row one short, and four
+      // assertions red pointing at counters that were correct. Every count in
+      // this scenario is read against the cast, so a cast that outgrows a page
+      // has to be red HERE, where the cause is, and not four lines later.
+      ok(_pq.every(q => q.served <= q.pageSize),
+        `the fixture served more listings for a city than the page the press asked for (${JSON.stringify(_pq.filter(q => q.served > q.pageSize).map(q => ({ city: q.city, served: q.served, page: q.pageSize })))}) - everything past the page is dropped silently, so the businesses at the END of that city's cast never reach the answer and every count below is short by exactly that many`);
+
       // Which branch of scenario I's second-press check actually fired. A
       // search outside the cast can only have come from the SECOND press, so
       // its absence is the dedupe working rather than an assumption about it.
@@ -1929,13 +2210,59 @@ const runLead = async (b, over, capMs) => {
       ok(_cos.length > 0 && _cos.every(c => typeof c.demotionPoints === 'number')
         && _cos.some(c => _dem(c)) && _cos.some(c => !_dem(c)),
         `demotionPoints is not on every lead, or no lead is demoted, or every lead is: ${JSON.stringify(_cos.map(c => [c.name, c.demotionPoints]))} - the ordering assertion below reads that field, and a field that answers the same for every lead makes it a green line about nothing`);
-      ok(_bi >= 0 && _cos[_bi].outsideBand === true,
-        `the ${_ct('band49').rating}-star business arrived as ${JSON.stringify(_bi >= 0 ? { outsideBand: _cos[_bi].outsideBand } : null)} - above the 4.85 ceiling it is kept and MARKED, never deleted: Google bills per call, so deleting it saves nothing and the next press pays to find it again`);
-      // Scoped to the lead being THERE: its absence is the assertion above,
-      // which names that cause properly. A message that blames the ordering for
-      // a deleted lead sends the reader to the healthy half of the press.
-      ok(_bi < 0 || _bi > _lastIn,
-        `the ${_ct('band49').rating}-star business came back at position ${_bi + 1} of ${_cos.length}, ahead of the in-band lead at position ${_lastIn + 1} (${JSON.stringify((_cos[_lastIn] || {}).name)}) - a demoted lead must arrive behind every in-band one so it fills the bench instead of this run's queue`);
+      // ══ ROUND 146 INVERTED BOTH OF THESE, AND SAYS SO ═══════════════════
+      // OLD RULE: above the 4.85 ceiling a business was MARKED outsideBand and
+      // served BEHIND every in-band lead.
+      // NEW RULE (Vin, 2026-09-12, asked twice and answered twice): the rating
+      // moves nothing in either direction. 259 of the 480 businesses in that
+      // day's 17:33 press were docked ten points on it - 259 of that run's 274
+      // demotions - so the biggest single mark-down in the run was being made
+      // on the one measurement the ladder has already proved it does not use.
+      // The business is kept, UNMARKED, undemoted, and it takes its queue slot
+      // like anybody else. GP_BAND_MODE=cut still restores the delete exactly
+      // and the boot's RATING BAND CHECK is where that escape is asserted.
+      const _b49 = _bi >= 0 ? _cos[_bi] : null;
+      ok(_b49 && _b49.outsideBand !== true && Number(_b49.demotionPoints) === 0,
+        `the ${_ct('band49').rating}-star business arrived as ${JSON.stringify(_b49 ? { outsideBand: _b49.outsideBand, demotionPoints: _b49.demotionPoints } : null)} - since 2026-09-12 a near-perfect rating is neither a penalty nor a reward, so it carries no mark and no mark-down`);
+      // AND IT IS NOT ON THE BENCH. The old line asserted the exact opposite:
+      // that it arrived behind every in-band lead. Scoped to the lead being
+      // THERE, because its absence is the assertion above, which names that
+      // cause properly - blaming the ordering for a deleted lead sends the
+      // reader to the healthy half of the press.
+      ok(_bi < 0 || _bi <= _lastIn,
+        `the ${_ct('band49').rating}-star business came back at position ${_bi + 1} of ${_cos.length}, BEHIND the last in-band lead at position ${_lastIn + 1} (${JSON.stringify((_cos[_lastIn] || {}).name)}) - it is an ordinary in-band lead now, so the bench is not where it belongs`);
+      // ══ AND NO BONUS EITHER: "IRRELEVANT" IS ZERO IN BOTH DIRECTIONS ════
+      // The pair differ in the rating and in nothing else - same trade, same
+      // metro, the same 88 reviews, the same website - so one number is the
+      // whole assertion. Predicted reachability is checked FIRST and on its
+      // own: the two NAMES have to score the same there, or the comparison
+      // below would be measuring the name instead of the rating.
+      const _b44 = _cos.find(c => String(c.name) === _ct('band44').name) || null;
+      ok(_b49 && _b44 && _b49.reachPredict === _b44.reachPredict,
+        `the rating pair differ in predicted reachability (${JSON.stringify([_b49 && _b49.reachPredict, _b44 && _b44.reachPredict])}) - the score comparison below would then be measuring their NAMES rather than their ratings, so rename the twin until the two agree`);
+      ok(_b49 && _b44 && _b49.icpScore === _b44.icpScore,
+        `${_ct('band49').name} at ${_ct('band49').rating} stars scored ${_b49 && _b49.icpScore} and ${_ct('band44').name} at ${_ct('band44').rating} stars scored ${_b44 && _b44.icpScore} on the same ${_ct('band49').reviews} reviews - the rating is moving the Find score again, and a BONUS above the ceiling is the same defect as the mark-down pointing the other way`);
+      // ══ AND THE HALF VIN KEPT, WHICH IS THE ONE THAT PROVES THIS CHECK
+      //    STILL READS THE RATING AT ALL. A build that had simply stopped
+      //    reading it passes both lines above and fails this one.
+      const _lo = _cos.find(c => String(c.name) === _ct('lowrating').name) || null;
+      ok(_lo && _lo.lowRating === true && Number(_lo.demotionPoints) === 0 && !_demFlags.some(f => _lo[f]),
+        `the ${_ct('lowrating').rating}-star business arrived as ${JSON.stringify(_lo ? { lowRating: _lo.lowRating, demotionPoints: _lo.demotionPoints, marks: _demFlags.filter(f => _lo[f]) } : null)} - the floor was retired on 2026-08-28 ("the ones with lower ratings have way more pain, especially visibility pain"), so it is kept, unmarked and counted as pain`);
+      ok(_lo && String(_lo.lowRatingNote || '').includes(String(_ct('lowrating').rating)),
+        `the note on ${_ct('lowrating').name} reads ${JSON.stringify(_lo && _lo.lowRatingNote)} - a lead kept BECAUSE its rating is a reason to buy has to carry the rating it was kept for, or the rep is handed a lead with no reason on it`);
+      // AND THE RUN'S OWN REPORT SAYS BOTH NUMBERS. Counted off the cast
+      // against the thresholds the LINE ITSELF prints, so nothing here holds a
+      // typed copy of a band edge that Settings can move.
+      const _pb = _log.match(/PAIN BAND \[Places\]: (\d+) lead\(s\) sat ABOVE ([\d.]+) stars and were (KEPT|DROPPED)/) || [];
+      const _pbLow = _log.match(/(\d+) lead\(s\) below ([\d.]+) stars were KEPT and ranked/) || [];
+      ok(_pb.length === 4 && _pbLow.length === 3,
+        `the press printed no readable PAIN BAND line, so the one report that says what the rating did to this run cannot be read: ${JSON.stringify((_log.match(/PAIN BAND[^\n]{0,220}/) || ['(no line at all)'])[0])}`);
+      if (_pb.length === 4 && _pbLow.length === 3) {
+        ok(_pb[3] === 'KEPT' && Number(_pb[1]) === _listings(c => Number(c.rating) > Number(_pb[2])),
+          `the PAIN BAND line reports ${_pb[1]} listing(s) above ${_pb[2]} stars and ${_pb[3]}, against the ${_listings(c => Number(c.rating) > Number(_pb[2]))} the fixture served - a DROPPED here is the star delete back on, and that cost 1,810 of 2,892 already-paid-for businesses on the 2026-08-19 run`);
+        ok(Number(_pbLow[1]) === _listings(c => Number(c.rating) < Number(_pbLow[2])),
+          `the PAIN BAND line reports ${_pbLow[1]} listing(s) below ${_pbLow[2]} stars kept and the fixture served ${_listings(c => Number(c.rating) < Number(_pbLow[2]))} - the low half is the half Vin kept, and a run that cannot count it cannot show him it happened`);
+      }
       // The same promise, for EVERY demoted lead rather than the one this
       // block is named after: the bench promise is that the leads we have
       // evidence for go out first on every run, and one demotion reason
@@ -2384,7 +2711,13 @@ const runLead = async (b, over, capMs) => {
       const rowNow = sbTable('user_settings')[0].data || {};
       ok(put.code === 200 && !('apiKey' in rowNow) && !('hunterKey' in rowNow) && rowNow.tone === 'plain' && rowNow.findPaidOwner === false, `the settings PUT answered ${put.code} and the row now holds ${JSON.stringify(rowNow)} - expected the two keys stripped and the two preferences kept`);
       const gs = await httpGet(`http://127.0.0.1:${SRV_PORT}/api/store/settings`);
-      ok(gs.code === 200 && gs.json && gs.json.data && !('apiKey' in gs.json.data) && gs.json.data.tone === 'plain' && gs.json.serverKeys && gs.json.serverKeys.anthropicKey === true && gs.json.serverKeys.hunterKey === false && gs.json.envNames && gs.json.envNames.anthropicKey === 'ANTHROPIC_API_KEY', `the settings GET answered ${JSON.stringify(gs.json).slice(0, 200)} - expected no key, the preference, and the server-key booleans naming the Render variable`);
+      // ROUND 146: hunterKey reads TRUE on this boot now - HUNTER_KEY was
+      // added to the spawn env so the email finder is reachable at all (see
+      // bootServer). The "a key Render does not have reads false" half moved
+      // onto MYEMAILVERIFIER_KEY, which this harness deliberately never sets,
+      // so both directions are still asserted and the pair cannot pass on a
+      // build that answers the same for every key.
+      ok(gs.code === 200 && gs.json && gs.json.data && !('apiKey' in gs.json.data) && gs.json.data.tone === 'plain' && gs.json.serverKeys && gs.json.serverKeys.anthropicKey === true && gs.json.serverKeys.hunterKey === true && gs.json.serverKeys.verifierKey === false && gs.json.envNames && gs.json.envNames.anthropicKey === 'ANTHROPIC_API_KEY', `the settings GET answered ${JSON.stringify(gs.json).slice(0, 200)} - expected no key, the preference, and the server-key booleans naming the Render variable: anthropicKey and hunterKey true (both on this instance), verifierKey false (not set)`);
       sbTable('user_settings')[0].data = _keepS;
     }
 
