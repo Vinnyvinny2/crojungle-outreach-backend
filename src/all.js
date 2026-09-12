@@ -6780,6 +6780,366 @@ const detectChainOutlets = (leads, minMetros) => {
   return { hosts, brands, reasonFor };
 };
 
+// ══ ONE BUSINESS NAME, ONE KEY, ONE COPY OF THE RULE ══════════════════════
+// This was declared with const INSIDE runDiscovery, which is the shape this
+// file already records twice: the four brand lists were local to the discovery
+// handler and /api/find-contact - the route that builds the list somebody
+// actually dials - could reach none of them. A guard in the wrong function.
+//
+// Two hand-kept copies of one name rule is the same disease one step on, and
+// the phone-collision test below needs exactly this rule: the discovery dedupe
+// asks "is this the business we already own?" and the collision test asks "is
+// this the same business under a second listing?". One question, one answer.
+//
+// Normalising strips the legal suffix and punctuation, so "James River
+// Remodeling LLC" and "James River Remodeling, L.L.C." are one business. Kept
+// deliberately conservative: two genuinely different companies sharing a
+// normalised name is rare, and the cost of a false match is one lead skipped.
+//   "&" and "and" are the same word to everyone except a string comparison, so
+//   "Tuck & Howell" and "Tuck and Howell" are one business. "and" goes
+//   entirely: "Tuck & Howell Plumbing, Heating & Air" and "Tuck and Howell
+//   Plumbing Heating Air" are the same shop written by two different sources,
+//   and dropping it makes them identical without bringing unrelated businesses
+//   together - the distinguishing words are the proper nouns.
+const bizNameKey = (n) => String(n || '').toLowerCase()
+  .replace(/&/g, ' and ')
+  .replace(/[.,'’]/g, ' ')
+  .replace(/\b(llc|l l c|inc|incorporated|corp|corporation|co|ltd|limited|pllc|pc|pa|lp|llp|the|and)\b/g, ' ')
+  .replace(/[^a-z0-9 ]/g, ' ')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+// ══ WHETHER THE LISTING IS A REAL BUSINESS, ASKED OF GOOGLE ═══════════════
+// This system had NO test for a fake or lead-generation listing. Not a weak
+// one: none. The FTC's May 2026 action over "Premium Home Service" documents
+// 15,000+ fake Google profiles run for eight years in the exact trades this
+// searches, 7,600+ phone numbers across 250+ area codes, all routed to one
+// call centre, with fabricated reviews.
+//
+// The tests a person would reach for first are the ones that must not be
+// built, and the list with the numbers behind it is at the press field mask.
+// The short version: every "obvious" spam tell deletes owner-operated small
+// businesses faster than it deletes fakes, and those businesses are the whole
+// market. The FTC's fakes were called "Levine Heating and Cooling".
+//
+// So this asks GOOGLE instead of guessing. Four fields, free on a call the
+// press already makes, and Google's own judgement rather than our inference.
+//
+// PURE, and no I/O, so a boot check can EXECUTE it on every shape instead of
+// reading the source and hoping.
+//
+// THE DECLARED SHAPE. readListingRisk always returns exactly these seven keys:
+//   drop         true  -> this business must not reach the sheet at all
+//   demote       true  -> it goes behind every other lead, and the row says why
+//   reason       one word from LISTING_RISK_REASONS, '' when there is nothing
+//   label        a short phrase for the row, '' when there is nothing to show
+//   why          one sentence a rep can read, naming what Google said
+//   googleText   Google's own alert wording, verbatim, '' when there was none
+//   serviceArea  true when the listing hides its address. A LABEL, never a
+//                penalty, and it travels whichever rule fired.
+// drop and demote are never both true: a dropped lead has nowhere to sit.
+const LISTING_RISK_REASONS = ['closed', 'moved', 'policy_alert', 'review_alert', 'alert_unread', 'mailbox_address', 'service_area'];
+// ══ A CONSUMER ALERT IS HANDLED BY KIND, NOT BY DEGREE ════════════════════
+// There is no severity scale here. Google returns a flag and some text, and
+// the two kinds of text want opposite answers:
+//
+//   "violates our policies"        the listing itself is the problem. DROP.
+//   "suspicious review activity"   DEMOTE, and show the rep Google's words.
+//
+// The reason for the split is the whole point: a LEGITIMATE business hit by a
+// review-extortion campaign carries the same flag. That business has a real
+// problem, it knows it has a real problem, and it may be one of the better
+// prospects on the sheet. Dropping it would delete a good lead on the strength
+// of somebody else's attack on it.
+//
+// THE EXACT STRINGS GOOGLE RETURNS ARE NOT VERIFIED. Nothing here has been
+// matched against a live response, so the classifier is a declared table of
+// patterns read IN ORDER with a documented default, and both the order and the
+// default lean the same way:
+//
+//   · the review kind is tested FIRST, so text carrying both ideas takes the
+//     safe branch rather than deleting the lead;
+//   · anything unrecognised - a new wording, a code we have never seen, a bare
+//     flag with no text at all - takes the DEFAULT, and the default is DEMOTE.
+//
+// Unmeasured is not zero and it is not guilt either. The cost of demoting a
+// clean business is one sort position; the cost of dropping a real one is a
+// lead nobody ever calls.
+const LISTING_ALERT_KINDS = [
+  { reason: 'review_alert', drop: false, re: /review|rating|\bstars?\b/i,
+    say: 'Google has flagged suspicious review activity on this listing' },
+  { reason: 'policy_alert', drop: true, re: /violat|polic|\bfake\b|deceptiv|misrepresent|prohibit|suspend|impersonat|fraud/i,
+    say: 'Google says this listing breaks its rules' },
+];
+const LISTING_ALERT_DEFAULT = { reason: 'alert_unread', drop: false,
+  say: 'Google has put an alert on this listing, in wording we do not recognise' };
+// Mailbox stores and rented desks, as a DECLARED list. Every entry is
+// multi-word or distinctive for the reason GP_FRANCHISE records: a bare generic
+// word matched anywhere deleted Kelly Roofing, Fox Plumbing and Target Pest
+// Control at discovery. This one only ever DEMOTES, so the worst a wrong match
+// costs is a sort position.
+const MAILBOX_BRAND_RE = /\b(the ups store|ups store|postnet|mail boxes etc|mailboxes etc|postal annex|pak mail|ipostal1|anytime mailbox|regus|wework|intelligent office|davinci virtual|alliance virtual|opus virtual|office evolution|carr workplaces|servcorp|venture x|industrious)\b/i;
+// Present means present. An absent key is no alert - never a quiet false.
+const listingAlertPresent = (v) => !(v === null || v === undefined || v === false || v === '');
+// ══ ONLY PROSE ABOUT THE BUSINESS MAY CLASSIFY THE ALERT ══════════════════
+// The shape is MEASURED now (Google's ConsumerAlert):
+//   overview?      string                          prose
+//   details?       { title?, description?,
+//                    aboutLink? { title?, uri? } } prose, and one LINK
+//   languageCode?  string                          a tag, not prose
+//
+// The first cut of this collected every string leaf, and that INVERTED the
+// safe default. aboutLink is Google's "learn more about this alert" pointer
+// and it points at a support page about review or content POLICIES - so the
+// word "polic" arrives in the collected text of essentially every alert,
+// whatever kind it is. Traced through the table: an alert whose own prose says
+// nothing about reviews, which is exactly the unrecognised case alert_unread
+// exists to protect, matched the policy pattern on the LINK and dropped the
+// lead. Legitimate businesses deleted on the wording of a Google help page,
+// and the safe default unreachable for every case it was written for.
+//
+// So the prose fields are NAMED, and the link is excluded by construction
+// rather than by a pattern somebody could loosen: it never enters this
+// function's answer at all. It is read separately by listingAlertLink, into a
+// field the classifier cannot see. languageCode is excluded for the same
+// reason in miniature - "en" is not something Google said about the business.
+//
+// A new prose field Google adds later must be added HERE, by name. Re-admitting
+// a generic walk would re-earn the bug in one line.
+const LISTING_ALERT_PROSE_FIELDS = ['overview', 'details.title', 'details.description'];
+const listingAlertProse = (v) => {
+  if (v === null || v === undefined) return '';
+  if (typeof v === 'string') return v;
+  if (Array.isArray(v)) return v.map((x) => listingAlertProse(x)).filter(Boolean).join(' ');
+  if (typeof v !== 'object') return '';
+  const d = (v.details && typeof v.details === 'object') ? v.details : {};
+  return [v.overview, d.title, d.description]
+    .map((s) => (typeof s === 'string' ? s : ''))
+    .filter(Boolean).join(' ');
+};
+// The link, read for the REP and never for the verdict. Google's own page
+// explaining the alert is genuinely useful on a row; it is fetched here, in
+// its own function, so that the one thing that must never reach the kind table
+// travels on a separate key.
+const listingAlertLink = (v) => {
+  if (!v || typeof v !== 'object') return '';
+  const d = (v.details && typeof v.details === 'object') ? v.details : {};
+  const l = (d.aboutLink && typeof d.aboutLink === 'object') ? d.aboutLink : {};
+  return typeof l.uri === 'string' ? l.uri.slice(0, 300) : '';
+};
+// containingPlaces entries carry a RESOURCE name ("places/ChIJ...") and may or
+// may not carry a readable one. A resource id is not a name and is never
+// treated as one: a container we can only see as an id yields NOTHING, so the
+// mailbox test says nothing rather than guessing. Coverage of this field is
+// undocumented and may be sparse, which costs a signal and never a lead.
+// ONE guard, applied to every path in, for the same reason the alert prose is
+// read by name: a string that is an id, a resource name or a URL is not
+// something a person called this place, and matching the mailbox brands
+// against one would let a help link or a place id decide a verdict. The
+// documented ContainingPlace carries only { name, id } - both ids - so the
+// readable paths below are TOLERANCE for a shape Google may send, and the
+// guard is what stops that tolerance becoming a hole.
+const listingReadableName = (s) => {
+  const t = String(s || '').trim();
+  if (!t) return '';
+  if (/^places\//i.test(t)) return '';                 // a resource name
+  if (t.indexOf('/') >= 0 || /:\/\//.test(t)) return '';  // a URL or a path
+  if (/^[A-Za-z0-9_-]{16,}$/.test(t)) return '';       // a bare id, no spaces
+  return t;
+};
+const listingContainerNames = (v) => {
+  const out = [];
+  for (const c of (Array.isArray(v) ? v : (v ? [v] : []))) {
+    if (!c) continue;
+    if (typeof c === 'string') { const s = listingReadableName(c); if (s) out.push(s); continue; }
+    if (typeof c !== 'object') continue;
+    // Named fields only, never a walk: `id` is deliberately not among them.
+    const dn = (c.displayName && typeof c.displayName === 'object') ? c.displayName.text : c.displayName;
+    for (const cand of [dn, c.title, c.name]) {
+      const s = listingReadableName(typeof cand === 'string' ? cand : '');
+      if (s) { out.push(s); break; }
+    }
+  }
+  return out;
+};
+// ══ THE FIELDS THE VERDICT READS, AS ONE DECLARED LIST ════════════════════
+// The press mask names them and the mask fallback removes them, so the two
+// cannot drift: the fallback removes exactly what the mask added. The boot
+// check EXECUTES this table against the mask line rather than reading a
+// hand-kept list of its own.
+//
+// movedPlace sits beside movedPlaceId because Google documents both on the
+// Place resource and either can be the one that is present.
+const PLACES_RISK_FIELDS = ['places.consumerAlert', 'places.pureServiceAreaBusiness', 'places.containingPlaces', 'places.movedPlaceId', 'places.movedPlace'];
+// What Google says when a field in a mask is not a field. Declared so the
+// fallback can only fire on THAT - a key refusal, a billing stop or a quota
+// needs a human, not a quieter mask.
+const PLACES_MASK_REFUSED_RE = /INVALID_ARGUMENT|field ?mask|fieldMask|unknown field|invalid field/i;
+let PLACES_MASK_FALLBACK = false;
+const LISTING_RISK_CLEAN = { drop: false, demote: false, reason: '', label: '', why: '', googleText: '', alertLink: '', serviceArea: false };
+const readListingRisk = (place) => {
+  const p = (place && typeof place === 'object') ? place : {};
+  // Read once and carried on every verdict: a business can hide its address
+  // AND carry a review alert, and the row needs both facts.
+  const sab = p.pureServiceAreaBusiness === true;
+  const _v = (o) => Object.assign({}, LISTING_RISK_CLEAN, { serviceArea: sab }, o || {});
+  // 1. DEAD, NOT FAKE. Nobody is there to answer the phone either way.
+  //
+  // The press already had this rule, as a bare line reading businessStatus,
+  // and it dropped ANYTHING that was not OPERATIONAL. That breadth is kept
+  // deliberately: a status word Google adds next year would otherwise walk
+  // through a rule that only names two, and this becoming the second copy of
+  // one test is exactly how that happens. So this is the ONE reader of
+  // businessStatus at the press, and its answer on '', 'OPERATIONAL' and any
+  // other value is identical to the line it replaces.
+  const status = String(p.businessStatus || '').trim().toUpperCase();
+  if (status === 'CLOSED_PERMANENTLY' || status === 'CLOSED_TEMPORARILY') {
+    return _v({ drop: true, reason: 'closed', label: 'closed',
+      why: `Google says this business is ${status === 'CLOSED_PERMANENTLY' ? 'permanently' : 'temporarily'} closed, so nobody is there to take the call. Dead, not fake.` });
+  }
+  if (status && status !== 'OPERATIONAL') {
+    return _v({ drop: true, reason: 'closed', label: 'closed',
+      why: `Google reports this listing as "${status.toLowerCase().replace(/_/g, ' ')}" rather than open for business, so nobody is there to take the call.` });
+  }
+  // 2. MOVED. Everything we hold describes the premises they left. Either of
+  //    Google's two fields answers this, and either can be the one present.
+  if (String(p.movedPlaceId || p.movedPlace || '').trim()) {
+    return _v({ drop: true, reason: 'moved', label: 'moved',
+      why: 'Google says this listing has moved and points at a different place, so the address, the phone and the reviews on it belong to the old one.' });
+  }
+  // 3. GOOGLE'S OWN ALERT, BY KIND. Classified on PROSE ONLY - see
+  //    listingAlertProse for the help link that inverted this, and
+  //    LISTING_ALERT_KINDS for why the order and the default both lean
+  //    towards keeping the lead.
+  if (listingAlertPresent(p.consumerAlert)) {
+    const text = String(listingAlertProse(p.consumerAlert) || '').replace(/\s+/g, ' ').trim();
+    const kind = (text && LISTING_ALERT_KINDS.find((k) => k.re.test(text))) || LISTING_ALERT_DEFAULT;
+    const dropIt = kind.drop === true;
+    return _v({ drop: dropIt, demote: !dropIt, reason: kind.reason,
+      label: dropIt ? 'google alert' : 'review alert',
+      why: `${kind.say}. ${text ? `Google's own words: "${text.slice(0, 300)}"` : 'Google sent the flag with no wording on it.'}`,
+      googleText: text, alertLink: listingAlertLink(p.consumerAlert) });
+  }
+  // 4. A MAILBOX OR A RENTED DESK. DEMOTE, never drop: a real small business
+  //    does register at a mailbox store, and an address is not a verdict.
+  const hit = listingContainerNames(p.containingPlaces).find((n) => MAILBOX_BRAND_RE.test(n));
+  if (hit) {
+    return _v({ demote: true, reason: 'mailbox_address', label: 'mailbox address',
+      why: `Google says this listing sits inside ${hit}, which rents mailboxes and desks rather than housing a business. Worth a look before the rep dials.` });
+  }
+  // 5. A HIDDEN ADDRESS IS A LABEL AND NOTHING ELSE. Google INSTRUCTS a
+  //    home-based trade to hide it, so this marks a real one-van operator -
+  //    which is the ICP - and §103 already needs it: the duplicate-listing
+  //    proof standard is an address match, and it is unavailable for them.
+  if (sab) {
+    return _v({ reason: 'service_area', label: 'service area',
+      why: 'Their listing hides its street address, which is what Google tells a home-based trade to do. One van, working out of the house.' });
+  }
+  return _v({});
+};
+
+// ══ THE SAME NUMBER UNDER DIFFERENT NAMES IN DIFFERENT METROS ═════════════
+// The one cross-lead test that survived measurement. Naive number-sharing does
+// NOT work and would delete real businesses: a number appearing on 99 listings
+// is only 26.9% abusive, because legitimate chains, answering services and
+// franchise call lines dominate the shared-number population. NAME-VARIANCE
+// AND METRO-VARIANCE ARE THE DISCRIMINATORS, not the sharing.
+//
+// A SIBLING of detectChainOutlets rather than an extension of it, and the
+// reason is that they answer opposite questions:
+//
+//   detectChainOutlets    the SAME brand in three metros. A franchise. The
+//                         branch manager does not own the marketing, so there
+//                         is nothing to sell him.
+//   detectPhoneCollisions DIFFERENT names in different metros on ONE number.
+//                         A call centre wearing local clothes.
+//
+// Folding the second into the first would hand a fake listing the franchise
+// drop reason and print the franchise sentence about it, which is a message
+// naming the wrong cause - and the thresholds disagree too (three metros and
+// three names there, two of each here). One home for one rule means one rule
+// per home. It follows that function's shape exactly: pure, recomputed from
+// the run's own results, a Map of the evidence and a reasonFor(lead) that
+// returns a checkable sentence or ''.
+//
+// SHAPE: { groups, reasonFor }
+//   groups     Map normalised-phone -> { phone, names:Set, identities:Set,
+//              metros:Set, places:Set } for FLAGGED numbers only
+//   reasonFor  (lead) -> '' to keep it, or one sentence naming the number's
+//              spread. A non-empty answer means DROP.
+//
+// Digits only, and a leading US country code dropped, so "+1 704-555-0199",
+// "(704) 555-0199" and "17045550199" are one number. Under ten digits is not a
+// number we can compare, and an uncomparable one groups nothing rather than
+// grouping with every other short string.
+const listingPhoneKey = (raw) => {
+  const d = String(raw || '').replace(/\D+/g, '');
+  const k = (d.length === 11 && d.charAt(0) === '1') ? d.slice(1) : d;
+  return k.length >= 10 ? k : '';
+};
+// ONE IDENTITY PER BUSINESS, and the brand key comes first on purpose: "Ram
+// Jack Durham" and "Ram Jack Raleigh" are ONE business with the city bolted
+// on, and a full-name comparison would read them as two and delete both. When
+// the brand key identifies nothing - every word in it generic, which is what
+// CHAIN_GENERIC_WORDS is for - the full normalised name decides instead. Both
+// halves are existing rules; neither is a second copy.
+const listingIdentityKey = (name) => chainBrandKey(name) || bizNameKey(name);
+// The metros this lead was actually seen in. marketsSeen is what the press
+// writes; metro/city/market are accepted so a lead restored from another store
+// is not silently metro-less. A lead carrying NO metro contributes none, so it
+// can never create the variance that drops a business - unmeasured is not a
+// value, which is the class this file produces most.
+const listingMetros = (lead) => {
+  const out = [];
+  for (const m of (Array.isArray(lead.marketsSeen) ? lead.marketsSeen : [])) if (m) out.push(String(m).trim().toLowerCase());
+  for (const k of ['metro', 'city', 'market']) {
+    const v = lead[k];
+    if (typeof v === 'string' && v.trim()) out.push(v.trim().toLowerCase());
+  }
+  return out;
+};
+// PURE. Takes the run's leads, returns which phone numbers are answering for
+// several differently-named businesses in several metros. Pure so the boot
+// check can EXECUTE it on the legitimate multi-branch case as well as the fake
+// one - a filter loosened until it catches nothing is the more expensive
+// failure, and a filter that eats real chains is the more expensive one still.
+const detectPhoneCollisions = (leads, minDistinct) => {
+  const need = Math.max(2, Number(minDistinct) || 2);
+  const byPhone = new Map();
+  for (const l of (Array.isArray(leads) ? leads : [])) {
+    if (!l || typeof l !== 'object') continue;
+    // lead.phone is what the press writes; internationalPhoneNumber is the raw
+    // Places field, so a raw result can be passed straight in.
+    const key = listingPhoneKey(l.phone || l.internationalPhoneNumber);
+    if (!key) continue;
+    let e = byPhone.get(key);
+    if (!e) { e = { phone: key, names: new Set(), identities: new Set(), metros: new Set(), places: new Set() }; byPhone.set(key, e); }
+    // ONE LISTING COUNTED ONCE. The bench and this run can both be holding the
+    // same business, and one listing must never be evidence of a network of
+    // itself - the same guard detectChainOutlets gets from counting distinct
+    // names.
+    const pid = String(l.placeId || '');
+    if (pid && e.places.has(pid)) continue;
+    if (pid) e.places.add(pid);
+    const id = listingIdentityKey(l.name);
+    if (id) e.identities.add(id);
+    if (l.name) e.names.add(String(l.name).trim());
+    for (const m of listingMetros(l)) e.metros.add(m);
+  }
+  const groups = new Map();
+  // BOTH conditions, and this is the whole rule. Same name in several cities is
+  // a legitimate multi-branch business and is left alone. Several names in ONE
+  // city is an answering service or a shared office, which is not this.
+  for (const [k, e] of byPhone) if (e.identities.size >= need && e.metros.size >= need) groups.set(k, e);
+  const reasonFor = (lead) => {
+    const k = lead ? listingPhoneKey(lead.phone || lead.internationalPhoneNumber) : '';
+    if (!k || !groups.has(k)) return '';
+    const e = groups.get(k);
+    return `the phone number on this listing answers for ${e.identities.size} businesses under different names in ${e.metros.size} metros (${[...e.names].slice(0, 3).join(', ')})`;
+  };
+  return { groups, reasonFor };
+};
+
 // ══ FILTERS APPLIED AT THE PULL ══════════════════════════════════════════════
 // Filtering after the fact still spends the Places call. Narrowing the run means
 // only buying leads that match — which is the whole point of a narrow pull: one
@@ -7077,11 +7437,74 @@ const orderGridByFreshness = (byCat, state, opts = {}) => {
 const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
   const _flt = filters && typeof filters === 'object' ? filters : {};
   if (!placesKey) { console.log('Google Places: no key (set GOOGLE_PLACES_KEY)'); return []; }
+  // ══ FOUR MORE FIELDS ON THE SAME CALL, AT NO EXTRA COST ═══════════════════
+  // Google bills a search at the HIGHEST tier any field in the mask belongs to,
+  // and this mask already asks for the star rating, the review count, the
+  // website and the phone - all Enterprise. So an Essentials field and a Pro
+  // field are free here, and four of them answer the one question this system
+  // could not ask at all: is this listing a real business?
+  //
+  // The FTC's May 2026 action over "Premium Home Service" is the scale of the
+  // problem in the exact trades this searches: 15,000+ fake Google profiles
+  // over eight years, 7,600+ phone numbers across 250+ area codes, every one
+  // routed to one call centre. Their fake names were "Levine Heating and
+  // Cooling" and "Horton Electrical Service" - a surname and a trade, which is
+  // what a real one-truck operator is called too.
+  //
+  // What each of the four is for, and readListingRisk is the one reader:
+  //   consumerAlert            Google's OWN flag, set when it detects
+  //                            suspicious review activity or a policy breach.
+  //                            Their judgement, not our inference.
+  //   pureServiceAreaBusiness  marks a listing that legitimately HIDES its
+  //                            address. PROTECTIVE: it is what Google tells a
+  //                            home-based plumber to do, so it is a label and
+  //                            never a penalty. §77 already buys it on the
+  //                            per-lead profile read; buying it here means the
+  //                            press knows it before a credit moves.
+  //   containingPlaces         what the listing sits inside, which can name a
+  //                            mailbox store or a coworking desk.
+  //   movedPlaceId             set when a closed place has moved, so the
+  //                            address, phone and reviews we hold are the old
+  //                            premises.
+  //
+  // NOT BUILT, deliberately, and each was measured and refuted: keyword-stuffed
+  // names (0.15% of removed listings, and ANTI-correlated with spam), no
+  // website or a free-builder site (~35% of suspended listings had none either,
+  // and no website is this system's best buying signal), a residential address
+  // (Google instructs home-based trades to hide the address; the FTC's fakes
+  // used commercial ones - a donut shop, an Arby's), a toll-free or tracking
+  // number (the fake operation used 250+ local area codes), open 24/7 (in the
+  // FTC's own exhibits the LEGITIMATE competitors showed "Open 24 hours"), a
+  // VoIP carrier lookup (2015 data), and thin content or stock photos (that is
+  // a real small contractor's cheap website). Every one of them deletes
+  // owner-operated businesses faster than it deletes fakes, and owner-operated
+  // businesses are the entire market.
+  //
   // places.location added so a coverage claim can be distance-aware. Without it
   // we would tell a roofer in north Charlotte he is "absent from Rock Hill" —
   // forty-five miles away, where he was never trying to appear. It is in the
   // same billing tier as the fields already requested.
-  const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.rating,places.userRatingCount,places.businessStatus,places.internationalPhoneNumber,places.location,places.regularOpeningHours';
+  const FIELD_MASK = 'places.id,places.displayName,places.formattedAddress,places.websiteUri,places.rating,places.userRatingCount,places.businessStatus,places.internationalPhoneNumber,places.location,places.regularOpeningHours,places.consumerAlert,places.pureServiceAreaBusiness,places.containingPlaces,places.movedPlaceId,places.movedPlace';
+  // ══ A FIELD NAME WE GOT WRONG MUST NOT ZERO THE PRESS ═════════════════════
+  // Google answers an unknown field in a mask with INVALID_ARGUMENT, and the
+  // error branch below treats ANY error as "this query taught us nothing" and
+  // breaks out of it. So one wrong field name in this string returns zero leads
+  // for a whole run, on the one stage that is in daily use - the worst outcome
+  // this function has.
+  //
+  // The five fake-listing fields are the newest and least proven part of the
+  // mask and the press ran for months without any of them, so they are the
+  // droppable half. On a refusal that names the MASK, they come off, the query
+  // is asked again, and the run returns leads. Latched for the process, so a
+  // bad deploy probes once rather than once per query, and said out loud once
+  // so nobody reads a flagless run as a run with no flags in it.
+  //
+  // The safe mask is DERIVED by removing the declared fields from the one mask
+  // above - never written out a second time, because two hand-kept copies of
+  // one list is the class this file records most. businessStatus is NOT one of
+  // them, so the closed-listing drop survives the fallback.
+  const FIELD_MASK_SAFE = FIELD_MASK.split(',').filter((f) => PLACES_RISK_FIELDS.indexOf(f) < 0).join(',');
+  const _maskFor = () => (PLACES_MASK_FALLBACK ? FIELD_MASK_SAFE : FIELD_MASK);
 
   // ══ WHAT THE RATING TELLS US BEFORE WE SPEND A PENNY ══════════════════════
   // Across fourteen audited leads in one evening, EVERY business at 4.9 stars
@@ -7367,16 +7790,35 @@ const searchGooglePlaces = async (placesKey, filters = {}, tally = null) => {
       do {
       const _body = { textQuery: `${cat.q} in ${city}`, includePureServiceAreaBusinesses: true, pageSize: 20 };
       if (_pageToken) _body.pageToken = _pageToken;
-      notePlacesCall('search', 'find-discovery');   // counted at DISPATCH: Google bills a request it received, even on a request we give up waiting for
-      const r = await fetchT('https://places.googleapis.com/v1/places:searchText', {
+      // ONE copy of the request, asked twice at most. The label stays beside
+      // each notePlacesCall as a plain string because PLACES LABEL CHECK reads
+      // it there, and the retry names itself so the meter shows what it cost.
+      const _askPlaces = () => fetchT('https://places.googleapis.com/v1/places:searchText', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': `${FIELD_MASK},nextPageToken` },
+        headers: { 'Content-Type': 'application/json', 'X-Goog-Api-Key': placesKey, 'X-Goog-FieldMask': `${_maskFor()},nextPageToken` },
         body: JSON.stringify(_body),
       }, 12000);
+      notePlacesCall('search', 'find-discovery');   // counted at DISPATCH: Google bills a request it received, even on a request we give up waiting for
+      let r = await _askPlaces();
       calls++;
       if (_pageToken) pagesBought++;
       _pagesHere++;
-      const d = await r.json();
+      let d = await r.json();
+      // THE MASK REFUSAL, AND ONLY THE MASK REFUSAL. A key, permission or
+      // billing failure needs a human and is left to the line below; asking
+      // again with fewer fields would only hide it.
+      {
+        const _err = (d && d.error) ? JSON.stringify(d.error) : '';
+        if (_err && !PLACES_MASK_FALLBACK && PLACES_MASK_REFUSED_RE.test(_err)
+            && !/API key|denied|disabled|billing|PERMISSION/i.test(_err)) {
+          PLACES_MASK_FALLBACK = true;
+          console.log(`⚠ PLACES MASK FALLBACK: Google refused the search field mask - "${String((d.error && (d.error.message || d.error.status)) || 'invalid argument').slice(0, 160)}". The ${PLACES_RISK_FIELDS.length} fake-listing field(s) are dropped from every search this process makes and the press is running on the mask it used before them, so this run returns leads instead of nothing. What that costs, stated plainly: every listing now reads as carrying NO Google flag, which is not the same as carrying none. The consumer alert, the moved-listing drop, the mailbox demote and the hidden-address label are all dark until the field name is fixed. Only the closed drop survives, because businessStatus was in the mask before any of this and is not one of the fields dropped here.`);
+          notePlacesCall('search', 'find-discovery-maskretry');
+          r = await _askPlaces();
+          calls++;
+          d = await r.json();
+        }
+      }
       if (d.error) { console.log(`Google Places: "${d.error.message || d.error.status || 'error'}"`); if (/API key|denied|disabled|billing|PERMISSION/i.test(JSON.stringify(d.error))) { _stop = true; break; } break; }
       // A response arrived and parsed. Only now is anything this query says
       // about its own ground worth remembering.
@@ -40540,19 +40982,14 @@ const runDiscovery = async (body) => {
   // deliberately conservative: two genuinely different companies sharing a
   // normalised name is rare, and the cost of a false match is one lead skipped
   // against ~10 Firecrawl credits and a queue slot for one already owned.
-  const _normName = (n) => String(n || '').toLowerCase()
-    // "&" and "and" are the same word to everyone except a string comparison —
-    // "Tuck & Howell" and "Tuck and Howell" are one business.
-    .replace(/&/g, ' and ')
-    .replace(/[.,'’]/g, ' ')
-    // "and" too: "Tuck & Howell Plumbing, Heating & Air" and "Tuck and Howell
-    // Plumbing Heating Air" are the same shop written by two different sources.
-    // Dropping it entirely makes them identical without bringing unrelated
-    // businesses together — the distinguishing words are the proper nouns.
-    .replace(/\b(llc|l l c|inc|incorporated|corp|corporation|co|ltd|limited|pllc|pc|pa|lp|llp|the|and)\b/g, ' ')
-    .replace(/[^a-z0-9 ]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  //
+  // THE RULE ITSELF IS AT MODULE SCOPE, as bizNameKey, beside the chain
+  // detection that is the other reader of it. It was declared here, inside this
+  // one handler, and the cross-lead phone-collision test needs the identical
+  // question answered - so a second copy would have been written and the two
+  // would have drifted. That is the disease this file records most. This is an
+  // alias, so every call site below is unchanged and there is ONE rule.
+  const _normName = bizNameKey;
   const _knownNames = new Set();
   for (const n of (Array.isArray(knownNames) ? knownNames : [])) {
     const k = _normName(n);
@@ -71386,7 +71823,14 @@ app.listen(PORT, () => {
     // business take a category slot and a queue position from the lead behind it,
     // which is the whole failure the demotion exists to prevent.
     {
-      if (_src.indexOf(_needle('const _demoted = _outsideBand', ' || _tooBig;')) < 0) {
+      // The needle stops at _tooBig rather than at the semicolon ON PURPOSE.
+      // It used to pin the whole line, which meant that ADDING a third
+      // demotion reason to the one flag - the thing this section asks for -
+      // turned this check red, and the cheap way out of a red check is to give
+      // the new reason its own flag instead. That is the exact failure the
+      // section is about. What must hold is that both named reasons feed ONE
+      // flag; further reasons joining it are the design working.
+      if (_src.indexOf(_needle('const _demoted = _outsideBand', ' || _tooBig')) < 0) {
         _fails.push('the two demotion reasons no longer feed one flag, so a gate reading only the band lets over-ceiling leads back into the in-band queue');
       }
       if (_src.indexOf(_needle('aboveSizeCeiling: ', 'true, sizeNote: _tooBigWhy')) < 0) {
@@ -75797,6 +76241,405 @@ We hold a 25 year workmanship warranty on every full replacement we install.`;
     }
   } catch (e) {
     console.log(`⛔ CHAIN OUTLET CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ THE SYSTEM HAD NO TEST FOR A FAKE LISTING AT ALL ══════════════════════
+  // Not a weak one: none. Grep found no address test, no shared-phone test and
+  // no virtual-office test anywhere in this file, while the FTC's May 2026
+  // action over "Premium Home Service" documents 15,000+ fake Google profiles
+  // in these exact trades, run for eight years, with every one of 7,600+ phone
+  // numbers routed to one call centre.
+  //
+  // The tests that must NOT exist are listed at the press field mask with the
+  // numbers that refuted each one. What is asserted here is the half that can
+  // be: Google's own four fields, read by KIND rather than by degree, with the
+  // unrecognised case landing on the safe side.
+  //
+  // EXECUTED on fixtures rather than read from source, because the whole
+  // question is what the function ANSWERS - and both directions are asserted,
+  // since a filter that deletes real owner-operated businesses is the more
+  // expensive failure and they are the entire market.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _press = String(searchGooglePlaces).replace(/\r/g, '');
+
+    // ── 1. EVERY DROP REASON, EXECUTED ────────────────────────────────────
+    const _closedP = readListingRisk({ businessStatus: 'CLOSED_PERMANENTLY' });
+    if (!_closedP.drop || _closedP.reason !== 'closed' || _closedP.demote) _fails.push(`a permanently closed listing reads drop=${_closedP.drop}/${_closedP.reason} instead of a plain drop - nobody is there to take the call`);
+    if (readListingRisk({ businessStatus: 'CLOSED_TEMPORARILY' }).reason !== 'closed') _fails.push('a temporarily closed listing is kept, so the rep dials a business that is not open');
+    if (!/Dead, not fake/.test(_closedP.why)) _fails.push('the closed drop does not say it is a dead listing rather than a fake one, so the log would file it as spam');
+    // The breadth of the line this replaces: anything not OPERATIONAL goes,
+    // and an ABSENT status is not a claim either way.
+    if (!readListingRisk({ businessStatus: 'SOMETHING_GOOGLE_ADDS_LATER' }).drop) _fails.push('a status word we have never seen walks through the closed rule - the press line this replaces dropped anything that was not OPERATIONAL, and narrowing it to two names is how a new status gets in');
+    if (readListingRisk({ businessStatus: 'OPERATIONAL' }).drop || readListingRisk({}).drop) _fails.push('an open business, or one whose status Google did not send, is being dropped as closed');
+    const _moved = readListingRisk({ movedPlaceId: 'places/ChIJmoved' });
+    if (!_moved.drop || _moved.reason !== 'moved') _fails.push(`a listing Google says has MOVED reads ${_moved.reason || 'clean'}, so the address, the phone and the reviews of the old premises reach the sheet as current`);
+    // BOTH of Google's two moved fields, because either can be the one that
+    // arrives and reading only one leaves half the moved listings on the sheet.
+    const _moved2 = readListingRisk({ movedPlace: 'places/ChIJnewpremises' });
+    if (!_moved2.drop || _moved2.reason !== 'moved') _fails.push(`a listing that carries Google's OTHER moved field and not the first reads ${_moved2.reason || 'clean'} - the two are documented side by side and either one is the whole answer`);
+    // The fixtures below use Google's MEASURED ConsumerAlert shape - overview
+    // and details.description. The first cut of this check used a guessed
+    // `text` key, and once the reader stopped walking unknown keys those
+    // fixtures classified as unread: a fixture written against a shape that
+    // does not exist measures nothing.
+    const _policy = readListingRisk({ consumerAlert: { overview: 'This business violates our policies' } });
+    if (!_policy.drop || _policy.reason !== 'policy_alert') _fails.push(`a listing Google says violates its policies reads ${_policy.reason || 'clean'} instead of a drop`);
+    if (!/violates our policies/.test(_policy.googleText)) _fails.push("Google's own wording is not carried on the verdict, so nothing downstream can quote the reason");
+
+    // ── 2. EVERY DEMOTE REASON, EXECUTED ──────────────────────────────────
+    // THE SPLIT THAT MATTERS: a legitimate business hit by a review-extortion
+    // campaign carries the SAME flag, has a real problem, and may be a good
+    // prospect. Dropping it would delete a good lead over somebody's attack.
+    const _revAlert = readListingRisk({ consumerAlert: 'We have detected suspicious review activity on this business' });
+    if (_revAlert.drop || !_revAlert.demote || _revAlert.reason !== 'review_alert') _fails.push(`a suspicious-review-activity alert reads drop=${_revAlert.drop}/${_revAlert.reason} - a legitimate business under a review-extortion campaign carries this exact flag and must be demoted, never deleted`);
+    if (!/suspicious review activity/.test(_revAlert.why)) _fails.push("the review alert does not surface Google's own text, so the rep is given a penalty with no reason he can check");
+    // ORDER IS LOAD-BEARING: text carrying both ideas takes the SAFE branch.
+    const _both = readListingRisk({ consumerAlert: { details: { description: 'suspicious review activity which violates our policies' } } });
+    if (_both.drop || _both.reason !== 'review_alert') _fails.push('an alert whose wording carries BOTH ideas is dropped rather than demoted - the review kind is tested first on purpose, because the exact strings Google returns are not verified and the safe branch has to win the ambiguous case');
+    const _box = readListingRisk({ containingPlaces: [{ displayName: { text: 'The UPS Store' } }] });
+    if (_box.drop || !_box.demote || _box.reason !== 'mailbox_address') _fails.push(`a listing sitting inside a mailbox store reads drop=${_box.drop}/${_box.reason} - a real small business does register at one, so this demotes and never drops`);
+    if (!/UPS Store/.test(_box.why)) _fails.push('the mailbox demote does not name what the listing sits inside, so the reason is not checkable');
+    if (readListingRisk({ containingPlaces: [{ displayName: { text: 'Northlake Mall' } }] }).reason) _fails.push('an ordinary shopping centre is being read as a mailbox drop-box');
+    // A container we can only see as a resource id yields NOTHING. An id is
+    // not a name and must never be treated as one. Asserted on the reader
+    // itself, not through the verdict: a resource id never matches the mailbox
+    // list anyway, so the verdict cannot tell the two apart and an assertion
+    // there would pass whatever the reader did. It is the FIRST cut of this
+    // check that did exactly that, and the falsification caught it.
+    if (readListingRisk({ containingPlaces: [{ name: 'places/ChIJabc', id: 'ChIJabc' }] }).reason) _fails.push('a containing place we can only see as an id produces a verdict, so the mailbox test is answering off something it never read');
+    if (listingContainerNames([{ name: 'places/ChIJabc', id: 'ChIJabc' }]).length) _fails.push('a containing place carrying only a resource name is reported as a readable business name, so an id is being matched against the mailbox list as though Google had named the place');
+    if (listingContainerNames(['places/ChIJabc']).length) _fails.push('a containing place arriving as a bare resource string is reported as a name - same defect, the other shape');
+    if (listingContainerNames([{ displayName: { text: 'The UPS Store' } }])[0] !== 'The UPS Store') _fails.push('a container Google DID name is not read at all, so the mailbox test can never fire on anything');
+    if (listingContainerNames([{ name: 'The UPS Store' }])[0] !== 'The UPS Store') _fails.push('a readable name arriving in the name field is thrown away with the resource ids, so a real mailbox container is missed');
+    // THE SAME CLASS AS THE HELP LINK, one field over: a URL or a bare id is
+    // not something a person called this place, and matching the mailbox
+    // brands against one would let a link decide a verdict. Every path in
+    // goes through the one guard, so no field can be the hole.
+    for (const [_c, _what] of [
+      [{ displayName: { text: 'https://www.theupsstore.com/1234' } }, 'a URL in displayName'],
+      [{ title: 'https://locations.regus.com/us/ny' }, 'a URL in title'],
+      [{ name: 'https://www.wework.com/buildings/x' }, 'a URL in name'],
+      [{ displayName: { text: 'ChIJregusABCDEFGHIJKLMN' } }, 'a bare place id that happens to contain a brand'],
+      [{ name: 'places/ChIJwework123456789' }, 'a resource name that happens to contain a brand'],
+      ['https://support.google.com/maps/answer/1?q=regus', 'a bare URL string'],
+    ]) {
+      if (listingContainerNames([_c]).length) _fails.push(`${_what} is read as a readable business name, so the mailbox list is matched against something nobody called this place`);
+      if (readListingRisk({ containingPlaces: [_c] }).reason) _fails.push(`${_what} produces a listing verdict - a URL or an id is deciding whether a real business is demoted`);
+    }
+    // And the id field is never read at all, whatever is in it.
+    if (listingContainerNames([{ id: 'The UPS Store' }]).length) _fails.push('the containing place id is being read as a name, and an id is not a name however it is spelled');
+
+    // ── 2b. THE HELP LINK MUST NEVER CLASSIFY THE ALERT ───────────────────
+    // THE DEFECT THIS EXISTS FOR. ConsumerAlert carries details.aboutLink -
+    // Google's "learn more about this alert" pointer - and that link goes to a
+    // support page about review or content policies. The first cut of the
+    // reader collected every string leaf, so the word in that link arrived in
+    // the text the kind table reads, and an alert whose OWN prose said nothing
+    // about reviews matched the policy pattern on the LINK and dropped the
+    // lead. The safe default became unreachable for every case it was written
+    // for, and legitimate businesses were deleted on the wording of a Google
+    // help page. Assembled from halves so neither one carries the whole word.
+    const _pol = _n('polic', 'ies');
+    const _linked = readListingRisk({ consumerAlert: {
+      overview: 'Google has placed a notice on this business listing.',
+      details: { title: 'Notice about this listing', description: 'There is a notice on this business.',
+        aboutLink: { title: `Learn more about our ${_pol}`, uri: `https://support.google.com/maps/answer/12345?hl=en#${_pol}` } },
+      languageCode: 'en' } });
+    if (_linked.drop) _fails.push(`an alert whose own prose says nothing about reviews, carrying Google's help LINK about ${_pol}, DROPS the lead - the link is being read as though Google had said it about the business, and since that link is on essentially every alert the safe default is unreachable for every case it exists for`);
+    if (_linked.reason !== 'alert_unread' || !_linked.demote) _fails.push(`the same alert reads "${_linked.reason}" rather than the unread default, so the help link is still reaching the kind table`);
+    if (/[Pp]olic/.test(_linked.googleText)) _fails.push(`the text handed to the classifier still carries the word from Google's help link ("${_linked.googleText.slice(0, 120)}") - the link has to be excluded by construction, not by a pattern somebody can loosen`);
+    if (_linked.googleText.indexOf('support.google.com') >= 0) _fails.push('the help URL itself is inside the text the classifier reads');
+    // The link is still SHOWN to the rep - on its own key, which the verdict
+    // provably never classifies on.
+    if (_linked.alertLink.indexOf('support.google.com') < 0) _fails.push("Google's own explanation of the alert never reaches the row, so a rep is handed a demoted lead with nowhere to read why");
+    // 2. NOT OVER-CORRECTED: a real policy breach in the alert's OWN prose
+    //    still drops. Asserted in both prose fields, because a fix that only
+    //    read overview would leave description unclassified.
+    for (const [_alert, _where] of [
+      [{ overview: `This business ${_n('viol', 'ates')} our ${_pol}.` }, 'overview'],
+      [{ details: { description: `This listing ${_n('viol', 'ates')} our ${_pol}.` } }, 'details.description'],
+      [{ details: { title: `${_n('Viol', 'ation')} of our ${_pol}` } }, 'details.title'],
+    ]) {
+      const _r = readListingRisk({ consumerAlert: _alert });
+      if (!_r.drop || _r.reason !== 'policy_alert') _fails.push(`an alert whose own ${_where} says the listing breaks Google's rules reads "${_r.reason}" instead of dropping - excluding the help link has been over-corrected into never dropping anything`);
+    }
+    // 4. languageCode is a tag, not something Google said about the business.
+    const _lang = readListingRisk({ consumerAlert: { languageCode: 'en' } });
+    if (_lang.reason !== 'alert_unread' || _lang.drop) _fails.push(`an alert carrying nothing but a language code reads "${_lang.reason}" - a locale tag is being classified as prose about the business`);
+    if (_lang.googleText) _fails.push(`the language code "${_lang.googleText}" is being shown to the rep as Google's own words about the business`);
+    // A HOSTILE value rather than a realistic one, deliberately: a real locale
+    // tag can never contain these words, so asking whether "en" changes the
+    // verdict tests nothing. What has to be true is that a field which is not
+    // prose CANNOT REACH the classifier at all, and that is what this asks.
+    const _langHostile = readListingRisk({ consumerAlert: {
+      overview: 'Google has placed a notice on this listing.',
+      languageCode: `en ${_n('viol', 'ates')} our ${_pol}` } });
+    if (_langHostile.drop || _langHostile.reason !== 'alert_unread') _fails.push(`a language code can still reach the kind table (the verdict came back "${_langHostile.reason}") - a field that is not prose about the business must be unable to decide anything, whatever is written in it`);
+    // Named fields only. A generic walk over unknown keys is what caused this,
+    // so re-admitting one must fail here rather than in six months.
+    if (LISTING_ALERT_PROSE_FIELDS.join(',') !== 'overview,details.title,details.description') _fails.push(`the prose fields are now ${LISTING_ALERT_PROSE_FIELDS.join(', ')} - the list is what keeps the help link out, and it is declared so that adding a field is a decision rather than an accident`);
+    if (/Object\.keys|for\s+in|JSON\.stringify/.test(String(listingAlertProse))) _fails.push('the alert reader walks unknown keys again, so whatever Google adds next - starting with the help link - classifies the alert');
+    if (String(listingAlertProse).indexOf('aboutLink') >= 0) _fails.push('the help link is named inside the reader that feeds the classifier');
+
+    // ── 3. THE UNRECOGNISED ALERT TAKES THE SAFE DEFAULT ──────────────────
+    // Nothing here has been matched against a live Google response. So the
+    // classifier is a declared table with a documented default, and the
+    // default must be the one that keeps the lead.
+    for (const [_alert, _what] of [
+      [{ code: 'SOMETHING_WE_HAVE_NEVER_SEEN' }, 'a code with no wording we recognise'],
+      [true, 'a bare flag with no text at all'],
+      [{}, 'an alert object carrying nothing'],
+      ['', 'an empty string'],
+    ]) {
+      const _r = readListingRisk({ consumerAlert: _alert });
+      if (_alert === '') {
+        if (_r.reason) _fails.push('an empty consumerAlert is being treated as an alert - absent is not a flag');
+        continue;
+      }
+      if (_r.drop) _fails.push(`${_what} DROPS the lead - the documented default for an alert we cannot classify is demote, because the strings are unverified and deleting a real business costs more than demoting a flagged one`);
+      if (_r.reason !== 'alert_unread') _fails.push(`${_what} reads "${_r.reason || 'clean'}" rather than the declared unread reason, so an alert Google sent is either thrown away or filed as something it is not`);
+      else if (!_r.demote && !_r.drop) _fails.push(`${_what} lands on the unread reason and is neither dropped nor demoted, so a listing Google has flagged takes an ordinary seat`);
+    }
+    if (LISTING_ALERT_DEFAULT.drop === true) _fails.push('the declared default for an unrecognised alert is now a DROP - the whole reason it is declared is that it must be the safe one');
+    if (LISTING_ALERT_KINDS[0].reason !== 'review_alert' || LISTING_ALERT_KINDS[0].drop === true) _fails.push('the alert table no longer reads the SAFE kind first, so an ambiguous wording deletes the lead');
+    for (const _k of LISTING_ALERT_KINDS.concat([LISTING_ALERT_DEFAULT])) {
+      if (!_k.say || !_k.reason || LISTING_RISK_REASONS.indexOf(_k.reason) < 0) _fails.push(`an alert kind is declared without a sentence or with a reason (${_k.reason}) that is not in the declared list`);
+    }
+
+    // ── 4. A HIDDEN ADDRESS IS PROTECTIVE, NEVER A PENALTY ────────────────
+    // Google INSTRUCTS a home-based plumber to hide his address. This marks a
+    // real one-van operator, which is the ICP.
+    const _sab = readListingRisk({ pureServiceAreaBusiness: true });
+    if (_sab.drop || _sab.demote) _fails.push('a business whose listing hides its address is being penalised for doing what Google told it to do - that is the one-van owner-operator this whole system is looking for');
+    if (_sab.reason !== 'service_area' || !_sab.serviceArea || !_sab.label) _fails.push(`a service-area listing reads ${_sab.reason || 'nothing'} with serviceArea=${_sab.serviceArea}, so the row cannot show the label`);
+    // And it must survive a verdict about something else, or §103's duplicate
+    // rule loses the one fact that makes its answer honest.
+    const _sabAlert = readListingRisk({ pureServiceAreaBusiness: true, consumerAlert: 'suspicious review activity' });
+    if (!_sabAlert.demote || _sabAlert.serviceArea !== true) _fails.push('a service-area business that also carries an alert loses the hidden-address fact, and the duplicate-listing rule needs it to say WHY it could not check rather than "no duplicate found"');
+    // Reused, not re-invented: the per-lead profile read already decides this
+    // with the same test, and two copies of one rule is the recorded disease.
+    if (!/pureServiceAreaBusiness\s*===\s*true/.test(String(readListingRisk))) _fails.push('the hidden-address test is no longer the same strict comparison the profile read uses, so a missing field could read as false at one site and true at the other');
+
+    // ── 5. A CLEAN LISTING PASSES CLEAN, AND NOTHING CRASHES ──────────────
+    const _clean = readListingRisk({ businessStatus: 'OPERATIONAL', displayName: { text: 'Darrel Plumbing' }, rating: 4.6, userRatingCount: 120 });
+    if (_clean.drop || _clean.demote || _clean.reason || _clean.label || _clean.why) _fails.push(`an ordinary open business with none of these flags reads ${JSON.stringify(_clean)} - every lead would carry a penalty`);
+    for (const _bad of [null, undefined, 'a string', 42, []]) {
+      const _r = readListingRisk(_bad);
+      if (_r.drop || _r.demote || _r.reason) _fails.push(`readListingRisk(${JSON.stringify(_bad)}) invents a verdict instead of answering clean`);
+    }
+    // The shape is DECLARED, so nothing downstream can read a key that is
+    // sometimes absent - the computed-but-not-passed class arriving as undefined.
+    const _keys = Object.keys(LISTING_RISK_CLEAN).sort().join(',');
+    for (const [_r, _what] of [[_closedP, 'a drop'], [_revAlert, 'a demote'], [_sab, 'a label'], [_clean, 'a clean lead']]) {
+      if (Object.keys(_r).sort().join(',') !== _keys) _fails.push(`${_what} verdict returns a different set of keys from the declared shape (${Object.keys(_r).sort().join(',')}), so a reader gets undefined on some leads and a value on others`);
+    }
+
+    // ── 6. THE FOUR FIELDS ARE IN THE PRESS MASK, PINNED ──────────────────
+    // Needles assembled at runtime from two halves, and searched in the press
+    // function's OWN source rather than in this file, so neither half can find
+    // itself here. Google bills at the highest tier in the mask and this mask
+    // already asks for the rating, the review count, the website and the
+    // phone, so all four of these are free on a call we already make.
+    const _maskLine = _press.split('\n').find((l) => l.indexOf(_n('const FIELD_MASK = ', "'places.id")) >= 0) || '';
+    let _maskOk = !!_maskLine;
+    const _maskFields = _maskLine ? _maskLine.replace(/^[^']*'/, '').replace(/'[^']*$/, '').split(',') : [];
+    if (!_maskLine) {
+      _fails.push('the press field mask cannot be found in searchGooglePlaces any more, so nothing here is asserting what we ask Google for');
+    } else {
+      for (const [_field, _what] of [
+        ['consumerAlert', "Google's OWN flag on a listing, which is the only judgement here that is not our inference"],
+        ['pureServiceAreaBusiness', 'the mark of a listing that legitimately hides its address, which is the protective half and stops a real one-van operator being read as a fake'],
+        ['containingPlaces', 'what the listing sits inside, which is the only way to see a mailbox store or a rented desk'],
+        ['movedPlaceId', 'the flag that says the address, phone and reviews on this listing belong to premises they have left'],
+        ['movedPlace', 'the other half of the moved flag - Google documents both and either one can be the field that is present'],
+      ]) {
+        if (PLACES_RISK_FIELDS.indexOf(_n('places.', _field)) < 0) { _maskOk = false; _fails.push(`the press no longer asks Google for ${_field} - ${_what}. It costs nothing extra at this tier, and without it readListingRisk is reading a field that was never requested, which reads exactly like a clean listing`); }
+      }
+      // The declared table is EXECUTED against the mask, so the two cannot
+      // drift: the fallback below removes exactly what the mask adds, and a
+      // field in one list and not the other breaks that on the day it matters.
+      for (const _f of PLACES_RISK_FIELDS) {
+        if (_maskFields.indexOf(_f) < 0) { _maskOk = false; _fails.push(`${_f} is declared as a fake-listing field and is NOT in the press mask, so the fallback would strip a field nothing ever asked for while the verdict reads one that was never requested`); }
+      }
+    }
+    if (_press.indexOf(_n("'X-Goog-FieldMask': ", '`${_maskFor()},nextPageToken`')) < 0) _fails.push('the mask is no longer the one sent on the request, so the fields can be declared and never asked for - and the INVALID_ARGUMENT fallback cannot take effect either');
+
+    // ── 6b. ONE WRONG FIELD NAME MUST NOT ZERO THE PRESS ──────────────────
+    // The error branch in the press treats any error as "this query taught us
+    // nothing" and breaks, so an unknown field in the mask returns zero leads
+    // for a whole run - on the one stage in daily use. These five field names
+    // are the newest part of the mask and the least proven thing in it.
+    const _safeFields = _maskFields.filter((f) => PLACES_RISK_FIELDS.indexOf(f) < 0);
+    if (_maskLine && _safeFields.length !== _maskFields.length - PLACES_RISK_FIELDS.length) _fails.push('the mask the press falls back to is not the mask minus exactly the declared fields, so the fallback is either dropping something it needs or keeping the field that was refused');
+    for (const _must of ['id', 'displayName', 'websiteUri', 'userRatingCount', 'internationalPhoneNumber', 'businessStatus']) {
+      if (_maskLine && _safeFields.indexOf(_n('places.', _must)) < 0) _fails.push(`the mask the press falls back to has lost ${_must}, so a run after the fallback would produce leads with no ${_must} at all - a fallback has to be a press that still works, not a quieter one`);
+    }
+    if (_press.indexOf(_n("const FIELD_MASK_SAFE = FIELD_MASK.split(','", ").filter((f) => PLACES_RISK_FIELDS.indexOf(f) < 0).join(',');")) < 0) _fails.push('the safe mask is no longer derived from the one mask by removing the declared fields, so there are two hand-kept copies of one field list and they will disagree');
+    if (_press.indexOf(_n('PLACES_MASK_FALLBACK = ', 'true;')) < 0) _fails.push('nothing latches the fallback, so either it never fires or it re-probes a refused mask on every query of every run');
+    // The label only, NOT the call around it: writing notePlacesCall( here put
+    // this check's own needle halves on one line, PLACES LABEL CHECK's scanner
+    // read them as a real call site, and it failed the boot for a Places call
+    // that does not exist. A needle is text in a file somebody else also greps.
+    if (_press.indexOf(_n("'find-discovery-", "maskretry'")) < 0) _fails.push('the retry after a refused mask is not named to the Places meter, so the extra call prints as ordinary discovery and the invoice question stays unanswerable');
+    if (_press.indexOf(_n('&& !/API key|denied|disabled|billing|PERMISSION/i.test(', '_err)')) < 0) _fails.push('the fallback is not fenced off from a key, permission or billing refusal - asking again with fewer fields would hide the failure that actually needs a human');
+    if (!PLACES_MASK_REFUSED_RE.test('INVALID_ARGUMENT') || !PLACES_MASK_REFUSED_RE.test('Unknown field: places.nope')) _fails.push('the refusal pattern no longer matches what Google says when a mask field is not a field, so the fallback can never fire');
+    if (PLACES_MASK_REFUSED_RE.test('The provided API key is expired') || PLACES_MASK_REFUSED_RE.test('billing is disabled')) _fails.push('the refusal pattern matches a key or billing failure, so a problem that needs a human would be answered by quietly asking for fewer fields');
+
+    // ── 7. THE CALL SITE. A fixture supplies its own arguments, so a pure
+    //      function that nothing calls protects no lead at all. ───────────
+    const _iRisk = _press.indexOf(_n('readListingRisk', '('));
+    const _iLead = _press.indexOf(_n('const _lead = {', '\n'));
+    if (_iRisk >= 0) {
+      const _after = _press.slice(_iRisk);
+      if (!/\.\s*drop\b/.test(_after)) _fails.push('the listing verdict is computed at the press and its drop is never read - computed-but-not-passed, the class this file produces most, and the closed, moved and policy-alert listings all reach the sheet');
+      if (!/\.\s*demote\b/.test(_after)) _fails.push('the verdict is read for its drop and not for its demote, so a listing Google has flagged for review activity takes an ordinary seat ahead of a clean business');
+      if (_iLead >= 0 && !(_iRisk < _iLead)) _fails.push('the verdict is read AFTER the lead has been built, so a dropped listing has already taken its category slot');
+      if (!/serviceAreaOnly/.test(_after)) _fails.push('the hidden-address fact is not carried onto the lead, so the duplicate-listing rule still has to buy a profile read to learn it');
+      // ONE DEMOTION FLAG, which is what RATING BAND CHECK section 7 is about:
+      // a gate that names one reason lets the other reason's leads take cap
+      // slots and queue positions from the lead behind them. Reading .demote
+      // into a variable nobody gates on would satisfy the test above and
+      // change nothing about where the lead sits.
+      if (!/const _demoted = [^\n;]*\.\s*demote/.test(_press)) _fails.push("the listing demote does not feed the press's one demotion flag, so a listing Google has flagged still takes a category slot and a queue position from a clean business - the exact failure RATING BAND CHECK section 7 exists to prevent");
+    }
+    const _iPhone = _press.indexOf(_n('detectPhoneCollisions', '('));
+    if (_iPhone >= 0) {
+      const _after = _press.slice(_iPhone);
+      if (!/reasonFor\s*\(/.test(_after)) _fails.push('the phone-collision detector is called and nothing asks it about a lead, so every collision it found is discarded');
+      // Anchored to the END of the paging loop, not to the lead. Comparing it
+      // against the lead only catches a call placed EARLY in the loop, and a
+      // falsification that put the call late in the loop went red on the wrong
+      // line - which is the "message naming the wrong cause" trap.
+      const _iLoopEnd = _press.indexOf(_n('} while (', '_pageToken);'));
+      if (_iLoopEnd >= 0 && !(_iLoopEnd < _iPhone)) _fails.push('the collision test runs INSIDE the loop that reads Google results rather than after it, so it can only ever see part of the run - and a cross-lead test that sees part of the run finds no collisions and drops nothing');
+    }
+
+    if (_fails.length) {
+      console.log(`⛔ LISTING RISK CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
+    } else {
+      console.log(`✓ LISTING RISK CHECK: the press asks Google what it thinks of a listing - ${LISTING_RISK_REASONS.length} declared reasons, executed on a fixture each. A closed, a moved and a policy-breach listing DROP; an unknown status word drops with them, the way the single press line it replaces always did. A suspicious-review-activity alert DEMOTES and carries Google's own words, because a legitimate business under a review-extortion campaign wears the identical flag and may be a better prospect than a clean one. An alert we cannot classify - a new code, a bare flag, an empty object - takes the declared default, and the default is demote: the exact strings are UNVERIFIED, so the safe branch also wins any wording carrying both ideas. A mailbox store demotes and never drops, an ordinary mall is nothing, and a container we can only see as a resource id yields nothing rather than a guess. A hidden address is a LABEL and never a penalty, and it travels under every other verdict. THE CLASSIFIER READS PROSE ONLY: Google's alert carries a "learn more" link to a support page about its POLICIES, and a reader that swept up every string matched the policy pattern on that link on essentially every alert - so an alert saying nothing about reviews dropped the lead and the safe default became unreachable. The three prose fields (${LISTING_ALERT_PROSE_FIELDS.join(', ')}) are named, the link is excluded by construction and travels on its own key for the rep to open, a language code classifies nothing, and a real breach in the alert's own prose still drops from any of the three. The same guard covers what a listing sits inside: a URL, a resource name and a bare id are none of them something a person called this place. ${PLACES_RISK_FIELDS.length} free fields carry all of it, pinned against the mask line itself with runtime-assembled needles (${_maskLine ? 'the mask is in place' : 'THE MASK IS MISSING'}), and a mask Google REFUSES falls back to the ten fields the press used for months - derived by removing these, never a second copy - so one wrong field name costs the flags rather than the whole run. HONEST SHAPE: the field names and the alert's shape are read off Google's own reference, but no live response has been scored through this build, so the WORDING Google puts in that prose is the one thing still declared rather than measured - which is why it is patterns with a safe default rather than a rule.`);
+    }
+    // The wiring, said out loud either way. A pure function nobody calls
+    // cannot protect a lead, and a ✓ above would otherwise report a guard that
+    // is not guarding - the shape this repo records more than twenty times.
+    if (_iRisk < 0 || _iPhone < 0) {
+      console.log(`⚠ LISTING RISK WIRING: built and NOT WIRED into the press - ${_iRisk < 0 ? 'readListingRisk' : ''}${_iRisk < 0 && _iPhone < 0 ? ' and ' : ''}${_iPhone < 0 ? 'detectPhoneCollisions' : ''} ${(_iRisk < 0 && _iPhone < 0) ? 'are' : 'is'} called by nothing inside searchGooglePlaces, so no fake listing is dropped from a real Find press yet. The ${PLACES_RISK_FIELDS.length} fields ${_maskOk ? 'ARE' : 'are NOT'} being requested${_fails.length ? ' and the check above is RED, so the verdicts are not proven either' : ' and the verdicts ARE proven on fixtures; only the call is missing'}. Wiring it turns the source assertions above into hard failures automatically.`);
+    }
+  } catch (e) {
+    console.log(`⛔ LISTING RISK CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ══ NAIVE NUMBER-SHARING WOULD HAVE DELETED EVERY REAL CHAIN ══════════════
+  // A phone number appearing on 99 listings is only 26.9% abusive: legitimate
+  // multi-branch businesses, answering services and franchise call lines
+  // dominate the shared-number population. So sharing is NOT the signal -
+  // name-variance and metro-variance are, and the negative case is asserted as
+  // hard as the positive one here, because a filter that eats real chains
+  // deletes exactly the $5-15M operators the ICP is made of.
+  //
+  // Both fixtures come off the shapes already recorded in this file: Ram Jack,
+  // the franchise §24 is an entire entry about, and Tuck & Howell, the genuine
+  // Charlotte-and-Raleigh two-market operator CHAIN OUTLET CHECK protects.
+  try {
+    const _fails = [];
+    const _mk = (name, phone, city, placeId) => ({ name, phone, marketsSeen: [city], placeId });
+
+    // ── 1. THE FAKE NETWORK: different names, different metros, one number ─
+    // The FTC's own names, which is why the name test can never be a shape
+    // test: "Levine Heating and Cooling" is what a real one-truck HVAC company
+    // is called.
+    const _fake = [
+      _mk('Levine Heating and Cooling', '+1 704-555-0199', 'Charlotte NC', 'f1'),
+      _mk('Horton Electrical Service', '(704) 555-0199', 'Phoenix AZ', 'f2'),
+    ];
+    const _dFake = detectPhoneCollisions(_fake);
+    if (!_dFake.reasonFor(_fake[0]) || !_dFake.reasonFor(_fake[1])) _fails.push('two differently-named businesses in two metros publishing ONE number are not caught, which is the only cross-lead fake test that survived measurement');
+    if (!/2 metros/.test(_dFake.reasonFor(_fake[0]))) _fails.push(`the reason does not name the spread, so a log line about it says nothing checkable - it reads "${_dFake.reasonFor(_fake[0])}"`);
+    // The number is normalised before comparing, or none of this fires: Google
+    // returns "+1 704-555-0199" and the sheet holds "(704) 555-0199".
+    if (_dFake.groups.size !== 1) _fails.push(`the same number written three ways grouped into ${_dFake.groups.size} groups - the digits have to be compared, not the punctuation`);
+
+    // ── 2. MUST SURVIVE: the legitimate multi-branch business ─────────────
+    // The same name in three cities on one central number is a real company
+    // with three branches. This negative case is as important as the positive.
+    const _branch = [
+      _mk('Blue Ridge Plumbing', '+1 704-555-0100', 'Charlotte NC', 'b1'),
+      _mk('Blue Ridge Plumbing', '704-555-0100', 'Raleigh NC', 'b2'),
+      _mk('Blue Ridge Plumbing', '17045550100', 'Nashville TN', 'b3'),
+    ];
+    const _dBranch = detectPhoneCollisions(_branch);
+    if (_dBranch.reasonFor(_branch[0]) || _dBranch.reasonFor(_branch[2])) _fails.push(`a business trading under ONE name in three cities on one central number is dropped as a fake network - "${_dBranch.reasonFor(_branch[0])}". That is a real multi-branch company and the exact $5-15M operator the ICP is made of`);
+    // And the same brand with the city bolted on is still one business: this
+    // is why the identity key is the brand key first.
+    const _ram = [
+      _mk('Ram Jack Durham', '+1 919-555-0111', 'Raleigh NC', 'r1'),
+      _mk('Ram Jack Texas', '+1 919-555-0111', 'Dallas TX', 'r2'),
+    ];
+    if (detectPhoneCollisions(_ram).reasonFor(_ram[0])) _fails.push('a franchise brand with the city bolted onto each outlet name is read as differently-named businesses, so the chain rule and this rule would both fire and the log would name the wrong cause');
+    const _twoMarket = [
+      _mk('Tuck and Howell Plumbing', '+1 704-555-0122', 'Charlotte NC', 't1'),
+      _mk('Tuck and Howell Plumbing Raleigh', '704.555.0122', 'Raleigh NC', 't2'),
+    ];
+    if (detectPhoneCollisions(_twoMarket).reasonFor(_twoMarket[0])) _fails.push('the genuine two-market operator CHAIN OUTLET CHECK protects is deleted here instead - Charlotte to Raleigh is 140 miles and the coverage-gap finding is built on exactly this shape');
+
+    // ── 3. MUST SURVIVE: everything that is not BOTH kinds of variance ─────
+    const _oneMetro = [
+      _mk('Levine Heating', '+1 704-555-0133', 'Charlotte NC', 'o1'),
+      _mk('Horton Electric Service', '+1 704-555-0133', 'Charlotte NC', 'o2'),
+    ];
+    if (detectPhoneCollisions(_oneMetro).reasonFor(_oneMetro[0])) _fails.push('two names on one number in ONE metro is dropped - that is a shared answering service or two trades run from one office, and metro-variance is half the rule');
+    const _twice = [
+      _mk('Peters Roofing', '+1 317-555-0144', 'Indianapolis IN', 'x1'),
+      _mk('Peters Roofing', '+1 317-555-0144', 'Indianapolis IN', 'x1'),
+    ];
+    if (detectPhoneCollisions(_twice).reasonFor(_twice[0])) _fails.push('one listing found twice is evidence of a network of itself, so a business found by two searches collides with its own second copy');
+    // THE SHAPE THAT ACTUALLY REACHES THE PLACE-ID GUARD. Identical rows are
+    // already collapsed by the Sets, so the first cut of this check asserted
+    // something it could not fail on and the falsification said so. The real
+    // case is ONE listing held twice under a STALE name and an older market -
+    // the bench row and this run's row - which without the guard supplies both
+    // variances by itself and deletes a real business.
+    const _samePlace = [
+      { name: 'Peters Roofing', phone: '+1 317-555-0188', marketsSeen: ['Indianapolis IN'], placeId: 'same1' },
+      { name: 'Peters Brothers Roofing', phone: '+1 317-555-0188', marketsSeen: ['Columbus OH'], placeId: 'same1' },
+    ];
+    if (detectPhoneCollisions(_samePlace).reasonFor(_samePlace[0])) _fails.push('one Google listing held twice - the bench row under an older name and market beside this run\'s row - supplies both variances on its own and the business is dropped for colliding with itself. A place id seen before has to count once');
+    const _noMetro = [
+      { name: 'A Roofing', phone: '+1 704-555-0155', placeId: 'm1' },
+      { name: 'B Plumbing', phone: '+1 704-555-0155', placeId: 'm2' },
+    ];
+    if (detectPhoneCollisions(_noMetro).reasonFor(_noMetro[0])) _fails.push('two leads carrying NO metro at all are dropped for differing in one - unmeasured treated as a value, the recorded class');
+    const _noPhone = [_mk('A Roofing', '', 'Charlotte NC', 'n1'), _mk('B Roofing', '555', 'Dallas TX', 'n2')];
+    if (detectPhoneCollisions(_noPhone).groups.size) _fails.push('leads with no usable number are being grouped, so two businesses that published nothing collide on emptiness');
+    for (const _bad of [null, undefined, 'x', 42, [null, 'x', 7]]) {
+      if (detectPhoneCollisions(_bad).groups.size) _fails.push(`detectPhoneCollisions(${JSON.stringify(_bad)}) invents a group`);
+    }
+
+    // ── 4. THE RAW PLACES FIELD, AND THE THRESHOLD ────────────────────────
+    const _raw = [
+      { name: 'A Roofing', internationalPhoneNumber: '+1 704-555-0177', marketsSeen: ['Charlotte NC'], placeId: 'i1' },
+      { name: 'B Plumbing', internationalPhoneNumber: '+1 704-555-0177', marketsSeen: ['Dallas TX'], placeId: 'i2' },
+    ];
+    if (!detectPhoneCollisions(_raw).reasonFor(_raw[0])) _fails.push('a raw Places result cannot be passed in - internationalPhoneNumber is the field name Google uses and the press renames it, so both have to be read');
+    if (detectPhoneCollisions(_fake, 3).reasonFor(_fake[0])) _fails.push('the threshold is not a knob, so it cannot be raised to three the way GP_CHAIN_MIN_METROS is if two ever proves too tight');
+    if (detectPhoneCollisions(_fake, 1).reasonFor(_fake[0]) && detectPhoneCollisions([_fake[0]]).groups.size) _fails.push('the floor of two can be argued down to one, and one listing would then be a network of itself');
+
+    // ── 5. ONE COPY OF THE NAME RULE ──────────────────────────────────────
+    // The discovery dedupe and this test ask the identical question, and the
+    // rule was declared inside runDiscovery where nothing else could reach it.
+    if (bizNameKey('James River Remodeling LLC') !== bizNameKey('James River Remodeling, L.L.C.')) _fails.push('the shared name rule no longer reads a legal suffix and its punctuation as the same business, and the discovery dedupe is built on that');
+    if (bizNameKey('Tuck & Howell Plumbing, Heating & Air') !== bizNameKey('Tuck and Howell Plumbing Heating Air')) _fails.push('"&" and "and" are no longer one word to the name rule, so one shop written by two sources reads as two businesses');
+    if (String(runDiscovery).indexOf(['const _normName = ', 'bizNameKey'].join('')) < 0) _fails.push('the discovery dedupe has its own copy of the name rule again - two hand-kept copies of one rule is the class this file records most, and these two must answer identically or a lead is deduped by one rule and grouped by another');
+
+    if (_fails.length) {
+      console.log(`⛔ PHONE COLLISION CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
+    } else {
+      console.log(`✓ PHONE COLLISION CHECK: one number answering for several differently-named businesses in several metros is caught from the run's own results, executed on the FTC's own names - "Levine Heating and Cooling" and "Horton Electrical Service", a surname and a trade, indistinguishable from a real one-truck operator, which is why no name-shape test can ever be built. Sharing alone is refused as a signal: a number on 99 listings is only 26.9% abusive. So BOTH variances are required, and every shape that has only one survives - one name in three cities (a real multi-branch business), a franchise brand with the city bolted on, the Charlotte-and-Raleigh two-market operator, two names inside one metro, one listing found twice, and leads carrying no metro or no number at all. The number is compared as digits with a country code dropped, the threshold is a knob defaulting to 2 with a hard floor of 2, and the name rule is the SAME function the discovery dedupe uses rather than a second copy of it. HONEST SHAPE: no live run has been scored through this yet, so what it drops from a real press is unproven.`);
+    }
+  } catch (e) {
+    console.log(`⛔ PHONE COLLISION CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ══ AN INVENTED PRICE IS A FABRICATION WHEREVER IT SITS ═══════════════════
