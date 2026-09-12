@@ -164,7 +164,7 @@ const leadDiag = (...a) => { if (BOOT_STATUS.phase === 'checking') return; conso
 // and the Netlify drag-in — exactly the window the client's warning exists for.
 // Bump BOTH (here and CLIENT_CONTRACT in index.html) when a change needs the
 // new client to be live.
-const CONTRACT_VERSION = 20261018;
+const CONTRACT_VERSION = 20261019;
 const BOOT_EXPECTED_RED = [
   /^\u26d4 MODEL DECLINED \[selftest\]/,
 ];
@@ -14391,7 +14391,13 @@ ${corpus}` }]
 // publish an About page next month, and a stale negative is worse than a
 // re-search because it is invisible.
 const DM_NEGATIVE_TTL_DAYS = 14;
-const _dmNegativeCache = new Map();   // domain -> timestamp of a failed lookup
+// Round 144: the KEY is any string, and it now namespaces two stages. It held
+// one for its whole life, and the file said so at the dead-site stop: "the
+// negative cache existed and covered exactly ONE of the four stages. Licence,
+// chamber and registry were re-bought at full price." Worse than that - a
+// websearch cache hit returns null WITHOUT settling the lead, so the licence
+// stage was reached FASTER on the second press, not avoided.
+const _dmNegativeCache = new Map();   // stage-scoped key -> timestamp of a MEASURED failed lookup
 
 const dmSearchedRecently = (domain) => {
   if (!domain) return false;
@@ -15885,7 +15891,21 @@ const siteLooksBuy = ({ notIcp, website, pagesRead, fcKey, apiKey, setting } = {
 // The contact read's page fetches stay FREE — a plain fetch first with Firecrawl
 // only as the fallback — so this is asked for, priced and logged on its own
 // instead of being folded into a page read that would then cost a render rate.
-const fcHomeShot = async (website, fcKey, timeout = 25000) => {
+// ══ ROUND 144: 22 SECONDS OF HEADROOM ON THE ONLY RENDER A LEAD GETS ══════
+// Live, 2026-09-11: four of eight renders failed - three timed out and one came
+// back HTTP 408. This call was budgeting 25,000ms for a 3,000ms waitFor, while
+// the audit's full-page render next door budgets 30,000ms for a LONGER 4,000ms
+// wait and firecrawlScrape budgets 45,000ms. The one render a Find lead gets
+// had the least headroom in the file and, unlike those, no retry behind it: a
+// timeout is deliberately not a transport failure in fetchTr, and that
+// reasoning stands (retrying one doubles a wall clock that is already the
+// problem). So the fix is headroom, not a second attempt.
+//
+// NOT PROVEN: that 35s fixes it. Three timeouts on eight leads is not a
+// distribution. The render counters on the run tally are what make the next
+// batch answer it instead of somebody counting off a screenshot.
+const FC_HOME_SHOT_TIMEOUT_MS = 35000;
+const fcHomeShot = async (website, fcKey, timeout = FC_HOME_SHOT_TIMEOUT_MS) => {
   if (!website || !fcKey) return { shot: null, paid: false, credits: 0, why: 'no website or no Firecrawl key, so no picture was asked for' };
   if (fcCreditsBlocked()) return { shot: null, paid: false, credits: 0, why: 'the Firecrawl account is out of credits, so no picture of their homepage could be taken' };
   const _url = String(website).startsWith('http') ? String(website) : 'https://' + String(website);
@@ -35545,12 +35565,30 @@ ${corpus}` }]
     return { name: parsed.name, title: _lic, licenseQualifier: _isQualifier, confidence: parsed.confidence || 'medium', source: 'license_or_chamber' };
   };
 
+  // Round 144: the same 14-day negative the web search has had since §113,
+  // for the stage that was re-bought at full price every press. Keyed on the
+  // NAME and the city rather than the domain, because that is what a licence
+  // register is searched by - this function is not even handed a website.
+  const _licKey = `license|${clean.toLowerCase()}|${loc}`;
+  const _licAgo = dmSearchedRecently(_licKey);
+  if (_licAgo !== false) {
+    console.log(`DM/license [${companyName}]: SKIPPED \u2014 we searched the same register for "${clean}" in ${loc} ${_licAgo} day(s) ago and it named nobody. A state licence register does not change in ${DM_NEGATIVE_TTL_DAYS} days, so re-buying it costs 2 Firecrawl credits and cannot return a different answer.`);
+    return null;
+  }
   try {
     const hits = [];
     const r0 = await firecrawlSearch(fcKey, q[0], 4, false, 'license_trade');
     if (Array.isArray(r0)) hits.push(...r0);
     if (hits.length) {
       const early = await evaluate(hits);
+      // Round 144: with DM_CHAMBER off - the default - q holds ONE query, so
+      // the loop below adds nothing and this is the only place a real negative
+      // is ever measured on this stage. Without the write here the cache would
+      // cover the licence stage only on a box where the chamber query is on.
+      if (!early && q.length === 1) {
+        rememberDmSearchFailed(_licKey);
+        console.log(`DM/license [${companyName}]: real results came back and none of them named an owner \u2014 remembering this for ${DM_NEGATIVE_TTL_DAYS} days so the same 2 credits are not spent again on the same negative.`);
+      }
       if (early) {
         if (q.length > 1) console.log(`DM/license [${clean}]: resolved on the trade query \u2014 skipped the chamber search (~4 Firecrawl credits saved)`);
         // Round 118: which of the two queries earned the name. DM_SOURCE_WEIGHT
@@ -35571,9 +35609,25 @@ ${corpus}` }]
       const r = await firecrawlSearch(fcKey, q[i], 4, false, 'license_chamber');
       if (Array.isArray(r)) hits.push(...r);
     }
-    if (!hits.length || hits.length === _before) return null;
+    // ══ REMEMBERED ONLY WHEN WE ACTUALLY LOOKED ════════════════════════
+    // hits.length === 0 does NOT mean the register named nobody. An empty
+    // array is also what firecrawlSearch returns when the balance is out
+    // (it logs FIRECRAWL OUT OF CREDITS and returns []) and when a call is
+    // throttled. Remembering that for 14 days would turn one empty Firecrawl
+    // account into a fortnight of leads we never searched and believe we did -
+    // and never looked is not measured zero. So the negative is written only
+    // where the model read real results and found no owner in them.
+    if (!hits.length || hits.length === _before) {
+      if (!hits.length) console.log(`DM/license [${companyName}]: the register search returned nothing at all, which is what an empty Firecrawl balance also looks like. NOT remembered as a negative - we cannot tell "nobody is listed" from "we never asked".`);
+      return null;
+    }
     const _late = await evaluate(hits);
-    return _late ? Object.assign({}, _late, { licenseQuery: 'chamber' }) : null;
+    if (!_late) {
+      rememberDmSearchFailed(_licKey);
+      console.log(`DM/license [${companyName}]: real results came back and none of them named an owner \u2014 remembering this for ${DM_NEGATIVE_TTL_DAYS} days so the same 2 credits are not spent again on the same negative.`);
+      return null;
+    }
+    return Object.assign({}, _late, { licenseQuery: 'chamber' });
   } catch(e) { console.log('findOwnerViaLicense failed:', e.message); return null; }
 };
 
@@ -36017,6 +36071,52 @@ const DM_REGISTRY = /^(?:1|true|on|yes)$/i.test(String(process.env.DM_REGISTRY |
 // per-search tally so the next batch says which of the remaining searches earn
 // their keep instead of anyone grepping a log for it.
 const DM_CHAMBER = /^(?:1|true|on|yes)$/i.test(String(process.env.DM_CHAMBER || ''));
+// ══ ROUND 144: THE WAVE STOPS BUYING NOBODY ════════════════════════════════
+// Live, 2026-09-11: 32 credits on 10 leads, and 21 of them bought nothing. The
+// paid owner wave ran on four leads and named nobody on three - The Insight
+// Program (7), Northgate Park (8), The Colonnade (6). All three are
+// ownerRisk categories: Behavioral Health and Senior Care, flagged on
+// GP_CATEGORIES years ago with the reason written beside them - "Senior living
+// is dominated by national operators and REITs ... flagging the whole category
+// as consolidation-risk makes Research confirm a real owner before we spend on
+// it."
+//
+// The flag was stamped on the lead at the Places search (consolidation_risk)
+// and read in exactly three places, all of them in research, merge and
+// scoring. runFindContactRead never read it, and at out.signals = signals the
+// incoming object is replaced outright - so the one signal that says "there
+// may be no local owner here" was thrown away immediately before the money
+// went out. Computed-but-not-passed, on the route that spends.
+//
+// §110 declined to act on a pair count from two leads in one afternoon and was
+// right to: "Two of two in one run is NOT evidence." This is a different
+// thing - a category flag declared in the source with its rationale, now three
+// of three in a second run - and it is still only half the rule. The category
+// alone never stands a lead down: Darrel owns a funeral home, and the whole
+// point of this system is finding Darrel. What stands the wave down is the
+// category AND their own pages naming nobody, which is the difference between
+// "this field is consolidated" and "we looked and there is no owner here".
+const FIND_OWNER_RISK_STANDDOWN = !/^(?:0|false|off|no)$/i.test(String(process.env.FIND_OWNER_RISK_STANDDOWN || ''));
+// One lookup, named. GP_CATEGORIES was searched by label inline in three
+// places already; a fourth copy is how the four drift.
+const findCategoryByLabel = (label) => {
+  const l = String(label || '').trim().toLowerCase();
+  return l ? (GP_CATEGORIES.find(c => String(c.label).toLowerCase() === l) || null) : null;
+};
+const categoryOwnerRisk = (label) => !!(findCategoryByLabel(label) || {}).ownerRisk;
+// Their own pages named NOBODY - no roster, no names, no founder sentence.
+// Every one of these is set by readFindIcpSignals from pages we already hold,
+// so this costs nothing and is known before a byte of the wave is bought.
+// NOT ownerNamedOnSite: it is written 300 lines below this, AFTER the wave,
+// out of what the wave itself found. Reading it here would be a clause that
+// can never be false - a check that cannot fail, dressed as a second opinion.
+const ownPagesNameNobody = (sig) => {
+  const s = sig || {};
+  return !(Number(s.teamCount) > 0)
+    && !(Array.isArray(s.teamNames) && s.teamNames.length > 0)
+    && !(Array.isArray(s.teamTitles) && s.teamTitles.length > 0)
+    && !s.founderPhrase;
+};
 const DM_SIGNATURE_PROMOTE_AT = 3;   // signatures of the same first name before it outranks a weak site title
 const foldFirstNameClusters = (clusters) => {
   for (let i = clusters.length - 1; i >= 0; i--) {
@@ -64026,7 +64126,14 @@ app.listen(PORT, () => {
       [_nd('if (apiKey && name &&', ' !out.notIcp) {'), 'a chain outlet still buys the paid owner wave'],
       [_nd('out.outlet = readOutletTell({ name, homeUrl:', ' ((pages || []).find(p'), 'the contact read no longer asks where their own Google listing points, so a branch on a brand site is read as an independent'],
       [_nd('const _headOffice = signals.branchNetwork', ' === true;'), 'the head-office rule no longer reads the branch mark'],
-      [_nd('const paidOwner = opts.paidOwnerLookup !== false', ' && !_headOffice;'), 'a branch of a national brand buys the paid owner wave again - ten credits and three minutes for a signer who sits at head office'],
+      // Round 144: RE-AIMED. The line gained a second stand-down, so the old
+      // needle pinned a shape rather than the fact. Both stand-downs are
+      // asserted, separately, because losing either is its own live failure:
+      // the branch one cost 30 credits on 2026-09-04 and the ownerRisk one
+      // cost 21 on 2026-09-11.
+      [_nd('const paidOwner = opts.paidOwnerLookup !== false', ' && !_headOffice'), 'a branch of a national brand buys the paid owner wave again - ten credits and three minutes for a signer who sits at head office'],
+      [_nd(' && !_owner', 'Risk;'), 'the owner wave no longer stands down at a consolidated operator whose own pages name nobody - that is 21 of the 32 credits the 2026-09-11 batch spent, for three names that were never there'],
+      [_nd('out.paidOwnerRiskStandDown = ', '_ownerRisk;'), 'the row cannot say the owner wave was stood down, so a batch that saved the credits looks identical to one that never had the leads'],
       [_nd('if (website &&', ' !out.notIcp) {'), 'a chain outlet still buys the address lookup'],
       [_nd('out.nonprofit = readNonprofitEvidence({ pages,', ' links });'), 'the contact read no longer looks for nonprofit evidence at all'],
       // Until Round 139 this needle asserted that the nonprofit verdict
@@ -64927,7 +65034,22 @@ app.listen(PORT, () => {
       [_n('contactSiteLooks: (d.site && SITE_LOOKS_WORDS.includes(d.site.looks))', " ? d.site.looks : 'unknown',"), 'the visual verdict never reaches the row the client reads, so the fair-and-bad toggle has nothing to filter on'],
       [_n('formats: [', "'screenshot'], onlyMainContent: false, waitFor: 3000,"), 'the render asks for something other than one picture of the first screen, so it is priced as a page read or costs more than it needs to'],
       [_n("fcNote(true, 'scrape+screenshot',", ' _url, true);'), 'the homepage render is not filed as a RENDER, so it is billed at the plain scrape rate and byKind.screenshot cannot settle the real one'],
+      // ══ ROUND 144: THE THREE THAT COUNT THE FAILURES ═════════════════
+      // Four of eight renders failed live on 2026-09-11 and no meter moved,
+      // because a failed render returns credits: 0. These three are the whole
+      // path from the failure to the number a human reads.
+      [_n('out.site.renderTried = ', 'true;'), 'nothing records that a render was even attempted, so a lead nobody rendered and a render that failed are the same row again'],
+      [_n('out.site.renderFailed = ', '!_shot.shot;'), 'the render failure never reaches the row, so the only way to know half of them failed is for somebody to count log lines by hand'],
+      [_n('contactSiteRenderFailed: !!(d.site && d.site.renderFailed', ' === true),'), 'the render outcome is computed and dropped at the client boundary, so the run tally counts nothing'],
     ]) if (!_src.includes(_needle)) _fails.push(_msg);
+    // ══ ROUND 144: THE HEADROOM, PINNED ════════════════════════════════
+    // EXECUTED, not greped: the constant is read and compared, so a literal
+    // typed back into the signature cannot satisfy it. 25,000ms for a 3,000ms
+    // wait was the least headroom in the file, on the only render a Find lead
+    // gets and the one with no retry behind it. The audit's full-page render
+    // budgets 30,000ms for a LONGER wait, and that is the floor asserted here.
+    if (!(FC_HOME_SHOT_TIMEOUT_MS >= 30000)) _fails.push(`the homepage render is given ${FC_HOME_SHOT_TIMEOUT_MS}ms, less headroom than the audit's own full-page render, which waits LONGER and is allowed 30000ms - and unlike that one this render is never retried, so a slow homepage is simply never seen`);
+    if (!String(fcHomeShot).includes(_n('timeout = FC_HOME_SHOT', '_TIMEOUT_MS'))) _fails.push('the render timeout is a typed number in the signature again, so the constant above it and the boot check on that constant are both guarding nothing');
     // Through fcCall, like every other outbound Firecrawl call, and named to
     // the model meter, like every other Anthropic call.
     if (!/fcCall\(/.test(String(fcHomeShot))) _fails.push('the homepage render does not go through fcCall, so it is outside the pacing, the retry and the per-endpoint gate every other Firecrawl call sits behind');
@@ -66065,14 +66187,45 @@ app.listen(PORT, () => {
       // The same corpus is not a second answer: with one query in q the loop
       // adds nothing, and the trailing evaluate used to re-run the identical
       // Haiku prompt on the identical hits for the identical null.
-      if (!_src.includes(_n('if (!hits.length || hits.length === _before)', ' return null;'))) {
-        _fails.push('the licence executor evaluates the same corpus twice again - with the chamber query off the loop adds no hits and the second model call is bought on evidence that did not change');
+      // Round 144: RE-AIMED from a literal to the ORDER, which is the actual
+      // rule and survives the guard being rewritten. The no-new-hits return
+      // must sit BEFORE the second evaluate, and there must be exactly one of
+      // each - a grep for the old one-line shape went red on a restructure
+      // that kept the behaviour exactly.
+      {
+        const _iGuard = _src.indexOf(_n('hits.length === ', '_before) {'));
+        const _iLate = _src.indexOf(_n('const _late = await evaluate', '(hits);'));
+        if (_iGuard < 0 || _iLate < 0 || !(_iGuard < _iLate)) {
+          _fails.push('the licence executor evaluates the same corpus twice again - with the chamber query off the loop adds no hits and the second model call is bought on evidence that did not change');
+        }
       }
       // Which of the two queries earned the name. One source weight covers both,
       // so without this nothing downstream can tell them apart.
+      // Round 144: the chamber branch was restructured so the negative could be
+      // remembered before it returns, so the needle pins the ASSIGNMENT rather
+      // than the whole return expression it used to sit inside.
       for (const _lq of [_n("return Object.assign({}, early, { licenseQuery:", " 'trade' });"),
-                         _n("_late ? Object.assign({}, _late, { licenseQuery:", " 'chamber' }) : null;")]) {
+                         _n("Object.assign({}, _late, { licenseQuery:", " 'chamber' })")]) {
         if (!_src.includes(_lq)) _fails.push('the licence result no longer records WHICH query produced it, so the chamber query cannot be judged on its own evidence');
+      }
+      // ══ ROUND 144: THE NEGATIVE IS REMEMBERED, AND ONLY WHEN MEASURED ══
+      // The cache covered ONE of the four paid stages for its whole life, and
+      // this file said so itself at the dead-site stop. The licence stage was
+      // re-bought at full price on every re-press.
+      if (!_src.includes(_n('const _licKey = `license|', '${clean.toLowerCase()}|${loc}`;'))) {
+        _fails.push('the licence stage has no negative memory again, so re-pressing the same list re-buys a state register that cannot have changed');
+      }
+      if (!_src.includes(_n('const _licAgo = dmSearchedRecently', '(_licKey);'))) {
+        _fails.push('the licence stage writes a negative it never reads, which is a cache that costs memory and saves nothing');
+      }
+      // AND NEVER LOOKED IS NOT MEASURED ZERO. firecrawlSearch returns [] on an
+      // empty balance too, so remembering an empty result would turn one
+      // unpaid Firecrawl bill into a fortnight of leads we believe we searched.
+      {
+        const _iEmpty = _src.indexOf(_n('if (!hits.length) console.log(`DM/license', ' [${companyName}]:'));
+        const _iRemember = _src.indexOf(_n('rememberDmSearchFailed', '(_licKey);'));
+        if (_iEmpty < 0) _fails.push('the licence stage no longer distinguishes an empty result from a measured negative, so an empty Firecrawl balance is remembered for 14 days as "nobody is listed"');
+        if (_iRemember < 0) _fails.push('the licence stage never records its negative, so the guard above it can never fire');
       }
       // The tag rides a parallel array: the query list shifts when a lead has
       // no city, and an index would then name the wrong search in the tally.
@@ -66101,6 +66254,36 @@ app.listen(PORT, () => {
       }
       if (!_src.includes(_n('    stages', 'Run,'))) {
         _fails.push('findDecisionMaker no longer returns how many stages ran, so nothing downstream can know whether the wave fired');
+      }
+
+      // ══ ROUND 144: THE WAVE STANDS DOWN WHERE IT BOUGHT NOBODY ═════════
+      // Live, 2026-09-11: three leads bought the full paid wave and named
+      // nobody - The Insight Program (7 credits), Northgate Park (8), The
+      // Colonnade (6). All three are ownerRisk categories, and that flag has
+      // sat on GP_CATEGORIES with its reason written beside it the whole time.
+      //
+      // EXECUTED against the real predicates on the real table, because the
+      // rule is two halves and only one of them is safe on its own. The
+      // category alone must NEVER stand a lead down: Darrel owns a funeral
+      // home and finding Darrel is the entire point of this system.
+      {
+        const _risky = GP_CATEGORIES.filter(c => c.ownerRisk).map(c => c.label);
+        if (_risky.length < 3) _fails.push('fewer than three categories are marked ownerRisk, so the flag the stand-down reads has been emptied out and the wave is back to buying nobody at consolidated operators');
+        for (const _l of ['Senior Care', 'Behavioral Health']) {
+          if (!categoryOwnerRisk(_l)) _fails.push(`${_l} is no longer an ownerRisk category - it is one of the two that bought 21 credits and found nobody on 2026-09-11, and the stand-down reads this flag and nothing else`);
+        }
+        if (categoryOwnerRisk('Roofing')) _fails.push('a plain trade reads as ownerRisk, so the stand-down would refuse the paid wave across the core ICP');
+        if (categoryOwnerRisk('')) _fails.push('a lead with NO trade label reads as ownerRisk, so a lead we know nothing about is stood down on a fact we do not have');
+        // The roster half, on the three free signals it actually reads.
+        if (ownPagesNameNobody({ teamCount: 9 }) !== false) _fails.push('a business whose own team page lists nine people reads as naming nobody, so a Darrel with a roster would have his owner search stood down');
+        if (ownPagesNameNobody({ teamNames: ['Darrel Jones'] }) !== false) _fails.push('a named person on their own pages does not count as naming somebody');
+        if (ownPagesNameNobody({ founderPhrase: 'family owned since 1974' }) !== false) _fails.push('a founder sentence on their own site does not count as naming somebody, and that sentence is the strongest free owner signal there is');
+        if (ownPagesNameNobody({}) !== true) _fails.push('a business whose pages named nobody at all does not read as naming nobody, so the stand-down can never fire and the 21 credits go again');
+        // BOTH halves, or nothing. This is the assertion that keeps Darrel.
+        const _stand = (trade, sig) => FIND_OWNER_RISK_STANDDOWN && categoryOwnerRisk(trade) && ownPagesNameNobody(sig);
+        if (_stand('Senior Care', {}) !== true) _fails.push('a senior care business whose own pages name nobody still buys the paid owner wave - that is Northgate Park and The Colonnade, 14 credits for two names nobody found');
+        if (_stand('Senior Care', { teamCount: 6 }) !== false) _fails.push('a senior care business that DOES name six people on its own team page is stood down - the category was never meant to decide this alone, and an owner-run home in a consolidated field is exactly the lead worth finding');
+        if (_stand('Roofing', {}) !== false) _fails.push('a roofing contractor whose pages name nobody is stood down - the stand-down has escaped the flagged categories and is now refusing to look for owners across the whole ICP');
       }
 
       // ══ THE TheirStack LANE'S OWN EVIDENCE ═════════════════════════════
@@ -86878,6 +87061,15 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     } else {
       const _shot = await fcHomeShot(website, fcKey);
       _renderCredits += Number(_shot.credits) || 0;
+      // Round 144: WHAT HAPPENED TO THE RENDER, on the row. A failed render
+      // returns credits: 0, so it advances neither the per-lead cap nor the
+      // daily budget - and this file's own note at the inner-page fallback
+      // says Firecrawl bills the submit. A failure we may be paying for was
+      // invisible to every meter we have, and the only reason anyone knows
+      // half of them failed on 2026-09-11 is that a human counted the log.
+      out.site.renderTried = true;
+      out.site.renderFailed = !_shot.shot;
+      out.site.renderFailWhy = _shot.shot ? '' : (/timeout/i.test(String(_shot.why || '')) ? 'timeout' : 'refused');
       _looksSaw = _shot.shot
         ? readSiteLooks(await visionSiteLooks(_shot.shot, name, apiKey),
             'we rendered their homepage and the read of it came back empty, so how it looks is unmeasured', _freeSeen)
@@ -86971,10 +87163,18 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // searches are stood down, and the marketing head Hunter looks for is the
   // target on a branch anyway.
   const _headOffice = signals.branchNetwork === true;
-  const paidOwner = opts.paidOwnerLookup !== false && !_headOffice;
+  // Round 144: the second stand-down, in the same shape as the first. The
+  // trade label arrives on the lead from the press (company.industry is what
+  // feeds signals.tradeLabel further down), so this is decided before anything
+  // is bought. BOTH halves are required - see FIND_OWNER_RISK_STANDDOWN.
+  const _riskTrade = (company && company.industry) || '';
+  const _ownerRisk = FIND_OWNER_RISK_STANDDOWN && categoryOwnerRisk(_riskTrade) && ownPagesNameNobody(signals);
+  const paidOwner = opts.paidOwnerLookup !== false && !_headOffice && !_ownerRisk;
   out.paidOwnerLookup = paidOwner;
   out.paidOwnerHeadOffice = _headOffice;
+  out.paidOwnerRiskStandDown = _ownerRisk;
   if (_headOffice) console.log(`DM [${name}]: a branch of a bigger operation - the signer is at head office, so the paid owner search was not bought (~10 Firecrawl credits saved)`);
+  else if (_ownerRisk) console.log(`DM [${name}]: a ${_riskTrade} business whose own pages name nobody - no team page, no roster, no founder sentence. That field is consolidated into national operators, so the paid owner search was not bought (~6-8 Firecrawl credits saved). The FREE stage still ran, and a ${_riskTrade} business that DOES name its people still buys the wave.`);
   // null means the resolver never ran on this lead, which is a different thing
   // from "it ran and bought nothing". Undefined would read as the second.
   out.ownerStagesRun = null;
@@ -87853,6 +88053,13 @@ const contactFieldsFrom = (data) => {
     // that was rendered and passed.
     contactSiteLooks: (d.site && SITE_LOOKS_WORDS.includes(d.site.looks)) ? d.site.looks : 'unknown',
     contactSiteLooksMeasured: !!(d.site && d.site.looksMeasured === true),
+    // Round 144: whether a picture was even attempted, and why it failed. Three
+    // states, and the third is the one that matters - renderTried false means
+    // nobody bought a render at all (dropped, capped, switched off), which is a
+    // different thing from a render that was bought and came back empty.
+    contactSiteRenderTried: !!(d.site && d.site.renderTried === true),
+    contactSiteRenderFailed: !!(d.site && d.site.renderFailed === true),
+    contactSiteRenderFailWhy: (d.site && d.site.renderFailWhy) || '',
     contactSiteLooksWhy: (d.site && d.site.looksWhy) || '',
     contactSpendRender: (d.spend && typeof d.spend.render === 'number') ? d.spend.render : 0,
     contactLayers: (d.layers && d.layers.verdict) || '',
@@ -87860,6 +88067,27 @@ const contactFieldsFrom = (data) => {
     contactTargetWhy: d.targetWhy || '',
     contactSizeTier: (d.size && d.size.tier) || '',
     contactSizeSay: (d.size && d.size.say) || '',
+    // ══ THE TIER THE LOG PRINTS, AND THE ONE THE ROW CARRIED ═══════════════
+    // Round 144. Two tiers existed and only the weaker one reached the row.
+    // contactSizeTier above is signals.scaleBand, which line 87350 sets to
+    // null the moment the scale ladder GUESSED - so on a guessed lead the row
+    // said nothing while the TARGET line printed "tier low" from _lanes.tier,
+    // the fallback-adjusted one. Log and row disagreed on every guessed lead,
+    // and lanesFor returns seven keys of which contactLanes below copies four:
+    // tier and measured were computed, printed, and dropped at this boundary.
+    // That is the computed-but-not-passed class, and it is why the rep's sheet
+    // could not say whether a business was a $900k shop or a $12M one.
+    //
+    // contactTier is ALWAYS populated, so the sheet and the log agree.
+    // contactTierMeasured is what stops a guess reading as a fact: the cell
+    // says "LOW (guess)" and the band says nothing rather than inventing a
+    // dollar range from a review count (Vin, 2026-09-12: mark it in the cell).
+    // The band is SCALE_BAND_SAY, the one existing tier-to-dollars map, derived
+    // from ICP_REVENUE_BAND - never a retyped range, or the sheet and the
+    // ladder drift the first time the band moves.
+    contactTier: (d.lanes && d.lanes.tier) || '',
+    contactTierMeasured: !!(d.lanes && d.lanes.measured === true),
+    contactTierBand: (d.lanes && d.lanes.measured === true && SCALE_BAND_SAY[d.lanes.tier]) || '',
     contactLanes: (d.lanes && typeof d.lanes === 'object') ? { call: d.lanes.call === true, email: d.lanes.email === true, noname: d.lanes.noname === true, last: d.lanes.last === true } : null,
     contactLanesWhy: (d.lanes && d.lanes.why) || '',
     contactMarketingLead: (d.marketingLead && d.marketingLead.name) || '',

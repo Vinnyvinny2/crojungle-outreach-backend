@@ -2412,6 +2412,11 @@ let contactTally = null;
                  'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN',
                  // Round 110: size and target cells.
                  'targetOf', 'SHORT_CELL_MAX', 'shortCell', 'nameWithFlag', 'sizeCell', 'siteCell', 'siteGradeCell', 'targetCell', 'targetWhyCell', 'websiteCell', 'lastRowsLast',
+                 // Round 144: the tier and the revenue band the rep's sheet opens
+                 // on, and the grade word that moved into the head of the target
+                 // cell when owner_confidence stopped being its own column. All
+                 // pure, all at module scope, so the guess marker is EXECUTED here.
+                 'TIER_SHEET_WORD', 'tierCell', 'revenueBandCell', 'OWNER_GRADE_HEAD', 'EMAIL_GRADE_UNVERIFIED',
                  // Round 141: the SECOND website verdict - what a visitor sees -
                  // and the toggle Vin asked for, which filters the rep's rows on
                  // it. Every one of these is pure and at module scope so the
@@ -2440,6 +2445,13 @@ let contactTally = null;
   const _lift = (re, what) => { const m = _srvLF.match(re); if (!m) fails.push('server.js no longer declares ' + what + ' at module scope, so the read-run port cannot be verified'); return m ? m[0] : ''; };
   const SERVER_LIFT = [
     (_srvLF.match(/const CONTRACT_VERSION = \d+;/) || [''])[0],
+    // Round 144: the one tier-to-dollars map, derived from ICP_REVENUE_BAND.
+    // contactFieldsFrom reads it for the revenue band, so it is lifted with it
+    // rather than retyped - a second copy of these ranges in the browser is
+    // exactly how the sheet and the ladder would come to disagree.
+    _lift(/const ICP_REVENUE_BAND = \{[\s\S]*?\};/, 'ICP_REVENUE_BAND'),
+    _lift(/const _usdShort = \(n\) => [^\n]*\n/, '_usdShort'),
+    _lift(/const SCALE_BAND_SAY = \{[\s\S]*?\n\};/, 'SCALE_BAND_SAY'),
     _lift(/const contactFieldsFrom = \(data\) => \{[\s\S]*?\n\};/, 'contactFieldsFrom'),
     _lift(/const contactFailureFields = \(status, body\) => \{[\s\S]*?\n\};/, 'contactFailureFields'),
     _lift(/const readRunCompanyFrom = \(company\) => \{[\s\S]*?\n\};/, 'readRunCompanyFrom'),
@@ -2577,16 +2589,33 @@ let contactTally = null;
       // the declaration would pass while the emitted file was wrong, which is
       // the whole reason this file exists.
       {
-        const WANT23 = ['batch_id', 'exported_date', 'company', 'decision_maker', 'title', 'owner_confidence',
-          'email', 'email_confidence', 'phone', 'best_time', 'size', 'city_state', 'trade', 'website',
+        // ══ ROUND 144: RE-AIMED, NOT RETIRED ════════════════════════════
+        // This literal was WANT23 and it pinned Round 131's ruling that the two
+        // A-D letters sit in every file under one heading. Vin reversed that on
+        // 2026-09-12 - "get rid of these (batch_id, exported_date, owener
+        // confidence, email_confidence)" - and the file now opens on the tier
+        // table he asked for instead.
+        //
+        // The four columns are gone; the TRUTH two of them carried is not, and
+        // that truth is what is asserted below now. owner_confidence became the
+        // head of the who_to_ask_for cell ("Owner (stated): Jo Blogs"), and
+        // email_confidence became a qualifier on the address itself. An
+        // assertion whose subject no longer exists is a guard nobody can trip,
+        // so neither was deleted - each was pointed at where its fact moved.
+        const WANT22 = ['company', 'who_to_ask_for', 'tier', 'revenue_band', 'website',
+          'phone', 'best_time', 'decision_maker', 'title', 'email', 'size', 'city_state', 'trade',
           'google_rating', 'google_reviews', 'already_paying_for_ads', 'hiring_for_marketing',
           'last_contact', 'convo_had', 'direct_phone_obtained', 'direct_email_obtained', 'notes'];
+        // The four Vin named must be gone from the WHOLE file, not just the
+        // fixed head - a column that merely moved into the tail is still a
+        // column he deletes by hand after every paste.
+        const GONE4 = ['batch_id', 'exported_date', 'owner_confidence', 'email_confidence'];
         const _cells = (line) => String(line || '').split('","').map(s => s.replace(/^"/, '').replace(/"$/, ''));
         const _file = (co, full) => M.csv(co, full).replace(/^\uFEFF/, '').split('\r\n');
 
         // A prefix key with no row in the table would export a blank column
         // under no heading at all, and nothing else in this file would notice.
-        if (M.prefix.length !== WANT23.length) fails.push(`the fixed CSV prefix is ${M.prefix.length} column(s), not ${WANT23.length}`);
+        if (M.prefix.length !== WANT22.length) fails.push(`the fixed CSV prefix is ${M.prefix.length} column(s), not ${WANT22.length}`);
         const _orphan = M.prefix.filter(k => !M.cols.some(c => c[0] === k));
         if (_orphan.length) fails.push(`the fixed CSV prefix names ${_orphan.join(', ')}, which has no row in FIND_CSV_COLUMNS - that column exports blank under no heading`);
 
@@ -2600,19 +2629,24 @@ let contactTally = null;
           contactAdsCode: true, contactHiringMarketing: false, contactIcp: 71,
         }];
         for (const _full of [false, true]) {
-          const _head = _cells(_file(_fix, _full)[0]).slice(0, WANT23.length);
-          if (_head.join('|') !== WANT23.join('|')) {
-            fails.push(`the ${_full ? 'full' : 'lean'} CSV does not open on the fixed 23 columns - it opens on ${_head.join(', ')}`);
+          const _all = _cells(_file(_fix, _full)[0]);
+          const _head = _all.slice(0, WANT22.length);
+          if (_head.join('|') !== WANT22.join('|')) {
+            fails.push(`the ${_full ? 'full' : 'lean'} CSV does not open on the fixed ${WANT22.length} columns - it opens on ${_head.join(', ')}`);
           }
+          const _back = GONE4.filter(k => _all.indexOf(k) >= 0);
+          if (_back.length) fails.push(`the ${_full ? 'full' : 'lean'} CSV still carries ${_back.join(', ')} - Vin deleted ${_back.length > 1 ? 'these columns' : 'this column'} by hand after every paste and asked for ${_back.length > 1 ? 'them' : 'it'} to go`);
         }
         // The VALUES, on the lean file. A heading with nothing under it is the
         // same defect one row lower down.
         const _row = _cells(_file(_fix, false)[1]);
-        const at = (name) => _row[WANT23.indexOf(name)];
-        if (at('batch_id') !== 'b1b2c3d4-77ff-4a00-9e11-000000000001') fails.push('the CSV carries no batch_id, so a rep holding a duplicate cannot say which file it is already in');
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(at('exported_date'))) fails.push(`exported_date is "${at('exported_date')}" and not the date the file was made`);
-        if (at('owner_confidence') !== 'A') fails.push(`owner_confidence is "${at('owner_confidence')}" for a confirmed owner and should be the letter A`);
-        if (at('email_confidence') !== 'A') fails.push(`email_confidence is "${at('email_confidence')}" for a published personal mailbox and should be the letter A - a sentence there is what Round 131 replaced`);
+        const at = (name) => _row[WANT22.indexOf(name)];
+        // A CONFIRMED owner and a published personal mailbox are the two clean
+        // states: the cell names the person with no qualifier and the address
+        // stands alone. This is where owner_confidence 'A' and email_confidence
+        // 'A' went - the absence of a caveat IS the A.
+        if (at('who_to_ask_for') !== 'Owner: Ada Lovelace') fails.push(`who_to_ask_for is "${at('who_to_ask_for')}" for a confirmed owner - it should name him with no qualifier, which is what the A in the retired owner_confidence column meant`);
+        if (at('email') !== 'jo@fixedco.com') fails.push(`email is "${at('email')}" for a published personal mailbox - a verified address carries no qualifier, which is what the A in the retired email_confidence column meant`);
         if (at('city_state') !== 'Phoenix, AZ') fails.push(`city_state is "${at('city_state')}" and not the city parsed out of the street address`);
         if (at('trade') !== 'Roofing') fails.push('the trade the press searched them under never reaches the rep file');
         if (at('google_rating') !== '4.4' || at('google_reviews') !== '51') fails.push('the Google rating and review count are not in the lean file, so a rep cannot see the pain the whole pitch opens on');
@@ -2628,8 +2662,79 @@ let contactTally = null;
         // sign" about a person the file does not name.
         const _noOwner = [{ contactReadOk: true, name: 'No Owner Co', contactPhone: '+1 555 0101', contactEmail: 'info@noowner.com', contactOwnerGrade: 'unconfirmed' }];
         const _nRow = _cells(_file(_noOwner, false)[1]);
-        if (_nRow[WANT23.indexOf('owner_confidence')] !== '') {
-          fails.push(`a lead with nobody named exports owner_confidence "${_nRow[WANT23.indexOf('owner_confidence')]}" - the honest cell is empty`);
+        if (_nRow[WANT22.indexOf('who_to_ask_for')] !== 'Nobody named') {
+          fails.push(`a lead with nobody named exports who_to_ask_for "${_nRow[WANT22.indexOf('who_to_ask_for')]}" - it must say nobody was named rather than carry a grade about a person the file does not name`);
+        }
+
+        // ══ ROUND 144: THE TIER, AND THE GUESS MARKED IN IT ═══════════════
+        // Four of eight rows in the 2026-09-11 batch took their tier from a
+        // review count. Northgate had 82 reviews and Monticello had 12 and both
+        // landed in LOW, and the research found no established relationship
+        // between review count and revenue. These four cases are the whole
+        // reason the column can be trusted, and each is EXECUTED through the
+        // real exporter rather than read off tierCell.
+        {
+          const _tierRow = (extra) => {
+            const _r = _cells(_file([Object.assign({
+              contactReadOk: true, name: 'Tier Co', contactOwner: 'Pat Smith',
+              contactOwnerGrade: 'confirmed', contactPhone: '+1 555 0102',
+            }, extra)], false)[1]);
+            return { tier: _r[WANT22.indexOf('tier')], band: _r[WANT22.indexOf('revenue_band')] };
+          };
+          // ══ THE WIRE FIRST ═══════════════════════════════════════════
+          // Every fixture below builds its own row, so all of them would pass
+          // while the server dropped the field on the way out - which is the
+          // computed-but-not-passed shape this whole round exists to fix, and
+          // exactly what it did: lanesFor returns seven keys and
+          // contactFieldsFrom copied four. M.fields is the SERVER's own row
+          // builder, lifted from server.js, so this is the seam itself.
+          {
+            const _wire = M.fields({ lanes: { call: true, email: false, noname: false, last: false, tier: 'core', measured: true }, size: { band: 'medium', confidence: 'sure', why: 'nine people on their own team page' } });
+            if (_wire.contactTier !== 'core') fails.push(`the server stops sending the tier the TARGET line prints (got ${JSON.stringify(_wire.contactTier)}) - it is computed on every read and dropped at the wire, so the rep's sheet cannot say whether a business is a $900k shop or a $12M one`);
+            if (_wire.contactTierMeasured !== true) fails.push('the server stops sending whether the tier was MEASURED, so a guess off a review count arrives looking exactly like a headcount we read');
+            if (!/\$/.test(String(_wire.contactTierBand))) fails.push(`the server sends no revenue band for a measured lead (got ${JSON.stringify(_wire.contactTierBand)}) - SCALE_BAND_SAY is the one tier-to-dollars map and the sheet has no other source for it`);
+            const _wireGuess = M.fields({ lanes: { call: true, email: false, noname: false, last: false, tier: 'entry', measured: false } });
+            if (_wireGuess.contactTier !== 'entry') fails.push('the server sends no tier at all on a GUESSED lead - that is four of the eight rows in the last live batch, and the TARGET line prints a tier for every one of them');
+            if (_wireGuess.contactTierBand !== '') fails.push(`the server sends a dollar range for a lead whose size was guessed off a review count (got ${JSON.stringify(_wireGuess.contactTierBand)}) - that is a number nobody measured on a row a human reads`);
+          }
+          const _m = _tierRow({ contactTier: 'core', contactTierMeasured: true, contactTierBand: '$1.2M-$10M' });
+          if (_m.tier !== 'MEDIUM') fails.push(`a measured core lead exports tier "${_m.tier}" and not MEDIUM`);
+          if (_m.band !== '$1.2M-$10M') fails.push(`a measured core lead exports revenue_band "${_m.band}" and not the server's own band`);
+
+          const _g = _tierRow({ contactTier: 'entry', contactTierMeasured: false, contactTierBand: '' });
+          if (_g.tier !== 'LOW (guess)') fails.push(`a lead whose size was GUESSED off a review count exports tier "${_g.tier}" - without the marker a rep reads a guess as a measurement, and four of eight rows in the last live batch were guesses`);
+          if (_g.band !== 'not measured') fails.push(`a guessed lead exports revenue_band "${_g.band}" - a dollar range there is a number nobody measured, which is the one thing this system must never do`);
+
+          // Never looked is not measured zero. A lead read by an OLDER build
+          // carries no tier token at all, and an empty cell is the only honest
+          // answer - 'LOW' would be an invention and 'not measured' would claim
+          // we looked.
+          const _old = _tierRow({});
+          if (_old.tier !== '' || _old.band !== '') fails.push(`a lead read before the tier existed exports tier "${_old.tier}" / revenue_band "${_old.band}" - both must be empty, because never looked is not measured zero`);
+
+          const _big = _tierRow({ contactTier: 'over_ceiling', contactTierMeasured: true, contactTierBand: 'over $15M' });
+          if (_big.tier !== 'TOO BIG') fails.push(`a business measured over the ceiling exports tier "${_big.tier}" - HIGH there hides the one distinction the column exists to make, and the rep calls a company we cannot serve`);
+
+          // ══ THE GRADE THAT USED TO BE ITS OWN COLUMN ═══════════════════
+          // owner_confidence is gone, so the qualifier rides the HEAD of this
+          // cell - the head and not the flag, because nameWithFlag drops a
+          // flag whole to keep a long name intact, and a caveat that
+          // disappears on long names is not a caveat. All four grades run.
+          const _ask = (grade, who, phone) => _cells(_file([{
+            contactReadOk: true, name: 'Grade Co', contactOwner: who || 'Pat Smith',
+            contactOwnerGrade: grade, contactPhone: phone || '+1 555 0102',
+          }], false)[1])[WANT22.indexOf('who_to_ask_for')];
+          const _WANT_HEAD = { confirmed: 'Owner: Pat Smith', stated: 'Owner (stated): Pat Smith', inferred: 'Owner (inferred): Pat Smith' };
+          for (const _g of Object.keys(_WANT_HEAD)) {
+            if (_ask(_g) !== _WANT_HEAD[_g]) fails.push('a ' + _g + ' owner exports who_to_ask_for "' + _ask(_g) + '" and not "' + _WANT_HEAD[_g] + '" - the A-D column left the file, so a name we only INFERRED now reads exactly like one we confirmed');
+          }
+          // A name the server held back at the buying floor is the one case
+          // where the cell must not say "Owner" at all (Round 115's rule).
+          if (!/^Held back: /.test(_ask('unconfirmed'))) fails.push('a held-back name exports who_to_ask_for "' + _ask('unconfirmed') + '" - a name the authority gate refused must never read as the owner');
+          // A long name keeps the qualifier, which is the whole reason it sits
+          // in the head rather than in the flag beside it.
+          const _long = _ask('inferred', 'Bartholomew Fotheringay-Winslow III', '+1 555 0103');
+          if (!/inferred/.test(_long)) fails.push('a long INFERRED name exports who_to_ask_for "' + _long + '" with the qualifier dropped - it rides the head precisely so length cannot delete it');
         }
 
         // ══ A ROW GOES OUT ONCE ══════════════════════════════════════════
@@ -3210,8 +3315,25 @@ let contactTally = null;
         for (const k of ['emailSafeToSend', 'ownerHowSure', 'emailConfidence']) {
           if (M.lean.indexOf(k) >= 0) fails.push(`the lean file carries "${k}" again - the sentences left the export on 2026-09-02`);
         }
+        // Round 144, Vin: the two A-D letters leave the file again - "get rid
+        // of these ... owener confidence, email_confidence". RE-AIMED, not
+        // deleted: Round 131's fact was that a rep can tell a confirmed name
+        // from a guessed one WITHOUT opening the full file, and that fact is
+        // still true - it moved into the head of who_to_ask_for and into the
+        // address itself, both executed in the WANT22 block above. What is
+        // asserted here now is the other half of Round 131's ruling, the half
+        // that survives: the SENTENCES must not come back in their place.
         for (const k of ['ownerGrade', 'emailGrade']) {
-          if (M.prefix.indexOf(k) < 0) fails.push(`the fixed CSV prefix lost "${k}" - Round 131 put the A-D letter back in every file, under one heading, in one place`);
+          if (M.prefix.indexOf(k) >= 0) fails.push(`the fixed CSV prefix carries "${k}" again - the A-D letters left the file on 2026-09-12 and the grade now rides the cell it is about`);
+        }
+        // The grade word must reach the rep through the CELL, not through a
+        // column beside it, and not by being dropped altogether. A lean file
+        // in which an inferred owner is indistinguishable from a confirmed one
+        // is the state this round would have shipped if the letters had simply
+        // been deleted.
+        {
+          const _g = (grade) => (M.rows([{ contactReadOk: true, name: 'Grade Co', contactOwner: 'Pat Smith', contactOwnerGrade: grade, contactPhone: '+1 555 0104', contactLanes: { call: true, email: false, noname: false, last: false } }])[0] || {}).target || '';
+          if (_g('inferred') === _g('confirmed')) fails.push('an inferred owner and a confirmed one produce the same who_to_ask_for cell, and the A-D column that used to tell them apart is gone - the rep says a guessed name out loud as a fact');
         }
         // Round 118: the website read is on the sheet, and it says nothing at
         // all on a lead whose site we could not read.
@@ -3309,13 +3431,19 @@ let contactTally = null;
           if (M.lean.indexOf(k) < 0) fails.push(`the lean file does not carry "${k}" - the rep asked for size and who to go to`);
         }
         if (M.cols.some(c => c[0] === 'emailSafeToSend')) fails.push('a Safe-to-send column is back in the declared table - Round 110 put that answer inside the address cell itself');
-        // Round 131: and the two grade columns must exist, under the exact
-        // headings Vin's sheet reads. A column present under the wrong name is
-        // a column he has to re-map on every paste.
-        for (const [_k, _want] of [['ownerGrade', 'owner_confidence'], ['emailGrade', 'email_confidence']]) {
+        // Round 144: the two grade columns leave the declared table with the
+        // prefix (Vin, 2026-09-12). RE-AIMED: what the Round 131 assertion
+        // above protected was a column under the EXACT heading Vin's sheet
+        // reads, so what is pinned now is the five headings that replaced it,
+        // under the exact names he asked for. A column present under the wrong
+        // name is still a column he has to re-map on every paste.
+        for (const [_k, _want] of [['company', 'company'], ['target', 'who_to_ask_for'], ['tier', 'tier'], ['revenueBand', 'revenue_band'], ['website', 'website']]) {
           const _gr = M.cols.find(c => c[0] === _k);
           if (!_gr) fails.push(`the ${_k} column is not in the declared table, so the fixed prefix cannot emit it`);
-          else if (_gr[1] !== _want) fails.push(`the ${_k} column is headed "${_gr[1]}" and Vin's sheet reads "${_want}"`);
+          else if (_gr[1] !== _want) fails.push(`the ${_k} column is headed "${_gr[1]}" and the sheet Vin asked for reads "${_want}"`);
+        }
+        for (const _k of ['ownerGrade', 'emailGrade', 'batchId', 'exportedDate']) {
+          if (M.cols.some(c => c[0] === _k)) fails.push(`the ${_k} column is back in the declared table - all four were dropped on 2026-09-12 and the two grades now ride the cells they are about`);
         }
         if (!/ask who is/.test(String(_rows[0].ownerHowSure || ''))) fails.push('the held-back owner lost the ask-rather-than-assert sentence in the full export');
         // The two new cells, executed.
