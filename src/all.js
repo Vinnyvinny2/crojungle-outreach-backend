@@ -5296,13 +5296,42 @@ const ICP_PREMIUM_RETAINER_MONTHLY = 10000;   // the '$10k' in OUR_PRICE_FIGURES
 //
 // The two numbers answer different questions and only one of them changed.
 // The CAP asks whether a business FITS what we sell, and that moved to $15M.
+//
+// == AND ON 2026-09-12 THE CAP MOVED AGAIN, TO $20M, ON EVIDENCE =============
+// Round 139 set it to $15M for one reason: the written ICP doc said $15M and
+// the code had drifted to $35M, so the doc won. That is a reason to stop two
+// copies disagreeing, not a reason to believe $15M. Vin asked for the number
+// to be found rather than picked - "find me the ideal range for whats still
+// reachabile either cold callign wise or email wise" - and three independent
+// lines cross at $20M:
+//
+//   1. Cold email reply falls almost linearly with headcount. Belkins, 7.5M
+//      emails sent in 2025: under 10 people 0.72%, 11-50 0.49%, 10,000+ 0.22%.
+//      Sales.co over 2M+: 1-10 people return 18.2% POSITIVE replies against
+//      3.4% at 5,000+. Woodpecker/Stealery: 1-100 8-15%, 100-1,000 4-8%,
+//      1,000+ 1-3%. The break sits at roughly 100 people.
+//   2. Who still buys from an agency at all, across six sources: under $1M
+//      freelancers; $1M-$5M one in-house marketer plus agencies; $5M-$25M a
+//      3-6 person team with agencies for overflow; above $25M a full
+//      department and agencies get defined projects only.
+//   3. PE roll-ups in these exact trades: the PLATFORM acquisition is a
+//      $20M-$80M operator and the add-ons are $2M-$15M independents. Once a
+//      business is the platform, marketing technology and lead routing
+//      centralise at corporate and the local owner stops deciding. Vin: "big
+//      PE comapneis woukd never work for cold outreach".
+//
+// At $200k of revenue a head, 100 people is about $20M, and all three cross
+// there. HONEST SHAPE: lines 1 and 2 are general B2B, not trades; only line 3
+// is trade-specific. The number is better evidenced than $15M or $35M ever
+// were, and it is still an affordability-and-reachability judgement, not a
+// measurement of our own results - we have never sold to a $20M business.
 // The REACH LINE asks whether the PHONE reaches the person who signs, and
 // nothing about a founder who answers his own phone changed on 2026-09-11:
 // he answers it at $24M exactly as he does at $9M. So it stays typed at the
 // number Vin ruled, and it is deliberately NOT derived from the cap - a ratio
 // nothing else reads is the same fact kept in two places waiting to drift,
 // which is the failure this whole round exists to correct.
-const ICP_REVENUE_BAND = { floor: 0.8e6, coreFrom: 1.2e6, upperFrom: 10e6, ceiling: 15e6 };
+const ICP_REVENUE_BAND = { floor: 0.8e6, coreFrom: 1.2e6, upperFrom: 10e6, ceiling: 20e6 };
 const ICP_CALL_REACH_CEILING = 50e6;   // owner within reach and measured under this: still a call (Vin, 2026-09-03, re-affirmed 2026-09-11)
 const ICP_REVENUE_PER_EMPLOYEE = 200000;      // HVAC/plumbing/electrical $160-280k per head (MarginPlug, Tradesly, SubcontractorHub; Vertical IQ: 12 people ~= $2.9M), 2026-09-03
 const ICP_REVENUE_PER_TRUCK = 300000;         // $250-400k per truck, home services (Service Autopilot), 2026-09-03
@@ -5342,6 +5371,80 @@ const SCALE_BAND_SAY = {
   upper: `${_usdShort(ICP_REVENUE_BAND.upperFrom)}-${_usdShort(ICP_REVENUE_BAND.ceiling)}`,
   over_ceiling: `over ${_usdShort(ICP_REVENUE_BAND.ceiling)}`,
 };
+// ══ THE SIZE LADDER THE REP READS - FOUR WORDS, AND A SECOND DIMENSION ═════
+// Vin, 2026-09-12: "break catgeroize that pool into 4 teirs very small , small,
+// meidum large ... size is the golden ticket because size kind of decides
+// reachability wise and also decides which channel we use".
+//
+// WHY THIS IS NOT ICP_REVENUE_BAND RENAMED, which is what the round plan said.
+// That band answers "what can they PAY?" and its cuts are prices, not sizes:
+// coreFrom is $1.2M because a $10k/mo retainer is 10% of $1.2M, and a boot
+// check proves it against the price list. Vin's cuts answer "how BIG are
+// they?" and the two cross-cut - his very small, small and medium all sit
+// inside the one affordability band, so no renaming could make them one
+// ladder. Kept apart, both stay provable and the row can say "small - premium
+// fit" against "very small - lower tier", which is the who-closes-it question.
+//
+// Only TWO numbers are typed here. The $10M line is the CHANNEL line and the
+// $20M line is the top of the ICP, so both are READ from ICP_REVENUE_BAND
+// rather than retyped - a number kept in two places is the defect Round 139
+// exists for, and a boot check asserts these two derive.
+const ICP_SIZE_TIERS = [
+  { id: 'very_small', word: 'very small', to: 1.5e6 },
+  { id: 'small',      word: 'small',      to: 4e6 },
+  { id: 'medium',     word: 'medium',     to: ICP_REVENUE_BAND.upperFrom },
+  { id: 'large',      word: 'large',      to: ICP_REVENUE_BAND.ceiling },
+];
+const SIZE_TIER_IDS = ICP_SIZE_TIERS.map(t => t.id);
+// Over the top of the ICP is not a tier, it is a drop. Named so a reader of a
+// log line or a row can tell "we measured them and they are too big" from "we
+// never measured them", which are not the same fact about a business.
+const SIZE_TIER_OVER = 'over_icp';
+const SIZE_TIER_UNMEASURED = '';
+const sizeTierFromRevenue = (usd) => {
+  const n = Number(usd);
+  if (!Number.isFinite(n) || n <= 0) return SIZE_TIER_UNMEASURED;
+  const hit = ICP_SIZE_TIERS.find(t => n <= t.to);
+  return hit ? hit.id : SIZE_TIER_OVER;
+};
+// SIZE_TIER_OVER carries its own word. Without it a business we MEASURED and
+// found too big printed "not measured" on the row, which is the precise
+// confusion the constant above was named to prevent - found in the first run.
+const SIZE_TIER_WORD = Object.assign(
+  Object.fromEntries(ICP_SIZE_TIERS.map(t => [t.id, t.word])),
+  { [SIZE_TIER_OVER]: 'over the ICP' });
+// The dollar range each word covers, derived from the cuts so the sheet and
+// the ladder can never disagree.
+const SIZE_TIER_SAY = Object.assign({ [SIZE_TIER_OVER]: 'over ' + _usdShort(ICP_REVENUE_BAND.ceiling) },
+  Object.fromEntries(ICP_SIZE_TIERS.map((t, i) => [t.id,
+  i === 0 ? `under ${_usdShort(t.to)}` : `${_usdShort(ICP_SIZE_TIERS[i - 1].to)}-${_usdShort(t.to)}`])));
+// ══ AND THE CHANNEL FALLS OUT OF THE SIZE, WHICH IS THE WHOLE POINT ═══════
+// Vin, 2026-09-12: "the smaller side we're gonna use cold calling and then
+// there's a point where cold calling won't work because the businesses are too
+// big so we need to establish what revenue point that is". Researched rather
+// than picked, and the answer is NOT about the phone being answered - four
+// trades-specific staffing sources give one ladder:
+//
+//   under $1.5M  the owner answers his own phone (1-2 techs, booking calls
+//                between estimates)
+//   ~$1.5M       first full-time CSR or dispatcher - the "unlock hire"
+//   $3M          CSR and dispatcher split out, office manager added
+//   $5-10M       2-3 CSRs, a dispatcher, an ops manager - the owner is
+//                insulated but STILL DECIDES MARKETING
+//   $10-20M      3-5 CSRs, a GM, and a Sales/Marketing Manager appears
+//
+// The ratio holds across all four sources: one office person per 3-4
+// technicians, at $250-350k of revenue per technician. So the line is where
+// SOMEBODY OTHER THAN THE OWNER OWNS MARKETING, and that is $10M - the same
+// number as upperFrom, which is why the medium tier ends there. Above it the
+// rule this file already carries applies: ask for the marketing
+// decision-maker one rung down. Below it the owner decides and one or two
+// people stand between him and the phone.
+//
+// NOT PROVEN: the staffing ladder is trades-specific. A ten-person law firm at
+// $1.75M has a receptionist and a different shape, so this line is weakest on
+// the professional-practice categories.
+const SIZE_TIER_CHANNEL = { very_small: 'call', small: 'call', medium: 'call', large: 'email' };
 // Points in the scale term: core first, then upper, then entry (Vin's sort).
 const SCALE_BAND_POINTS = { below_floor: 3, entry: 12, core: 20, upper: 16, over_ceiling: 4 };
 // The rep's words, pinned to the tiers. "low" is $800k-$1.2M on the sheet: a
@@ -5432,7 +5535,7 @@ const LANE_TIERS = { call: ['entry', 'core', 'upper'], email: ['core', 'upper', 
 // And the call lane means a NAMED owner within reach: a read lead with a
 // phone and nobody named is the "no name yet" bucket, off the rep's sheet.
 const SIZE_WORD_TIER = { low: 'entry', medium: 'core', high: 'upper' };
-const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national, siteless, phone, siteMarketingHead } = {}) => {
+const lanesFor = ({ tier, sizeTier, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national, siteless, phone, siteMarketingHead } = {}) => {
   const why = [];
   let t = SCALE_TIERS.includes(tier) ? tier : null;
   let measured = !!t;
@@ -5485,7 +5588,38 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
   // office. It is NOT benched: it keeps the email lane and that director is
   // who the email goes to. It loses the call lane only.
   const siteHead = siteMarketingHead === true;
-  const inCall = (LANE_TIERS.call.includes(t) || reach) && !ts && !prod && !siteHead;
+  // ══ THE CHANNEL COMES FROM THE MEASURED SIZE (Vin, 2026-09-12) ═══════════
+  // "size is the golden ticket because size kind of decides reachability wise
+  // and also decides which channel we use." It used to come from LANE_TIERS on
+  // the AFFORDABILITY tier, whose call and email lists OVERLAP from core up -
+  // so nearly every row read "call + email", and a field that says both on
+  // every lead is not a decision. SIZE_TIER_CHANNEL is a partition: one word,
+  // one channel.
+  //
+  // AN UNMEASURED SIZE GOES TO THE REP, and that is a judgement worth stating.
+  // We do not know how big they are, the row says so in those words, and the
+  // rep is the cheapest way to find out - he asks for the owner and learns the
+  // shape in thirty seconds. The alternative, holding them back until a paid
+  // read measures them, is how 1,048 leads came to sit banked behind ten reads
+  // a day. Never both lanes, and never silently: sizeTierWhy carries it.
+  const _sz = String(sizeTier || '');
+  const _szMeasured = SIZE_TIER_IDS.includes(_sz) || _sz === SIZE_TIER_OVER;
+  // AN EXCEPTION THAT TAKES A LEAD OFF THE CALL SHEET MOVES IT TO EMAIL.
+  // It does not strip both lanes. While the two lists overlapped this was
+  // implicit - anything pushed out of call was still inside email - and the
+  // FIRST RUN of this function under a partition proved it was load-bearing:
+  // a medium business publishing a marketing director, and a TheirStack lead,
+  // both came back with no lane at all. Each of those is a recorded ruling
+  // (Round 139 for the marketing director, Round 113 for TheirStack) and a
+  // partition silently repealed both.
+  //
+  // A branch network, a PE-owned company and a national operator are NOT in
+  // here: Round 114 keeps them on the call sheet ranked last under the cap,
+  // which is a different ruling and still holds.
+  const _forcedEmail = ts || siteHead || (prod && t !== 'below_floor');
+  const _szChannel = _forcedEmail ? 'email'
+    : _szMeasured ? (SIZE_TIER_CHANNEL[_sz] || '') : 'call';
+  const inCall = (_szChannel === 'call' || reach) && !ts && !prod && !siteHead;
   // ══ ROUND 121: A BUSINESS WITH NO WEBSITE IS THE CLEAREST LEAD WE FIND ══
   // Vin, 2026-09-04, ruling on two leads from that press: Delta Solar Power
   // (232 reviews) and American Dream Solar (305), both with a phone and no
@@ -5508,21 +5642,23 @@ const lanesFor = ({ tier, sizeWord, sizeConfidence, affordBand, layers, source, 
   // Round 115: a product company is an email lead whatever the tier GUESS - a
   // manufacturer's reviews do not measure it (Mission Solar, 37 reviews, was
   // "entry" and got no lane at all). A measured below-floor still benches.
-  const email = named && (LANE_TIERS.email.includes(t) || (prod && t !== 'below_floor'));
+  const email = named && (_szChannel === 'email' || (prod && t !== 'below_floor'));
   const last = call && (layered || !!big || _sitelessCall);
   if (t === 'below_floor') why.push('under the floor - benched');
   if (t === 'over_ceiling') why.push(reach ? `over the call cap but owner-run and measured under ${_usdShort(ICP_CALL_REACH_CEILING)} - still a call` : `over the call cap (${SCALE_BAND_SAY.over_ceiling}) - email, the marketing decision-maker`);
   if (layered && inCall) why.push('layered business - on the call sheet last, ask for the marketing head');
   if (big && inCall) why.push(`${big} - on the call sheet last; the local number reaches a branch, the decision is at head office`);
-  if (big && !inCall && LANE_TIERS.email.includes(t)) why.push(`${big} - email, the marketing decision-maker at head office`);
-  if (ts && LANE_TIERS.call.includes(t)) why.push('a TheirStack lead - email only');
-  if (prod && LANE_TIERS.call.includes(t)) why.push(LANE_TIERS.email.includes(t) ? 'a product company - email only' : 'a product company - email whatever the size guess, its reviews do not measure a manufacturer');
-  if (siteHead && (LANE_TIERS.call.includes(t) || reach)) why.push('their own site names a marketing director, so the buying decision sits behind a marketing department - email only, and that director is who it goes to');
+  if (big && !inCall && _szChannel === 'email') why.push(`${big} - email, the marketing decision-maker at head office`);
+  if (ts && _szChannel === 'call') why.push('a TheirStack lead - email only');
+  if (prod && _szChannel === 'call') why.push('a product company - email only, its reviews do not measure a manufacturer');
+  if (siteHead && (_szChannel === 'call' || reach)) why.push('their own site names a marketing director, so the buying decision sits behind a marketing department - email only, and that director is who it goes to');
   if (_sitelessCall) why.push('no working website, so nobody can be named from their own pages - on the call sheet last, with the number to ask who runs it');
   if (noname) why.push('nobody named yet - off the call sheet until a name is found');
-  if (LANE_TIERS.email.includes(t) && !email && !noname) why.push('nobody named to write to');
-  if (call && email && !last) why.push('owner within reach and can afford premium - call first, email if no connect');
-  return { call, email, noname, last, tier: t, measured, why: why.join('; ') };
+  if (_szChannel === 'email' && !email && !noname) why.push('nobody named to write to');
+  if (!_szMeasured) why.push('their size is not measured anywhere we looked - on the call sheet so the rep can find out, and the row says so');
+  if (_sz === SIZE_TIER_OVER) why.push(reach ? `measured over the top of the ICP but owner-run and under ${_usdShort(ICP_CALL_REACH_CEILING)} - still a call` : `measured over ${_usdShort(ICP_REVENUE_BAND.ceiling)}, the top of what still buys from an agency - not a lead`);
+  return { call, email, noname, last, tier: t, measured, sizeTier: _sz, sizeTierMeasured: _szMeasured,
+           sizeWord: SIZE_TIER_WORD[_sz] || '', sizeSay: SIZE_TIER_SAY[_sz] || '', channel: _szChannel, why: why.join('; ') };
 };
 const laneWord = (l) => !l ? 'none' : (l.call && l.email) ? 'call + email' : l.call ? 'call' : l.email ? 'email' : l.noname ? 'no name yet' : 'none';
 
