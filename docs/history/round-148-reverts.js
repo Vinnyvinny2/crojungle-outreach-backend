@@ -104,7 +104,7 @@ module.exports = [
     // size ladder's own output rather than recomputed beside it.
     name: '148-d-the-straddle-is-not-read-from-the-ladder',
     path: 'src/all.js',
-    old: "  const _sizeStraddles = SIZE_STRADDLE_SAY_RE.test(String(_size.why || ''));",
+    old: "  const _sizeStraddles = directoryRangeStraddles(signals);",
     new: '  const _sizeStraddles = false;',
     prove: 'boot',
     mustPrint: /no longer read from the size ladder/,

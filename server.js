@@ -65580,7 +65580,7 @@ app.listen(PORT, () => {
       [_n('SIZE LOOKUP [${name}]: not bought - ${_sizeSettledWhy}', ', and a directory has no record of a business this size'), 'the size search is stood down on a lead whose own team page already settled it and nothing in the log says so - a saving the operator cannot see reads as a broken feature'],
       [_n('const _ownerWaveFoundNobody = _ownerAttempted === true', ' && !(out.owner && out.owner.name);'), 'nothing measures whether the owner wave ran and found nobody, so the size wave cannot be aimed away from those leads'],
       [_n('sizeWord: _size.band, sizeConfidence: _size.confidence,', ' affordBand: signals.affordBand ||'), 'the lane does not read the sheet\'s own guess, so the two can disagree'],
-      [_n('const _sizeStraddles = directoryRangeStraddles(signals) ||', ' SIZE_STRADDLE_SAY_RE.test(String(_size.why'), 'the straddling range is no longer read from the size ladder\'s own rule, so either nothing measures it or a second hand-kept copy decides it'],
+      [_n('const _sizeStraddles = ', 'directoryRangeStraddles(signals);'), 'the straddling range is no longer read from the size ladder\'s own rule, so either nothing measures it or a second hand-kept copy decides it'],
       [_n('sizeIsFloor: _sizeIsFloor, sizeStraddles:', ' _sizeStraddles, sizeWord: _size.band,'), 'the straddle is computed and never passed to the lane, so a directory range spanning two tiers takes a lead off the phone again - Fred Flores CPA, 2026-09-12, whose only address is BLOCKED and who was then reachable by nobody'],
       [_n("signals.scaleBand = (_scale && !_scale.guess) ?", ' _scale.band : null;'), 'a tenure guess decides the tier the lanes read'],
       [_n('site:linkedin.com/company OR ', 'site:bbb.org'), 'the size lookup has no second query, so a miss on the revenue directories stays a miss'],
@@ -89963,11 +89963,14 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // The lane agent had to sniff the ladder's PROSE for "(a range across
   // tiers)" because editing sizeBand was another agent's scope; that agent
   // lifted the same rule out into directoryRangeStraddles(). Asking the rule
-  // directly is the better wire and the agent said so itself. The prose test
-  // stays as a belt: a straddle the ladder PRINTS but the rule no longer
-  // returns is a disagreement between two answers to one question, and the
-  // lead keeps its phone either way.
-  const _sizeStraddles = directoryRangeStraddles(signals) || SIZE_STRADDLE_SAY_RE.test(String(_size.why || ''));
+  // directly is the better wire and the agent said so itself.
+  //
+  // The prose test was kept beside it for one build as a belt, and that was
+  // wrong twice over: it is a SECOND answer to one question - the disease this
+  // repo names - and falsification proved it had disarmed the guard, because
+  // reverting either half left the other doing the job and the check stayed
+  // green. One rule, one reader.
+  const _sizeStraddles = directoryRangeStraddles(signals);
   const _lanes = lanesFor({ tier: signals.scaleBand, sizeTier: _sizeTier, sizeIsFloor: _sizeIsFloor, sizeStraddles: _sizeStraddles, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true, siteless: signals.readable !== true, phone: !!out.phone, siteMarketingHead: _siteMarketingHead });
   out.lanes = _lanes;
   // Round 114: a layered or owned-elsewhere lead on the call sheet ranks LAST.
