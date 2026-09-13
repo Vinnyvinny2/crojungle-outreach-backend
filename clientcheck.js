@@ -2413,6 +2413,10 @@ let contactTally = null;
                  // Round 106: the lean sheet is grades, and each grade is one pure
                  // function shared by the card chip and both export destinations.
                  'OWNER_GRADE_RATING', 'ownerGradeRating', 'EMAIL_GRADE_RATING', 'emailGradeRating', 'ownerGradeCell', 'bestTimeCell', 'exportedDateCell',
+                 // Round 147: the confidence mark the batch review row draws
+                 // beside the owner's name. It is built from the letters above,
+                 // so it is executed against them here rather than trusted.
+                 'ownerSureCell',
                  // A front-desk mailbox is kept on the sheet and marked, and the
                  // resolver's source ids are said the way a rep would say them.
                  'GENERIC_MAILBOX_RE', 'isGenericMailbox', 'OWNER_SOURCE_PLAIN',
@@ -2530,7 +2534,7 @@ let contactTally = null;
         + ' lean: FIND_CSV_ESSENTIAL, pick: findCsvColumns, prefix: FIND_CSV_PREFIX,'
         + ' cityState: cityStateCell, split: exportSplit, withheldSay: exportWithheldSay,'
         + ' mergeView: mergeFindView, stamp: stampExportedRows, exportedCell, prov: websiteProvenanceCell,'
-        + ' ownerGrade: ownerGradeRating, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, siteCell,'
+        + ' ownerGrade: ownerGradeRating, ownerGradeMap: OWNER_GRADE_RATING, ownerSure: ownerSureCell, emailGrade: emailGradeRating, ownerGradeCell, sizeCell, siteCell,'
         // ══ ROUND 146: THE VOCABULARIES, SO A FIXTURE CAN BE DERIVED ═══════
         // srvTierWord / srvTierSay are the SERVER's size ladder (lifted above)
         // and tierWord is the page's own typed copy of the same words, so the
@@ -3647,6 +3651,26 @@ let contactTally = null;
         if (src.indexOf(_nk("if (l.contactOwner && l.contactOwnerGrade === 'unconfirmed')", " flags.push('unconfirmed');")) < 0) {
           fails.push('the review row no longer marks an unconfirmed owner, so the one row that needs a second question looks like every other');
         }
+        // ══ ROUND 147: THE GUESS IS ON THE ROW, NOT ONLY IN THE FILE ══════
+        // 2026-09-12, a live batch review: "Property An, Owner" at score 91,
+        // top of the sheet. Not a person - two words off two adjacent lines of
+        // a homepage, which the server had graded `inferred`. Four rows down a
+        // name it had CONFIRMED was drawn in exactly the same type. The letters
+        // existed the whole time; the row just never drew them.
+        // So the mark is EXECUTED for all four grades against the ONE letter
+        // map, because a second hand-kept copy passes until the day a letter
+        // moves - and both call sites are pinned, because a cell computed on a
+        // row and never concatenated into it is the defect this file exists for.
+        const _sureOf = (g) => M.ownerSure({ contactReadOk: true, contactOwner: 'Property An', contactOwnerTitle: 'Owner', contactOwnerGrade: g });
+        for (const _g of Object.keys(M.ownerGradeMap)) {
+          if (_sureOf(_g) !== 'name ' + M.ownerGradeMap[_g]) fails.push(`an owner graded ${_g} is marked "${_sureOf(_g)}" on the review row while the export grades the same name ${M.ownerGradeMap[_g]} - the screen and the file are describing one row two ways`);
+        }
+        if (!_sureOf('inferred')) fails.push('a likely owner name carries no confidence mark on the review row at all - "Property An" reached the top of a live call sheet at score 91 with nothing to tell the rep the name was a guess');
+        if (_sureOf('inferred') === _sureOf('confirmed')) fails.push('a name we inferred and a name we confirmed are marked identically on the review row, which is the screen this round exists to fix');
+        if (M.ownerSure({ contactReadOk: true, name: 'Nobody Co' }) !== '') fails.push('a lead with nobody named is still given an owner-confidence mark, so the row grades a name that is not there');
+        if (M.ownerSure({ contactReadOk: true, contactOwner: '', contactOwnerGrade: 'inferred' }) !== '') fails.push('a lead whose owner name came back empty is still graded on the review row');
+        if (src.indexOf(_nk('const sure = ', 'ownerSureCell(l);')) < 0) fails.push('the batch review row no longer works out how sure we are of the owner name, so every name is drawn with the same confidence again');
+        if (src.indexOf(_nk("who + (sure ? ' \u00b7 ", "' + sure : '')")) < 0) fails.push('the batch review row works out the owner-confidence mark and never puts it in the line the rep reads - computed and not passed, the class this repo records most');
       }
 
       // ══ SIX EMAIL STATES REACH THE ROW, DECIDED ON THE SERVER ═════════
@@ -4502,6 +4526,6 @@ Promise.all(PENDING).then(() => {
   notes.forEach(n => console.log(n));
   if (findStat) console.log(`\u2713 index.html: the Find run's clock and card were EXECUTED, not read \u2014 the browser's wall sits above the server's own sweep so a healthy run is never killed by the wrong file, the submit goes through the poller and exactly one call site still touches the synchronous door as the old-server fallback, the trigger lanes are a Settings switch that is off by default and sent explicitly, and a lead we have actually read stops showing the name-based guess beside the owner, email and phone we measured. A demoted lead now says why it was sorted last: "Find score 74/100 \u00b7 owner findable 31/40, a guess until we read them \u00b7 sorted last: outside the star band we mine reviews in". And the card answers what a business can afford instead of inventing a revenue band from its review count: "Find score 74/100 \u00b7 Premium fit".`);
   if (contactTally) console.log(`\u2713 index.html: the contact run TALLY was executed \u2014 the first thing in this project that has ever counted whether the owner resolver and the email engine work. Rates are over leads actually READ, the email tier split is reported rather than one "found" number because a published address and a guess are not the same thing, a run under twelve reads says its numbers are counts and not rates, and a run made while the verifier was down says so. On the fixture queue: ${contactTally}`);
-  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 every file opens on the same ${contactStat.prefix} columns in the same order whichever way the tick box is set (Round 131), with ${contactStat.lean} columns by default and all ${contactStat.cols} one tick away (the Google Sheet push is retired: CSV only, Vin 2026-09-08). A row that already went out is withheld and the message says which batch it went out in, and the override re-admits it. It neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, writes the lean file as GRADES with every sentence one tick away, and reports an unmeasured signal as "not checked" rather than as a definite no. Round 124: the fields a read stamps on a row are the SERVER's contactFieldsFrom now, lifted from server.js and run through the same fixtures, and the request the driver builds is its readRunCompanyFrom, so a field dropped on either side of the wire fails here. The two Find screens decide with pure functions executed here (lead state, the one verified-email rule on both sides, the batch card stats, the credit estimate off the server's figure, the route parser, the pipeline additions, the spec's tokens), and every call site is pinned: start, cancel, review, move, rule out, restore and the export stamp go through the routes, the page never touches discovered_queue, never reads a lead itself, and the Research batch cannot reach any of it.`);
+  if (contactStat) console.log(`\u2713 index.html: the Find tab's contact list was EXECUTED, not read \u2014 every file opens on the same ${contactStat.prefix} columns in the same order whichever way the tick box is set (Round 131), with ${contactStat.lean} columns by default and all ${contactStat.cols} one tick away (the Google Sheet push is retired: CSV only, Vin 2026-09-08). A row that already went out is withheld and the message says which batch it went out in, and the override re-admits it. It neutralises a formula cell without mangling a real company name, sorts an UNSCORED lead below a measured zero, writes the lean file as GRADES with every sentence one tick away, and reports an unmeasured signal as "not checked" rather than as a definite no. Round 124: the fields a read stamps on a row are the SERVER's contactFieldsFrom now, lifted from server.js and run through the same fixtures, and the request the driver builds is its readRunCompanyFrom, so a field dropped on either side of the wire fails here. The two Find screens decide with pure functions executed here (lead state, the one verified-email rule on both sides, the batch card stats, the credit estimate off the server's figure, the route parser, the pipeline additions, the spec's tokens), and every call site is pinned: start, cancel, review, move, rule out, restore and the export stamp go through the routes, the page never touches discovered_queue, never reads a lead itself, and the Research batch cannot reach any of it. Round 147: the owner-confidence mark the batch review row draws beside a name was executed for all four grades against the one letter map, a lead with nobody named is proven to get none, and both call sites on the row are pinned.`);
   if (mergeStat) console.log(`\u2713 index.html: the research merge was EXECUTED, not read \u2014 all ${mergeStat.kept} fields the server's answer carries land on the lead. It used to be 200 lines inside one React function, so auditing fifty businesses at once meant writing it a second time, and its own comment names that as the disease: "the second copy is always the one that rots, because it only runs in the case nobody tests."`);
 }).catch((e) => { console.log('\n\u2717 index.html: the checks could not finish \u2014 ' + (e && e.message)); process.exit(1); });

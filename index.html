@@ -1369,7 +1369,7 @@ const discoverViaJob = async (signal, onTick, body) => {
 // Nothing anywhere said so. The rule is not "bump on an incompatible change" -
 // it is "bump when index.html changes", because this number is the ONLY
 // staleness signal there is.
-const CLIENT_CONTRACT = 20261021;
+const CLIENT_CONTRACT = 20261022;
 let _staleClientWarned = false;
 const warnIfStaleClient = (serverContract) => {
   const s = Number(serverContract);
@@ -5606,6 +5606,19 @@ const OWNER_GRADE_HEAD = {
   inferred: 'Owner (inferred): ', unconfirmed: 'Held back: ',
 };
 const ownerGradeRating = (c) => (c && c.contactOwner && OWNER_GRADE_RATING[c.contactOwnerGrade]) || '';
+// ══ ROUND 147: THE ROW SAYS WHICH NAMES ARE A GUESS ═════════════════════
+// A live call sheet, 2026-09-12: "Property An, Owner" sat at the top of the
+// rep's batch review at score 91. It is not a person - it is two words off two
+// adjacent lines of their homepage, and the server had graded it `inferred`.
+// Nothing on the row said so, and four rows down a name the server had
+// CONFIRMED was drawn in exactly the same type. Vin, 2026-09-13: a likely name
+// still counts as a named owner, but the row has to show the rep which names
+// are confirmed and which are not, so he opens the call differently.
+// The letter is ownerGradeRating's - the ONE mapping, shared with the export -
+// because two hand-kept copies of one rule is the class this repo records most.
+// The shape is the row's own: a noun, then the verdict, like "site good". No
+// owner named means nothing to be sure about, so it grades nothing at all.
+const ownerSureCell = (c) => { const r = ownerGradeRating(c); return r ? ('name ' + r) : ''; };
 const EMAIL_GRADE_RATING = { published_personal: 'A', smtp_confirmed: 'A', company_mailbox: 'B', published_role: 'B', catch_all: 'C', pattern_guess: 'D', verifier_down: 'D' };
 // Round 144: the two grades where an address is sendable and still unverified.
 // Anything not listed here is either verified or already stopped by the
@@ -7471,6 +7484,10 @@ function FindView({
       const fit = (typeof l.contactIcp === 'number') ? l.contactIcp : null;
       const fitColor = fit === null ? T.text3 : fit >= 70 ? T.lime : fit >= 40 ? T.text : T.text2;
       const who = l.contactOwner ? (l.contactOwner + (l.contactOwnerTitle ? ', ' + l.contactOwnerTitle : '')) : 'no owner named';
+      // Round 147: how sure we are of that name, in two characters, right
+      // beside it. Computed here and CONCATENATED below - a value computed
+      // on the row and never passed to it is the defect this file records most.
+      const sure = ownerSureCell(l);
       const where = shortLocation(l.location);
       // Round 141: what their website looks like, understated, beside where
       // they are. A rep glancing down a filtered list can see why a business
@@ -7516,7 +7533,7 @@ function FindView({
           // Round 141: the verdict reads on the row, and the SENTENCE behind
           // it is on hover. A one-word judgement nobody can question is the
           // thing this round exists to replace, so the reason travels with it.
-          h('div', { title: [looksWhy, sizeRange && sizeRange !== 'not measured' ? 'size ' + sizeRange : ''].filter(Boolean).join(' · ') || undefined, style: Object.assign({ fontSize: 11, color: T.text3 }, ell) }, who + (where ? ' · ' + where : '') + (sizeSay ? ' · ' + sizeSay : '') + (looks ? ' · site ' + looks : '') + (chanSay ? ' · ' + chanSay : ''),
+          h('div', { title: [looksWhy, sizeRange && sizeRange !== 'not measured' ? 'size ' + sizeRange : ''].filter(Boolean).join(' · ') || undefined, style: Object.assign({ fontSize: 11, color: T.text3 }, ell) }, who + (sure ? ' · ' + sure : '') + (where ? ' · ' + where : '') + (sizeSay ? ' · ' + sizeSay : '') + (looks ? ' · site ' + looks : '') + (chanSay ? ' · ' + chanSay : ''),
             flags.length ? h('span', { style: { color: T.amberDim } }, ' · ' + flags.join(' · ')) : null)),
         h('div', { style: Object.assign({ fontSize: 10 }, ell) }, emailCell),
         h('div', { style: { textAlign: 'right' } }, action));
