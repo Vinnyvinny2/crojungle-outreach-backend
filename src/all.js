@@ -5514,6 +5514,50 @@ const sizeSettledSmall = (s) => {
   if (capacityClassFor(d.tradeLabel, d.trade) === 'solo') return true;
   return false;
 };
+// ══ A RANGE THAT STRADDLES TIERS IS A GUESS - ONE DECLARATION ══════════════
+// Round 113 wrote this rule inside sizeBand's own loop. Round 148 needs the
+// same question one ladder up, and two hand-kept copies of one rule is the
+// class this file records most, so it is declared here and EXECUTED by both:
+// a directory range that is below the core cut at one end and above it at the
+// other ("1-10" for a $200k/head trade) measures nothing.
+const directoryRangeStraddles = (s) => {
+  const d = s || {};
+  const m = String(d.directoryEmployeesRange || '').match(/(\d+)\s*(?:-|\u2013|to)\s*(\d+)/);
+  if (!m) return false;
+  const c = scaleCuts(revenuePerEmployeeFor(d.tradeLabel));
+  const bandOf = (v) => v >= c.upper + 1 ? 'high' : v >= c.core ? 'medium' : 'low';
+  return bandOf(Number(m[1])) !== bandOf(Number(m[2]));
+};
+// ══ A PARSED ROSTER OF A FEW PEOPLE IS A SIZE (Round 148) ══════════════════
+// Live, 2026-09-12: Dawn Designs Texas and Rick Stone Masonrys each publish a
+// four-person team page, four real people with names and titles. The log line
+// said their own page "settles them as small" and stood the four-credit
+// directory search down on exactly that reading - and then the four names
+// were thrown away, the size ladder returned nothing at all, and the rep's row
+// printed a band off the Google review count. Four names were good enough to
+// save the credits and not good enough to be a size.
+//
+// Counting names errs UPWARD and only upward: a nav label, a photo caption or
+// a testimonial signer adds a name and nothing ever removes one. So a SMALL
+// roster is the reliable reading and a LARGE one is the junk - and the rule
+// as written used their own page only at the large end, at the core cut.
+//
+// NO DOLLAR CONVERSION (Vin, 2026-09-13: "just the band, drop the dollars").
+// The cut between the two words is the per-trade cut sizeSettledSmall already
+// owns, and it is ASKED rather than retyped. Below the three-name floor that
+// rule keeps for SPEND, a roster cannot be bigger than one at the floor, so
+// the question is asked upward until that rule speaks - which is why this
+// reads the live function in a loop instead of copying its numbers.
+const ROSTER_SIZE_MAX = 8;
+const sizeTierFromRoster = (s) => {
+  const d = s || {};
+  const n = Number(d.teamRosterParsed);
+  if (!Number.isFinite(n) || n < 1 || n > ROSTER_SIZE_MAX) return SIZE_TIER_UNMEASURED;
+  for (let k = n; k <= ROSTER_SIZE_MAX; k++) {
+    if (sizeSettledSmall({ teamCount: k, tradeLabel: d.tradeLabel, trade: d.trade })) return ICP_SIZE_TIERS[0].id;
+  }
+  return ICP_SIZE_TIERS[1].id;
+};
 // ══ WHICH LANE A LEAD BELONGS TO (Round 111) ════════════════════════════════
 // Vin, 2026-09-03: "keep what our ICP has been for cold calling and up it for
 // email" - ONE ladder, TWO lanes drawn on it. The call lane is bounded by
@@ -65495,6 +65539,8 @@ app.listen(PORT, () => {
       [_n("out.target === 'marketing' && out.marketingLead ?", " ' ' + out.marketingLead.name"), 'the TARGET line prints the marketing head\'s name straight after the word "owner" again (Carpet Giant, 2026-09-04)'],
       [_n('out.owner && out.owner.name && out.owner.canBuy === true &&', ' signals.readable === true'), 'a name the ladder HELD BACK is read as "the owner is named on their own pages" again (Southern Oak Dental, 2026-09-04)'],
       [_n('const fl = _scaleLadder({ teamCount: d.teamCount,', ' tradeLabel: d.tradeLabel });'), 'the team-page floor is back inside the return-ladder, where it can only fire when nothing above it did'],
+      [_n('const _sizeTier = (_scale && _scale.sizeTier) ? _scale.sizeTier', ' : sizeTierFromRevenue(_sizeUsd);'), 'the four-word tier is converted from dollars again, so a parsed roster of four real people - which has no dollars behind it on purpose - reads "not measured" on the row while the ladder knows the size (Dawn Designs Texas and Rick Stone Masonrys, 2026-09-12)'],
+      [_n('if (!(Number(_rosterParsedOn.get(p))', ' >= 1)) {'), 'a bare count of name-shaped strings is a headcount again on a page that named no human - that is John and Jerry at "at least 16 people" and Dana Dean at "at least 11", both off pages parseTeamRoster read nobody on'],
     ];
     for (const [needle, msg] of _sites) if (!_src.includes(needle)) _fails.push(msg);
     if (_src.includes(_n('/\\$\\s*\\d|employees/i.test(', 'String(r.description'))) _fails.push('the second size query trigger reads the snippet wording again');
@@ -65509,6 +65555,110 @@ app.listen(PORT, () => {
     }
   } catch (e) {
     console.log(`⛔ SIZE AND LAYERS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ---- ROUND 148: A SMALL ROSTER IS A SIZE ----
+  // Live, 2026-09-12: Dawn Designs Texas and Rick Stone Masonrys each publish
+  // a four-person team page. sizeSettledSmall read it, said in the log that it
+  // "settles them as small" and saved the four-credit directory search on it;
+  // then estimateScaleBand returned NOTHING, the four-word tier came back
+  // empty, and the rep's row printed "low (guess): only the review count (96)".
+  // Driven through the REAL signals reader, so the page, the wire and the
+  // ladder are all exercised rather than a hand-built signals object.
+  try {
+    const _fails = [];
+    const _trade = 'Hardscaping';
+    const _cut = scaleCuts(revenuePerEmployeeFor(_trade)).core;
+    const _teamHtml = '<h3>Dawn Mercer</h3><p>Owner</p><h3>Paul Quintero</h3><p>Project Manager</p>'
+      + '<h3>Rita Lang</h3><p>Operations Manager</p><h3>Sam Okafor</h3><p>General Manager</p>';
+    const _sig = readFindIcpSignals([{ url: 'https://example.com/team', intent: 'team', html: _teamHtml, text: _teamHtml.replace(/<[^>]+>/g, ' ') }]);
+    _sig.tradeLabel = _trade; _sig.reviewCount = 96;
+    if (_sig.teamRosterParsed !== 4) _fails.push(`the four people their own page names reach the signals as ${_sig.teamRosterParsed} parsed rows, so nothing downstream can tell a parsed roster from a count of name-shaped strings`);
+    const _tier = sizeTierFromRoster(_sig);
+    if (_tier !== ICP_SIZE_TIERS[0].id) _fails.push(`a four-person parsed roster reads as "${_tier || 'nothing at all'}" on the four-word ladder - four real named people saved the credits and then decided no size at all`);
+    const _band = estimateScaleBand(_sig) || {};
+    if (_band.sizeTier !== ICP_SIZE_TIERS[0].id) _fails.push(`the size ladder hands the row "${_band.sizeTier || 'no tier'}" for a four-person roster, so the tier is computed and dropped between the ladder and the row`);
+    if (_band.usd !== null && _band.usd !== undefined) _fails.push(`a parsed roster carries ${_band.usd} in dollars - Vin ruled on 2026-09-13 "just the band, drop the dollars", and a headcount multiplied into a revenue is exactly the invented figure that rule refuses`);
+    if (_band.verified === true || _band.directory === true) _fails.push("a roster read off their own page is marked verified or a directory's, and those are the two marks that take a lead off the rep's phone (Round 147)");
+    if (_band.floor !== true) _fails.push('a roster is not marked a floor, so a firm publishing four of its forty people reads as measured at four');
+    const _word = sizeBand(_sig);
+    if (_word.confidence === 'guess' || /review count/.test(String(_word.why))) _fails.push(`the rep's word ladder still says "${_word.why}" about a business that names four people on its own page`);
+    if (!/team page/.test(String(_word.why))) _fails.push('the size sentence does not name the team page the four people were read from');
+    if (SIZE_TIER_CHANNEL[_tier] !== 'call') _fails.push('a very small business is not a call - the four-word ladder and the channel table disagree, and the floor rule of Round 147 turns on that word');
+    // The other word, and the end where counting names stops being a reading.
+    if (sizeTierFromRoster({ teamRosterParsed: _cut, tradeLabel: _trade }) !== ICP_SIZE_TIERS[1].id) _fails.push(`a roster at the trade's own core cut (${_cut}) still reads "${ICP_SIZE_TIERS[0].word}", so the two words never separate and the per-trade cut is not being read`);
+    if (sizeTierFromRoster({ teamRosterParsed: _cut - 1, tradeLabel: _trade }) !== ICP_SIZE_TIERS[0].id) _fails.push('a roster one under the core cut is not the smaller word - the cut sizeSettledSmall owns is not the cut being asked');
+    if (sizeTierFromRoster({ teamRosterParsed: ROSTER_SIZE_MAX + 1, tradeLabel: _trade })) _fails.push(`a roster longer than ${ROSTER_SIZE_MAX} names decides a size - that is the end where nav labels, photo captions and testimonial signers pile up, and counting errs upward only`);
+    if (sizeTierFromRoster({ teamCount: 4, tradeLabel: _trade })) _fails.push('a bare team count with nobody parsed names a tier - this rung must read the PARSED roster, never the count');
+    if (_fails.length) console.log(`\u26d4 A SMALL ROSTER IS A SIZE: ${_fails.join(' | ')}.`);
+    else console.log(`\u2713 A SMALL ROSTER IS A SIZE: four people named with titles on their own team page settle the four-word tier at "${SIZE_TIER_WORD[_tier]}" with no dollars behind it, marked a floor so the lead keeps the rep's phone, and the sheet says "${_word.why}" instead of a review count; the cut between the two words is the trade's own (${_cut} at ${_trade}); over ${ROSTER_SIZE_MAX} names, and on a count nobody parsed, the rung stays silent.`);
+  } catch (e) {
+    console.log(`\u26d4 A SMALL ROSTER IS A SIZE COULD NOT RUN - ${(e && e.message) || e}.`);
+  }
+
+  // ---- ROUND 148: A PAGE THAT NAMES NOBODY STATES NO SIZE ----
+  // Live, 2026-09-12: John and Jerry reported "at least 16 people on their own
+  // team page" and Dana Dean "at least 11", on pages where parseTeamRoster
+  // read ZERO name/title pairs and the owner wave found nobody. Sixteen
+  // name-shaped strings on a page that names no human is not sixteen people.
+  try {
+    const _fails = [];
+    const _sixteen = ['Justin Bride', 'Whitney Bride', 'Carlos Vega', 'Dana Whitfield', 'Omar Reyes', 'Priya Natarajan',
+      'Mark Feldman', 'Alice Trent', 'Ruben Diaz', 'Nina Kowalski', 'Tom Hargrove', 'Beth Salinas',
+      'Ivan Petrov', 'Grace Odum', 'Hank Delgado', 'Maya Ferris'].map(n => `<h4>${n}</h4>`).join('');
+    // The fixture has to reproduce the live shape or it measures nothing.
+    if (countTeamNames(_sixteen) !== 16) _fails.push(`the fixture counts ${countTeamNames(_sixteen)} name-shaped strings, not 16, so this check no longer reproduces the page John and Jerry shipped off`);
+    if (parseTeamRoster(_sixteen, '').length !== 0) _fails.push('the fixture page now parses somebody, so it cannot test the page that named nobody');
+    const _sig = readFindIcpSignals([{ url: 'https://example.com/team', intent: 'team', html: _sixteen, text: _sixteen.replace(/<[^>]+>/g, ' ') }]);
+    _sig.tradeLabel = 'Hardscaping'; _sig.reviewCount = 40;
+    if (_sig.teamCount !== null) _fails.push(`a team page that named no human still reports ${_sig.teamCount} people, so the row says "at least ${_sig.teamCount} people on their own team page" about a page with nobody on it`);
+    if (_sig.teamRosterParsed !== 0) _fails.push('the parsed count is not zero on a page nobody parsed');
+    if (_sig.teamNamedNobody !== true) _fails.push('the refusal is silent - the row cannot say the page was read and named nobody, which reads exactly like never having looked');
+    if (_sig.teamNamesCounted !== 16) _fails.push('the refusal does not carry how many name-shaped strings it refused, so nobody can tell a thin page from a busy one');
+    if (estimateScaleBand(_sig)) _fails.push(`a page that names nobody still decides a band (${JSON.stringify(estimateScaleBand(_sig))})`);
+    if (sizeTierFromRoster(_sig)) _fails.push('a page that names nobody still names a four-word tier');
+    const _word = sizeBand(_sig);
+    if (/team page/.test(String(_word.why)) && !/named nobody/.test(String(_word.why))) _fails.push(`the rep's sheet still counts that page as people: "${_word.why}"`);
+    if (!/named nobody/.test(String(_word.why))) _fails.push(`the row does not say the team page was read and named nobody - it says "${_word.why}", which is the sentence a business with no team page gets`);
+    if (_fails.length) console.log(`\u26d4 A PAGE THAT NAMES NOBODY STATES NO SIZE: ${_fails.join(' | ')}.`);
+    else console.log(`\u2713 A PAGE THAT NAMES NOBODY STATES NO SIZE: sixteen name-shaped headings with not one name/title pair among them measure nothing - no team count, no band, no tier - and the row says so in words ("${_word.why}") rather than falling silently to the review count.`);
+  } catch (e) {
+    console.log(`\u26d4 A PAGE THAT NAMES NOBODY STATES NO SIZE COULD NOT RUN - ${(e && e.message) || e}.`);
+  }
+
+  // ---- ROUND 148: THEIR OWN SITE OUTRANKS A STRADDLING RANGE ----
+  // Live, 2026-09-12: Fred Flores CPA, whose own page lists two staff beside
+  // Fred, was read by ZoomInfo as "126 employees / $15.1M" and sized large.
+  // The rep's own sheet printed "(a range across tiers)" beside that count -
+  // sizeBand has called such a range a guess since Round 113 - while the tier
+  // ladder read it as a measurement. A verified headcount still beats both.
+  try {
+    const _fails = [];
+    const _ownHtml = '<h3>Fred Flores</h3><p>Owner</p><h3>Ana Ruiz</h3><p>Operations Manager</p><h3>Dee Park</h3><p>General Manager</p>';
+    const _base = readFindIcpSignals([{ url: 'https://example.com/our-team', intent: 'team', html: _ownHtml, text: _ownHtml.replace(/<[^>]+>/g, ' ') }]);
+    const _mk = (extra) => Object.assign({}, _base, { tradeLabel: 'Accounting', reviewCount: 31 }, extra || {});
+    const _straddle = _mk({ directoryEmployees: 126, directoryEmployeesSource: 'ZoomInfo', directoryEmployeesRange: '51-200', revenueStated: '$15.1M', revenueStatedSource: 'ZoomInfo' });
+    if (_base.teamRosterParsed < 1) _fails.push('the fixture page parses nobody, so it cannot test a roster against a directory');
+    if (!directoryRangeStraddles(_straddle)) _fails.push('the fixture range no longer straddles a tier, so this check proves nothing about the rule it names');
+    const _sb = sizeBand(_straddle);
+    if (!/range across tiers/.test(String(_sb.why))) _fails.push("the rep's sheet stopped flagging the range, so the two ladders no longer disagree for the reason this check exists");
+    const _b = estimateScaleBand(_straddle) || {};
+    if (_b.sizeTier !== ICP_SIZE_TIERS[0].id) _fails.push(`Fred Flores CPA, three people named on his own page, is sized "${_b.sizeTier || 'off a band with no tier'}" off a directory's 126 employees and $15.1M - a range that is below the core cut at one end and above it at the other`);
+    if (Number(_b.usd) > 0) _fails.push(`the directory's dollars (${_b.usd}) survive the roster, so the lane still reads a revenue nobody measured`);
+    if (_b.verified === true) _fails.push('a roster is marked verified, which would take the lead off the phone');
+    // ONLY this guard can refuse the next two: an exact directory count is not
+    // a guess, and a filing is a size in both directions.
+    const _exact = _mk({ directoryEmployees: 126, directoryEmployeesSource: 'ZoomInfo' });
+    const _eb = estimateScaleBand(_exact) || {};
+    if (_eb.directory !== true || _eb.sizeTier) _fails.push('an EXACT directory headcount loses to a three-name roster - a count that sits inside one tier is as good as an exact one, and only a range across tiers is the guess this rung overrides');
+    const _ver = _mk({ verifiedEmployees: 126 });
+    const _vb = estimateScaleBand(_ver) || {};
+    if (_vb.verified !== true || _vb.sizeTier) _fails.push('a VERIFIED headcount of 126 loses to three names on their own page - a filing is a size in both directions and a floor never argues with one');
+    if (_vb.band !== 'upper') _fails.push(`126 verified employees at an accounting firm no longer read as the upper tier (got ${_vb.band})`);
+    if (_fails.length) console.log(`\u26d4 THEIR OWN SITE OUTRANKS A STRADDLING RANGE: ${_fails.join(' | ')}.`);
+    else console.log(`\u2713 THEIR OWN SITE OUTRANKS A STRADDLING RANGE: three people named on their own team page beat "126 employees per ZoomInfo" when that count arrives as a range across tiers or as a revenue with no headcount beside it, and the answer carries no dollars; an exact directory count and a verified headcount both still win.`);
+  } catch (e) {
+    console.log(`\u26d4 THEIR OWN SITE OUTRANKS A STRADDLING RANGE COULD NOT RUN - ${(e && e.message) || e}.`);
   }
 
   // ---- ROUND 116: A RETIRED PERSON IS NOT THE DECISION-MAKER, AND THREE FREE SIZE SOURCES ----
@@ -86317,7 +86467,10 @@ const SIZE_TERMS = [
   { id: 'locationsProse',     cut: () => ({ high: 6, medium: 2 }), say: (n) => `${n} locations on their own pages` },
   { id: 'marketCount',        cut: () => ({ high: 3, medium: 2 }), say: (n) => `seen in ${n} metros this run` },
   // Round 112: their own team page, a floor - it only ever raises the band.
-  { id: 'teamCount',          cut: (c) => ({ high: c.upper + 1, medium: c.core }), floor: true, say: (n) => `at least ${n} people on their own team page` },
+  // Round 148: below the core cut this rung was silent and the sheet fell to
+  // the review count. A PARSED roster is the reliable end of the reading, so
+  // it speaks there too; a bare count still needs the core cut to say anything.
+  { id: 'teamCount',          cut: (c) => ({ high: c.upper + 1, medium: c.core }), floor: true, lowOk: (s) => !!sizeTierFromRoster(s), say: (n) => `at least ${n} people on their own team page` },
 ];
 const SIZE_ORDER = { low: 0, medium: 1, high: 2 };
 const SIZE_RANK = { low: 0, medium: 1, high: 2 };
@@ -86331,17 +86484,12 @@ const sizeBand = (s) => {
     if (t.id === 'marketCount' && n < 2) continue;
     if (Number.isFinite(t.min) && n < t.min) continue;   // Round 147: a published count under three measures nothing
     const k = t.cut(_cuts, _tcuts);
-    if (t.floor && n < k.medium) continue;   // a floor under the core cut says nothing
+    if (t.floor && n < k.medium && !(t.lowOk && t.lowOk(d))) continue;   // a floor under the core cut says nothing, unless real people parsed on the page (Round 148)
     // Round 113: a directory RANGE that straddles two tiers ("1-10" for a
     // $200k/head trade is below the floor at one end and core at the other)
     // is a guess; one that sits inside a tier ("11-50" is core end to end)
     // is as good as an exact count.
-    const _straddles = t.id === 'directoryEmployees' && (() => {
-      const m = String(d.directoryEmployeesRange || '').match(/(\d+)\s*(?:-|\u2013|to)\s*(\d+)/);
-      if (!m) return false;
-      const bandOf = (v) => v >= k.high ? 'high' : v >= k.medium ? 'medium' : 'low';
-      return bandOf(Number(m[1])) !== bandOf(Number(m[2]));
-    })();
+    const _straddles = t.id === 'directoryEmployees' && directoryRangeStraddles(d);
     facts.push({ id: t.id, band: n >= k.high ? 'high' : n >= k.medium ? 'medium' : 'low', say: t.say(n, d) + (_straddles ? ' (a range across tiers)' : ''), directory: t.id === 'directoryEmployees', straddles: _straddles, floor: t.floor === true });
   }
   // A revenue a directory states reads onto the ladder after a verified
@@ -86391,12 +86539,19 @@ const sizeBand = (s) => {
     if (soft >= 2 && band === 'low') { band = 'medium'; confidence = 'likely'; why.push('department heads, commercial work or financing on their site'); }
     return { band, confidence, why: why.join('; ') };
   }
+  // Round 148: a team page we DID read that named nobody is a fact about the
+  // read, and a refusal nobody can see reads as "we never looked". John and
+  // Jerry shipped "at least 16 people on their own team page" off a page that
+  // named no human; the count is refused now, and this is the row saying so.
+  const _nobody = d.teamNamedNobody === true
+    ? ` - we read their team page and it named nobody (${Number(d.teamNamesCounted) || 0} name-shaped headings, not one person)`
+    : '';
   const rv = Number(d.reviewCount);
   if (typeof d.reviewCount === 'number' && Number.isFinite(rv)) {
     const band = rv >= 750 ? 'high' : rv >= 150 ? 'medium' : 'low';
-    return { band, confidence: 'guess', why: `only the review count (${rv}) - nothing published about staff, fleet or locations` };
+    return { band, confidence: 'guess', why: `only the review count (${rv}) - nothing published about staff, fleet or locations${_nobody}` };
   }
-  return { band: null, confidence: 'unknown', why: 'nothing readable about their size' };
+  return { band: null, confidence: 'unknown', why: 'nothing readable about their size' + _nobody };
 };
 const readLayers = (s, opts) => {
   const d = s || {}, o = opts || {};
@@ -87196,6 +87351,19 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
   let teamNames = [];
   let teamPageUrl = '';
   let execTitles = [];
+  // ══ ROUND 148: HOW MANY ROWS PARSED AS A PERSON, KEPT APART FROM THE
+  // COUNT ═══════════════════════════════════════════════════════════════
+  // teamCount answers "how many people does this page show"; this answers
+  // "how many of them did a name door stand behind". The two were one number,
+  // so a page of sixteen name-shaped headings and a page naming four real
+  // people with titles arrived downstream indistinguishable.
+  let teamRosterParsed = 0;
+  let teamNamedNobody = false;
+  let teamNamesCounted = 0;
+  // The parse is remembered per page so the count-only fallback below can ask
+  // whether THIS page named a human without parsing it a second time - a
+  // second answer to a question this loop has already answered.
+  const _rosterParsedOn = new Map();
   // Every title the roster read, not only the ones that matched the exec
   // pattern. readChainEvidence needs them and re-parsing the roster to get
   // them would be a second answer to a question this function has already
@@ -87204,8 +87372,10 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
   for (const p of read) {
     if (p.intent !== 'team') continue;
     const roster = parseTeamRoster(p.html || p.text, '');
+    _rosterParsedOn.set(p, roster.length);
     if (roster.length >= 1) {
       teamCount = roster.length;
+      teamRosterParsed = roster.length;
       teamNames = roster.map(r => r.name);
       teamTitles = roster.map(r => String(r.title || '')).filter(Boolean);
       teamPageUrl = p.url;
@@ -87248,7 +87418,24 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
     for (const p of read) {
       if (p.intent !== 'team') continue;
       const n = countTeamNames(p.html || p.text);
-      if (n >= 3) { teamCount = n; teamPageUrl = p.url; break; }
+      if (n < 3) continue;
+      // ══ ROUND 148: SIXTEEN NAME-SHAPED STRINGS ON A PAGE THAT NAMES
+      // NOBODY IS NOT SIXTEEN PEOPLE ════════════════════════════════════
+      // Live, 2026-09-12: John and Jerry shipped "at least 16 people on their
+      // own team page" and Dana Dean "at least 11" - both off pages where
+      // parseTeamRoster read ZERO name/title pairs and the model found nobody.
+      // A bare count says how many runs of capitalised words the layout holds;
+      // a parsed row says a person is there, through the three name doors this
+      // file already declares. So the count may only speak on a page that
+      // named at least one human, and a refusal is SAID on the row rather than
+      // falling silently to a review count - a saving nobody can see reads as
+      // a broken feature, and so does a refusal.
+      if (!(Number(_rosterParsedOn.get(p)) >= 1)) {
+        teamNamedNobody = true;
+        if (n > teamNamesCounted) teamNamesCounted = n;
+        continue;
+      }
+      teamCount = n; teamPageUrl = p.url; break;
     }
   }
 
@@ -87287,6 +87474,7 @@ const readFindIcpSignals = (pages, now = Date.now()) => {
     adsCode, adPlatforms, tagManager, adsWhy,
     adsConversion, callTracking, analytics, liveChat, scheduler,
     teamCount, teamNames, teamPageUrl, execTitles, teamTitles,
+    teamRosterParsed, teamNamedNobody, teamNamesCounted,
     hiringAny, hiringMarketing, hiringTitles,
     hiringMarketingTitles: lanes.marketing,
     hiringSource,
@@ -87418,6 +87606,26 @@ const _scaleLadder = (s) => {
   // (and as a bound when it was "<$5M" or a range); then what they publish.
   const ver = Number(d.verifiedEmployees);
   if (Number.isFinite(ver) && ver > 0) return Object.assign(mk(tierFromCount(ver, cuts), `${ver} verified employees`, ver * per), { verified: true });
+  // ══ THEIR OWN PAGE BEATS A DIRECTORY THAT IS GUESSING (Round 148) ═══════
+  // Live, 2026-09-12: Fred Flores CPA, whose own team page lists two staff
+  // beside Fred, was read by ZoomInfo as "126 employees / $15.1M" and sized
+  // large. The rep's own sheet flagged that count "(a range across tiers)" -
+  // sizeBand has called such a range a guess since Round 113 - and this
+  // ladder read it as a measurement anyway, so the lead lost its lane to a
+  // number nobody could stand behind. A range across tiers, and a revenue
+  // figure with no headcount beside it, now lose to a roster we PARSED. An
+  // exact directory count still wins, and a VERIFIED headcount beats both.
+  //
+  // The row carries no dollars: the four-word tier is named outright and the
+  // affordability band stays null, because nothing here measured revenue.
+  const _rosterTier = sizeTierFromRoster(d);
+  const _rosterSaid = Number(d.teamRosterParsed);
+  const _rosterRow = () => ({ band: null, points: 0, usd: null, floor: true, roster: true, sizeTier: _rosterTier,
+    say: `${_rosterSaid} ${_rosterSaid === 1 ? 'person' : 'people'} named on their own team page` });
+  const _dirN = Number(d.directoryEmployees);
+  const _dirHead = Number.isFinite(_dirN) && _dirN > 0;
+  const _dirTrusted = _dirHead && !directoryRangeStraddles(d);
+  if (_rosterTier && !_dirTrusted && (_dirHead || parseStatedRevenueBound(d.revenueStated))) return _rosterRow();
   const rb = parseStatedRevenueBound(d.revenueStated);
   if (rb) return Object.assign(mk(tierFromRevenue(rb.usd), `a directory's revenue figure (${d.revenueStatedSource || 'web'}${rb.bound === 'below' ? ', stated as under ' + _usdShort(rb.hi) : rb.bound === 'range' ? ', a range' : ''})`, rb.usd), { directory: true, bound: rb.bound });
   const dir = Number(d.directoryEmployees);
@@ -87449,22 +87657,43 @@ const _scaleLadder = (s) => {
   const tc = Number(d.teamCount);
   if (Number.isFinite(tc) && tc >= cuts.core) return Object.assign(mk(tierFromCount(tc, cuts), `at least ${tc} people on their own team page`, tc * per), { floor: true });
   // Tenure is a GUESS, flagged so the lookup still fires (sizeMeasured ignores it).
+  //
+  // ══ AND IT STAYS ABOVE THE ROSTER, ON PURPOSE (Round 148) ═══════════════
+  // The roster rung below is a FLOOR, and the scale TERM of the ICP score
+  // refuses a floor because the size term already scores the same team page -
+  // one fact may not sit in two terms of the same denominator (Round 112). So
+  // putting the roster above this line took the scale term out of the score on
+  // every long-established lead with a small team page, which servercheck's
+  // research scenario caught. The four-word tier is not lost by sitting below
+  // it: estimateScaleBand stamps the roster's tier onto whatever answer wins,
+  // and a tenure guess is discarded before it can decide a band anyway.
   const yrs = Number(d.yearsInBusiness), rv = Number(d.reviewCount);
   if (Number.isFinite(yrs) && yrs >= 15 && Number.isFinite(rv) && rv >= 40) return Object.assign(mk('entry', `${yrs} years in business at ${rv} reviews - a guess`), { guess: true });
+  // Nothing a directory said, nothing in their own prose, and no tenure worth
+  // guessing off. The people they name on their own page are the reading.
+  if (_rosterTier) return _rosterRow();
   return null;
 };
 const estimateScaleBand = (s) => {
   const d = s || {};
   const r = _scaleLadder(d);
   const fl = _scaleLadder({ teamCount: d.teamCount, tradeLabel: d.tradeLabel });
-  if (!fl || fl.floor !== true) return r;
-  if (!r || r.guess === true) return fl;
+  // Round 148: the four-word tier a parsed roster names travels with whatever
+  // answer wins. SCALE_TIERS.indexOf(null) is -1, so without this the floor
+  // re-run below hands the row back a band with the tier stripped off it - the
+  // computed-but-not-passed class, one line from where it was computed. It
+  // never argues with a VERIFIED headcount or with a directory count we trust.
+  const _rtier = sizeTierFromRoster(d);
+  const _rt = (x) => (x && !x.sizeTier && _rtier && x.verified !== true && x.directory !== true)
+    ? Object.assign({}, x, { sizeTier: _rtier }) : x;
+  if (!fl || fl.floor !== true) return _rt(r);
+  if (!r || r.guess === true) return _rt(fl);
   // A verified count is the one term the floor never overrides: it is the
   // strongest row in SIZE_TERMS, and the floor was written in Round 112 to
   // lift a band off what a business PUBLISHES, not to argue with a filing.
   if (r.verified === true) return r;
-  if (SCALE_TIERS.indexOf(fl.band) <= SCALE_TIERS.indexOf(r.band)) return r;
-  return Object.assign({}, fl, { say: `${fl.say} (their own words say fewer: ${r.say})` });
+  if (SCALE_TIERS.indexOf(fl.band) <= SCALE_TIERS.indexOf(r.band)) return _rt(r);
+  return _rt(Object.assign({}, fl, { say: `${fl.say} (their own words say fewer: ${r.say})` }));
 };
 
 // ══ WHAT THEIR OWN PAGE SAYS ABOUT WHO OWNS THEM ═══════════════════════════
@@ -89233,7 +89462,9 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // stated revenue, a published count), so a guessed lead gets no size tier
   // here at all and the row says "not measured" rather than inventing one.
   const _sizeUsd = Number(signals.scaleUsd) > 0 ? Number(signals.scaleUsd) : 0;
-  const _sizeTier = sizeTierFromRevenue(_sizeUsd);
+  // Round 148: a parsed roster names its own tier and carries no dollars, so
+  // it is READ here rather than converted through a revenue that never existed.
+  const _sizeTier = (_scale && _scale.sizeTier) ? _scale.sizeTier : sizeTierFromRevenue(_sizeUsd);
   // ══ IS THIS SIZE A FLOOR? (Round 147) ════════════════════════
   // A count a business PUBLISHES is a lower bound: at least this many. Only a
   // VERIFIED headcount (a filing, an enrichment record) and a stated revenue
