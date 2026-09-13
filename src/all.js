@@ -42961,6 +42961,12 @@ const WEIGHTS = {
       _findYield.notSized = _siteRead.notSized;
       console.log(`\u{1F310} PRESS SITE READ: ${_siteRead.considered} homepage(s) read free - no Firecrawl, no screenshot, no model call. ${_siteRead.graded} carry a grade a visitor would recognise (${SITE_LOOKS_GRADES.map(_g => `${_siteRead.byGrade[_g] || 0} ${_g}`).join(', ')}); ${_siteRead.clean} showed nothing a visitor could see and stay NOT GRADED, because clean code is not the same as looking good and nobody took a picture; ${_siteRead.refused} refused a plain read; ${_siteRead.notReached} were not reached before the clock. ${_siteRead.noWebsite} lead(s) have no website at all and are their own lane. Refused and not-reached leads say nobody looked - never that the site passed.`);
       console.log(`\u{1F4CF} PRESS SIZE READ: ${_siteRead.sized} of ${_siteRead.considered} businesses state their own size on their homepage and now carry a MEASURED tier off it for nothing (${SIZE_TIER_IDS.map(_t => `${_siteRead.byTier[_t] || 0} ${SIZE_TIER_WORD[_t]}`).join(', ')}${_siteRead.byTier[SIZE_TIER_OVER] ? `, ${_siteRead.byTier[SIZE_TIER_OVER]} over the ICP` : ''}). ${_siteRead.notSized} say nothing about how big they are and are marked \"size not measured\" - never a review-count guess wearing a measurement's clothes. A published count is a FLOOR: a business publishes at most the people it wants seen, so every tier here means at least that big${_siteRead.floorKept ? `, and ${_siteRead.floorKept} of them read big enough that before Round 147 the size alone would have taken them off the rep's call sheet - a floor no longer does that` : ''}. Before this round NO lead in the pool carried a measured size at all, because the size ladder only ran inside the paid contact read - ten leads a day against a queue of 1,791.`);
+      // ROUND 148: the 100-business test reports its own result, so the cap
+      // comes off on a number rather than on a hunch. Vin, 2026-09-13:
+      // "test with a batch of 100 first".
+      if (_siteRead.aiAsked || _siteRead.aiSized) {
+        console.log(`\u{1F50E} SIZE FROM GOOGLE: asked about ${_siteRead.aiAsked} business(es) that said nothing about themselves, capped at ${SIZE_AI_CAP} for this run, and got a usable size on ${_siteRead.aiSized} of them (${_siteRead.aiNoAnswer} had no answer worth reading). At $0.0012 a business that is about ${(_siteRead.aiAsked * 0.0012).toFixed(2)} - against the ~1.1c Firecrawl directory search this replaces, which reported 126 employees for a three-person CPA firm on 2026-09-12. Every one of these is an ESTIMATE and is marked as a guess, so it can never be the thing that takes a business off the rep's phone. A business is asked about once and remembered by domain; their own pages always answer first and win.`);
+      }
     }
     const allScored = unique
       .map(c => {
@@ -65502,6 +65508,36 @@ app.listen(PORT, () => {
     // Assembled at runtime: a literal regex here would find itself.
     if (new RegExp(_n('uthority >= 7', '5\\b')).test(_src) || _src.includes(_n('decisionMaker.title) >= ', '75)'))) _fails.push('a literal 75 buying floor is back somewhere in the file');
     if (new RegExp(_n('verifiedEmployees > 5', '00\\b')).test(_src) || new RegExp(_n('verifiedEmployees <= 2', '00\\b')).test(_src) || new RegExp(_n('emp <= 2', '00\\b')).test(_src)) _fails.push('a literal 200 or 500 employee gate is back somewhere in the file');
+    // ══ ROUND 148: WHAT GOOGLE SAYS IS AN ESTIMATE, AND IS SPENT ONCE ══════
+    // Vin's own screenshot, 2026-09-13, is the fixture. Asked plainly, Google
+    // refused: "Specific annual revenue figures ... are not publicly
+    // available." Asked for a ROUGH ESTIMATE it answered, and that difference
+    // is the whole reason the query is phrased the way it is - the API has no
+    // second turn, so the first question has to be the useful one.
+    {
+      const _refusal = 'Specific annual revenue figures for a firm under the exact name "Deiondre Taylor CPA" in Dallas are not publicly available in standard corporate or state registries. As a private, small-to-mid-sized professional service firm, its exact internal revenue data is kept private.';
+      const _answer = 'Based on industry benchmarks for small, boutique accounting and advisory firms in the Dallas-Fort Worth metroplex, a firm of this profile typically generates an estimated $150,000 to $500,000 in annual revenue. Staff Size: The firm functions as a boutique practice led by principal owner Deirdre Taylor, utilizing a compact team of tax professionals.';
+      if (readAiSize(_refusal).ok !== false) _fails.push('Google saying a business\'s figures are NOT PUBLIC is read as a size - that is an answer about the absence of data being turned into a measurement');
+      const _r = readAiSize(_answer);
+      if (_r.ok !== true) _fails.push('the answer Google actually gave Vin on 2026-09-13 reads as no size at all, so the one shape this is built for is refused');
+      // A RANGE READS LOW. Over-reading a size takes a business off the rep's
+      // phone; under-reading only leaves it on. The direction is the point.
+      if (_r.ok && _r.usd !== 150000) _fails.push(`a range "$150,000 to $500,000" was read as ${_r.usd} instead of its LOW end - an estimate read high is the half that can cost a lead`);
+      if (_r.ok && sizeTierFromRevenue(_r.usd) !== SIZE_TIER_IDS[0]) _fails.push('a boutique practice Google puts at $150k does not land in the smallest tier, which is the one Vin works');
+      if (readAiOwner(_answer) !== 'Deirdre Taylor') _fails.push(`Google naming "principal owner Deirdre Taylor" does not reach the owner slot (got "${readAiOwner(_answer)}") - LinkedIn is the source three of nine leads on 2026-09-12 had no other route to`);
+      if (readAiSize('Dana Dean Roofing is a roofing contractor in Raleigh serving the Triangle since 1994.').ok !== false) _fails.push('a plain description with no figure in it is read as a size');
+      // THE QUERY IS THE SECOND QUESTION, NOT THE FIRST.
+      const _q = SIZE_AI_QUERY('Deirdre L Taylor, CPA PLLC', 'Dallas TX');
+      if (!/rough estimate/i.test(_q)) _fails.push('the question no longer asks for a ROUGH ESTIMATE, so it gets the refusal Vin got on his first try and every lookup is wasted');
+      if (_q.length > 700) _fails.push('the question is over the 700-character cap the vendor sets');
+      // THE SPEND, CAPPED AND SAID OUT LOUD.
+      if (!(SIZE_AI_CAP > 0)) _fails.push('the per-run cap on the paid size lookup is zero or unset, so a press could ask about every business on the list');
+      if (!_src.includes(_n('if (_aiSizeSpent >= SIZE_AI_CAP)', ' return'))) _fails.push('the cap is no longer checked before the call, so a press can spend past what Vin agreed to');
+      if (!_src.includes(_n('if (key && AI_SIZE_MEM.has(key))', ' return'))) _fails.push('the answer is no longer remembered per domain, so the same business is paid for twice');
+      if (!_src.includes(_n('const _ai = await askGoogleAboutSize(c.name', " || '', c.location"))) _fails.push('the press no longer asks Google about a business its own pages could not size - the measurement exists and nothing calls it');
+      if (!_src.includes(_n('c.sizeIsGuess = ', 'true;'))) _fails.push('a size that came from Google is no longer marked a GUESS, so an estimate can take a business off the rep\'s phone');
+      if (!_src.includes(_n('c.sizeUsd = null;', '                 // Vin'))) _fails.push('a dollar figure from Google reaches the row again - Vin ruled on 2026-09-13 that the row carries the band and nothing else');
+    }
     if (_fails.length) {
       console.log(`⛔ SIZE AND LAYERS CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
     } else {
@@ -86886,8 +86922,10 @@ const FIND_PRESS_SITE_MAX = Math.max(0, parseInt(process.env.FIND_PRESS_SITE_MAX
 // the queue row's extra blob and are read back by the client and by the score.
 const pressSiteLooks = async (leads) => {
   const all = Array.isArray(leads) ? leads : [];
+  aiSizeReset();
   const out = { considered: 0, graded: 0, clean: 0, refused: 0, notReached: 0, noWebsite: 0,
-                byGrade: {}, sized: 0, notSized: 0, byTier: {}, floorKept: 0 };
+                byGrade: {}, sized: 0, notSized: 0, byTier: {}, floorKept: 0,
+                aiSized: 0, aiAsked: 0, aiNoAnswer: 0 };
   if (!FIND_PRESS_SITE_READ) return out;
   const _todo = [];
   for (const c of all) {
@@ -86982,15 +87020,47 @@ const pressSiteLooks = async (leads) => {
           // at all - and they are the number to watch next press.
           if (c.sizeIsFloor && (SIZE_TIER_CHANNEL[c.sizeTier] === 'email' || c.sizeTier === SIZE_TIER_OVER)) out.floorKept++;
         } else {
-          // NOT MEASURED, said in those words. Never looked is not measured
-          // zero, and a review-count guess dressed as a size is the defect
-          // the whole round is about.
-          c.sizeTier = SIZE_TIER_UNMEASURED;
-          c.sizeTierMeasured = false;
-          c.sizeWhy = _scale && _scale.guess === true
-            ? 'their homepage says nothing about how big they are; the only thing left was age against review count, which is a guess and is not published as a size'
-            : 'their homepage says nothing about how big they are - no team, no fleet, no locations, no staff count';
-          out.notSized++;
+          // NOT MEASURED FROM THEIR OWN PAGE, so ask Google - the source Vin
+          // himself checks against. THEIR OWN SITE RAN FIRST AND WON: this
+          // branch is only reached when the homepage said nothing, so a
+          // published count can never be overruled by an estimate.
+          const _ai = await askGoogleAboutSize(c.name || '', c.location || '', c.website || '');
+          if (_ai && _ai.ok) {
+            const _aiTier = _ai.usd > 0 ? sizeTierFromRevenue(_ai.usd)
+              : Number.isFinite(_ai.employees) && _ai.employees > 0
+                ? sizeTierFromRevenue(_ai.employees * revenuePerEmployeeFor(c.industry || ''))
+                : SIZE_TIER_IDS[0];
+            if (_aiTier) {
+              c.sizeUsd = null;                 // Vin, 2026-09-13: the band, never the dollars
+              c.sizeTier = _aiTier;
+              c.sizeTierMeasured = true;
+              // A GUESS, and it says so in the field the lanes read. Round 147
+              // keeps a floor on the rep's phone; Round 148 extends that to a
+              // guess, and this is the flag that earns it. An estimate must
+              // never be the thing that takes a business off the call sheet.
+              c.sizeIsFloor = true;
+              c.sizeIsGuess = true;
+              c.sizeSay = SIZE_TIER_SAY[_aiTier] || '';
+              c.sizeWhy = `${_ai.why} - asked Google once, the way Vin checks it, and it is an estimate rather than a filed figure`;
+              if (_ai.owner && !c.ownerName) { c.ownerFromAi = _ai.owner; }
+              out.sized++; out.aiSized++;
+              if (!_ai.cached) out.aiAsked++;
+              out.byTier[_aiTier] = (out.byTier[_aiTier] || 0) + 1;
+            }
+          } else if (_ai && _ai.skipped !== true) { out.aiAsked++; out.aiNoAnswer++; }
+          if (!c.sizeTierMeasured) {
+            // NOT MEASURED, said in those words. Never looked is not measured
+            // zero, and a review-count guess dressed as a size is the defect
+            // the whole round is about.
+            c.sizeTier = SIZE_TIER_UNMEASURED;
+            c.sizeTierMeasured = false;
+            c.sizeWhy = (_ai && _ai.ok === false && _ai.skipped !== true)
+              ? `their homepage says nothing about how big they are, and ${_ai.why}`
+              : _scale && _scale.guess === true
+                ? 'their homepage says nothing about how big they are; the only thing left was age against review count, which is a guess and is not published as a size'
+                : 'their homepage says nothing about how big they are - no team, no fleet, no locations, no staff count';
+            out.notSized++;
+          }
         }
         const _saw = readSiteLooks(null, 'nobody looked at the page itself - the press reads their markup only', (_build && _build.faults) || []);
         c.siteLooks = _saw.looks;
@@ -87465,6 +87535,146 @@ const estimateScaleBand = (s) => {
   if (r.verified === true) return r;
   if (SCALE_TIERS.indexOf(fl.band) <= SCALE_TIERS.indexOf(r.band)) return r;
   return Object.assign({}, fl, { say: `${fl.say} (their own words say fewer: ${r.say})` });
+};
+
+// ══ WHAT GOOGLE SAYS ABOUT THIS BUSINESS (Round 148) ═══════════════════════
+// Vin, 2026-09-13, asked how he would catch a wrong size: "i would just google
+// the business and 9/10 times ai overview pops up and tell me theri revenue
+// numebr." That is the truth test this system is scored against, so it is also
+// the cheapest thing to read: DataForSEO returns Google's AI answer for
+// $0.0012 a business, against ~1.1c for the Firecrawl directory search it
+// replaces - the search that reported 126 employees for a three-person CPA
+// firm on 2026-09-12.
+//
+// WHAT IT IS NOT. Vin's own screenshot settles it: asked plainly, Google said
+// "Specific annual revenue figures ... are not publicly available." It is not a
+// filed figure and this code never pretends otherwise. What it IS good at is
+// the SHAPE - "a boutique practice ... led by principal owner Deirdre Taylor,
+// utilizing a compact team" - and that is exactly what the four-word ladder
+// needs. So: a band, never a dollar figure on the row, and marked a GUESS, so
+// Round 147's rule keeps the lead on the rep's phone rather than letting an
+// estimate bench it.
+//
+// ONE QUESTION, NO FOLLOW-UP. The API takes one keyword and returns one
+// answer; there is no second turn. Vin's first question got the refusal above
+// and his SECOND ("rough estimate") got the useful answer, so the question is
+// phrased as his second one was. 700 characters is the vendor's cap.
+const SIZE_AI_CAP = Math.max(0, parseInt(process.env.SIZE_AI_CAP || '100', 10) || 0);
+const SIZE_AI_QUERY = (name, city) => `${String(name || '').trim()}${city ? ' ' + String(city).trim() : ''} - rough estimate of annual revenue and number of employees`.slice(0, 700);
+// The answer arrives as nested ai_overview elements; every one of them carries
+// text and the useful sentence is as often in a bullet as in the opening
+// paragraph, so the whole thing is flattened before anything is read out of it.
+const aiAnswerText = (body) => {
+  const out = [];
+  const walk = (n, depth) => {
+    if (!n || depth > 6) return;
+    if (Array.isArray(n)) { for (const x of n) walk(x, depth + 1); return; }
+    if (typeof n !== 'object') return;
+    if (typeof n.text === 'string' && n.text.trim()) out.push(n.text.trim());
+    else if (typeof n.markdown === 'string' && n.markdown.trim()) out.push(n.markdown.trim());
+    for (const k of ['items', 'result', 'tasks']) if (n[k]) walk(n[k], depth + 1);
+  };
+  walk(body, 0);
+  return out.join(' \n').replace(/\s+/g, ' ').trim();
+};
+const _AI_MONEY = '\\$\\s?([\\d,.]+)\\s*(million|billion|m\\b|b\\b|k\\b|thousand)?';
+const _aiUsd = (num, unit) => {
+  const n = Number(String(num || '').replace(/,/g, ''));
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  const u = String(unit || '').toLowerCase();
+  if (/^b/.test(u)) return n * 1e9;
+  if (/^m/.test(u)) return n * 1e6;
+  if (/^(k|thousand)/.test(u)) return n * 1e3;
+  return n;
+};
+// A RANGE READS AT ITS LOW END. "$150,000 to $500,000" is Google hedging, and
+// the low end is the only half of it that cannot cost us a lead: under-reading
+// a size keeps a business on the call sheet, over-reading takes it off.
+const readAiSize = (text) => {
+  const t = String(text || '');
+  if (t.length < 40) return { ok: false, why: 'Google returned nothing readable about them' };
+  if (/\bnot\s+(?:publicly\s+available|available|disclosed)\b|\bdoes not (?:publicly )?(?:disclose|report)\b/i.test(t)
+      && !new RegExp(_AI_MONEY, 'i').test(t)) {
+    return { ok: false, why: 'Google said their figures are not public and offered no estimate' };
+  }
+  let usd = 0, saidRange = false;
+  const rng = t.match(new RegExp(_AI_MONEY + '\\s*(?:to|-|\\u2013|and)\\s*' + _AI_MONEY, 'i'));
+  if (rng) { usd = _aiUsd(rng[1], rng[2] || rng[4]); saidRange = true; }
+  if (!usd) {
+    const one = t.match(new RegExp('(?:revenue|revenues|sales|turnover|generates?|generating|brings? in)[^.]{0,60}?' + _AI_MONEY, 'i'));
+    if (one) usd = _aiUsd(one[1], one[2]);
+  }
+  const emp = t.match(/\b(?:about|around|approximately|roughly|over|under|fewer than|more than)?\s*(\d{1,4})\s*(?:full[- ]time\s+)?(?:employees|staff|workers|people|team members)\b/i)
+           || t.match(/\b(?:team|staff|workforce) of (?:about |around |roughly |over )?(\d{1,4})\b/i)
+           || t.match(/\bemploys\s+(?:about |around |roughly |over )?(\d{1,4})\b/i);
+  const employees = emp ? Number(emp[1]) : null;
+  // "boutique", "solo", "small team" is Google describing a very small
+  // business in words when it will not put a number on one. It is read only
+  // when no number was found, and it can never raise a band.
+  const tiny = /\b(?:boutique|solo practitioner|sole proprietor|one[- ]person|single[- ]person|small team|compact team|husband[- ]and[- ]wife|family[- ]run)\b/i.test(t);
+  if (!usd && !Number.isFinite(employees) && !tiny) return { ok: false, why: 'Google described them but put no size on it' };
+  return {
+    ok: true, usd: usd || 0, employees: Number.isFinite(employees) ? employees : null,
+    tiny: tiny && !usd && !Number.isFinite(employees), saidRange,
+    why: usd ? `Google puts them at ${_usdShort(usd)}${saidRange ? ' at the low end of the range it gave' : ''}`
+       : Number.isFinite(employees) ? `Google says about ${employees} people`
+       : 'Google describes them as a very small operation',
+  };
+};
+// The owner, where Google names one. It reads LinkedIn, which is the source
+// three of nine leads on 2026-09-12 had no other route to. Graded no higher
+// than STATED: Google naming somebody is not the company naming them.
+const readAiOwner = (text) => {
+  const m = String(text || '').match(/\b(?:principal owner|owner|founder|co-founder|president|managing partner|principal)\s*,?\s+((?:[A-Z][a-zA-Z'’-]{1,20}[ \t]+){1,2}[A-Z][a-zA-Z'’-]{1,20})\b/)
+         || String(text || '').match(/\b((?:[A-Z][a-zA-Z'’-]{1,20}[ \t]+){1,2}[A-Z][a-zA-Z'’-]{1,20})\s*,\s*(?:the\s+)?(?:principal\s+)?(?:owner|founder|president|managing partner)\b/);
+  const name = m ? m[1].replace(/\s+/g, ' ').trim() : '';
+  if (!name || name.split(' ').length < 2) return '';
+  return name;
+};
+// ══ AND THE CALL, CAPPED AND REMEMBERED ════════════════════════════════════
+// Two guards on the spend, because this is the first thing in the press that
+// costs money per business:
+//   · SIZE_AI_CAP stops a press after N businesses. Vin set it to 100 for the
+//     first run against a balance of $0.256, which is 12c of a 25.6c balance.
+//   · the answer is remembered per DOMAIN, like the mail facts are, so a
+//     business is asked about once and never again.
+// The account latch does the rest: an empty or unverified account costs ONE
+// doomed call for the whole press, not one per business (dfsAccountDown).
+const AI_SIZE_MEM = new Map();
+let _aiSizeSpent = 0;
+const aiSizeReset = () => { _aiSizeSpent = 0; };
+const aiSizeSpent = () => _aiSizeSpent;
+const askGoogleAboutSize = async (companyName, location, domain) => {
+  const key = String(domain || companyName || '').toLowerCase().replace(/^www\./, '');
+  if (key && AI_SIZE_MEM.has(key)) return Object.assign({}, AI_SIZE_MEM.get(key), { cached: true });
+  if (!DFS_READY) return { ok: false, why: 'no DataForSEO credentials on this instance', skipped: true };
+  if (_aiSizeSpent >= SIZE_AI_CAP) return { ok: false, why: `the ${SIZE_AI_CAP}-business cap for this run is spent`, skipped: true };
+  if (dfsAccountDown()) return { ok: false, why: 'the DataForSEO account is stood down', skipped: true };
+  _aiSizeSpent++;
+  try {
+    const auth = Buffer.from(`${DFS_LOGIN}:${DFS_PASSWORD}`).toString('base64');
+    const r = await fetchT('https://api.dataforseo.com/v3/serp/google/ai_mode/live/advanced', {
+      method: 'POST',
+      headers: { 'Authorization': `Basic ${auth}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify([{ keyword: SIZE_AI_QUERY(companyName, location), location_name: 'United States', language_code: 'en' }]),
+    }, 25000);
+    const body = await safeJson(r);
+    const task = body && Array.isArray(body.tasks) ? body.tasks[0] : null;
+    const code = task ? task.status_code : (body && body.status_code);
+    if (Number(code) !== 20000) {
+      const f = dfsFailure(code, (task && task.status_message) || (body && body.status_message), 'SIZE FROM GOOGLE');
+      dfsNoteFailure(f, companyName);
+      return { ok: false, why: f.why, accountLevel: f.accountLevel === true };
+    }
+    const text = aiAnswerText(task);
+    const size = readAiSize(text);
+    const owner = readAiOwner(text);
+    const out = Object.assign({}, size, { owner, asked: true });
+    if (key) AI_SIZE_MEM.set(key, out);
+    return out;
+  } catch (e) {
+    return { ok: false, why: `the call failed - ${(e && e.message) || e}` };
+  }
 };
 
 // ══ WHAT THEIR OWN PAGE SAYS ABOUT WHO OWNS THEM ═══════════════════════════
