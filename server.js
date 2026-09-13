@@ -13398,6 +13398,36 @@ const ownerEvidenceGrade = (o) => {
   }
   const sources = Array.isArray(d.sources) ? d.sources : [];
   const independent = independentSourceCount(sources);
+  // ══ TWO SETTLES THAT MAY NEVER READ AS CONFIRMED ══════════════════
+  // Asked BEFORE the corroboration branch, deliberately. Both of these name a
+  // person off ONE artifact that is not their site - the name the practice is
+  // registered under, and an index of who holds a mailbox at the domain - and
+  // a later source that happened to agree would tip the count to two and print
+  // CONFIRMED on a name nothing they wrote has ever confirmed. The cap is
+  // mechanical rather than a comment asking for it.
+  if (d.settledBy === 'practice_name') {
+    // ══ A LAW FIRM'S NAME IS NOT A MAILBOX (Round 148, at the merge) ═══
+    // The agent that built this rule flagged the risk itself, and the record
+    // backs it: Round 139, jay@jaymurraylaw.com - at a firm called Jay Murray
+    // Law, named on exactly this evidence - came back UNDELIVERABLE. That lead
+    // was graded 'inferred' and blocked. 'stated' is sendable, so the same
+    // reasoning that failed once would now be allowed to send.
+    //
+    // A medical or accounting suffix is a LICENCE held by a named individual -
+    // CPA, MD, DDS, PLLC are registered to a person. "Law" and "Attorney" are
+    // trade words that any firm may put over the door, and a two-partner firm
+    // called Smith Law tells you nothing about whose mailbox exists. So those
+    // two are call-only: the rep still gets the name to ask for, and nothing
+    // is written to an address nobody has confirmed.
+    const _tradeWordOnly = /\b(?:law|attorney|attorneys|legal)\b/i.test(String(d.practiceSuffix || ''));
+    if (_tradeWordOnly) {
+      return { grade: 'inferred', why: 'the firm carries his name over a trade word rather than a licence held by a person, so the name is worth asking for on the phone and is not evidence that any mailbox exists (Round 139: jay@jaymurraylaw.com, named on this exact reasoning, did not exist)' };
+    }
+    return { grade: 'stated', why: 'the practice is registered under his name and a professional suffix, which is a licensed individual naming his own firm' };
+  }
+  if (d.settledBy === 'hunter_roster') {
+    return { grade: 'stated', why: "an email index names him at their domain, and nothing this business publishes does" };
+  }
   if (d.corroborated === true || independent >= 2) {
     return { grade: 'confirmed', why: `${independent} independent sources agree` };
   }
@@ -13439,6 +13469,14 @@ const ownerAskLine = (name, grade, why) => {
 // clientcheck executes THIS list against the page's own rule.
 const OWNER_GRADES_MAY_SEND = ['confirmed', 'stated'];
 const ownerGradeMaySend = (grade) => OWNER_GRADES_MAY_SEND.indexOf(String(grade || '')) >= 0;
+// ══ HUNTER ALONE IS NOT EVIDENCE ═════════════════════════════
+// One weak, LinkedIn-biased opinion is what surfaces a VP of Maintenance as
+// the buyer. The owner resolver has held that line since it was written; the
+// Find read now asks that index a second question of its own, and a second
+// hand-written copy of "may this name be the buyer" would be the two-hand-kept
+// -copies disease pointed at the gate that decides who gets emailed.
+const ownerEvidenceIsReal = (sources, corroborated) => corroborated === true
+  || (Array.isArray(sources) ? sources : []).filter(s => s !== 'hunter').length >= 1;
 const DM_CONFIDENCE_AT = { high: 80, medium: 50 };
 const dmConfidenceFor = (score) => {
   // typeof FIRST. Number(null) is 0 and Number.isFinite(0) is true, so an
@@ -13696,6 +13734,7 @@ const DM_SOURCE_WEIGHT = {
   google_review_replies: 35, // whoever answers the reviews at an owner-run shop is the owner
   news:              30,   // press quotes them as owner — strong independent corroboration
   business_name:     34,   // the business is named after them AND their site confirms it
+  practice_name:     26,   // the practice is REGISTERED under their name plus a professional suffix - the words over the door, with nothing else asked
   hunter:            20,   // real, but LinkedIn-biased: it surfaces VPs and HR, not owners
 };
 
@@ -13708,6 +13747,10 @@ const independentSourceCount = (sources) => {
   if (s.has('own_website_brain') && s.has('business_name')) s.delete('business_name');
   // The regex backstop reads the SAME page as the brain and the name test.
   if (s.has('own_website_regex') && (s.has('own_website_brain') || s.has('business_name'))) s.delete('own_website_regex');
+  // The practice registration IS the business name: the name reader and the
+  // registration reader look at the same words over the same door, so counting
+  // both is the double count this function exists to stop.
+  if (s.has('practice_name') && (s.has('business_name') || s.has('own_website_brain'))) s.delete('practice_name');
   return s.size;
 };
 
@@ -14452,9 +14495,24 @@ const ownerSentenceIsOurs = (m, shapeA, corpus, coTok) => {
 // Louisville shipped as Black Rock Contracting's decision-maker on 2026-09-08.
 const OWNER_SENTENCE_ROLE = `[Ff]ounder|[Oo]wner|[Pp]resident|[Pp]rincipal|[Pp]roprietor`;
 const OWNER_SENTENCE_NAMETOK = `[A-Z][a-zA-Z'\\u2019-]{1,20}`;
+// ══ A NAME IS WRITTEN ON ONE LINE ══════════════════════════════
+// Live 2026-09-12, John and Jerry Asphalt & Concrete - ICP score 91, the top
+// row on the rep's screen. Both name slots below joined their two tokens with
+// a general whitespace class, and that class matches a LINE BREAK, so the last
+// word of one line and the first word of the next became a person: their page
+// ends a sentence, starts a line with "Property", and starts the next with "An
+// owner who cares about every driveway". The sheet came back with the owner
+// "Property An", after nine Firecrawl credits, at the top of the call list.
+//
+// A first name and a surname sit side by side on ONE line - spaces or tabs, or
+// a hyphen between them - and two capitalised words either side of a line
+// break are two sentences, never a name. ONE declaration, read by BOTH name
+// slots, because two hand-kept copies of one rule is the class this file
+// records most: the other copy is where the line break would come back.
+const OWNER_SENTENCE_NAMEGAP = `(?:[ \\t]+|[ \\t]*-[ \\t]*)`;
 const OWNER_SENTENCE_RE = new RegExp(
-  `\\b(${OWNER_SENTENCE_ROLE})(?:\\s+and\\s+\\w+)?\\s+of\\s+([^.]{2,80}?),\\s*([A-Z][a-z]{1,15}(?:\\s+${OWNER_SENTENCE_NAMETOK})?)\\s+(?:is|was|has|had|founded|started|began|brings|built|leads|runs|opened)\\b`
-  + `|\\b([A-Z][a-z]{1,15}\\s+${OWNER_SENTENCE_NAMETOK})\\s*,?\\s+(?:the\\s+)?(${OWNER_SENTENCE_ROLE})\\b(?!-)`);
+  `\\b(${OWNER_SENTENCE_ROLE})(?:\\s+and\\s+\\w+)?\\s+of\\s+([^.]{2,80}?),\\s*([A-Z][a-z]{1,15}(?:${OWNER_SENTENCE_NAMEGAP}${OWNER_SENTENCE_NAMETOK})?)\\s+(?:is|was|has|had|founded|started|began|brings|built|leads|runs|opened)\\b`
+  + `|\\b([A-Z][a-z]{1,15}${OWNER_SENTENCE_NAMEGAP}${OWNER_SENTENCE_NAMETOK})\\s*,?\\s+(?:the\\s+)?(${OWNER_SENTENCE_ROLE})\\b(?!-)`);
 const _ownerFromCorpus = async (corpus, companyName, website, apiKey, rosterCorpus) => {
   try {
     // ══ THE ROSTER IS READ BEFORE THE MODEL IS ASKED ═════════════════════════
@@ -36826,6 +36884,47 @@ const eponymousDoorLicence = (f, companyName, door) => {
   if (ownerNameDoor(name, companyName, true)) return null;
   return { source, title };
 };
+// ══ A PRACTICE NAMED AFTER A PERSON IS THAT PERSON ══════════════════
+// Live 2026-09-12. "Adam Dickreiter, CPA, PLLC" came back with NO owner at
+// all: his site could not be read, so the business-name reader had nothing to
+// check a name against and the eponymous settle - which needs the site copy
+// read back at high confidence - could never fire. "Fred Flores CPA" settled
+// free on the same run only because his site happened to be readable. The
+// difference between those two leads was OUR read, not their evidence.
+//
+// A professional suffix is not a brand. CPA, PLLC, PC, LLP, MD, DDS, DMD, DO,
+// Esq, Law and Attorney are what a licensed individual puts after his own name
+// when he registers his practice, and the name in front of it is the
+// principal. That is what the registration MEANS, and no page is needed to
+// confirm it.
+//
+// It adds NOTHING to the eponymous rule beside it and takes nothing from it.
+// Deliberately narrow, because this answer reaches a rep with no second
+// source behind it: one person's name, then suffixes and nothing else; a
+// first token that is a KNOWN given name or a middle initial, which is what a
+// collective never carries; no trade word left in the name; and then the
+// shared name door, the same one every other source walks through. A generic
+// company suffix (LLC, Inc, Co) is absent on purpose - it says nothing about
+// who is licensed, and it would make a principal out of every "Bob Smith LLC".
+// DISCLOSED COST: a first name the given-name list does not carry is refused
+// here, which is the safer direction and is why "Fred Flores CPA" is still the
+// eponymous rule's lead and not this one's.
+const PRACTICE_SUFFIX_ONE = /^(?:cpa|pllc|pc|llp|md|dds|dmd|do|esq|esquire|law|attorney|attorneys)$/i;
+const practicePrincipalName = (companyName) => {
+  const raw = String(companyName || '').trim();
+  if (!raw) return null;
+  if (/[&\/+]|\band\b/i.test(raw)) return null;      // two names on the door is not one principal
+  const toks = raw.replace(/[.,]+/g, ' ').split(/\s+/).filter(Boolean);
+  const suffix = [];
+  while (toks.length && PRACTICE_SUFFIX_ONE.test(toks[toks.length - 1])) suffix.unshift(toks.pop());
+  if (!suffix.length || toks.length < 2 || toks.length > 3) return null;
+  if (toks.some(t => TRADE_WORD.test(t))) return null;
+  const first = toks[0].toLowerCase().replace(/[^a-z]/g, '');
+  if (!GIVEN_NAMES.has(first) && !PERSON_INITIAL_RE.test(raw)) return null;
+  const name = toks.join(' ');
+  if (!looksLikeRealName(name) || ownerNameDoor(name, companyName)) return null;
+  return { name, suffix: suffix.join(' ') };
+};
 const rankOwnerCandidates = (found, companyName = '') => {
   if (!found || !found.length) return null;
   const clusters = [];
@@ -36922,6 +37021,17 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   if (hunterName && looksLikeRealName(hunterName)) {
     found.push({ name: hunterName, title: hunterTitle || null, confidence: 'medium', source: 'hunter' });
   }
+  // ══ THE NAME OVER THE DOOR IS A SOURCE, EVEN WHEN THE SITE IS NOT ══════
+  // Read HERE, before anything is fetched, because it needs nothing fetched.
+  // That is the whole point on "Adam Dickreiter, CPA, PLLC": his site could
+  // not be read, so every source below this line had nothing to work with and
+  // the lead left the call sheet with nobody on it, while the answer was in
+  // the name the listing had already handed us.
+  const _practice = practicePrincipalName(companyName);
+  if (_practice) {
+    found.push({ name: _practice.name, title: '', confidence: 'medium', source: 'practice_name', evidence: `the practice is registered as "${companyName}" - a person's name followed by ${_practice.suffix}` });
+    console.log(`DM/practice [${companyName}]: registered as a person's name followed by ${_practice.suffix}, so ${_practice.name} is this practice's principal. That is what the registration says, and no page is needed to confirm it.`);
+  }
 
   // Is what we have already good enough to stop? Two INDEPENDENT sources naming a
   // buying-level person settles it. So does a high-confidence hit on their OWN
@@ -36944,6 +37054,9 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // The executable rule lives at module scope (isEponymousOwnerRule) so the
   // boot check runs the real thing; this alias keeps every call site here.
   const _isEponymousOwner = isEponymousOwnerRule;
+  // Read once, outside settled(): it is a pure read of the name the listing
+  // gave us, and settled() is asked six times.
+  const _practicePrincipal = practicePrincipalName(companyName);
 
   // == THE ONLY RECORD OF WHY THE PAID WAVE WAS BOUGHT =======================
   // Miller's Fancy Bath, live 2026-08-27: the business is named Miller's, their
@@ -37076,6 +37189,20 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
       && ranked.authority >= DM_AUTHORITY_FLOOR
       && rosterConfidence !== 'low'
       && sameName(ranked.name, brainHit.name));
+    // ══ AND THE NAME THE PRACTICE IS REGISTERED UNDER ═════════════════
+    // Adam Dickreiter, CPA, PLLC: an unreadable site, so the eponymous settle
+    // above could not fire at all, the paid wave was bought, and it named
+    // nobody. The registration itself is the evidence and it is free.
+    //
+    // LAST of the five on purpose, and switched off by every stronger settle
+    // above it, so it can never relabel one of them - an eponymous settle is
+    // graded 'inferred' by decision and this one is graded 'stated', and a
+    // rule that could take over the eponymous row would be quietly promoting
+    // it. The grade it carries is the thinnest sendable one there is.
+    const practiceConfident = !!(_practicePrincipal
+      && ranked.sources.includes('practice_name')
+      && sameName(ranked.name, _practicePrincipal.name))
+      && !(corroborated || ownSiteConfident || rosterConfident || eponymousConfident);
     if (!_settleSaid && rosterConfident && !(corroborated || ownSiteConfident)) {
       _settleSaid = true;
       console.log(`DM [${companyName}]: ROSTER SETTLES IT \u2014 their own team page states ${ranked.name} is "${brainHit.title}". That is the company naming its owner on a page it maintains, which no paid search can outrank. Skipping the web, licence and registry lookups (~12 Firecrawl credits saved).`);
@@ -37112,14 +37239,19 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
         ? 'their site copy names them as well, so two things they wrote themselves say the same thing'
         : 'we could not find that name anywhere in the site copy we read, so the business name is the only evidence there is and a name cannot corroborate itself'}. Evidence floor met without paid lookups (~8 Firecrawl credits saved).`);
     }
+    if (!_settleSaid && practiceConfident) {
+      _settleSaid = true;
+      console.log(`DM [${companyName}]: PRACTICE — this practice is registered as ${_practicePrincipal.name} followed by ${_practicePrincipal.suffix}, which is a licensed individual naming his own firm. Nothing else we read names an owner, and the row says so. The web, licence and registry lookups are not bought (~10 Firecrawl credits saved).`);
+    }
     _settleWhy = `${ranked.name || 'nobody'} (${ranked.sources.join('+')}) authority=${ranked.authority} independent=${independent}`
-      + ` | corroborated=${corroborated} ownSite=${ownSiteConfident} eponymous=${eponymousConfident} roster=${rosterConfident}`
+      + ` | corroborated=${corroborated} ownSite=${ownSiteConfident} eponymous=${eponymousConfident} roster=${rosterConfident} practice=${practiceConfident}`
       + ` | brainConfidence=${(brainHit && brainHit.confidence) || 'none'} rankedScore=${ranked.score} rankedConfidence=${dmConfidenceFor(ranked.score)} eponymousRule=${_isEponymousOwner(ranked.name, companyName, website)}`;
     _settledBy = corroborated ? 'corroborated'
       : ownSiteConfident ? 'ownSite'
       : rosterConfident ? 'roster'
+      : practiceConfident ? 'practice_name'
       : eponymousConfident ? 'eponymous' : '';
-    return (corroborated || ownSiteConfident || eponymousConfident || rosterConfident) ? ranked : null;
+    return (corroborated || ownSiteConfident || eponymousConfident || rosterConfident || practiceConfident) ? ranked : null;
   };
 
   // ── STAGE 1 — free, or paid for by something else anyway ──────────────────
@@ -37373,6 +37505,21 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
     _authority = _epo.authority;
     console.log(`DM [${companyName}]: EPONYMOUS AUTHORITY \u2014 ${best.name} is "${best.title || 'no title found'}" on the page, but the business is named after them and their own sources confirm it, so they can sign (${_epo.why}).`);
   }
+  // ══ AND A PRACTICE'S PRINCIPAL CAN SIGN HIS OWN PRACTICE ════════════
+  // The lift above needs the person on their OWN pages, which is exactly what
+  // an unreadable site cannot give - so on Adam Dickreiter it could not fire,
+  // and a name found with no title reads as authority 30 and is held back
+  // below the buying floor. A practice registered as a person's name plus a
+  // professional suffix names somebody who can sign it, whatever we could or
+  // could not read; a plainly junior title still refuses, the same way it
+  // refuses an eponym at the front desk.
+  const _prin = practicePrincipalName(companyName);
+  const _practiceOwner = !!(_prin && sameName(_prin.name, best.name)
+    && !EPONYM_JUNIOR_RE.test(String(best.title || '')));
+  if (!_epo.lift && _practiceOwner && _authority < AUTHORITY_FLOOR) {
+    _authority = 80;
+    console.log(`DM [${companyName}]: PRACTICE AUTHORITY — ${best.name} is "${best.title || 'no title found'}" here, and the practice is registered as his name followed by ${_prin.suffix}. A licensed individual's own firm is signed by him.`);
+  }
   const hasAuthority = _authority >= AUTHORITY_FLOOR;
 
   // EVIDENCE FLOOR: authority alone isn't enough. If the ONLY source is Hunter —
@@ -37380,8 +37527,7 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   // we have one weak, unverified opinion. That is not enough to burn a lead on.
   // Require either corroboration (2+ independent sources) OR a strong single
   // source that is NOT Hunter (their own website / web search / registry).
-  const nonHunterSources = best.sources.filter(s => s !== 'hunter');
-  const hasRealEvidence = best.corroborated || nonHunterSources.length >= 1;
+  const hasRealEvidence = ownerEvidenceIsReal(best.sources, best.corroborated);
 
   best.canBuy = hasAuthority && hasRealEvidence;
   if (!best.canBuy) {
@@ -37403,6 +37549,12 @@ const findDecisionMaker = async ({ companyName, website, fcKey, apiKey, homepage
   const _grade = ownerEvidenceGrade({
     name: best.name, canBuy: best.canBuy, sources: best.sources,
     corroborated: best.corroborated, settledBy: _settledBy, blockReason: _blockReason,
+    // The SUFFIX decides whether this name may be written to: a licence held
+    // by a person (CPA, MD, DDS, PLLC) or a trade word anyone may use (Law,
+    // Attorney). Passed explicitly, because a grade that reads a field nobody
+    // sets is the computed-but-not-passed defect wearing a safety rule's
+    // clothes - it would silently grade every practice sendable.
+    practiceSuffix: (_practicePrincipal && _practicePrincipal.suffix) || '',
   });
   return {
     name: best.name,
@@ -64414,15 +64566,25 @@ app.listen(PORT, () => {
         ' !(corroborated || ownSiteConfident)) {'), 'the ROSTER SETTLES IT sentence is no longer behind the latch'],
       [_nS('    if (!_settleSaid && eponymousConfident &&',
         ' !(corroborated || ownSiteConfident || rosterConfident)) {'), 'the EPONYMOUS sentence is no longer behind the latch, which is the exact line that printed twice'],
+      // The third sentence, added with the practice settle. It carries its
+      // own exclusions inside practiceConfident rather than in this line, so
+      // the latch is the only thing pinned here.
+      [_nS('    if (!_settleSaid && practiceConfident)',
+        ' {'), 'the PRACTICE sentence is not behind the latch, so a practice that settles on a later ask prints its sentence twice and inflates the free-settle rate the Firecrawl plan is sized from'],
     ]) if (!_srcS.includes(_needle)) _fails.push(_msg);
     // The latch is set at the PRINT, twice - once inside each sentence. Set on
     // entry instead, a lead that settles on a LATER ask than the first loses
     // its sentence altogether, which is a worse bug than the duplicate.
+    // THREE sentences since the practice settle was added, so three prints and
+    // three sets. The number is spelled out rather than counted off the
+    // sentences themselves: a requirement list read from the code under test
+    // cannot fail, and this count is the only thing that catches a fourth
+    // sentence added without its latch.
     const _setCount = _srcS.split(_nS('      _settleSaid =',
       ' true;')).length - 1;
-    if (_setCount !== 2) _fails.push(`the latch is set ${_setCount} time(s) inside the settle sentences instead of 2 - set anywhere but at the print, a lead that settles on a later ask prints nothing at all`);
+    if (_setCount !== 3) _fails.push(`the latch is set ${_setCount} time(s) inside the settle sentences instead of 3 - set anywhere but at the print, a lead that settles on a later ask prints nothing at all`);
     if (_fails.length) console.log(`\u26d4 SETTLE SAID ONCE CHECK: ${_fails.slice(0, 4).join(' | ')}.`);
-    else console.log('\u2713 SETTLE SAID ONCE CHECK: both settle sentences sit behind one latch and the latch is set at the print, not at the first ask, so a lead that settles on a later ask still says so exactly once. Asserted on this file\'s own source, because settled() is a closure no fixture can reach - which is why the duplicate survived unnoticed.');
+    else console.log('\u2713 SETTLE SAID ONCE CHECK: all three settle sentences - roster, eponymous and practice - sit behind one latch, and the latch is set at the print rather than at the first ask, so a lead that settles on a later ask still says so exactly once. Asserted on this file\'s own source, because settled() is a closure no fixture can reach - which is why the duplicate survived unnoticed.');
   } catch (e) {
     console.log(`\u26d4 SETTLE SAID ONCE CHECK COULD NOT RUN \u2014 ${(e && e.message) || e}.`);
   }
@@ -64602,6 +64764,181 @@ app.listen(PORT, () => {
     else console.log(`✓ PLACE IS NOT A PERSON CHECK: the owner sentence is executed at module scope and refuses "Owner-Operated" as a title, and the regex backstop passes the name door every other source passes, so "Greater Louisville", "Downtown Dallas" and "North Texas" are places and Dan Hanson is still the owner. "Non-profit Organization" in an industries menu no longer drops a sign shop; a business that says it IS one still drops. A lead already out buys no size search. A branch's brand is the words its path does not carry (Image360, not "Image360 Jacksonville-St."), and a town in the path on their own domain is a note, never a branch. The owner model ranks the navigation the free read already harvested instead of buying a sitemap. The retired BBB rung is silent per lead, a pipe in a title keeps the title, and the review coverage line cannot read "86 of 85".`);
   } catch (e) {
     console.log(`⛔ PLACE IS NOT A PERSON CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ---- A NAME IS ON ONE LINE -------------------------------------------
+  // Live 2026-09-12. John and Jerry Asphalt & Concrete - ICP score 91, the top
+  // row on the rep's screen - came back with the owner "Property An" after
+  // nine Firecrawl credits, because both name slots of the owner sentence
+  // joined their two tokens with a whitespace class that matches a LINE BREAK.
+  // EXECUTED on the live regex, with a fixture per ALTERNATIVE: one fixture
+  // covering both halves leaves either of them free to keep the line break and
+  // still go green, which is the shared-fixture trap this file records.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _src = selfSourceNoCommentsLF();
+    const _nameOf = (m) => m ? String(m[3] || m[4] || '') : '';
+    const _say = (x) => JSON.stringify(x);
+    // Shape B ("<Name>, Owner"), on the live John and Jerry string.
+    const _jjm = 'We are a family owned asphalt and concrete company.\nProperty\nAn owner who cares about every driveway.'.match(OWNER_SENTENCE_RE);
+    if (_jjm) _fails.push(`the owner sentence reads ${_say(_nameOf(_jjm))} across a line break - the last word of one line and the first word of the next are not a person, and that exact string put "Property An" at the top of the call sheet`);
+    // Shape A ("owner of X, Name is"), which has its own name slot and its own
+    // gap, and which the fixture above cannot reach at all.
+    const _am = 'The owner of Ace Paving, Marcus\nWebb is a third-generation paver.'.match(OWNER_SENTENCE_RE);
+    if (_am) _fails.push(`the "owner of X, Name is" shape still joins its two name tokens across a line break: ${_say(_nameOf(_am))}`);
+    // And both shapes still read the sentences they exist for.
+    for (const [_txt, _want] of [
+      ['Meet Dusty Hannah, Owner of the company.', 'Dusty Hannah'],
+      ['Sarah Chen, President, founded the firm in 2004.', 'Sarah Chen'],
+      ['The owner of Ace Paving, Marcus Webb is a third-generation paver.', 'Marcus Webb'],
+    ]) {
+      const _got = _nameOf(_txt.match(OWNER_SENTENCE_RE));
+      if (_got !== _want) _fails.push(`"${_txt}" no longer yields ${_want}: ${_say(_got)} - the one-line rule has eaten the names it was written to keep`);
+    }
+    // ONE declaration, read by BOTH name slots. Counted rather than tested for
+    // presence: a single use is exactly the half-applied fix that would leave
+    // one of the two shapes reading across a line break.
+    const _gapUses = _src.split(_n('OWNER_SENTENCE_', 'NAMEGAP}')).length - 1;
+    if (_gapUses !== 2) _fails.push(`the one-line rule is read by ${_gapUses} of the owner sentence's two name slots, so one of them can still take a name across a line break`);
+    if (_fails.length) console.log(`⛔ A NAME IS ON ONE LINE CHECK: ${_fails.join(' | ')}.`);
+    else console.log(`✓ A NAME IS ON ONE LINE CHECK: the two tokens of a person's name sit side by side on ONE line - spaces, tabs or a hyphen between them - in both shapes the owner sentence knows. Executed on the live regex: "Property" ending one line and "An" starting the next is no longer a person (John and Jerry Asphalt & Concrete, the top row of the 2026-09-12 call sheet, nine credits for a name nobody has), "Marcus" and "Webb" split across a line break is no longer a person either, and Dusty Hannah, Sarah Chen and Marcus Webb all still parse. One declaration, counted at both name slots.`);
+  } catch (e) {
+    console.log(`⛔ A NAME IS ON ONE LINE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ---- A PRACTICE IS ITS PRINCIPAL -------------------------------------
+  // Live 2026-09-12. "Adam Dickreiter, CPA, PLLC" came back with NO owner:
+  // his site could not be read, so the business-name reader had nothing to
+  // check a name against and the eponymous settle, which needs that copy read
+  // back at high confidence, could never fire. EXECUTED on the real rule, the
+  // real ranker, the real grade and the real source count.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _src = selfSourceNoCommentsLF();
+    const _co = 'Adam Dickreiter, CPA, PLLC';
+    for (const [_nm, _want] of [
+      [_co, 'Adam Dickreiter'],
+      ['Adam Dickreiter CPA PLLC', 'Adam Dickreiter'],
+      ['David B. Robinson CPA', 'David B Robinson'],
+    ]) {
+      const _r = practicePrincipalName(_nm);
+      if (!_r || _r.name !== _want) _fails.push(`"${_nm}" does not name ${_want} as its principal (${JSON.stringify(_r)}) - that lead left the call sheet with nobody on it`);
+    }
+    // The refusals. Each is refused by a DIFFERENT clause of the rule, so no
+    // one of them can stand in for the others.
+    for (const _no of ['Cornerstone Law', 'Smith & Jones LLP', 'Precision Paving Group', 'Bright Path Dental PC', 'Michael Law MD Aesthetic Plastic Surgery', 'Bob Smith LLC', 'Wilson Brothers LLP']) {
+      const _r = practicePrincipalName(_no);
+      if (_r) _fails.push(`"${_no}" reads as a licensed individual's own firm and names "${_r.name}" - a brand, a partnership, a trade word or a generic company suffix is not a person on the door`);
+    }
+    // He walks the SAME door every other source walks, and the ranker keeps him.
+    const _ranked = rankOwnerCandidates([{ name: 'Adam Dickreiter', title: '', source: 'practice_name', evidence: 'the registration' }], _co);
+    if (!_ranked || _ranked.name !== 'Adam Dickreiter') _fails.push('the shared ranker refuses the practice principal, so the lead this rule exists for still ships with nobody on it');
+    // Graded STATED, and never confirmed whatever else lands on the row.
+    // ══ A TRADE WORD OVER THE DOOR IS NOT A MAILBOX (Round 148) ═════
+    // Round 139: jay@jaymurraylaw.com, at a firm called Jay Murray Law and
+    // named on exactly this evidence, did not exist. A licence suffix is
+    // registered to a PERSON; "Law" is a word any firm may use. Executed on
+    // both, because a safety rule nobody runs is a comment.
+    for (const _sfx of ['CPA, PLLC', 'MD', 'DDS', 'PC']) {
+      const _r = ownerEvidenceGrade({ name: 'Adam Dickreiter', canBuy: true, sources: ['practice_name'], settledBy: 'practice_name', practiceSuffix: _sfx }).grade;
+      if (_r !== 'stated') _fails.push(`a practice registered as a person plus "${_sfx}" no longer grades stated (got ${_r}), so a licensed individual naming his own firm stopped counting`);
+    }
+    for (const _sfx of ['Law', 'Attorney', 'Attorneys at Law']) {
+      const _r = ownerEvidenceGrade({ name: 'Jay Murray', canBuy: true, sources: ['practice_name'], settledBy: 'practice_name', practiceSuffix: _sfx }).grade;
+      if (_r === 'stated' || _r === 'confirmed') _fails.push(`a firm called "Jay Murray ${_sfx}" grades ${_r}, which is SENDABLE - that is the exact reasoning behind jay@jaymurraylaw.com, which did not exist (Round 139). A trade word over the door is not evidence a mailbox exists`);
+    }
+    if (!_src.includes(_n('practiceSuffix: (_practicePrincipal &&', ' _practicePrincipal.suffix)'))) _fails.push('the practice suffix never reaches the grade, so the law-firm rule reads an unset field and every practice grades sendable again - computed and not passed, wearing a safety rule\'s clothes');
+    const _g = ownerEvidenceGrade({ name: 'Adam Dickreiter', canBuy: true, sources: ['practice_name'], settledBy: 'practice_name', practiceSuffix: 'CPA, PLLC' }).grade;
+    if (_g !== 'stated') _fails.push(`a practice principal grades "${_g}" and must grade stated`);
+    if (ownerEvidenceGrade({ name: 'Adam Dickreiter', canBuy: true, corroborated: true, sources: ['practice_name', 'web_search'], settledBy: 'practice_name' }).grade === 'confirmed') {
+      _fails.push('a name settled on a registration can read CONFIRMED on the sheet - one artifact, the words over the door, printed as two things agreeing');
+    }
+    if (!ownerGradeMaySend(_g)) _fails.push('a practice principal may not be written to at all, so this rule finds a name nothing can use');
+    if (ownerEvidenceGrade({ name: 'Adam Dickreiter', canBuy: false, sources: ['practice_name'], settledBy: 'practice_name', blockReason: 'no title' }).grade !== 'unconfirmed') {
+      _fails.push('a practice principal the buying floor held back is still presented as settled');
+    }
+    if (independentSourceCount(['practice_name', 'business_name']) !== 1) _fails.push('the registration and the business-name reader count as two independent sources - the same words over the same door, counted twice');
+    // The eponymous rule beside it is UNTOUCHED, in both directions.
+    if (!isEponymousOwnerRule('Fred Flores', 'Fred Flores CPA', '')) _fails.push('the eponymous rule no longer recognises a business carrying the surname, so this rule was widened by breaking the one beside it');
+    if (isEponymousOwnerRule('Adam Dickreiter', 'Bright Path Dental', '')) _fails.push('the eponymous rule now fires on a business carrying no part of the name');
+    if (ownerEvidenceGrade({ name: 'A B', canBuy: true, sources: ['own_website_brain'], settledBy: 'eponymous' }).grade !== 'inferred') {
+      _fails.push("the eponymous settle's own grade moved, so the thinner rule added beside it has quietly promoted the older one");
+    }
+    // The call sites: a fixture supplies its own arguments and cannot see that
+    // the resolver never asks. It must be read BEFORE anything is fetched -
+    // that is the whole point on a site that could not be read.
+    if (_src.indexOf(_n('const _practice = practicePrincipalName', '(companyName);')) < 0) {
+      _fails.push('the resolver no longer READS the registration, so the candidate below it is built from an empty variable - a position needle is satisfied by a hard-coded null, which is the half-a-check shape this file records');
+    }
+    const _push = _src.indexOf(_n("found.push({ name: _practice.name, title: '',", " confidence: 'medium', source: 'practice_name',"));
+    const _stage1 = _src.indexOf(_n('const [brain, news, bizName] = await', ' Promise.all(['));
+    if (_push < 0) _fails.push('the resolver no longer offers the practice principal as a candidate at all');
+    else if (_stage1 < 0 || _push > _stage1) _fails.push('the practice principal is read after the site fetch, so it is gated on exactly the read that failed on the lead it exists for');
+    if (_src.indexOf(_n(': practiceConfident ?', " 'practice_name'")) < 0) {
+      _fails.push("the settle no longer records that the registration is what named him, so the row grades him on site copy instead - a sentence about a page we never read");
+    }
+    if (_src.indexOf(_n('if (!_epo.lift && _practiceOwner &&', ' _authority < AUTHORITY_FLOOR) {')) < 0) {
+      _fails.push('a practice principal with no title found is held back below the buying floor again, so the name is found and never shown');
+    }
+    if (_fails.length) console.log(`⛔ A PRACTICE IS ITS PRINCIPAL CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ A PRACTICE IS ITS PRINCIPAL CHECK: a business registered as a person's name followed by a professional suffix names its own principal, with no site copy asked for - which is the whole point, because Adam Dickreiter, CPA, PLLC came back with nobody on 2026-09-12 for the single reason that his site could not be read. Executed on the real rule: he and David B Robinson are named, while Cornerstone Law, Smith & Jones LLP, Precision Paving Group, Bright Path Dental PC, Bob Smith LLC and Wilson Brothers LLP are each refused by a different clause. The name is read before anything is fetched, walks the shared name door and the shared ranker, is lifted over the buying floor only as the principal of his own practice, and is graded stated - never confirmed, because the words over the door are one artifact and the source count collapses them. The eponymous rule beside it is untouched and still grades its own leads inferred.`);
+  } catch (e) {
+    console.log(`⛔ A PRACTICE IS ITS PRINCIPAL CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
+  }
+
+  // ---- HUNTER IS ASKED WHO WORKS THERE ---------------------------------
+  // Hunter bills one credit per 1-10 addresses and was only ever asked "who
+  // runs marketing here", filtered to executive and senior. On a lead the
+  // owner ladder could not name - A2Z Construction, Adam Dickreiter - that
+  // filter answers nobody and the credit is spent anyway. EXECUTED: the
+  // ranking is a pure function and runs here on a real payload; both call
+  // sites are pinned, because no fixture can see which question is asked.
+  try {
+    const _fails = [];
+    const _n = (a, b) => a + b;
+    const _src = selfSourceNoCommentsLF();
+    const _payload = [
+      { value: 'reception@acmepaving.com', first_name: 'Paige', last_name: 'Corliss', position: 'Receptionist', confidence: 97 },
+      { value: 'dana@acmepaving.com', first_name: 'Dana', last_name: 'Whitfield', position: 'President', confidence: 82 },
+      { value: 'marc@acmepaving.com', first_name: 'Marc', last_name: 'Ellery', position: 'Marketing Coordinator', confidence: 95 },
+    ];
+    const _read = readHunterRoster(_payload, 'Acme Paving');
+    if (!_read.owner || _read.owner.name !== 'Dana Whitfield') {
+      _fails.push(`the unfiltered list does not rank the President first (${JSON.stringify(_read.owner)}) - the reason for asking the wider question is that the answer is ranked by the one authority table, never by the index's own order or its confidence`);
+    }
+    if (_read.owner && _read.owner.email !== 'dana@acmepaving.com') _fails.push('the ranked owner loses the address that came with him');
+    if (readHunterRoster([_payload[2]], 'Acme Paving').owner) _fails.push('a Marketing Coordinator is offered as the owner - a title that cannot sign is not an owner candidate, and it is the one the index surfaces most');
+    if (readHunterRoster([{ value: 'info@wb.com', first_name: 'Whitfield', last_name: 'Brothers', position: 'Owner' }], 'Whitfield Brothers Paving').owner) {
+      _fails.push('a row that is a collective rather than a person walks past the shared name door as the owner');
+    }
+    if (readHunterRoster(null, 'Acme Paving').owner) _fails.push('an empty answer still produces an owner');
+    // One source can never be written to, from the one declaration both
+    // callers read.
+    if (ownerEvidenceIsReal(['hunter'], false)) _fails.push('a name only the index holds counts as real evidence, so a LinkedIn-biased list can put a VP on a send');
+    if (!ownerEvidenceIsReal(['hunter', 'own_website_brain'], false)) _fails.push('a name their own site also carries is refused as evidence, so the floor has eaten the population it exists to protect');
+    const _gh = ownerEvidenceGrade({ name: 'Dana Whitfield', canBuy: false, sources: ['hunter'], settledBy: 'hunter_roster', blockReason: 'one source' }).grade;
+    if (ownerGradeMaySend(_gh)) _fails.push(`a name only an email index holds is graded ${_gh} and may be written to - the email would open with his first name and tell a stranger we know he owns the business`);
+    if (ownerEvidenceGrade({ name: 'Dana Whitfield', canBuy: true, corroborated: true, sources: ['hunter', 'web_search'], settledBy: 'hunter_roster' }).grade === 'confirmed') {
+      _fails.push('a name this lookup produced can read CONFIRMED on the sheet');
+    }
+    // Two questions, two call sites, and neither may eat the other.
+    const _roster = String(findOwnerViaHunterRoster);
+    const _mkt = String(findMarketingLeadViaHunter);
+    if (_roster.indexOf(_n('type=personal&', 'limit=10')) < 0) _fails.push('the unfiltered lookup no longer asks for the whole list, so the credit buys the same filtered handful it always did');
+    if (_roster.indexOf(_n('department=', 'marketing')) >= 0) _fails.push('the second lookup carries the marketing filter too, so both calls ask one question and a lead with no name still gets nobody');
+    if (_mkt.indexOf(_n('department=marketing&seniority=', 'executive,senior')) < 0) _fails.push('the marketing-filtered lookup lost its filter, so the layered-business question is now answered by whoever the index happens to hold');
+    if (_src.indexOf(_n('_hr = await findOwnerViaHunterRoster(website, hunterKey,', ' name);')) < 0) _fails.push('nothing calls the unfiltered lookup, so it is present and unreachable - the shape the review-reply source sat in for its whole life');
+    if (_src.indexOf(_n('if (_ladderNamedNobody && hunterKey &&', ' website) {')) < 0) _fails.push('the unfiltered lookup is no longer gated on the ladder having named nobody, so it spends a credit on leads whose owner is already known');
+    const _gate = _src.indexOf(_n('const _ladderNamedNobody = !(out.owner &&', ' out.owner.name);'));
+    const _gradeGate = _src.indexOf(_n('&& out.owner && out.owner.name && ', '!ownerGradeMaySend(out.owner.grade)) {'));
+    if (_gate < 0) _fails.push('the gate no longer reads whether an owner was found, so the condition it is written on is not the ladder failing');
+    else if (_gradeGate < 0 || _gate > _gradeGate) _fails.push('this owner is set AFTER the send gate that reads his grade, so a name one index holds rides along with an address already marked sendable');
+    if (_fails.length) console.log(`⛔ HUNTER IS ASKED WHO WORKS THERE CHECK: ${_fails.slice(0, 6).join(' | ')}.`);
+    else console.log(`✓ HUNTER IS ASKED WHO WORKS THERE CHECK: the one credit Hunter bills per 1-10 addresses now buys the whole list on a lead the owner ladder could not name, not only the marketing slice of it. Executed on a real payload: the President outranks a Receptionist and a Marketing Coordinator on the one authority table, the coordinator alone is offered to nobody, a collective is refused by the shared name door and an empty answer produces nobody. Both questions survive as two call sites - the marketing filter for a layered business, the unfiltered list only when nobody at all has been named - and the second never fires when a name is already in hand. The name it finds goes through the same ranker and the same grade as every other source, an index alone is not evidence, so it lands on the rep's sheet to be asked for and can never be written to; and the whole block sits ahead of the send gate that reads its grade.`);
+  } catch (e) {
+    console.log(`⛔ HUNTER IS ASKED WHO WORKS THERE CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ---- GOOD LEADS IN --------------------------------------------------
@@ -86804,6 +87141,47 @@ const findMarketingLeadViaHunter = async (website, hunterKey, companyName) => {
   console.log(`HUNTER MARKETING [${companyName}]: \u2713 ${name} (${hit.position}) via Hunter's marketing filter, confidence ${hit.confidence || '?'}.`);
   return { name, title: String(hit.position || '').trim(), email: hit.value || '', confidence: hit.confidence || null, source: 'hunter' };
 };
+// ══ THE SAME CREDIT ALREADY BOUGHT THE WHOLE LIST ═══════════════════
+// Hunter bills one credit per 1-10 addresses returned, and the only question
+// this system ever asked it was "who runs marketing here", filtered to
+// executive and senior. On a lead the owner ladder could not name - A2Z
+// Construction, Adam Dickreiter - that filter answers nobody and the credit is
+// spent anyway. The unfiltered question costs the same credit and comes back
+// with whoever holds a mailbox there.
+//
+// It answers a DIFFERENT question from the marketing lookup above and both
+// stay: that one is asked at a layered business for the marketing
+// decision-maker; this one is asked only when nobody at all has been named,
+// and what it finds is offered as an owner CANDIDATE that walks through the
+// same ranker, the same name door and the same grade as every other source.
+// An index alone is not evidence (ownerEvidenceIsReal), so the name reaches
+// the rep's sheet to be asked for and never reaches a send.
+// Pure, so a boot check runs the real ranking on a real payload.
+const readHunterRoster = (emails, companyName) => {
+  const people = (Array.isArray(emails) ? emails : []).map(e => ({
+    email: String((e && e.value) || ''),
+    name: `${(e && e.first_name) || ''} ${(e && e.last_name) || ''}`.trim(),
+    title: String((e && e.position) || '').trim(),
+    confidence: (e && e.confidence) == null ? null : e.confidence,
+    authority: authorityScore((e && e.position) || ''),
+  })).filter(p => p.email && looksLikeRealName(p.name) && !ownerNameDoor(p.name, companyName))
+    .sort((a, b) => b.authority - a.authority);
+  const top = people[0] || null;
+  return { people, owner: (top && top.authority >= DM_AUTHORITY_FLOOR) ? top : null };
+};
+const findOwnerViaHunterRoster = async (website, hunterKey, companyName) => {
+  const domain = String(website || '').replace(/^https?:\/\//, '').replace(/\/.*/, '').replace(/^www\./, '');
+  if (!domain || !hunterKey) return null;
+  const r = await hunterSerial(() => fetchT(`https://api.hunter.io/v2/domain-search?domain=${domain}&type=personal&limit=10&api_key=${hunterKey}`, {}, 10000));
+  const d = await safeJson(r);
+  const read = readHunterRoster((d && d.data && Array.isArray(d.data.emails)) ? d.data.emails : [], companyName);
+  if (!read.owner) {
+    console.log(`HUNTER ROSTER [${companyName}]: ${read.people.length} named address(es) at ${domain}, and none of them holds a title that can buy - nobody is offered as the owner.`);
+    return null;
+  }
+  console.log(`HUNTER ROSTER [${companyName}]: \u2713 ${read.owner.name} (${read.owner.title}) at ${domain}, the most senior of ${read.people.length} named address(es) the index holds, confidence ${read.owner.confidence == null ? '?' : read.owner.confidence}. One source, so he goes on the row to be asked for and is never written to.`);
+  return { email: read.owner.email, name: read.owner.name, title: read.owner.title, confidence: read.owner.confidence };
+};
 // == A BRANCH POINTS AT ONE PAGE INSIDE SOMEBODY ELSE'S SITE ==============
 // Round 117. Three national brands were read at full price on 2026-09-04 and
 // named nobody: Champion Replacement Windows of Raleigh (championwindow.com,
@@ -89843,6 +90221,32 @@ const runFindContactRead = async (company, keys, opts = {}) => {
     _layers = { verdict: 'layered', why: `${signals.branchNetwork ? 'a branch network' : signals.peOwned ? 'PE-owned' : 'a national operator'} - the decision is at head office${_layers.why ? ' (their page: ' + _layers.why + ')' : ''}` };
   }
   out.layers = { verdict: _layers.verdict, why: _layers.why };
+  // ══ AND WHEN THE LADDER NAMED NOBODY, ASK WHO WORKS THERE ═══════════
+  // Hunter is paid on these leads already and was only ever asked about
+  // marketing, so a lead with no name at all spent the credit and got an empty
+  // marketing list back. The unfiltered question costs the same credit.
+  //
+  // Placed HERE on purpose: AFTER the layers are read, so an index hit can
+  // never make their own pages look like they named an owner, and BEFORE the
+  // front-desk and grade gates below, so this name is judged by the same two
+  // doors every other owner passes - a guard in the wrong function is the
+  // class this file records. It does not run when a name is already found:
+  // that is a credit spent on a question already answered.
+  const _ladderNamedNobody = !(out.owner && out.owner.name);
+  if (_ladderNamedNobody && hunterKey && website) {
+    let _hr = null;
+    try { _hr = await findOwnerViaHunterRoster(website, hunterKey, name); }
+    catch (e) { notes.push(`the unfiltered contact lookup failed (${e && e.message})`); }
+    const _pick = _hr ? rankOwnerCandidates([{ name: _hr.name, title: _hr.title, source: 'hunter', evidence: `an email index at ${website} names ${_hr.name}, ${_hr.title}` }], name) : null;
+    if (_pick) {
+      const _auth = authorityScore(_pick.title);
+      const _canBuy = _auth >= DM_AUTHORITY_FLOOR && ownerEvidenceIsReal(_pick.sources, _pick.corroborated);
+      const _hwhy = _canBuy ? '' : 'an email index is the only source - nothing this business publishes names him, so he is a person to ask for and not a person to write to';
+      const _hg = ownerEvidenceGrade({ name: _pick.name, canBuy: _canBuy, sources: _pick.sources, corroborated: _pick.corroborated, settledBy: 'hunter_roster', blockReason: _hwhy });
+      out.owner = { name: _pick.name, title: _pick.title || '', confidence: dmConfidenceFor(_pick.score), sources: _pick.sources, authority: _auth, canBuy: _canBuy, blockReason: _hwhy, grade: _hg.grade, gradeWhy: _hg.why, askAs: ownerAskLine(_pick.name, _hg.grade, _hg.why), settledBy: 'hunter_roster' };
+      notes.push(`nothing this business publishes names an owner; an email index holds ${_pick.name}${_pick.title ? ` (${_pick.title})` : ''} at their domain - one source, so ask for him rather than writing to him`);
+    }
+  }
   // ══ ROUND 136: A FRONT DESK IS SENDABLE ONLY AT A VERY SMALL CREW ═════
   // Decided HERE rather than in the email engine because the engine runs
   // before the size lookup - at address time the crew is genuinely not known
