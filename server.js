@@ -5535,7 +5535,7 @@ const LANE_TIERS = { call: ['entry', 'core', 'upper'], email: ['core', 'upper', 
 // And the call lane means a NAMED owner within reach: a read lead with a
 // phone and nobody named is the "no name yet" bucket, off the rep's sheet.
 const SIZE_WORD_TIER = { low: 'entry', medium: 'core', high: 'upper' };
-const lanesFor = ({ tier, sizeTier, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national, siteless, phone, siteMarketingHead } = {}) => {
+const lanesFor = ({ tier, sizeTier, sizeIsFloor, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national, siteless, phone, siteMarketingHead } = {}) => {
   const why = [];
   let t = SCALE_TIERS.includes(tier) ? tier : null;
   let measured = !!t;
@@ -5638,10 +5638,40 @@ const lanesFor = ({ tier, sizeTier, sizeWord, sizeConfidence, affordBand, layers
   // §114 REACH exception survives untouched and is the one way back onto the
   // call sheet: an owner-run business with measured dollars under
   // ICP_CALL_REACH_CEILING is still called, which is DMI Paving at $24M.
-  const _overIcp = (_sz === SIZE_TIER_OVER) || (t === 'over_ceiling');
+  // ══ A FLOOR MAY NOT TAKE A LEAD OFF THE CALL SHEET (Round 147) ════
+  // Live, 2026-09-12, the first batch read under this round's channel rule:
+  // Andrew P. Trussler, MD - ONE plastic surgeon - came back "large" and was
+  // routed to the email lane, off the rep's call sheet. The measurement behind
+  // it was "at least 53 people on their own team page": a FLOOR, and this
+  // file's own comment says why it is one ("a firm with forty staff may
+  // publish four"). Until this round a floor could only ever raise a SCORE,
+  // which is safe in one direction. Since Vin made size decide the channel it
+  // also decides whether a human being ever dials the number, and the least
+  // certain reading we own became the one thing that can delete a lead.
+  //
+  // So the rule is the same one Rounds 114 and 139 wrote at both ends of the
+  // ladder, carried to its conclusion: only a size measured in BOTH directions
+  // comes off the call sheet. That is a VERIFIED headcount or a stated revenue
+  // figure. Everything a business PUBLISHES about itself is a lower bound, it
+  // keeps the phone, and the row says which fact kept it.
+  //
+  // Rose Paving is the case this must NOT repeal: PE-owned, layered, $255M
+  // from a directory's revenue figure. A directory figure is not a floor, so
+  // sizeIsFloor is false there and it stays off the phone.
+  const _floorOnly = sizeIsFloor === true;
+  const _byTier = SIZE_TIER_CHANNEL[_sz] || '';
+  const _floorKeptCall = _floorOnly && _byTier === 'email';
+  const _rawOverIcp = (_sz === SIZE_TIER_OVER) || (t === 'over_ceiling');
+  const _floorKeptIcp = _floorOnly && _rawOverIcp;
+  const _overIcp = _rawOverIcp && !_floorOnly;
+  // _forcedEmail is read BEFORE the floor: a TheirStack lead with no phone, a
+  // product company and a business publishing its own marketing director are
+  // FACTS about the lead, not inferences about its size, and they keep their
+  // email-only routing.
   const _szChannel = (_overIcp && !reach) ? ''
     : _forcedEmail ? 'email'
-    : _szMeasured ? (SIZE_TIER_CHANNEL[_sz] || '') : 'call';
+    : _floorKeptIcp ? 'call'
+    : _szMeasured ? ((_floorKeptCall ? 'call' : _byTier) || '') : 'call';
   const inCall = (_szChannel === 'call' || reach) && !ts && !prod && !siteHead;
   // ══ ROUND 121: A BUSINESS WITH NO WEBSITE IS THE CLEAREST LEAD WE FIND ══
   // Vin, 2026-09-04, ruling on two leads from that press: Delta Solar Power
@@ -5694,10 +5724,20 @@ const lanesFor = ({ tier, sizeTier, sizeWord, sizeConfidence, affordBand, layers
   if (prod && t !== 'below_floor') why.push('a product company - email only, its reviews do not measure a manufacturer');
   if (siteHead) why.push('their own site names a marketing director, so the buying decision sits behind a marketing department - email only, and that director is who it goes to');
   if (_sitelessCall) why.push('no working website, so nobody can be named from their own pages - on the call sheet last, with the number to ask who runs it');
+  if (_floorKeptCall) why.push('what they publish about themselves is a floor - at least this big, possibly bigger - so it is not the measurement that takes a business off the phone. Kept on the call sheet, and the rep finds out how big they really are in thirty seconds');
+  if (_floorKeptIcp) why.push(`what they publish puts them over ${_usdShort(ICP_REVENUE_BAND.ceiling)}, but a published count is a floor and a business publishes at most the people it wants seen - kept on the call sheet rather than dropped on the weakest number we hold`);
   if (noname) why.push('nobody named yet - off the call sheet until a name is found');
+  // Round 147, found by running the round's own evidence file: a lead moved to
+  // the email lane by a MEASURED size carried no reason at all. Round 139's
+  // assertion exists because a lead taken off the rep's sheet for a reason
+  // nobody can see is indistinguishable from a resolver that failed. Every
+  // other route off the call sheet says why; this one - the one Vin's channel
+  // ruling actually created - was the silent one.
+  if (email && _szMeasured && !_forcedEmail && !_overIcp) why.push(`measured at ${SIZE_TIER_WORD[_sz] || _sz} - past the point where the owner still takes the call himself, so this one is written to rather than dialled`);
   if (_szChannel === 'email' && !email && !noname) why.push('nobody named to write to');
   if (!_szMeasured && !_overIcp) why.push('their size is not measured anywhere we looked - on the call sheet so the rep can find out, and the row says so');
   return { call, email, noname, last, tier: t, measured, sizeTier: _sz, sizeTierMeasured: _szMeasured,
+           sizeIsFloor: _floorOnly, floorKeptCall: _floorKeptCall || _floorKeptIcp,
            sizeWord: SIZE_TIER_WORD[_sz] || '', sizeSay: SIZE_TIER_SAY[_sz] || '', channel: _szChannel, why: why.join('; ') };
 };
 const laneWord = (l) => !l ? 'none' : (l.call && l.email) ? 'call + email' : l.call ? 'call' : l.email ? 'email' : l.noname ? 'no name yet' : 'none';
@@ -12197,7 +12237,7 @@ const verifierProviders = (fallbackKey = '') => {
 const VERIFIER_STATE = new Map();
 const _vState = (id) => {
   const k = id || VERIFIER_PRIMARY;
-  if (!VERIFIER_STATE.has(k)) VERIFIER_STATE.set(k, { exhausted: false, dead: false, latchedAt: 0, probeAt: 0 });
+  if (!VERIFIER_STATE.has(k)) VERIFIER_STATE.set(k, { exhausted: false, dead: false, latchedAt: 0, probeAt: 0, unknownRun: 0 });
   return VERIFIER_STATE.get(k);
 };
 // Read-only: says whether the verifier is currently stood down. Deliberately
@@ -12253,6 +12293,32 @@ const verifierLatch = (kind, id) => {
 // A call that ANSWERED is the proof the account is live again. Clearing on a
 // real answer rather than on a timer alone is what stops a permanently dead
 // key being reported as healthy every ten minutes.
+// ══ A CHECKER THAT ONLY EVER ERRORS IS UNAVAILABLE (Round 147) ══════
+// Live, 2026-09-12: Reoon answered "error" SIX times in a batch of ten - every
+// call it was asked to make. "error" is in neither token list, so each one was
+// honestly reported as UNCHECKED and then forgotten: nothing latched, so the
+// provider stayed "available", and verifierAnyAvailable kept saying yes. That
+// matters because the row's block reason reads that function: with a checker
+// still counted as available, a lead falls through to "no evidence of this
+// mailbox from any source" - a statement about the prospect built on a failure
+// of ours. That is the same offence as the Hunter timeout, one round later.
+//
+// Three in a row, per provider, and it is stood down for the cooldown like a
+// spent balance. A recognised verdict - valid or invalid - resets the run,
+// so a checker that works and meets one odd token is untouched.
+const VERIFIER_UNKNOWN_RUN_MAX = 3;
+const verifierUnknownAnswer = (id, label, status, payload) => {
+  const st = _vState(id);
+  st.unknownRun = (st.unknownRun || 0) + 1;
+  const d = payload && typeof payload === 'object' ? payload : {};
+  const _why = String(d.reason || d.message || d.error_message || d.detail || (typeof d.error === 'string' ? d.error : '') || '').trim().slice(0, 120);
+  console.log(`\u2753 ${label} answered "${status}"${_why ? ` and gave its own reason: "${_why}"` : ' and gave no reason'}, which this adapter does not recognise, so the address is treated as UNCHECKED rather than as good or bad. That is ${st.unknownRun} in a row from this checker. Add the token to the list in EMAIL_VERIFIERS.${id} and it becomes a verdict.`);
+  if (st.unknownRun >= VERIFIER_UNKNOWN_RUN_MAX && !verifierBlocked(id)) {
+    console.log(`\ud83d\udd34 ${String(label).toUpperCase()} IS ANSWERING NOTHING USABLE - ${st.unknownRun} unrecognised answers in a row, so it is stood down and no longer counts as a checker we asked. Without this a lead can be told there is "no evidence of this mailbox from any source" while this checker never once returned a verdict. It re-tests itself in ${Math.round(VERIFIER_COOLDOWN_MS / 60000)} minutes.`);
+    verifierLatch('dead', id);
+  }
+};
+const verifierRecognisedAnswer = (id) => { _vState(id).unknownRun = 0; };
 const verifierAnswered = (id) => {
   if (!verifierBlocked(id)) return;
   console.log(`\u{1F7E2} EMAIL VERIFIER: back. A probe answered, so SMTP verification is on again for every lead after this one - and every address checked while it was off is tier 3 at best, which is a fact about US and not about those prospects.`);
@@ -12343,7 +12409,9 @@ const _verifyVia = async (provider, email) => {
     // working mapping. This line is how the vocabulary gets corrected from one
     // real call instead of from a hunch.
     if (_read.valid === null && _read.invalid === null) {
-      console.log(`\u2753 ${provider.def.label} answered "${status}", which this adapter does not recognise, so the address is treated as UNCHECKED rather than as good or bad. Add the token to the list in EMAIL_VERIFIERS.${provider.id} and it becomes a verdict.`);
+      verifierUnknownAnswer(provider.id, provider.def.label, status, d);
+    } else {
+      verifierRecognisedAnswer(provider.id);
     }
     return {
       valid: _read.valid === true,
@@ -42892,7 +42960,7 @@ const WEIGHTS = {
       _findYield.sized = _siteRead.sized;
       _findYield.notSized = _siteRead.notSized;
       console.log(`\u{1F310} PRESS SITE READ: ${_siteRead.considered} homepage(s) read free - no Firecrawl, no screenshot, no model call. ${_siteRead.graded} carry a grade a visitor would recognise (${SITE_LOOKS_GRADES.map(_g => `${_siteRead.byGrade[_g] || 0} ${_g}`).join(', ')}); ${_siteRead.clean} showed nothing a visitor could see and stay NOT GRADED, because clean code is not the same as looking good and nobody took a picture; ${_siteRead.refused} refused a plain read; ${_siteRead.notReached} were not reached before the clock. ${_siteRead.noWebsite} lead(s) have no website at all and are their own lane. Refused and not-reached leads say nobody looked - never that the site passed.`);
-      console.log(`\u{1F4CF} PRESS SIZE READ: ${_siteRead.sized} of ${_siteRead.considered} businesses state their own size on their homepage and now carry a MEASURED tier off it for nothing (${SIZE_TIER_IDS.map(_t => `${_siteRead.byTier[_t] || 0} ${SIZE_TIER_WORD[_t]}`).join(', ')}${_siteRead.byTier[SIZE_TIER_OVER] ? `, ${_siteRead.byTier[SIZE_TIER_OVER]} over the ICP` : ''}). ${_siteRead.notSized} say nothing about how big they are and are marked \"size not measured\" - never a review-count guess wearing a measurement's clothes. A published count is a FLOOR: a business publishes at most the people it wants seen, so every tier here means at least that big. Before this round NO lead in the pool carried a measured size at all, because the size ladder only ran inside the paid contact read - ten leads a day against a queue of 1,791.`);
+      console.log(`\u{1F4CF} PRESS SIZE READ: ${_siteRead.sized} of ${_siteRead.considered} businesses state their own size on their homepage and now carry a MEASURED tier off it for nothing (${SIZE_TIER_IDS.map(_t => `${_siteRead.byTier[_t] || 0} ${SIZE_TIER_WORD[_t]}`).join(', ')}${_siteRead.byTier[SIZE_TIER_OVER] ? `, ${_siteRead.byTier[SIZE_TIER_OVER]} over the ICP` : ''}). ${_siteRead.notSized} say nothing about how big they are and are marked \"size not measured\" - never a review-count guess wearing a measurement's clothes. A published count is a FLOOR: a business publishes at most the people it wants seen, so every tier here means at least that big${_siteRead.floorKept ? `, and ${_siteRead.floorKept} of them read big enough that before Round 147 the size alone would have taken them off the rep's call sheet - a floor no longer does that` : ''}. Before this round NO lead in the pool carried a measured size at all, because the size ladder only ran inside the paid contact read - ten leads a day against a queue of 1,791.`);
     }
     const allScored = unique
       .map(c => {
@@ -64318,6 +64386,37 @@ app.listen(PORT, () => {
       const _doorSrc = String(verifyEmailSMTP);
       if (!/for\s*\(const _p of _providers\)/.test(_doorSrc))
         _fails.push('the door no longer walks every configured checker - a spent primary ends the attempt and the secondary is never asked, which is the fallback existing on paper only');
+      // ══ 4c. ROUND 147: A CHECKER THAT ONLY EVER ERRORS IS UNAVAILABLE ══
+      // Live, 2026-09-12: Reoon answered "error" SIX times in a batch of ten -
+      // every call it was asked to make. "error" is in neither token list, so
+      // each one was honestly printed as UNCHECKED and then forgotten. Nothing
+      // latched, so the provider stayed "available", and assertion 5 below -
+      // which is the one the row's block reason reads - kept saying a checker
+      // was there. A lead then falls through to "no evidence of this mailbox
+      // from any source": a statement about a prospect built on a failure of
+      // ours, which is the Hunter-timeout offence one round later.
+      verifierAnswered('myemailverifier'); verifierAnswered('reoon');
+      verifierRecognisedAnswer('reoon');
+      if (!verifierAnyAvailable()) _fails.push('the unrecognised-answer fixture could not start from a clean state');
+      verifierUnknownAnswer('reoon', 'Reoon', 'error', { reason: 'invalid api key' });
+      verifierUnknownAnswer('reoon', 'Reoon', 'error', { reason: 'invalid api key' });
+      if (verifierBlocked('reoon')) _fails.push('two unrecognised answers stand a checker down - one odd token from a working vendor must cost nothing, or a new status word takes the whole checker offline');
+      verifierUnknownAnswer('reoon', 'Reoon', 'error', { reason: 'invalid api key' });
+      if (!verifierBlocked('reoon')) _fails.push(`${VERIFIER_UNKNOWN_RUN_MAX} unrecognised answers in a row from one checker leave it counted as available, so a run where it NEVER returns a verdict still tells leads there is "no evidence of this mailbox from any source" - that is Reoon, 6 of 6, on 2026-09-12`);
+      // And a real verdict clears the run, so a working checker is never
+      // walked into the latch by three odd tokens spread across a batch.
+      verifierAnswered('reoon'); verifierRecognisedAnswer('reoon');
+      if (verifierBlocked('reoon')) _fails.push('a stood-down checker that answers again cannot be cleared, so the latch is permanent and the cooldown probe buys nothing');
+      verifierUnknownAnswer('reoon', 'Reoon', 'error', {});
+      verifierUnknownAnswer('reoon', 'Reoon', 'error', {});
+      verifierRecognisedAnswer('reoon');
+      verifierUnknownAnswer('reoon', 'Reoon', 'error', {});
+      if (verifierBlocked('reoon')) _fails.push('a checker that returned a real verdict in between is still stood down by three unrecognised answers spread across a batch - the run counter is not being cleared by a verdict, so an odd token here and there kills a working checker');
+      // The reason the vendor itself gave must reach the log, or the line
+      // cannot tell a wrong key from a spent quota - which is exactly what
+      // nobody could tell on 2026-09-12.
+      if (!/d\.reason \|\| d\.message/.test(String(verifierUnknownAnswer))) _fails.push("the unrecognised-answer line no longer quotes the vendor's own reason, so a checker failing on every call says why to nobody");
+      verifierAnswered('reoon'); verifierRecognisedAnswer('reoon');
       // 5. AND NO CHECKER AVAILABLE IS STILL REPORTED HONESTLY.
       verifierLatch('exhausted', 'myemailverifier'); verifierLatch('dead', 'reoon');
       if (verifierAnyAvailable()) _fails.push('every configured checker is stood down and the run still reports one available, so a lead gets a verdict nothing produced');
@@ -64705,8 +64804,12 @@ app.listen(PORT, () => {
       // worse than no comment: the next reader trusts it and moves on.
       [_nd('const _lanes = lanesFor({ tier: signals.scaleBand, sizeTier:',
         ' _sizeTier,'), 'the measured size never reaches lanesFor, so the CHANNEL falls back to its unmeasured default - which is "call" - and every read lead goes to the rep whatever its size. That is the one thing Vin asked the size to decide: "size is the golden ticket because size kind of decides reachability wise and also decides which channel we use"'],
-      [_nd('sizeTier: _sizeTier, sizeTierMeasured: !!_sizeTier,',
+      // Round 147 re-aimed this needle: sizeIsFloor now sits between the two
+      // halves it used to join. Named rather than silently widened - the guard
+      // it replaces pinned one field and this one pins two.
+      [_nd('sizeTier: _sizeTier, sizeTierMeasured: !!_sizeTier, sizeIsFloor: _sizeIsFloor,',
         ' usd: _sizeUsd || null,'), 'the four-word size tier is computed and never put on the answer, so the row, the CSV and the size filter all read empty while the log knows the size - which is exactly how Round 144 shipped a tier that was computed, printed and dropped at the wire'],
+      [_nd('const _lanes = lanesFor({ tier: signals.scaleBand, sizeTier: _sizeTier,', ' sizeIsFloor: _sizeIsFloor,'), 'the floor flag never reaches lanesFor, so a count a business PUBLISHES about itself decides the channel again - and that is Andrew P. Trussler, one plastic surgeon, read as "at least 53 people" and pushed off the rep\'s call sheet into the email lane on 2026-09-12'],
       [_nd('const _sig = readFindIcpSignals([{ intent: ', "'home', url: c.website,"), 'the press stops reading their own pages for a size, so no lead in the pool carries a measured one and the tier is a Google review count again - 0 of 300 on 2026-09-12, which is the defect this round exists for'],
       [_nd('c.sizeTier = sizeTierFromRevenue(', 'c.sizeUsd);'), 'the press measures a size and never writes the tier, so the free measurement is thrown away between the ladder and the row'],
       [_nd('c.sizeIsFloor = _scale.floor === true ||', ' !_scale.verified;'), 'the row stops saying a published size is a FLOOR, so "small" reads as a measurement when a forty-person firm publishing four people is exactly this file’s own example of why it is not - Vin asked for the sizing to be as accurate as possible, and the honest answer is that the error has a known direction'],
@@ -65047,6 +65150,86 @@ app.listen(PORT, () => {
         if (!row || !(Number(row.per) > 0) || !row.source || !/^\d{4}-\d{2}-\d{2}$/.test(String(row.at || ''))) _fails.push(`the per-trade revenue row "${k}" is not declared with a figure, a source and a date`);
       }
       if (parseStatedRevenue('$25,300,000') !== 25300000 || parseStatedRevenue('$5M') !== 5e6 || parseStatedRevenue('about 12 employees') !== null) _fails.push('a directory\'s revenue string is misread');
+      // ══ ROUND 147: A FLOOR MAY NOT TAKE A LEAD OFF THE CALL SHEET ════
+      // Live, 2026-09-12, the first batch read under the channel rule Round 146
+      // shipped: Andrew P. Trussler, MD - ONE plastic surgeon - came back
+      // "large" and was routed to email, off the rep's call sheet, on the
+      // strength of "at least 53 people on their own team page". 308 boot
+      // checks and 345 server assertions were green while it did that, which
+      // is the whole reason this block exists.
+      {
+        const _floorBig = lanesFor({ tier: 'upper', sizeTier: 'large', sizeIsFloor: true, sizeConfidence: 'likely', layers: 'owner', source: 'google_places', target: 'owner', usd: 10.6e6, phone: true });
+        if (_floorBig.channel !== 'call' || _floorBig.call !== true) _fails.push(`a size read as "at least 53 people on their own team page" - a FLOOR, the least certain number this system holds - took a business off the rep's phone (channel "${_floorBig.channel}", call ${_floorBig.call}). That is Andrew P. Trussler, one surgeon, on 2026-09-12`);
+        if (!/floor/.test(_floorBig.why)) _fails.push('a lead kept on the call sheet by the floor rule says nothing about why, so the rep cannot tell a deliberate ruling from a size that was never measured');
+        // LAYERED on purpose, so Round 114's owner-run reach exception cannot
+        // pass this assertion for a reason that has nothing to do with floors.
+        // The first draft used layers 'owner' at $22M, reach fired, and the
+        // check went green with the fix reverted - falsification caught it.
+        const _floorOver = lanesFor({ tier: 'over_ceiling', sizeTier: SIZE_TIER_OVER, sizeIsFloor: true, sizeConfidence: 'likely', layers: 'layered', source: 'google_places', target: 'owner', usd: 22e6, phone: true });
+        if (_floorOver.call !== true) _fails.push('a published count that reads over the top of the ICP DROPS the lead - and the dollars it was dropped on are a headcount multiplied by a revenue-per-head constant that 7 trades have a row for and every other trade borrows from HVAC, so that number is an inference in both directions and must not be what ends a lead');
+        // AND THE TWO CASES THE RULE MUST NOT REPEAL. A directory's revenue
+        // figure and a verified headcount are sizes in both directions; only
+        // what a business PUBLISHES about itself is a floor.
+        const _rose = lanesFor({ tier: 'over_ceiling', sizeTier: SIZE_TIER_OVER, sizeIsFloor: false, sizeConfidence: 'sure', layers: 'layered', source: 'google_places', target: 'owner', usd: 255e6, peOwned: true, phone: true });
+        if (_rose.call !== false || _rose.email !== false) _fails.push('Rose Paving is back: PE-owned, layered, $255M from a directory\'s figure, and on the rep\'s call sheet. A directory figure is not a floor and the floor rule must not reach it');
+        const _verBig = lanesFor({ tier: 'upper', sizeTier: 'large', sizeIsFloor: false, sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 12e6, phone: true });
+        if (_verBig.channel !== 'email' || _verBig.call !== false) _fails.push('a VERIFIED headcount over $10M no longer leaves the call sheet, so the floor rule was written as "never leave" instead of "a floor never leaves" and Vin\'s channel ruling has been repealed');
+        if (!_verBig.why) _fails.push('a lead moved to the email lane by a MEASURED size carries no reason on its row - every other route off the call sheet says why, and a lead taken off the sheet for a reason nobody can see is indistinguishable from a resolver that failed (Round 139)');
+      }
+      // ══ ROUND 147: A PUBLISHED COUNT UNDER THREE IS NOT A SIZE ═══════
+      // Live, 2026-09-12: Henry A. Mentz, MD - a multi-page plastic surgery
+      // practice with a med spa - wrote "two doctors" and the sheet read
+      // "estimated under $800k". A MAXIMUM stated from a MINIMUM, and
+      // below_floor is the band that benches a lead.
+      {
+        const _two = estimateScaleBand({ staffProse: 2, staffProseSay: 'two doctors' });
+        if (_two) _fails.push(`two names on their own pages decided a size band ("${_two.say}") - a published count is a lower bound, and this is the one rung that read it as a ceiling`);
+        const _three = estimateScaleBand({ staffProse: 3, staffProseSay: 'three doctors' });
+        if (!_three || _three.band !== 'entry') _fails.push(`three people on their own pages stopped measuring a size (got ${_three ? _three.band : 'nothing'}) - the cut moved instead of the floor being added`);
+        const _twoWord = sizeBand({ staffProse: 2, staffProseSay: 'two doctors' });
+        if (_twoWord.band !== null || _twoWord.confidence !== 'unknown') _fails.push(`the rep's word ladder still reads two names as a size ("${_twoWord.band}", ${_twoWord.confidence}) while the affordability ladder calls it unmeasured - two ladders disagreeing about whether a business was measured at all is how one screen carries two verdicts`);
+        if (sizeBand({ staffProse: 3, staffProseSay: 'three doctors' }).band !== 'low') _fails.push("the rep's word ladder stopped reading three published people as low, so the min was written as a cut instead of a floor");
+        // It FALLS THROUGH, it does not return null: the rungs below still run.
+        const _twoPlusLocs = estimateScaleBand({ staffProse: 2, staffProseSay: 'two doctors', locationsProse: 4 });
+        if (!_twoPlusLocs || !/locations/.test(_twoPlusLocs.say)) _fails.push('a two-name read now blocks the rungs below it, so a practice publishing four locations is unmeasured because it also said "two doctors"');
+      }
+      // ══ ROUND 147: AN AWARD IS NOT A HEADCOUNT ═════════════════
+      // Live, 2026-09-12: Dr. Sam Sukkar, one plastic surgeon, carried the row
+      // '"50 doctors" on their own pages'. His page says he was named one of
+      // Houston's TOP 50 DOCTORS. A false sentence about a business, on the
+      // rep's sheet - and it fires at the PRESS, on every business found,
+      // where nobody opens the page to catch it.
+      {
+        const _awards = [
+          "Dr. Sukkar was named one of Houston's Top 50 Doctors by H Texas Magazine.",
+          'Voted among the top 10 doctors in Texas for five consecutive years.',
+          'Castle Connolly Top Doctors 2024 - one of only 25 doctors in the region.',
+          'Named to the Super Doctors list of 40 doctors statewide.',
+          'Awarded a place among the best 20 attorneys in the county.',
+          'Ranked in the top 100 agents nationwide by volume.',
+          'Winner: Best 15 Designers in Austin, 2025.',
+          'Recognized by Texas Monthly magazine as one of 30 top dentists.',
+          'Honored as a finalist alongside 12 designers from across the state.',
+          '#1 of 50 agents in the region three years running.',
+          'Our founder was nominated with 18 other therapists for the state award.',
+          'Austin Business Journal ranking: 45 lawyers you should know.',
+        ];
+        for (const _a of _awards) {
+          const _p = readFindProse(_a);
+          if (_p.staffProse !== null) _fails.push(`a magazine's ranking was counted as staff: "${_p.staffProseSay}" (${_p.staffProse}) from "${_a.slice(0, 60)}". That sentence goes on a row about a real business and it is not true of them`);
+        }
+        // AND THE SIX FORMS THAT SAY STAFF IN THEIR OWN WORDS, UNTOUCHED - a
+        // guard that refused these would cost the round more than it saved.
+        const _real = [['A team of 14 dedicated professionals.', 14], ['Our practice employs 12 full-time staff members.', 12],
+                       ['We are a 9-person team serving the whole metro.', 9], ['A 6-man crew arrives on every job.', 6],
+                       ['Employing 20 licensed technicians across two counties.', 20], ['Our 30 technicians are on call around the clock.', 30],
+                       ['One of our 30 technicians will arrive within the hour.', 30], ['We have grown to 45 employees since 1998.', 45]];
+        for (const [_t, _want] of _real) {
+          const _p = readFindProse(_t);
+          if (_p.staffProse !== _want) _fails.push(`a business stating its own headcount stopped being counted: wanted ${_want}, got ${_p.staffProse} from "${_t}" - the award guard was written wide enough to refuse real counts`);
+        }
+        if (!STAFF_PROSE_AWARD_RE.test('top') || STAFF_PROSE_AWARD_RE.test('our team of technicians')) _fails.push('the award window matches nothing, or matches ordinary body copy');
+      }
       // The lanes, both ways.
       const _ln = (o) => laneWord(lanesFor(o));
       // ══ ROUND 146: ONE LANE PER LEAD, NOT BOTH ════════════════════════
@@ -86126,7 +86309,10 @@ const MARKETING_FUNCTION_RE = /\b(?:marketing|human resources|\bhr\b|recruit(?:e
 const SIZE_TERMS = [
   { id: 'verifiedEmployees',  cut: (c) => ({ high: c.upper + 1, medium: c.core }), say: (n) => `${n} verified employees` },
   { id: 'directoryEmployees', cut: (c) => ({ high: c.upper + 1, medium: c.core }), say: (n, s) => `${n} employees per ${s.directoryEmployeesSource || 'a directory'}` },
-  { id: 'staffProse',         cut: (c) => ({ high: c.upper + 1, medium: c.core }), say: (n, s) => `"${s.staffProseSay || n + ' staff'}" on their own pages` },
+  // Round 147: three is the floor on a published count, here and in
+  // _scaleLadder both - a two-name read is a page layout, not a headcount, and
+  // the two ladders must not disagree about whether a business was measured.
+  { id: 'staffProse',         min: 3, cut: (c) => ({ high: c.upper + 1, medium: c.core }), say: (n, s) => `"${s.staffProseSay || n + ' staff'}" on their own pages` },
   { id: 'fleetProse',         cut: (c, t) => ({ high: t.upper + 1, medium: t.core }), say: (n) => `${n} trucks on their own pages` },
   { id: 'locationsProse',     cut: () => ({ high: 6, medium: 2 }), say: (n) => `${n} locations on their own pages` },
   { id: 'marketCount',        cut: () => ({ high: 3, medium: 2 }), say: (n) => `seen in ${n} metros this run` },
@@ -86143,6 +86329,7 @@ const sizeBand = (s) => {
     const n = Number(d[t.id]);
     if (!Number.isFinite(n) || n <= 0) continue;
     if (t.id === 'marketCount' && n < 2) continue;
+    if (Number.isFinite(t.min) && n < t.min) continue;   // Round 147: a published count under three measures nothing
     const k = t.cut(_cuts, _tcuts);
     if (t.floor && n < k.medium) continue;   // a floor under the core cut says nothing
     // Round 113: a directory RANGE that straddles two tiers ("1-10" for a
@@ -86700,7 +86887,7 @@ const FIND_PRESS_SITE_MAX = Math.max(0, parseInt(process.env.FIND_PRESS_SITE_MAX
 const pressSiteLooks = async (leads) => {
   const all = Array.isArray(leads) ? leads : [];
   const out = { considered: 0, graded: 0, clean: 0, refused: 0, notReached: 0, noWebsite: 0,
-                byGrade: {}, sized: 0, notSized: 0, byTier: {} };
+                byGrade: {}, sized: 0, notSized: 0, byTier: {}, floorKept: 0 };
   if (!FIND_PRESS_SITE_READ) return out;
   const _todo = [];
   for (const c of all) {
@@ -86789,6 +86976,11 @@ const pressSiteLooks = async (leads) => {
           c.sizeWhy = `${_scale.say} - read free off their own homepage at the press${c.sizeIsFloor ? ', and it is a floor: a business publishes at most the people it wants seen, so this is at least this big and never at most' : ''}`;
           out.sized++;
           out.byTier[c.sizeTier] = (out.byTier[c.sizeTier] || 0) + 1;
+          // Round 147: how many of these floors would have cost the rep the
+          // lead if the contact read happened today. Those are the two
+          // outcomes a wrong-high size produces - the email lane, and no lane
+          // at all - and they are the number to watch next press.
+          if (c.sizeIsFloor && (SIZE_TIER_CHANNEL[c.sizeTier] === 'email' || c.sizeTier === SIZE_TIER_OVER)) out.floorKept++;
         } else {
           // NOT MEASURED, said in those words. Never looked is not measured
           // zero, and a review-count guess dressed as a size is the defect
@@ -87128,11 +87320,38 @@ const CREW_PROSE_RE = new RegExp('\\b(' + PROSE_NUM + ')\\+?\\s*(?:crews|service
 const FLEET_PROSE_RE = new RegExp('\\b(?:(' + PROSE_NUM + ')\\+?\\s*(?:trucks|vans|service vehicles|service trucks|service vans|fleet vehicles|vehicles|rigs|bucket trucks|box trucks)|fleet of (?:over |more than )?(' + PROSE_NUM + ')|(' + PROSE_NUM + ')[- ]truck fleet)\\b', 'gi');
 const LOCATIONS_PROSE_RE = /\b(\d{1,2})\s*(?:locations|offices|showrooms|branches|convenient locations)\b/gi;
 const FIND_FOUNDED_RE = /\b(?:since|established|est\.?|founded|in business since|serving [a-z ,'-]{3,40} since|family[- ]owned since)\s*(?:in\s*)?((?:18|19|20)\d{2})\b/gi;
-const _maxCapture = (text, re, cap, min = 1) => {
+// ══ AN AWARD IS NOT A HEADCOUNT (Round 147) ═════════════════════
+// Live, 2026-09-12: Dr. Sam Sukkar - one plastic surgeon - carried the row
+// '"50 doctors" on their own pages'. His page says he was named one of
+// Houston's TOP 50 DOCTORS. The bare-number branch of STAFF_PROSE_RE has an
+// OPTIONAL prefix, so any number standing next to a trade noun was a staff
+// count, and a magazine's ranking became a measurement of the business.
+//
+// It is not a scoring wobble. It writes a false sentence about a company onto
+// the rep's sheet, and it fires at the PRESS, on every business found, where
+// nobody opens the page to catch it: all 13 sizes measured free on 2026-09-12
+// came from this reader.
+//
+// Refused on the BARE-NUMBER branch only (capture 6). The five grammatical
+// forms - "a team of 14", "employs 12", "9-person team", "6-man crew",
+// "employing 20" - say staff in their own words and are untouched, so
+// "one of our 30 technicians" still counts 30 while "one of 50 agents" does
+// not. The window is the SENTENCE the number sits in, because the award sits
+// before the number as often as after it.
+const STAFF_PROSE_AWARD_RE = /(?:\b(?:top|best|voted|named one of|named to|award|awards|awarded|winner|winners|honored|honoured|recognized|recognised|ranked|ranking|rankings|super\s?doctors?|super\s?lawyers?|castle connolly|rising stars?|magazine|list of|finalist|nominee|nominated|hall of fame)\b|#\s?\d)/i;
+const _proseSentence = (text, at, len) => {
+  let a = at, b = at + len;
+  while (a > 0 && !/[.!?\u2022\n]/.test(text[a - 1])) a--;
+  while (b < text.length && !/[.!?\u2022\n]/.test(text[b])) b++;
+  return text.slice(a, b);
+};
+const _isAwardNotStaff = (text, m) => m[6] !== undefined && STAFF_PROSE_AWARD_RE.test(_proseSentence(text, m.index, m[0].length));
+const _maxCapture = (text, re, cap, min = 1, reject = null) => {
   let best = null, say = '';
   re.lastIndex = 0;
   let m;
   while ((m = re.exec(text))) {
+    if (reject && reject(text, m)) continue;
     const raw = m.slice(1).find(x => x !== undefined && x !== '');
     const n = PROSE_NUM_WORDS[String(raw || '').toLowerCase()] !== undefined ? PROSE_NUM_WORDS[String(raw).toLowerCase()] : Number(raw);
     if (!Number.isFinite(n) || n < min || n > cap) continue;
@@ -87143,7 +87362,7 @@ const _maxCapture = (text, re, cap, min = 1) => {
 const readFindProse = (text, now = Date.now()) => {
   const t = String(text || '');
   const fp = t.match(FOUNDER_PHRASE_RE);
-  let staff = _maxCapture(t, STAFF_PROSE_RE, 999);
+  let staff = _maxCapture(t, STAFF_PROSE_RE, 999, 1, _isAwardNotStaff);
   // Round 116: crews, at about three people each - an estimate, and the row says so.
   if (staff.n === null) {
     const crews = _maxCapture(t, CREW_PROSE_RE, 50);
@@ -87206,7 +87425,21 @@ const _scaleLadder = (s) => {
   const staff = Number(d.staffProse);
   // A count they PUBLISH is a floor (a forty-person firm may publish four): from
   // three people up it reads as entry at least; only a verified count goes lower.
-  if (Number.isFinite(staff) && staff > 0) return mk(staff < cuts.entry && staff >= 3 ? 'entry' : tierFromCount(staff, cuts), `"${d.staffProseSay || staff + ' staff'}" on their own pages`, staff * per);
+  //
+  // ══ AND BELOW THREE IT IS NOT A MEASUREMENT AT ALL (Round 147) ═══════
+  // Live, 2026-09-12: Henry A. Mentz, MD - a multi-page plastic surgery
+  // practice with a med spa - wrote "two doctors" on his own pages and the
+  // sheet read "estimated under 800k". That is a MAXIMUM stated from a
+  // MINIMUM, and it is the one direction a floor can never be read in. The
+  // whole rest of this file already knows it: countTeamNames refuses fewer
+  // than three names, the team-page rung only speaks at the core cut, and the
+  // line above says "from three people up". Only the fall-through disagreed,
+  // and the fall-through is what reached the rep.
+  //
+  // It FALLS THROUGH rather than returning null: a two-doctor practice with
+  // three locations is still sized by its locations, one rung down. What it
+  // may no longer do is put a dollar ceiling on a business from two names.
+  if (Number.isFinite(staff) && staff >= 3) return mk(staff < cuts.entry ? 'entry' : tierFromCount(staff, cuts), `"${d.staffProseSay || staff + ' staff'}" on their own pages`, staff * per);
   const fleet = Number(d.fleetProse);
   if (Number.isFinite(fleet) && fleet > 0) return mk(tierFromCount(fleet, tcuts), `${fleet} trucks on their own pages`, fleet * ICP_REVENUE_PER_TRUCK);
   const locs = Number(d.locationsProse);
@@ -89001,8 +89234,15 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // here at all and the row says "not measured" rather than inventing one.
   const _sizeUsd = Number(signals.scaleUsd) > 0 ? Number(signals.scaleUsd) : 0;
   const _sizeTier = sizeTierFromRevenue(_sizeUsd);
+  // ══ IS THIS SIZE A FLOOR? (Round 147) ════════════════════════
+  // A count a business PUBLISHES is a lower bound: at least this many. Only a
+  // VERIFIED headcount (a filing, an enrichment record) and a stated revenue
+  // figure are sizes in both directions, and those two are the only ones
+  // allowed to take a lead off the rep's phone - see lanesFor. The press half
+  // of this computes the same flag on the same ladder.
+  const _sizeIsFloor = !!_scale && _scale.verified !== true && _scale.directory !== true;
   out.size = { band: _size.band, confidence: _size.confidence, why: _size.why, tier: signals.scaleBand, say: _scale ? _scale.say : '',
-               sizeTier: _sizeTier, sizeTierMeasured: !!_sizeTier, usd: _sizeUsd || null,
+               sizeTier: _sizeTier, sizeTierMeasured: !!_sizeTier, sizeIsFloor: _sizeIsFloor, usd: _sizeUsd || null,
                sizeSay: _sizeTier ? (SIZE_TIER_SAY[_sizeTier] || '') : '',
                sizeWord: _sizeTier ? (SIZE_TIER_WORD[_sizeTier] || '') : '' };
   let _layers = readLayers(signals, { ownerNamed: !!(out.owner && out.owner.name) });
@@ -89122,7 +89362,7 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // size, and the one thing Vin asked the size to decide would have been
   // decided by nothing. Computed-but-not-passed is the bug class this repo
   // records most; the boot check below pins this call site by name.
-  const _lanes = lanesFor({ tier: signals.scaleBand, sizeTier: _sizeTier, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true, siteless: signals.readable !== true, phone: !!out.phone, siteMarketingHead: _siteMarketingHead });
+  const _lanes = lanesFor({ tier: signals.scaleBand, sizeTier: _sizeTier, sizeIsFloor: _sizeIsFloor, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true, siteless: signals.readable !== true, phone: !!out.phone, siteMarketingHead: _siteMarketingHead });
   out.lanes = _lanes;
   // Round 114: a layered or owned-elsewhere lead on the call sheet ranks LAST.
   signals.laneLast = _lanes.last === true;
