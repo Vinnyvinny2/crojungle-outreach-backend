@@ -5579,9 +5579,23 @@ const LANE_TIERS = { call: ['entry', 'core', 'upper'], email: ['core', 'upper', 
 // And the call lane means a NAMED owner within reach: a read lead with a
 // phone and nobody named is the "no name yet" bucket, off the rep's sheet.
 const SIZE_WORD_TIER = { low: 'entry', medium: 'core', high: 'upper' };
-const lanesFor = ({ tier, sizeTier, sizeIsFloor, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national, siteless, phone, siteMarketingHead } = {}) => {
+// ══ THE SIZE LADDER'S OWN WORDS FOR "THIS NUMBER IS A GUESS" (Round 148) ══
+// sizeBand marks a directory headcount that arrives as a range spanning two of
+// our tiers - "1-10" for a $200k/head trade is below the floor at one end and
+// core at the other - and the confidence word it settles on can then be lifted
+// past "guess" by a second directory figure agreeing with it. The straddle
+// itself never moved off that row, so the channel could not see it. This is
+// the marker sizeBand writes, read back rather than the rule retyped, and the
+// boot check ONE GUESS, ONE VERDICT executes sizeBand on a straddling range
+// and on one that sits inside a single tier to prove the two still agree.
+const SIZE_STRADDLE_SAY_RE = /\(a range across tiers\)/;
+const lanesFor = ({ tier, sizeTier, sizeIsFloor, sizeStraddles, sizeWord, sizeConfidence, affordBand, layers, source, target, product, usd, network, peOwned, national, siteless, phone, siteMarketingHead } = {}) => {
   const why = [];
   let t = SCALE_TIERS.includes(tier) ? tier : null;
+  // Round 148: the four-word size tier is a LET because the guess headroom
+  // below demotes it in step with t. Two ladders that disagree about one guess
+  // put two contradictory sentences on one row - see the block that does it.
+  let _szTier = String(sizeTier || '');
   let measured = !!t;
   if (!t && SIZE_WORD_TIER[sizeWord]) {
     t = SIZE_WORD_TIER[sizeWord];
@@ -5607,6 +5621,17 @@ const lanesFor = ({ tier, sizeTier, sizeIsFloor, sizeWord, sizeConfidence, affor
   // MEASURED size moves a business into the email-only lane.
   if (t === 'over_ceiling' && sizeConfidence !== 'likely' && sizeConfidence !== 'sure') {
     t = 'upper';
+    // ══ ROUND 148: THE SECOND LADDER IS DEMOTED WITH THE FIRST ═══════════
+    // Live, 2026-09-12: Andrew Arthur Homes, put at $38.4M by a directory on a
+    // GUESS. Round 139 demoted the affordability tier here and printed its
+    // reason on the row - kept as high and still callable. The four-word size
+    // tier, written into this function afterwards, was left at over_icp, so
+    // the over-the-ICP drop below fired off that second ladder anyway and
+    // stripped the channel. One row reached the rep saying both that the lead
+    // was still callable and that it was not a lead today. A lead cannot be
+    // two things, and the rep reading that row cannot tell which half to act
+    // on. One guess, one verdict: both ladders forgive it or neither does.
+    if (_szTier === SIZE_TIER_OVER) _szTier = SIZE_TIER_IDS[SIZE_TIER_IDS.length - 1];
     why.push(`over the cap on a ${sizeConfidence || 'guess'} - kept as high and still callable; only a measured size comes off the call sheet`);
   }
   // Round 113 (Vin, 2026-09-03): a product company is kept, as an email lead.
@@ -5646,7 +5671,7 @@ const lanesFor = ({ tier, sizeTier, sizeIsFloor, sizeWord, sizeConfidence, affor
   // shape in thirty seconds. The alternative, holding them back until a paid
   // read measures them, is how 1,048 leads came to sit banked behind ten reads
   // a day. Never both lanes, and never silently: sizeTierWhy carries it.
-  const _sz = String(sizeTier || '');
+  const _sz = _szTier;
   const _szMeasured = SIZE_TIER_IDS.includes(_sz) || _sz === SIZE_TIER_OVER;
   // AN EXCEPTION THAT TAKES A LEAD OFF THE CALL SHEET MOVES IT TO EMAIL.
   // It does not strip both lanes. While the two lists overlapped this was
@@ -5703,19 +5728,45 @@ const lanesFor = ({ tier, sizeTier, sizeIsFloor, sizeWord, sizeConfidence, affor
   // from a directory's revenue figure. A directory figure is not a floor, so
   // sizeIsFloor is false there and it stays off the phone.
   const _floorOnly = sizeIsFloor === true;
+  // ══ AND A GUESS MAY NOT TAKE A LEAD OFF THE PHONE EITHER (Round 148) ════
+  // Live, 2026-09-12: Fred Flores CPA, a firm naming three people on its own
+  // page, read by ZoomInfo as 126 employees and $15.1M. That headcount arrived
+  // as the range 51-200, which spans two of our tiers, and the size ladder
+  // calls such a range a guess in its own words. A second directory figure
+  // agreeing lifted the word printed on the row to "likely", the size read
+  // large, large is the email lane - and the one address he has is BLOCKED.
+  // The lead was reachable by nobody: no phone lane, and no address to write
+  // to. The weakest number we hold had deleted a business.
+  //
+  // Round 147 settled the principle for a FLOOR one line above: only a size
+  // measured in BOTH directions takes a business off the phone. A guess is
+  // weaker than a floor, not stronger, so it keeps the phone for the same
+  // reason and the row says which fact kept it. The straddling range travels
+  // as its own flag because the confidence WORD can be lifted past "guess"
+  // while the range underneath it stays exactly as much of a guess.
+  //
+  // Rose Paving is still the case this must NOT repeal: its $255M is a
+  // directory's revenue figure at "sure", which is not a guess, so it stays
+  // off the phone and out of every lane.
+  const _guessOnly = sizeConfidence === 'guess' || sizeStraddles === true;
+  const _softSize = _floorOnly || _guessOnly;
   const _byTier = SIZE_TIER_CHANNEL[_sz] || '';
   const _floorKeptCall = _floorOnly && _byTier === 'email';
+  const _guessKeptCall = _guessOnly && !_floorOnly && _byTier === 'email';
   const _rawOverIcp = (_sz === SIZE_TIER_OVER) || (t === 'over_ceiling');
   const _floorKeptIcp = _floorOnly && _rawOverIcp;
-  const _overIcp = _rawOverIcp && !_floorOnly;
+  const _guessKeptIcp = _guessOnly && !_floorOnly && _rawOverIcp;
+  const _softKeptCall = _floorKeptCall || _guessKeptCall;
+  const _softKeptIcp = _floorKeptIcp || _guessKeptIcp;
+  const _overIcp = _rawOverIcp && !_softSize;
   // _forcedEmail is read BEFORE the floor: a TheirStack lead with no phone, a
   // product company and a business publishing its own marketing director are
   // FACTS about the lead, not inferences about its size, and they keep their
   // email-only routing.
   const _szChannel = (_overIcp && !reach) ? ''
     : _forcedEmail ? 'email'
-    : _floorKeptIcp ? 'call'
-    : _szMeasured ? ((_floorKeptCall ? 'call' : _byTier) || '') : 'call';
+    : _softKeptIcp ? 'call'
+    : _szMeasured ? ((_softKeptCall ? 'call' : _byTier) || '') : 'call';
   const inCall = (_szChannel === 'call' || reach) && !ts && !prod && !siteHead;
   // ══ ROUND 121: A BUSINESS WITH NO WEBSITE IS THE CLEAREST LEAD WE FIND ══
   // Vin, 2026-09-04, ruling on two leads from that press: Delta Solar Power
@@ -5770,6 +5821,14 @@ const lanesFor = ({ tier, sizeTier, sizeIsFloor, sizeWord, sizeConfidence, affor
   if (_sitelessCall) why.push('no working website, so nobody can be named from their own pages - on the call sheet last, with the number to ask who runs it');
   if (_floorKeptCall) why.push('what they publish about themselves is a floor - at least this big, possibly bigger - so it is not the measurement that takes a business off the phone. Kept on the call sheet, and the rep finds out how big they really are in thirty seconds');
   if (_floorKeptIcp) why.push(`what they publish puts them over ${_usdShort(ICP_REVENUE_BAND.ceiling)}, but a published count is a floor and a business publishes at most the people it wants seen - kept on the call sheet rather than dropped on the weakest number we hold`);
+  // Round 148. Both are gated on the lead actually BEING on the call sheet:
+  // a TheirStack lead, a product company and a published marketing director
+  // are read first and send it to email, and "kept on the call sheet" printed
+  // on a row that is not on the call sheet is a false sentence about a real
+  // business - the offence the three sentences above this block were found to
+  // be committing when this function was first executed.
+  if (_guessKeptCall && _szChannel === 'call') why.push('their size is a guess rather than a measurement - a range that spans two of our size tiers, or a number nothing else agrees with - so it is not what takes a business off the phone. Kept on the call sheet, and the rep finds out how big they really are in thirty seconds');
+  if (_guessKeptIcp && _szChannel === 'call') why.push(`their size reads over ${_usdShort(ICP_REVENUE_BAND.ceiling)} on a guess, and a guess is the thing most likely wrong in either direction - kept on the call sheet rather than dropped on the weakest number we hold`);
   if (noname) why.push('nobody named yet - off the call sheet until a name is found');
   // Round 147, found by running the round's own evidence file: a lead moved to
   // the email lane by a MEASURED size carried no reason at all. Round 139's
@@ -5781,7 +5840,7 @@ const lanesFor = ({ tier, sizeTier, sizeIsFloor, sizeWord, sizeConfidence, affor
   if (_szChannel === 'email' && !email && !noname) why.push('nobody named to write to');
   if (!_szMeasured && !_overIcp) why.push('their size is not measured anywhere we looked - on the call sheet so the rep can find out, and the row says so');
   return { call, email, noname, last, tier: t, measured, sizeTier: _sz, sizeTierMeasured: _szMeasured,
-           sizeIsFloor: _floorOnly, floorKeptCall: _floorKeptCall || _floorKeptIcp,
+           sizeIsFloor: _floorOnly, sizeGuess: _guessOnly, floorKeptCall: _softKeptCall || _softKeptIcp,
            sizeWord: SIZE_TIER_WORD[_sz] || '', sizeSay: SIZE_TIER_SAY[_sz] || '', channel: _szChannel, why: why.join('; ') };
 };
 const laneWord = (l) => !l ? 'none' : (l.call && l.email) ? 'call + email' : l.call ? 'call' : l.email ? 'email' : l.noname ? 'no name yet' : 'none';
@@ -65521,6 +65580,8 @@ app.listen(PORT, () => {
       [_n('SIZE LOOKUP [${name}]: not bought - ${_sizeSettledWhy}', ', and a directory has no record of a business this size'), 'the size search is stood down on a lead whose own team page already settled it and nothing in the log says so - a saving the operator cannot see reads as a broken feature'],
       [_n('const _ownerWaveFoundNobody = _ownerAttempted === true', ' && !(out.owner && out.owner.name);'), 'nothing measures whether the owner wave ran and found nobody, so the size wave cannot be aimed away from those leads'],
       [_n('sizeWord: _size.band, sizeConfidence: _size.confidence,', ' affordBand: signals.affordBand ||'), 'the lane does not read the sheet\'s own guess, so the two can disagree'],
+      [_n('const _sizeStraddles = directoryRangeStraddles(signals) ||', ' SIZE_STRADDLE_SAY_RE.test(String(_size.why'), 'the straddling range is no longer read from the size ladder\'s own rule, so either nothing measures it or a second hand-kept copy decides it'],
+      [_n('sizeIsFloor: _sizeIsFloor, sizeStraddles:', ' _sizeStraddles, sizeWord: _size.band,'), 'the straddle is computed and never passed to the lane, so a directory range spanning two tiers takes a lead off the phone again - Fred Flores CPA, 2026-09-12, whose only address is BLOCKED and who was then reachable by nobody'],
       [_n("signals.scaleBand = (_scale && !_scale.guess) ?", ' _scale.band : null;'), 'a tenure guess decides the tier the lanes read'],
       [_n('site:linkedin.com/company OR ', 'site:bbb.org'), 'the size lookup has no second query, so a miss on the revenue directories stays a miss'],
       [_n('if (!parsed && !secondQuery', ' && secondWorth) {'), 'the second size query is bought on the wording of a snippet, or on every miss regardless of the review band (21 of 21 misses on 2026-09-03)'],
@@ -65594,7 +65655,7 @@ app.listen(PORT, () => {
     if (_fails.length) {
       console.log(`⛔ SIZE AND LAYERS CHECK: ${_fails.slice(0, 8).join(' | ')}${_fails.length > 8 ? ` | +${_fails.length - 8} more` : ''}.`);
     } else {
-      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the SIZE tier and the layers, ONE lane per lead and never both (Vin, 2026-09-12: very small, small and medium are the rep's calls and large is an email lead, so Darrel at $5M is a call and no row reads "call + email" any more; an unmeasured size goes to the rep on purpose, because the row says so and he is the cheapest way to find out; TheirStack leads and product companies email only; layered, PE-owned and national on the call sheet LAST under the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap and dropped over it, which supersedes the uncapped email lane of Round 114 - "over 30m is dropped for now"; a detected branch network dropped outright, at the press off its own listing URL and at the read off its own pages; an owner-run business over the cap still called while its MEASURED dollars sit under $${ICP_CALL_REACH_CEILING / 1e6}M, and dropped past it; nobody named means no email lane; the old ${_usdShort(ICP_REVENUE_BAND.floor)} floor benches nobody at any confidence, and over the cap takes a lead off the call sheet only when likely or sure; a business whose own site names a marketing director written to and never dialled); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; the size search is not bought on a lead whose own team page already lists three to five people, nor on a one-person trade, nor a second directory query on a MEASURED zero review count; and the buying floor has one copy.`);
+      console.log(`✓ SIZE AND LAYERS CHECK: the ICP ladder is one table ($${ICP_REVENUE_BAND.floor / 1e6}M floor, core from $${ICP_REVENUE_BAND.coreFrom / 1e6}M at the 10% rule on the $${ICP_PREMIUM_RETAINER_MONTHLY / 1000}k retainer, upper from $${ICP_REVENUE_BAND.upperFrom / 1e6}M, ceiling $${ICP_REVENUE_BAND.ceiling / 1e6}M) and every cut - staff per trade, trucks, the discovery employee gate, the TheirStack query, the rep's medium and high - is that table divided by a benchmark, so the sheet word and the tier cannot disagree; six people are a core HVAC shop and an entry law firm; an unpublished size is bought once and labelled a directory's; the lanes fall out of the SIZE tier and the layers, ONE lane per lead and never both (Vin, 2026-09-12: very small, small and medium are the rep's calls and large is an email lead when the size behind it was measured in both directions, so Darrel at $5M is a call and no row reads "call + email" any more; an unmeasured size goes to the rep on purpose, because the row says so and he is the cheapest way to find out; TheirStack leads and product companies email only; layered, PE-owned and national on the call sheet LAST under the $${ICP_REVENUE_BAND.ceiling / 1e6}M cap and dropped over it, which supersedes the uncapped email lane of Round 114 - "over 30m is dropped for now"; a detected branch network dropped outright, at the press off its own listing URL and at the read off its own pages; an owner-run business over the cap still called while its MEASURED dollars sit under $${ICP_CALL_REACH_CEILING / 1e6}M, and dropped past it; nobody named means no email lane; the old ${_usdShort(ICP_REVENUE_BAND.floor)} floor benches nobody at any confidence, and over the cap takes a lead off the call sheet only when likely or sure; a business whose own site names a marketing director written to and never dialled); the rep's size band is read from headcount, fleet, locations and markets with a confidence word, never from age or reviews alone (those are a "guess" and say so); the target is picked from the layers, so a $5M business whose owner is named on his own pages routes to the owner while a business with corporate titles or a marketing function routes to a director-level marketing head; a Marketing Manager or Coordinator is never shown; the roster pairs a Marketing Director instead of dropping the row; the "too big" marks are lifted only when that reachable decision-maker was found, and a high size still ranks below medium; the size search is not bought on a lead whose own team page already lists three to five people, nor on a one-person trade, nor a second directory query on a MEASURED zero review count; and the buying floor has one copy.`);
     }
   } catch (e) {
     console.log(`⛔ SIZE AND LAYERS CHECK COULD NOT RUN — ${(e && e.message) || e}.`);
@@ -65702,6 +65763,77 @@ app.listen(PORT, () => {
     else console.log(`\u2713 THEIR OWN SITE OUTRANKS A STRADDLING RANGE: three people named on their own team page beat "126 employees per ZoomInfo" when that count arrives as a range across tiers or as a revenue with no headcount beside it, and the answer carries no dollars; an exact directory count and a verified headcount both still win.`);
   } catch (e) {
     console.log(`\u26d4 THEIR OWN SITE OUTRANKS A STRADDLING RANGE COULD NOT RUN - ${(e && e.message) || e}.`);
+  }
+  // ---- ROUND 148: ONE GUESS, ONE VERDICT ---------------------------------
+  // Two rows from the live batch of 2026-09-12, executed here on the exact
+  // inputs that produced them.
+  //
+  // ANDREW ARTHUR HOMES. A directory put them at $38.4M, confidence GUESS.
+  // Round 139's headroom demoted the affordability tier and printed its reason
+  // on the row - kept as high and still callable - while the four-word size
+  // tier added after it stayed at over_icp, so the over-the-ICP drop fired off
+  // that second ladder anyway and stripped the channel. The row reached the
+  // rep carrying BOTH sentences, still callable AND not a lead today, with no
+  // lane to act on. One guess, two verdicts.
+  //
+  // FRED FLORES CPA. Three people on his own page. ZoomInfo read 126 employees
+  // and $15.1M, the headcount arriving as a range spanning two of our tiers -
+  // which the size ladder calls a guess in its own words. A second directory
+  // figure agreeing lifted the word on the row to "likely", the size read
+  // large, large is the email lane, and the only address he has is BLOCKED.
+  // That lead was reachable by nobody.
+  try {
+    const _fails = [];
+    const _guess = { tier: 'over_ceiling', sizeTier: SIZE_TIER_OVER, sizeIsFloor: false, sizeConfidence: 'guess',
+                     layers: 'owner', source: 'google_places', target: 'owner', usd: 38.4e6 };
+    const _aah = lanesFor(Object.assign({}, _guess, { product: true }));
+    // 1. THE SYMPTOM: two sentences that cannot both be true of one business.
+    if (/still callable/.test(_aah.why) && /not a lead today/.test(_aah.why)) _fails.push(`one row carries both verdicts on a single guess - "${_aah.why}" - so the rep cannot tell whether the lead was kept or dropped (Andrew Arthur Homes, 2026-09-12)`);
+    // 2. THE CAUSE, asserted on its own so reverting either half goes red
+    //    alone: the four-word ladder must be demoted in step with the tier.
+    if (_aah.sizeTier === SIZE_TIER_OVER || !SIZE_TIER_IDS.includes(_aah.sizeTier)) _fails.push(`an over-cap GUESS leaves the four-word size ladder reading "${_aah.sizeTier}" while the affordability ladder reads "${_aah.tier}" - one ladder forgiving the guess and the other enforcing it is how one row came to carry two verdicts`);
+    if (_aah.tier !== 'upper') _fails.push(`Round 139's headroom stopped demoting the affordability tier on a guess (got "${_aah.tier}")`);
+    if (_aah.channel === '') _fails.push('a lead the row calls still callable was handed over with no channel on it at all');
+    // 3. AND NO LEAD MAY VANISH ON A GUESS. The same business without the
+    //    product-company fact is owner-run with a phone, and it is a call.
+    const _guessCall = lanesFor(Object.assign({}, _guess, { phone: true }));
+    if (laneWord(_guessCall) !== 'call') _fails.push(`an owner-run business a directory GUESSED at $38.4M has no lane at all (got "${laneWord(_guessCall)}", channel "${_guessCall.channel}") - only a measured size comes off the rep's call sheet, which is Round 139's ruling and Round 114's before it`);
+    // 4. FRED FLORES: a straddling range is a guess whatever word the
+    //    confidence ladder settled on, and a guess keeps the phone.
+    const _fred = { tier: 'upper', sizeTier: 'large', sizeIsFloor: false, sizeConfidence: 'likely', layers: 'owner',
+                    source: 'google_places', target: 'owner', usd: 15.1e6, phone: true };
+    const _fredLive = lanesFor(Object.assign({}, _fred, { sizeStraddles: true }));
+    if (laneWord(_fredLive) !== 'call' || _fredLive.channel !== 'call') _fails.push(`a size read off a directory range that spans two tiers took a lead off the phone (got "${laneWord(_fredLive)}", channel "${_fredLive.channel}") - his only address is BLOCKED, so that lead is reachable by nobody. Round 147 keeps a FLOOR on the call sheet and a guess is weaker than a floor, not stronger`);
+    if (!/guess/.test(_fredLive.why)) _fails.push('a lead kept on the call sheet because its size is a guess does not say so on the row, so the rep cannot tell it from a size nobody ever measured');
+    // 5. THE ONE FIELD BETWEEN THEM. Same business, same numbers, nothing
+    //    straddling and the size measured for sure: still an email lead.
+    const _fredSure = lanesFor(Object.assign({}, _fred, { sizeConfidence: 'sure' }));
+    if (laneWord(_fredSure) !== 'email') _fails.push(`a size MEASURED above the $${ICP_REVENUE_BAND.upperFrom / 1e6}M channel line stopped leaving the call sheet (got "${laneWord(_fredSure)}") - the guess rule was written as a hole in the channel instead of headroom on it`);
+    // 6. THE STRADDLE MUST TRAVEL, and both ends of it are EXECUTED here so
+    //    the lane and the size ladder cannot drift apart in silence.
+    const _stradSig = { tradeLabel: 'Accounting', directoryEmployees: 126, directoryEmployeesRange: '51-200',
+                        directoryEmployeesSource: 'ZoomInfo', revenueStated: '$15.1M', revenueStatedSource: 'ZoomInfo',
+                        staffProse: 3, staffProseSay: 'three CPAs' };
+    const _stradBand = sizeBand(_stradSig);
+    if (!SIZE_STRADDLE_SAY_RE.test(String(_stradBand.why || ''))) _fails.push(`the size ladder no longer marks a range spanning two tiers in the words the lane reads ("${_stradBand.why}"), so the straddle never reaches the channel and Fred Flores goes back to the email lane`);
+    if (SIZE_STRADDLE_SAY_RE.test(String(sizeBand(Object.assign({}, _stradSig, { directoryEmployeesRange: '101-200' })).why || ''))) _fails.push('a directory range that sits inside ONE tier reads as straddling, so every directory headcount would keep the phone and the channel would stop deciding anything');
+    if (_stradBand.confidence === 'guess') _fails.push('the straddling fixture is settled by the confidence word alone, so this block would pass with the straddle flag deleted - it has to be the case the word calls "likely"');
+    // 7. MUST NOT REGRESS.
+    const _rose = lanesFor({ tier: 'over_ceiling', sizeTier: SIZE_TIER_OVER, sizeIsFloor: false, sizeConfidence: 'sure', layers: 'layered', peOwned: true, usd: 255e6 });
+    if (laneWord(_rose) !== 'none') _fails.push(`Rose Paving ($255M, PE-owned, layered, measured for sure) is back in a lane (got "${laneWord(_rose)}") - a directory figure at "sure" is not a guess and stays off the phone`);
+    for (const [_k, _v, _what] of [['source', 'theirstack', 'a TheirStack lead'], ['product', true, 'a product company'], ['siteMarketingHead', true, 'a business publishing its own marketing director']]) {
+      const _fe = lanesFor({ tier: 'core', sizeTier: 'large', sizeIsFloor: false, sizeConfidence: 'guess', layers: 'owner', source: 'google_places', target: 'owner', phone: true, [_k]: _v });
+      if (_fe.call !== false || _fe.email !== true) _fails.push(`${_what} is back on the rep's call sheet because its size is a guess (call ${_fe.call}, email ${_fe.email}) - those three are FACTS about the lead rather than inferences about its size, and they are read before the size rule`);
+    }
+    const _floorLead = lanesFor({ tier: 'upper', sizeTier: 'large', sizeIsFloor: true, sizeConfidence: 'sure', layers: 'owner', source: 'google_places', target: 'owner', usd: 15e6, phone: true });
+    if (_floorLead.channel !== 'call') _fails.push(`Round 147's floor rule stopped keeping a published count on the phone (channel "${_floorLead.channel}")`);
+    if (_fails.length) {
+      console.log(`⛔ ONE GUESS, ONE VERDICT: ${_fails.join(' | ')}.`);
+    } else {
+      console.log(`✓ ONE GUESS, ONE VERDICT: the two ladders inside lanesFor agree about what a guess is worth, executed on the two rows that proved they did not. An over-cap GUESS is demoted on BOTH - the affordability tier to upper and the four-word size tier to ${SIZE_TIER_IDS[SIZE_TIER_IDS.length - 1]} - so Andrew Arthur Homes gets one verdict and a channel instead of "still callable" and "not a lead today" on the same row, and an owner-run business a directory guessed at $38.4M is a call rather than nothing at all. A size the ladder itself calls a guess keeps the phone exactly as Round 147's floor does, including a directory range that spans two tiers while the confidence word beside it reads "likely" - Fred Flores CPA, three people on his own page and 126 employees per ZoomInfo, whose only address is BLOCKED and who was reachable by nobody. Both ends of that straddle are executed rather than one retyped. Four rulings are asserted unmoved: Rose Paving at $255M stays out of every lane, a size measured for sure above the $${ICP_REVENUE_BAND.upperFrom / 1e6}M line still leaves the call sheet, the three email-only exceptions still hold because they are facts rather than inferences, and Round 147's floor still keeps the phone.`);
+    }
+  } catch (e) {
+    console.log(`⛔ ONE GUESS, ONE VERDICT COULD NOT RUN — ${(e && e.message) || e}.`);
   }
 
   // ---- ROUND 116: A RETIRED PERSON IS NOT THE DECISION-MAKER, AND THREE FREE SIZE SOURCES ----
@@ -89819,7 +89951,24 @@ const runFindContactRead = async (company, keys, opts = {}) => {
   // size, and the one thing Vin asked the size to decide would have been
   // decided by nothing. Computed-but-not-passed is the bug class this repo
   // records most; the boot check below pins this call site by name.
-  const _lanes = lanesFor({ tier: signals.scaleBand, sizeTier: _sizeTier, sizeIsFloor: _sizeIsFloor, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true, siteless: signals.readable !== true, phone: !!out.phone, siteMarketingHead: _siteMarketingHead });
+  // Round 148: a directory headcount that arrives as a range spanning two of
+  // our tiers is a guess, and the size ladder says so in its own words on the
+  // row. The confidence WORD beside it can be lifted past "guess" by a second
+  // directory figure agreeing, which is how Fred Flores CPA - three people on
+  // his own page, 126 employees per ZoomInfo - reached the email lane with a
+  // BLOCKED address and no phone lane, reachable by nobody. Read from the
+  // ladder's own output, never recomputed here: two hand-kept copies of one
+  // rule is the trap this repo records, and the boot check executes both ends.
+  // ══ READ THE RULE, NOT THE SENTENCE (Round 148, at the merge) ══════
+  // The lane agent had to sniff the ladder's PROSE for "(a range across
+  // tiers)" because editing sizeBand was another agent's scope; that agent
+  // lifted the same rule out into directoryRangeStraddles(). Asking the rule
+  // directly is the better wire and the agent said so itself. The prose test
+  // stays as a belt: a straddle the ladder PRINTS but the rule no longer
+  // returns is a disagreement between two answers to one question, and the
+  // lead keeps its phone either way.
+  const _sizeStraddles = directoryRangeStraddles(signals) || SIZE_STRADDLE_SAY_RE.test(String(_size.why || ''));
+  const _lanes = lanesFor({ tier: signals.scaleBand, sizeTier: _sizeTier, sizeIsFloor: _sizeIsFloor, sizeStraddles: _sizeStraddles, sizeWord: _size.band, sizeConfidence: _size.confidence, affordBand: signals.affordBand || signals.findAffordBand, layers: _layers.verdict, source: String((company && company.source) || ''), target: out.target, product: signals.productCompany, usd: signals.scaleUsd, network: signals.branchNetwork === true, peOwned: signals.peOwned === true, national: signals.nationalOperator === true, siteless: signals.readable !== true, phone: !!out.phone, siteMarketingHead: _siteMarketingHead });
   out.lanes = _lanes;
   // Round 114: a layered or owned-elsewhere lead on the call sheet ranks LAST.
   signals.laneLast = _lanes.last === true;
